@@ -235,9 +235,9 @@ pub mod caching {
 
 pub mod api {
     use lazy_static::lazy_static;
-    use prometheus::{register_gauge, register_histogram_vec, Gauge, HistogramVec};
+    use prometheus::{Gauge, HistogramVec, register_gauge, register_histogram_vec};
     use std::fmt::Debug;
-    use tracing::{error, info, Span};
+    use tracing::{Span, error, info};
 
     lazy_static! {
         static ref API_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(

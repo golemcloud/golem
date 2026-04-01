@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::event::InternalWorkerEvent;
 use crate::model::ExecutionStatus;
+use crate::model::event::InternalWorkerEvent;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
 use crate::services::shard::ShardService;
@@ -53,7 +53,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::Instrument;
-use uuid::{uuid, Uuid};
+use uuid::{Uuid, uuid};
 
 /// Per-plugin live state tracked by `ForwardingOplogState` for exactly-once delivery.
 /// Seeded from `AgentStatusRecord.oplog_processor_checkpoints` on construction,
@@ -783,10 +783,10 @@ impl Oplog for ForwardingOplog {
         let mut state = self.state.lock().await;
         let mut result = self.inner.commit(level).await;
         // Update last_committed_idx from committed entries
-        if let Some(max_idx) = result.keys().max() {
-            if *max_idx > state.last_committed_idx {
-                state.last_committed_idx = *max_idx;
-            }
+        if let Some(max_idx) = result.keys().max()
+            && *max_idx > state.last_committed_idx
+        {
+            state.last_committed_idx = *max_idx;
         }
         state.commit_count += 1;
         if state.commit_count >= self.max_commit_count {
@@ -1501,6 +1501,7 @@ fn oplog_processor_idempotency_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::Timestamp;
     use golem_common::model::account::AccountId;
     use golem_common::model::application::ApplicationId;
     use golem_common::model::component::{
@@ -1512,7 +1513,6 @@ mod tests {
     use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
     use golem_common::model::oplog::PersistenceLevel;
     use golem_common::model::plugin_registration::PluginRegistrationId;
-    use golem_common::model::Timestamp;
     use golem_common::read_only_lock;
     use golem_service_base::model::component::Component;
     use test_r::test;

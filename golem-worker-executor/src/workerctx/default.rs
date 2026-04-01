@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::LogEventEmitBehaviour;
+use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
@@ -40,16 +41,17 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{worker_enumeration, HasAll, NoAdditionalDeps};
+use crate::services::{HasAll, NoAdditionalDeps, worker_enumeration};
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
-    InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
+    CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::OplogIndex;
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{ComponentFilePath, ComponentRevision};
@@ -64,8 +66,8 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_service_base::model::component::Component;
 use golem_service_base::model::GetFileSystemNodeResult;
+use golem_service_base::model::component::Component;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm::{Uri, WitType};
 use std::collections::HashSet;
@@ -230,6 +232,20 @@ impl FuelManagement for Context {
         let consumed = self.fuel_tracker.on_return(current_level);
         debug!("reset fuel mark to {}", current_level);
         consumed
+    }
+}
+
+impl CallCountManagement for Context {
+    fn reset_invocation_call_counts(&mut self) {
+        self.durable_ctx.reset_invocation_call_counts();
+    }
+
+    fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
+        self.durable_ctx.record_monthly_http_call()
+    }
+
+    fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
+        self.durable_ctx.record_monthly_rpc_call()
     }
 }
 
@@ -751,6 +767,7 @@ impl WorkerCtx for Context {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -783,8 +800,11 @@ impl WorkerCtx for Context {
             agent_webhooks_service,
             shard_service,
             http_connection_pool,
+            websocket_connection_pool,
             pending_update,
             original_phantom_id,
+            account_resource_limits.per_invocation_http_call_limit(),
+            account_resource_limits.per_invocation_rpc_call_limit(),
         )
         .await?;
         Ok(Self::new(golem_ctx, config, account_resource_limits))

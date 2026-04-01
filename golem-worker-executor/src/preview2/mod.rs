@@ -1,6 +1,6 @@
-// Copyright 2024-2026 Golem Cloud
+// Copyright 2024-2025 Golem Cloud
 //
-// Licensed under the Golem Source License v1.1 (the "License");
+// Licensed under the Golem Source License v1.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -21,6 +21,7 @@ wasmtime::component::bindgen!({
     exports: { default: async },
     require_store_data_send: true,
     anyhow: true,
+    wasmtime_crate: ::wasmtime,
     with: {
         "wasi:io/streams.input-stream": InputStream,
         "wasi:io/streams.output-stream": OutputStream,
@@ -47,6 +48,9 @@ wasmtime::component::bindgen!({
         // shared wasi dependencies of golem:rpc/wasm-rpc and golem:api/golem
         "wasi:io/poll": wasmtime_wasi::p2::bindings::io::poll,
         "wasi:clocks/wall-clock": wasmtime_wasi::p2::bindings::clocks::wall_clock,
+        "golem:rdbms/ignite2.db-connection": super::durable_host::rdbms::ignite::Ignite2DbConnection,
+        "golem:rdbms/ignite2.db-result-stream": super::durable_host::rdbms::ignite::DbResultStreamEntry,
+        "golem:rdbms/ignite2.db-transaction": super::durable_host::rdbms::ignite::DbTransactionEntry,
         "golem:rdbms/mysql.db-connection": super::durable_host::rdbms::mysql::MysqlDbConnection,
         "golem:rdbms/mysql.db-result-stream": super::durable_host::rdbms::mysql::DbResultStreamEntry,
         "golem:rdbms/mysql.db-transaction": super::durable_host::rdbms::mysql::DbTransactionEntry,
@@ -55,6 +59,7 @@ wasmtime::component::bindgen!({
         "golem:rdbms/postgres.db-transaction": super::durable_host::rdbms::postgres::DbTransactionEntry,
         "golem:rdbms/postgres.lazy-db-column-type": super::durable_host::rdbms::postgres::LazyDbColumnTypeEntry,
         "golem:rdbms/postgres.lazy-db-value": super::durable_host::rdbms::postgres::LazyDbValueEntry,
+        "golem:websocket/client.websocket-connection": super::durable_host::websocket::client::WebSocketConnectionEntry,
     },
 });
 

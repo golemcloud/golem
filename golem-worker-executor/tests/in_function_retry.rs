@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::RetryConfig;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
-    start_with_overrides, FailingBlobStoreService, FailingKeyValueService, LastUniqueId,
-    PrecompiledComponent, TestContext, TestExecutorOverrides, WorkerExecutorTestDependencies,
+    FailingBlobStoreService, FailingKeyValueService, LastUniqueId, PrecompiledComponent,
+    TestContext, TestExecutorOverrides, WorkerExecutorTestDependencies, start_with_overrides,
 };
 use std::sync::Arc;
 use std::time::Duration;

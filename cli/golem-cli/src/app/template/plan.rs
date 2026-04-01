@@ -16,7 +16,7 @@ use crate::app::edit;
 use crate::app::template::generator::InMemoryFs;
 use crate::fs;
 use crate::log::LogColorize;
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use serde_json::Value as JsonValue;
 use serde_yaml::Value as YamlValue;
 use std::collections::BTreeMap;

@@ -1,6 +1,6 @@
 [package]
 description = "Golem Rust tooling library that facilitates writing Golem backends in Rust"
-edition = "2021"
+ edition = "2024"
 homepage = "https://golem.cloud"
 license = "Apache-2.0"
 name = "golem-rust"

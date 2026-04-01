@@ -14,13 +14,14 @@
 
 use crate::bridge_gen::rust::rust::to_rust_ident;
 use crate::bridge_gen::type_naming::TypeNaming;
-use crate::bridge_gen::{bridge_client_directory_name, BridgeGenerator};
+use crate::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
 use crate::fs;
 use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{
-    AgentMethod, AgentType, BinaryType, DataSchema, ElementSchema, NamedElementSchemas, TextType,
+    AgentConfigDeclaration, AgentConfigSource, AgentMethod, AgentType, BinaryType, DataSchema,
+    ElementSchema, NamedElementSchemas, TextType,
 };
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToSnakeCase, ToUpperCamelCase};
@@ -28,7 +29,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use std::collections::{BTreeMap, HashMap};
 use syn::{Lit, LitStr};
-use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Table, Value};
+use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value, value};
 use tracing::debug;
 
 #[allow(clippy::module_inception)]
@@ -121,6 +122,7 @@ impl RustBridgeGenerator {
         doc["dependencies"]["nonempty-collections"] = dep("0.3.1", &[]);
         doc["dependencies"]["reqwest"] = dep("0.13", &["rustls"]);
         doc["dependencies"]["reqwest-middleware"] = dep("0.5", &[]);
+        doc["dependencies"]["serde_json"] = dep("1", &[]);
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
 
         std::fs::write(path, doc.to_string())
@@ -161,6 +163,80 @@ impl RustBridgeGenerator {
             methods.extend(self.methods(&method)?);
         }
 
+        let local_configs: Vec<&AgentConfigDeclaration> = self
+            .agent_type
+            .config
+            .iter()
+            .filter(|c| c.source == AgentConfigSource::Local)
+            .collect();
+
+        let mut config_param_defs = Vec::new();
+        let mut config_encode_stmts = Vec::new();
+        for config in &local_configs {
+            let param_name_str = format!(
+                "config_{}",
+                config
+                    .path
+                    .iter()
+                    .map(|s| s.to_snake_case())
+                    .collect::<Vec<_>>()
+                    .join("_")
+            );
+            let param_name = Ident::new(&self.to_rust_ident(&param_name_str), Span::call_site());
+            let param_type = self.wit_type_to_typeref(&config.value_type)?;
+            config_param_defs.push(quote! { #param_name: Option<#param_type> });
+
+            let path_segments: Vec<TokenStream> = config
+                .path
+                .iter()
+                .map(|s| {
+                    let lit = Lit::Str(LitStr::new(s, Span::call_site()));
+                    quote! { #lit.to_string() }
+                })
+                .collect();
+            config_encode_stmts.push(quote! {
+                if let Some(value) = #param_name {
+                    agent_config.push(golem_client::model::WorkerAgentConfigEntry {
+                        path: vec![#(#path_segments),*],
+                        value: serde_json::to_value(value).unwrap(),
+                    });
+                }
+            });
+        }
+
+        let with_config_methods = if !local_configs.is_empty() {
+            quote! {
+                pub async fn get_with_config(#(#constructor_params,)* #(#config_param_defs,)*) -> Result<Self, golem_client::bridge::ClientError> {
+                    #constructor_params_to_data_value
+                    let constructor_parameters: golem_common::model::agent::UntypedJsonDataValue =
+                        typed_constructor_parameters.into();
+                    let mut agent_config = Vec::new();
+                    #(#config_encode_stmts)*
+                    Self::__create(constructor_parameters, None, agent_config).await
+                }
+
+                pub async fn get_phantom_with_config(uuid: uuid::Uuid, #(#constructor_params,)* #(#config_param_defs,)*) -> Result<Self, golem_client::bridge::ClientError> {
+                    #constructor_params_to_data_value
+                    let constructor_parameters: golem_common::model::agent::UntypedJsonDataValue =
+                        typed_constructor_parameters.into();
+                    let mut agent_config = Vec::new();
+                    #(#config_encode_stmts)*
+                    Self::__create(constructor_parameters, Some(uuid), agent_config).await
+                }
+
+                pub async fn new_phantom_with_config(#(#constructor_params,)* #(#config_param_defs,)*) -> Result<Self, golem_client::bridge::ClientError> {
+                    #constructor_params_to_data_value
+                    let constructor_parameters: golem_common::model::agent::UntypedJsonDataValue =
+                        typed_constructor_parameters.into();
+                    let mut agent_config = Vec::new();
+                    #(#config_encode_stmts)*
+                    Self::__create(constructor_parameters, Some(uuid::Uuid::new_v4()), agent_config).await
+                }
+            }
+        } else {
+            quote! {}
+        };
+
         let global_config = self.global_config();
 
         let types = self.type_definitions()?;
@@ -196,25 +272,58 @@ impl RustBridgeGenerator {
             }
 
             impl #client_struct_name {
-                pub fn get(#(#constructor_params),*) -> Self {
+                pub async fn get(#(#constructor_params),*) -> Result<Self, golem_client::bridge::ClientError> {
                     #constructor_params_to_data_value
                     let constructor_parameters: golem_common::model::agent::UntypedJsonDataValue =
                         typed_constructor_parameters.into();
-                    Self { constructor_parameters, phantom_id: None }
+                    Self::__create(constructor_parameters, None, vec![]).await
                 }
 
-                pub fn get_phantom(uuid: uuid::Uuid, #(#constructor_params),*) -> Self {
+                pub async fn get_phantom(uuid: uuid::Uuid, #(#constructor_params),*) -> Result<Self, golem_client::bridge::ClientError> {
                     #constructor_params_to_data_value
                     let constructor_parameters: golem_common::model::agent::UntypedJsonDataValue =
                         typed_constructor_parameters.into();
-                    Self { constructor_parameters, phantom_id: Some(uuid) }
+                    Self::__create(constructor_parameters, Some(uuid), vec![]).await
                 }
 
-                pub fn new_phantom(#(#constructor_params),*) -> Self {
+                pub async fn new_phantom(#(#constructor_params),*) -> Result<Self, golem_client::bridge::ClientError> {
                     #constructor_params_to_data_value
                     let constructor_parameters: golem_common::model::agent::UntypedJsonDataValue =
                         typed_constructor_parameters.into();
-                    Self { constructor_parameters, phantom_id: Some(uuid::Uuid::new_v4()) }
+                    Self::__create(constructor_parameters, Some(uuid::Uuid::new_v4()), vec![]).await
+                }
+
+                #with_config_methods
+
+                async fn __create(
+                    constructor_parameters: golem_client::model::UntypedJsonDataValue,
+                    phantom_id: Option<uuid::Uuid>,
+                    agent_config: Vec<golem_client::model::WorkerAgentConfigEntry>,
+                ) -> Result<Self, golem_client::bridge::ClientError> {
+                    let config = CONFIG.get().expect("Configuration has not been set");
+
+                    let client = reqwest_middleware::ClientWithMiddleware::from(
+                        reqwest::Client::builder().build().unwrap()
+                    );
+                    let context = golem_client::Context {
+                        client,
+                        base_url: config.server.url(),
+                        security_token: config.server.token(),
+                    };
+                    let api_client = golem_client::api::AgentClientLive { context };
+                    golem_client::api::AgentClient::create_agent(
+                        &api_client,
+                        &golem_client::model::CreateAgentRequest {
+                            app_name: config.app_name.to_string(),
+                            env_name: config.env_name.to_string(),
+                            agent_type_name: #agent_type_name_lit.to_string(),
+                            parameters: constructor_parameters.clone(),
+                            phantom_id,
+                            agent_config: Some(agent_config),
+                        },
+                    ).await?;
+
+                    Ok(Self { constructor_parameters, phantom_id })
                 }
 
                 #(#methods)*

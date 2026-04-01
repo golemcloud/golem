@@ -17,7 +17,7 @@ use proptest::proptest;
 use proptest::strategy::Strategy;
 use std::collections::{BTreeMap, BTreeSet, HashSet, LinkedList, VecDeque};
 use std::num::{
-    NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8,
+    NonZeroI8, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64,
 };
 use std::ops::Range;
 use std::rc::Rc;

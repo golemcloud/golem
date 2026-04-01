@@ -17,6 +17,7 @@ use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, Internal
 use crate::preview2::golem::agent::host::Host;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
+use golem_common::model::PromiseId;
 use golem_common::model::agent::bindings::golem::agent::common::{
     AgentError, DataValue, RegisteredAgentType,
 };
@@ -34,7 +35,6 @@ use golem_common::model::oplog::{
     HostResponseGolemAgentAgentTypes, HostResponseGolemAgentGetConfigValue,
     HostResponseGolemAgentWebhookUrl,
 };
-use golem_common::model::PromiseId;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{NodeBuilder, WitType, WitValue, WitValueBuilderExtensions};
 

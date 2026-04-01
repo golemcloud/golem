@@ -1670,6 +1670,69 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/agents/create-agent:
+    post:
+      tags:
+      - Agent
+      operationId: create_agent
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/CreateAgentRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/CreateAgentResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/accounts/{account_id}/tokens:
     get:
       tags:
@@ -10421,6 +10484,43 @@ components:
           $ref: '#/components/schemas/ValueAndType'
       required:
       - value
+    CreateAgentRequest:
+      title: CreateAgentRequest
+      type: object
+      properties:
+        appName:
+          type: string
+        envName:
+          type: string
+        agentTypeName:
+          type: string
+        parameters:
+          $ref: '#/components/schemas/UntypedJsonDataValue'
+        phantomId:
+          type: string
+          format: uuid
+        agentConfig:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerAgentConfigEntry'
+      required:
+      - appName
+      - envName
+      - agentTypeName
+      - parameters
+    CreateAgentResponse:
+      title: CreateAgentResponse
+      type: object
+      properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        componentRevision:
+          type: integer
+          format: uint64
+      required:
+      - agentId
+      - componentRevision
     DataValue:
       discriminator:
         propertyName: type
@@ -10708,6 +10808,67 @@ components:
           format: uint64
       required:
       - targetRevision
+    MultipartPartData:
+      discriminator:
+        propertyName: type
+        mapping:
+          Json: '#/components/schemas/MultipartPartData_JsonSnapshotData'
+          Raw: '#/components/schemas/MultipartPartData_RawSnapshotData'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/MultipartPartData_JsonSnapshotData'
+      - $ref: '#/components/schemas/MultipartPartData_RawSnapshotData'
+    MultipartPartData_JsonSnapshotData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Json
+            type: string
+            enum:
+            - Json
+        required:
+        - type
+      - $ref: '#/components/schemas/JsonSnapshotData'
+    MultipartPartData_RawSnapshotData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Raw
+            type: string
+            enum:
+            - Raw
+        required:
+        - type
+      - $ref: '#/components/schemas/RawSnapshotData'
+    MultipartSnapshotData:
+      title: MultipartSnapshotData
+      type: object
+      properties:
+        mimeType:
+          type: string
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/MultipartSnapshotPart'
+      required:
+      - mimeType
+      - parts
+    MultipartSnapshotPart:
+      title: MultipartSnapshotPart
+      type: object
+      properties:
+        name:
+          type: string
+        contentType:
+          type: string
+        data:
+          $ref: '#/components/schemas/MultipartPartData'
+      required:
+      - name
+      - contentType
+      - data
     NameOptionTypePair:
       title: NameOptionTypePair
       type: object
@@ -11747,10 +11908,12 @@ components:
         mapping:
           Raw: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
           Json: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+          Multipart: '#/components/schemas/PublicSnapshotData_MultipartSnapshotData'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
       - $ref: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+      - $ref: '#/components/schemas/PublicSnapshotData_MultipartSnapshotData'
     PublicSnapshotData_JsonSnapshotData:
       allOf:
       - type: object
@@ -11763,6 +11926,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/JsonSnapshotData'
+    PublicSnapshotData_MultipartSnapshotData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Multipart
+            type: string
+            enum:
+            - Multipart
+        required:
+        - type
+      - $ref: '#/components/schemas/MultipartSnapshotData'
     PublicSnapshotData_RawSnapshotData:
       allOf:
       - type: object
@@ -15164,6 +15339,21 @@ components:
         maxDiskSpacePerWorker:
           type: integer
           format: uint64
+        perInvocationHttpCallLimit:
+          type: integer
+          format: uint64
+        perInvocationRpcCallLimit:
+          type: integer
+          format: uint64
+        monthlyHttpCallLimit:
+          type: integer
+          format: uint64
+        monthlyRpcCallLimit:
+          type: integer
+          format: uint64
+        maxConcurrentAgentsPerExecutor:
+          type: integer
+          format: uint64
       required:
       - planId
       - name
@@ -15178,6 +15368,11 @@ components:
       - maxMemoryPerWorker
       - maxTableElementsPerWorker
       - maxDiskSpacePerWorker
+      - perInvocationHttpCallLimit
+      - perInvocationRpcCallLimit
+      - monthlyHttpCallLimit
+      - monthlyRpcCallLimit
+      - maxConcurrentAgentsPerExecutor
     PluginInstallation:
       title: PluginInstallation
       type: object
@@ -15558,9 +15753,14 @@ components:
           format: uint64
         period:
           $ref: '#/components/schemas/TimePeriod'
+        max:
+          description: Maximum burst capacity. Defaults to `value` if not specified.
+          type: integer
+          format: uint64
       required:
       - value
       - period
+      - max
     SecuritySchemeAgentSecurity:
       title: SecuritySchemeAgentSecurity
       description: |-

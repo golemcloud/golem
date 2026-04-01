@@ -28,8 +28,8 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use metrohash::MetroHash128;
 use std::collections::HashSet;
 use std::hash::Hasher;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::RwLock;
 use tracing::debug;
 use uuid::Uuid;
@@ -364,25 +364,24 @@ impl ReplayState {
             response,
             ..
         } = &oplog_entry
+            && function_name == &HostFunctionName::GolemApiFork
         {
-            if function_name == &HostFunctionName::GolemApiFork {
-                let response = self
-                    .oplog
-                    .download_payload(response.clone())
-                    .await
-                    .expect("Failed to download oplog entry payload");
-                let result: HostResponseGolemApiFork =
-                    if let HostResponse::GolemApiFork(result) = response {
-                        result
-                    } else {
-                        panic!("Expected GolemApiFork response, got {:?}", response);
-                    };
-                if result.result == Ok(ForkResult::Forked) {
-                    self.record_replay_event(ReplayEvent::ForkReplayed {
-                        new_phantom_id: result.forked_phantom_id,
-                    })
-                    .await;
-                }
+            let response = self
+                .oplog
+                .download_payload(response.clone())
+                .await
+                .expect("Failed to download oplog entry payload");
+            let result: HostResponseGolemApiFork =
+                if let HostResponse::GolemApiFork(result) = response {
+                    result
+                } else {
+                    panic!("Expected GolemApiFork response, got {:?}", response);
+                };
+            if result.result == Ok(ForkResult::Forked) {
+                self.record_replay_event(ReplayEvent::ForkReplayed {
+                    new_phantom_id: result.forked_phantom_id,
+                })
+                .await;
             }
         }
 

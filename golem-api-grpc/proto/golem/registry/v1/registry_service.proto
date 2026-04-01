@@ -18,8 +18,8 @@ import "golem/customapi/core.proto";
 import "golem/mcp/core.proto";
 import "golem/registry/agent.proto";
 import "golem/registry/environment_state.proto";
-import "golem/registry/quota.proto";
-import "golem/registry/fuel_usage_update.proto";
+import "golem/common/quota.proto";
+import "golem/registry/resource_usage_update.proto";
 import "golem/registry/v1/registry_service_error.proto";
 import "golem/worker/worker_id.proto";
 
@@ -32,7 +32,7 @@ service RegistryService {
   rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
   rpc UpdateWorkerLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
   rpc UpdateWorkerConnectionLimit (UpdateWorkerConnectionLimitRequest) returns (UpdateWorkerConnectionLimitResponse);
-  rpc BatchUpdateFuelUsage (BatchUpdateFuelUsageRequest) returns (BatchUpdateFuelUsageResponse);
+  rpc BatchUpdateResourceUsage (BatchUpdateResourceUsageRequest) returns (BatchUpdateResourceUsageResponse);
 
   // components api
   rpc DownloadComponent (DownloadComponentRequest) returns (stream DownloadComponentResponse);
@@ -44,8 +44,6 @@ service RegistryService {
   // agent types api
   rpc GetAllAgentTypes (GetAllAgentTypesRequest) returns (GetAllAgentTypesResponse);
   rpc GetAgentType (GetAgentTypeRequest) returns (GetAgentTypeResponse);
-  rpc ResolveLatestAgentTypeByNames (ResolveLatestAgentTypeByNamesRequest) returns (ResolveLatestAgentTypeByNamesResponse);
-  rpc ResolveAgentTypeAtDeployment (ResolveAgentTypeAtDeploymentRequest) returns (ResolveAgentTypeAtDeploymentResponse);
   rpc ResolveAgentTypeByNames(ResolveAgentTypeByNamesRequest)
       returns (ResolveAgentTypeByNamesResponse);
 
@@ -136,18 +134,18 @@ message UpdateWorkerConnectionLimitResponse {
   }
 }
 
-message BatchUpdateFuelUsageRequest {
-  repeated golem.registry.FuelUsageUpdate updates = 1;
+message BatchUpdateResourceUsageRequest {
+  repeated golem.registry.ResourceUsageUpdate updates = 1;
 }
 
-message BatchUpdateFuelUsageResponse {
+message BatchUpdateResourceUsageResponse {
   oneof result {
-    BatchUpdateFuelUsageSuccessResponse success = 1;
+    BatchUpdateResourceUsageSuccessResponse success = 1;
     RegistryServiceError error = 2;
   }
 }
 
-message BatchUpdateFuelUsageSuccessResponse {
+message BatchUpdateResourceUsageSuccessResponse {
   golem.common.AccountResourceLimits account_resource_limits = 1;
 }
 
@@ -262,47 +260,12 @@ message GetAgentTypeSuccessResponse {
   RegisteredAgentType agent_type = 1;
 }
 
-message ResolveLatestAgentTypeByNamesRequest {
-  golem.common.AccountId accountId = 1;
-  string app_name = 2;
-  string environment_name = 3;
-  string agent_type_name = 4;
-}
-
-message ResolveLatestAgentTypeByNamesResponse {
-  oneof result {
-    ResolveLatestAgentTypeByNamesSuccessResponse success = 1;
-    RegistryServiceError error = 2;
-  }
-}
-
-message ResolveLatestAgentTypeByNamesSuccessResponse {
-  RegisteredAgentType agent_type = 1;
-}
-
-message ResolveAgentTypeAtDeploymentRequest {
-  golem.common.AccountId accountId = 1;
-  string app_name = 2;
-  string environment_name = 3;
-  string agent_type_name = 4;
-  uint64 deployment_revision = 5;
-}
-
-message ResolveAgentTypeAtDeploymentResponse {
-  oneof result {
-    ResolveAgentTypeAtDeploymentSuccessResponse success = 1;
-    RegistryServiceError error = 2;
-  }
-}
-
-message ResolveAgentTypeAtDeploymentSuccessResponse {
-  RegisteredAgentType agent_type = 1;
-}
-
 message ResolveAgentTypeByNamesRequest {
   string app_name = 1;
   string environment_name = 2;
   string agent_type_name = 3;
+  // If set, resolves at this concrete deployment revision. If omitted,
+  // resolves at the latest current deployment.
   optional uint64 deployment_revision = 4;
   optional string owner_account_email = 5;
   golem.auth.AuthCtx auth_ctx = 6;
@@ -319,6 +282,8 @@ message ResolveAgentTypeByNamesSuccessResponse {
   RegisteredAgentType agent_type = 1;
   golem.common.EnvironmentId environment_id = 2;
   uint64 deployment_revision = 3;
+  // Present only when request.deployment_revision is not set.
+  optional uint64 current_deployment_revision = 4;
 }
 
 message GetActiveRoutesForDomainRequest {
@@ -367,7 +332,7 @@ message GetCurrentEnvironmentStateSuccessResponse {
 }
 
 message GetResourceDefinitionByIdRequest {
-  ResourceDefinitionId resource_definition_id = 1;
+  golem.common.ResourceDefinitionId resource_definition_id = 1;
 }
 
 message GetResourceDefinitionByIdResponse {
@@ -378,7 +343,7 @@ message GetResourceDefinitionByIdResponse {
 }
 
 message GetResourceDefinitionByIdSuccessResponse {
-  ResourceDefinition resource_definition = 1;
+  golem.common.ResourceDefinition resource_definition = 1;
 }
 
 message GetResourceDefinitionByNameRequest {
@@ -394,7 +359,7 @@ message GetResourceDefinitionByNameResponse {
 }
 
 message GetResourceDefinitionByNameSuccessResponse {
-  ResourceDefinition resource_definition = 1;
+  golem.common.ResourceDefinition resource_definition = 1;
 }
 
 // ── Multiplexed registry invalidation stream ──
@@ -416,6 +381,7 @@ message RegistryInvalidationEvent {
     EnvironmentPermissionsChangedEvent permissions_changed = 5;
     DomainRegistrationChangedEvent domain_registration_changed = 6;
     SecuritySchemeChangedEvent security_scheme_changed = 7;
+    ResourceDefinitionChangedEvent resource_definition_changed = 8;
   }
 }
 
@@ -427,6 +393,7 @@ message CursorExpiredEvent {}
 message DeploymentChangedEvent {
   golem.common.EnvironmentId environment_id = 1;
   uint64 deployment_revision = 2;
+  uint64 current_deployment_revision = 3;
 }
 
 // Sent when domain registrations change (create/delete).
@@ -449,4 +416,11 @@ message EnvironmentPermissionsChangedEvent {
 // Sent when a security scheme is created, updated, or deleted.
 message SecuritySchemeChangedEvent {
   golem.common.EnvironmentId environment_id = 1;
+}
+
+// Sent when a resource definition is created, updated, or deleted.
+message ResourceDefinitionChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
+  golem.common.ResourceDefinitionId resource_definition_id = 2;
+  string resource_name = 3;
 }

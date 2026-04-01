@@ -16,10 +16,11 @@ use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
-use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::HasWorker;
+use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use desert_rust::BinaryCodec;
+use golem_common::model::ScheduleId;
 use golem_common::model::oplog::host_functions::{
     HttpTypesFutureIncomingResponseGet, HttpTypesFutureTrailersGet,
 };
@@ -28,7 +29,6 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse,
     HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, OplogEntry, PersistenceLevel,
 };
-use golem_common::model::ScheduleId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue};
@@ -395,10 +395,10 @@ impl<Ctx: WorkerCtx> HostIncomingResponse for DurableWorkerCtx<Ctx> {
         self.observe_function_call("http::types::incoming_response", "drop");
 
         let handle = rep.rep();
-        if let Some(state) = self.state.open_http_requests.get(&handle) {
-            if state.close_owner == HttpRequestCloseOwner::IncomingResponseDrop {
-                end_http_request(self, handle).await?;
-            }
+        if let Some(state) = self.state.open_http_requests.get(&handle)
+            && state.close_owner == HttpRequestCloseOwner::IncomingResponseDrop
+        {
+            end_http_request(self, handle).await?;
         }
 
         HostIncomingResponse::drop(&mut self.as_wasi_http_view(), rep).await
@@ -462,10 +462,10 @@ impl<Ctx: WorkerCtx> HostIncomingBody for DurableWorkerCtx<Ctx> {
         self.observe_function_call("http::types::incoming_body", "drop");
 
         let handle = rep.rep();
-        if let Some(state) = self.state.open_http_requests.get(&handle) {
-            if state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish {
-                end_http_request(self, handle).await?;
-            }
+        if let Some(state) = self.state.open_http_requests.get(&handle)
+            && state.close_owner == HttpRequestCloseOwner::IncomingBodyDropOrFinish
+        {
+            end_http_request(self, handle).await?;
         }
 
         HostIncomingBody::drop(&mut self.as_wasi_http_view(), rep).await
@@ -681,10 +681,10 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
     ) -> HttpResult<()> {
         self.observe_function_call("http::types::outgoing_body", "finish");
         let body_rep = this.rep();
-        if let Some(handle) = self.state.find_request_handle_by_outgoing_body(body_rep) {
-            if let Some(state) = self.state.open_http_requests.get_mut(&handle) {
-                state.outgoing_body_rep = None;
-            }
+        if let Some(handle) = self.state.find_request_handle_by_outgoing_body(body_rep)
+            && let Some(state) = self.state.open_http_requests.get_mut(&handle)
+        {
+            state.outgoing_body_rep = None;
         }
         HostOutgoingBody::finish(&mut self.as_wasi_http_view(), this, trailers)
     }
@@ -692,10 +692,10 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
     fn drop(&mut self, rep: Resource<OutgoingBody>) -> wasmtime::Result<()> {
         self.observe_function_call("http::types::outgoing_body", "drop");
         let body_rep = rep.rep();
-        if let Some(handle) = self.state.find_request_handle_by_outgoing_body(body_rep) {
-            if let Some(state) = self.state.open_http_requests.get_mut(&handle) {
-                state.outgoing_body_rep = None;
-            }
+        if let Some(handle) = self.state.find_request_handle_by_outgoing_body(body_rep)
+            && let Some(state) = self.state.open_http_requests.get_mut(&handle)
+        {
+            state.outgoing_body_rep = None;
         }
         HostOutgoingBody::drop(&mut self.as_wasi_http_view(), rep)
     }
@@ -805,16 +805,14 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .await;
             }
 
-            if !is_pending {
-                if let Ok(Some(Ok(Ok(resource)))) = &response {
-                    let incoming_response_handle = resource.rep();
-                    continue_http_request(
-                        self,
-                        handle,
-                        incoming_response_handle,
-                        HttpRequestCloseOwner::IncomingResponseDrop,
-                    );
-                }
+            if !is_pending && let Ok(Some(Ok(Ok(resource)))) = &response {
+                let incoming_response_handle = resource.rep();
+                continue_http_request(
+                    self,
+                    handle,
+                    incoming_response_handle,
+                    HttpRequestCloseOwner::IncomingResponseDrop,
+                );
             }
 
             response
@@ -879,10 +877,10 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
         self.observe_function_call("http::types::future_incoming_response", "drop");
 
         let handle = rep.rep();
-        if let Some(state) = self.state.open_http_requests.get(&handle) {
-            if state.close_owner == HttpRequestCloseOwner::FutureIncomingResponseDrop {
-                end_http_request(self, handle).await?;
-            }
+        if let Some(state) = self.state.open_http_requests.get(&handle)
+            && state.close_owner == HttpRequestCloseOwner::FutureIncomingResponseDrop
+        {
+            end_http_request(self, handle).await?;
         }
 
         HostFutureIncomingResponse::drop(&mut self.as_wasi_http_view(), rep).await

@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_compilation_service::{
-    wait_for_startup, ComponentCompilationService,
-};
 use crate::components::ChildProcessLogger;
+use crate::components::component_compilation_service::{
+    ComponentCompilationService, wait_for_startup,
+};
 use async_trait::async_trait;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::info;
 use tracing::Level;
+use tracing::info;
 
 pub struct SpawnedComponentCompilationService {
     grpc_port: u16,
@@ -45,7 +45,9 @@ impl SpawnedComponentCompilationService {
         info!("Starting golem-component-compilation-service process");
 
         if !executable.exists() {
-            panic!("Expected to have precompiled golem-component-compilation-service at {executable:?}");
+            panic!(
+                "Expected to have precompiled golem-component-compilation-service at {executable:?}"
+            );
         }
 
         let mut child = Command::new(executable)

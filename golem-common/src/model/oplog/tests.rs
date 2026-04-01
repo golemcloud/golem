@@ -30,7 +30,8 @@ use crate::model::oplog::public_oplog_entry::{
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, AgentResourceId, JsonSnapshotData, LogLevel, PersistenceLevel,
+    AgentMethodInvocationParameters, AgentResourceId, JsonSnapshotData, LogLevel,
+    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, PersistenceLevel,
     PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData,
     PublicOplogEntry, PublicRetryConfig, PublicSnapshotData, PublicSpanData,
@@ -42,7 +43,7 @@ use crate::model::{
     AccountId, AgentId, ComponentId, Empty, IdempotencyKey, OplogIndex, Timestamp, TransactionId,
 };
 use golem_wasm::analysis::analysed_type::{
-    bool, f64, field, handle, list, option, r#enum, record, result_err, result_ok, s16, s32, str,
+    bool, r#enum, f64, field, handle, list, option, record, result_err, result_ok, s16, s32, str,
     tuple, u64, variant,
 };
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode};
@@ -840,10 +841,40 @@ fn snapshot_json_serialization_poem_serde_equivalence() {
 }
 
 #[test]
+fn snapshot_multipart_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Snapshot(SnapshotParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        data: PublicSnapshotData::Multipart(MultipartSnapshotData {
+            mime_type: "multipart/mixed; boundary=test-boundary".to_string(),
+            parts: vec![
+                MultipartSnapshotPart {
+                    name: "state".to_string(),
+                    content_type: "application/json".to_string(),
+                    data: MultipartPartData::Json(JsonSnapshotData {
+                        data: serde_json::json!({"version": 1, "properties": {"counter": 42}}),
+                    }),
+                },
+                MultipartSnapshotPart {
+                    name: "db:main".to_string(),
+                    content_type: "application/x-sqlite3".to_string(),
+                    data: MultipartPartData::Raw(RawSnapshotData {
+                        data: vec![0x53, 0x51, 0x4C, 0x69, 0x74, 0x65],
+                        mime_type: "application/x-sqlite3".to_string(),
+                    }),
+                },
+            ],
+        }),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
 fn oplog_entry_type_matches_wit() {
     use crate::model::oplog::OplogEntry;
-    use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
     use golem_wasm::IntoValue;
+    use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
     use std::path::PathBuf;
 
     let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");

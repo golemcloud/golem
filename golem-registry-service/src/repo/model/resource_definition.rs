@@ -25,8 +25,8 @@ use golem_common::model::resource_definition::{
     ResourceDefinitionId, ResourceDefinitionRevision, ResourceLimit, ResourceName,
     ResourceRateLimit, TimePeriod,
 };
+use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::RepoError;
-use golem_service_base::repo::numeric::NumericU64;
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -231,6 +231,7 @@ impl LimitTypeEnum {
 pub struct ResourceLimitRecord {
     pub limit_value: NumericU64,
     pub limit_period: Option<TimePeriodEnum>,
+    pub limit_max: Option<NumericU64>,
 }
 
 impl ResourceLimitRecord {
@@ -238,6 +239,7 @@ impl ResourceLimitRecord {
         diff::ResourceLimit {
             value: self.limit_value.into(),
             period: self.limit_period.clone().map(Into::into),
+            max: self.limit_max.map(Into::into),
         }
     }
 
@@ -254,13 +256,18 @@ impl ResourceLimitRecord {
                     value: self.limit_value.into(),
                 }))
             }
-            LimitTypeEnum::Rate => Ok(ResourceLimit::Rate(ResourceRateLimit {
-                value: self.limit_value.into(),
-                period: self
-                    .limit_period
-                    .ok_or_else(|| anyhow!("missing limit period for rate limit"))?
-                    .into(),
-            })),
+            LimitTypeEnum::Rate => {
+                let value: u64 = self.limit_value.into();
+                let max: u64 = self.limit_max.map(Into::into).unwrap_or(value);
+                Ok(ResourceLimit::Rate(ResourceRateLimit {
+                    value,
+                    period: self
+                        .limit_period
+                        .ok_or_else(|| anyhow!("missing limit period for rate limit"))?
+                        .into(),
+                    max,
+                }))
+            }
         }
     }
 }
@@ -271,14 +278,17 @@ impl From<&ResourceLimit> for ResourceLimitRecord {
             ResourceLimit::Capacity(inner) => ResourceLimitRecord {
                 limit_value: inner.value.into(),
                 limit_period: None,
+                limit_max: None,
             },
             ResourceLimit::Concurrency(inner) => ResourceLimitRecord {
                 limit_value: inner.value.into(),
                 limit_period: None,
+                limit_max: None,
             },
             ResourceLimit::Rate(inner) => ResourceLimitRecord {
                 limit_value: inner.value.into(),
                 limit_period: Some(inner.period.into()),
+                limit_max: Some(inner.max.into()),
             },
         }
     }

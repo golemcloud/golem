@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::template::AppTemplateName;
 use crate::app::template::metadata::AppTemplateMetadata;
 use crate::app::template::template::{
     AppTemplate, AppTemplateAgent, AppTemplateCommon, AppTemplateCommonOnDemand,
     AppTemplateComponent, AppTemplatesForLanguage,
 };
-use crate::app::template::AppTemplateName;
 use crate::fs;
 use crate::model::GuestLanguage;
-use anyhow::{anyhow, bail, Context};
-use include_dir::{include_dir, Dir};
+use anyhow::{Context, anyhow, bail};
+use include_dir::{Dir, include_dir};
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
@@ -67,6 +67,18 @@ impl AppTemplateRepo {
         language: GuestLanguage,
     ) -> anyhow::Result<&Option<AppTemplateCommon>> {
         Ok(&self.language_templates(language)?.common)
+    }
+
+    pub fn common_template_file_contents(
+        &self,
+        language: GuestLanguage,
+        relative_path: &Path,
+    ) -> anyhow::Result<Option<String>> {
+        let Some(common_template) = self.common_template(language)?.as_ref() else {
+            return Ok(None);
+        };
+
+        Self::template_file_contents(&common_template.0, relative_path)
     }
 
     pub fn common_on_demand_template(
@@ -123,7 +135,7 @@ impl AppTemplateRepo {
 
         self.templates
             .iter()
-            .filter(|(&lang, _)| language.is_none_or(|l| lang == l))
+            .filter(|&(&lang, _)| language.is_none_or(|l| lang == l))
             .map(|(lang, lang_templates)| {
                 (
                     *lang,
@@ -193,6 +205,22 @@ impl AppTemplateRepo {
         }
 
         Ok(templates)
+    }
+
+    fn template_file_contents(
+        template: &AppTemplate,
+        relative_path: &Path,
+    ) -> anyhow::Result<Option<String>> {
+        let file_path = template.template_path.join(relative_path);
+        let Some(file) = TEMPLATES_DIR.get_file(file_path.as_path()) else {
+            return Ok(None);
+        };
+
+        let source = file
+            .contents_utf8()
+            .ok_or_else(|| anyhow!("Template file is not valid UTF-8: {}", file_path.display()))?;
+
+        Ok(Some(source.to_string()))
     }
 
     fn collect_templates(dev_mode: bool) -> anyhow::Result<Vec<AppTemplate>> {

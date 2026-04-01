@@ -497,7 +497,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .map(|container_entry| container_entry.name.clone())?;
 
         let result = if durability.is_live() {
-            let result = loop {
+            let _result = loop {
                 let result = self
                     .state
                     .blob_store_service
@@ -511,6 +511,14 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
+            let result = self
+                .state
+                .blob_store_service
+                .clear(environment_id, container_name.clone())
+                .await;
+            durability
+                .try_trigger_retry(self, &result, classify_blob_store_error)
+                .await?;
 
             let result = HostResponseBlobStoreUnit {
                 result: result.map_err(|err| err.to_string()),

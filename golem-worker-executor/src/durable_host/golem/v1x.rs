@@ -18,7 +18,7 @@ use crate::durable_host::{
 };
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
-    find_component_revision_at, get_public_oplog_chunk, search_public_oplog, PublicOplogEntryOps,
+    PublicOplogEntryOps, find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::preview2::golem_api_1_x::host::{
     AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
@@ -26,7 +26,7 @@ use crate::preview2::golem_api_1_x::host::{
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
-use crate::preview2::{golem_api_1_x, Pollable};
+use crate::preview2::{Pollable, golem_api_1_x};
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker_proxy::WorkerProxyError;
@@ -64,7 +64,7 @@ use tokio::sync::OnceCell;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
-use wasmtime_wasi::{subscribe, IoView};
+use wasmtime_wasi::{IoView, subscribe};
 
 fn classify_worker_proxy_error(err: &WorkerProxyError) -> HostFailureKind {
     match err {
@@ -269,6 +269,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api", "set_oplog_index");
         let jump_source = self.state.current_oplog_index().await.next(); // index of the Jump instruction that we will add
         let jump_target = OplogIndex::from_u64(oplog_idx).next(); // we want to jump _after_ reaching the target index
+        let original_target = OplogIndex::from_u64(oplog_idx); // the actual oplog entry the user wants to jump to
         if jump_target > jump_source {
             Err(anyhow!(
                 "Attempted to jump forward in oplog to index {jump_target} from {jump_source}"
@@ -276,11 +277,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else if self
             .state
             .replay_state
-            .is_in_skipped_region(jump_target)
+            .is_in_skipped_region(original_target)
             .await
         {
             Err(anyhow!(
-                "Attempted to jump to a deleted region in oplog to index {jump_target} from {jump_source}"
+                "Attempted to jump to a deleted region in oplog to index {original_target} from {jump_source}"
             ))
         } else if self.state.is_live() {
             let jump = OplogRegion {

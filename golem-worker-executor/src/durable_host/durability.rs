@@ -37,7 +37,7 @@ use std::pin::Pin;
 use std::time::Duration;
 use tracing::{debug, error};
 use wasmtime::component::Resource;
-use wasmtime_wasi::{dynamic_subscribe, DynPollable, DynamicPollable, Pollable};
+use wasmtime_wasi::{DynPollable, DynamicPollable, Pollable, dynamic_subscribe};
 
 /// Classification of host function failures for semantic retry decisions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -895,11 +895,11 @@ impl DynamicPollable for LazyInitializedPollableEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::oplog::host_functions::KeyvalueEventualGet;
-    use golem_common::model::oplog::PersistenceLevel;
     use golem_common::model::RetryConfig;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use golem_common::model::oplog::PersistenceLevel;
+    use golem_common::model::oplog::host_functions::KeyvalueEventualGet;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
 
     /// A mock DurabilityHost for testing `try_trigger_retry_or_loop` in isolation.

@@ -14,13 +14,13 @@
 
 use crate::evcxr_repl::cli_repl_interop::CliReplInterop;
 use crate::evcxr_repl::config::ReplResolvedConfig;
-use crate::evcxr_repl::log::{log, logln, set_output, OutputMode};
+use crate::evcxr_repl::log::{OutputMode, log, logln, set_output};
 use crate::fs;
-use crate::process::{with_hidden_output_unless_error, HiddenOutput};
+use crate::process::{HiddenOutput, with_hidden_output_unless_error};
 use anyhow::{anyhow, bail};
 use ariadne::sources;
-use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
+use colored::control::SHOULD_COLORIZE;
 use evcxr::{CommandContext, CompilationError, EvalContextOutputs, Theme};
 use heck::{ToKebabCase, ToSnakeCase};
 use indoc::formatdoc;
@@ -39,8 +39,8 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread::JoinHandle;
 use std::time::Duration;

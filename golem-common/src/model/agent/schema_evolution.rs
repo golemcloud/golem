@@ -390,8 +390,8 @@ mod tests {
     };
     use crate::model::Empty;
     use golem_wasm::analysis::analysed_type::{
-        bool, case, field, flags, list, option, r#enum, record, result, result_ok, str, tuple, u32,
-        u8, unit_case, variant,
+        bool, case, r#enum, field, flags, list, option, record, result, result_ok, str, tuple, u8,
+        u32, unit_case, variant,
     };
     use test_r::test;
 

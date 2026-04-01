@@ -11,4 +11,8 @@ message PlanData {
   int32 monthly_upload_limit = 6;
   int64 max_memory_per_worker = 7;
   int64 max_table_elements_per_worker = 8;
+  uint64 per_invocation_http_call_limit = 9;
+  uint64 per_invocation_rpc_call_limit = 10;
+  uint64 monthly_http_call_limit = 11;
+  uint64 monthly_rpc_call_limit = 12;
 }

@@ -23,7 +23,7 @@ use golem_common::model::http_api_deployment::{
 use golem_common::model::invocation_context::{SpanId, TraceId};
 use golem_test_framework::components::jaeger::{DockerJaeger, Jaeger, JaegerQueryClient};
 use golem_test_framework::components::otel_collector::{
-    wait_for_otlp_logs, wait_for_otlp_metrics, DockerOtelCollector, OtelCollector,
+    DockerOtelCollector, OtelCollector, wait_for_otlp_logs, wait_for_otlp_metrics,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};

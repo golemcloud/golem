@@ -16,10 +16,10 @@ use crate::app::template::AppTemplateName;
 use crate::config::{AuthSecret, AuthenticationConfig, Profile, ProfileConfig, ProfileName};
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::log::{log_warn, log_warn_action, logln, LogColorize};
+use crate::log::{LogColorize, log_warn, log_warn_action, logln};
+use crate::model::GuestLanguage;
 use crate::model::format::Format;
 use crate::model::worker::RawAgentId;
-use crate::model::GuestLanguage;
 use anyhow::bail;
 use colored::Colorize;
 use golem_client::model::Account;
@@ -422,6 +422,14 @@ impl InteractiveHandler {
         self.confirm(
             true,
             "The above template plan steps will now be applied. Do you want to continue?",
+            None,
+        )
+    }
+
+    pub fn confirm_dependency_fix_plan_apply(&self) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            "The above dependency and configuration update steps will now be applied. Do you want to continue?",
             None,
         )
     }

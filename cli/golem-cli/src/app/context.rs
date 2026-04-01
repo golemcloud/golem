@@ -15,19 +15,20 @@
 use crate::app::build::build_app;
 use crate::app::build::clean::clean_app;
 use crate::app::build::command::execute_custom_command;
-use crate::app::error::{format_warns, AppValidationError, CustomCommandError};
+use crate::app::error::{AppValidationError, CustomCommandError, format_warns};
+use crate::app::manifest_version::validate_manifest_versions;
 use crate::app::template::AppTemplateRepo;
 use crate::fs;
-use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
+use crate::log::{LogColorize, LogIndent, LogOutput, Output, log_action, logln};
 use crate::model::app::{
-    includes_from_yaml_file, AppBuildStep, Application, ApplicationComponentSelectMode,
-    ApplicationConfig, ApplicationNameAndEnvironments, ApplicationSourceMode, BuildConfig,
-    CleanMode, ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps,
-    WithSource, DEFAULT_CONFIG_FILE_NAME,
+    AppBuildStep, Application, ApplicationComponentSelectMode, ApplicationConfig,
+    ApplicationNameAndEnvironments, ApplicationSourceMode, BuildConfig, CleanMode,
+    ComponentPresetSelector, CustomBridgeSdkTarget, DynamicHelpSections, LoadedRawApps, WithSource,
+    includes_from_yaml_file,
 };
 use crate::model::text::fmt::format_component_applied_layers;
 use crate::model::text::server::ToFormattedServerContext;
-use crate::model::{app_raw, GuestLanguage};
+use crate::model::{GuestLanguage, app_raw};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::anyhow;
 use colored::Colorize;
@@ -37,6 +38,8 @@ use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+
+const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 
 pub struct BuildContext<'a> {
     application_context: &'a ApplicationContext,
@@ -263,7 +266,7 @@ impl ApplicationContext {
         log_action("Selecting", "components");
         let _indent = LogIndent::new();
 
-        let current_dir = fs::canonicalize_path(&std::env::current_dir()?)?;
+        let current_dir = fs::current_dir_lexical()?;
 
         let selected_component_names: ValidatedResult<BTreeSet<ComponentName>> =
             match component_select_mode {
@@ -277,7 +280,8 @@ impl ApplicationContext {
                         )
                     };
 
-                    let called_from_project_root = self.calling_working_dir == current_dir;
+                    let called_from_project_root =
+                        fs::path_eq_normalized(&self.calling_working_dir, &current_dir);
                     if called_from_project_root {
                         all_components()
                     } else {
@@ -285,10 +289,12 @@ impl ApplicationContext {
                             .application
                             .component_names()
                             .filter(|component_name| {
-                                self.application
-                                    .component(component_name)
-                                    .component_dir()
-                                    .starts_with(self.calling_working_dir.as_path())
+                                let component = self.application.component(component_name);
+                                let component_dir = component.component_dir();
+                                fs::path_starts_with_normalized(
+                                    component_dir,
+                                    self.calling_working_dir.as_path(),
+                                )
                             })
                             .cloned()
                             .collect::<BTreeSet<_>>();
@@ -664,20 +670,22 @@ fn load_raw_apps(source_mode: ApplicationSourceMode) -> Option<ValidatedResult<L
     fn load(root_source: Option<&Path>) -> Option<ValidatedResult<LoadedRawApps>> {
         collect_sources_and_switch_to_app_root(root_source).map(|collected_sources| {
             collected_sources.and_then(|collected_sources| {
-                collected_sources
-                    .sources
-                    .into_iter()
-                    .map(|source| {
-                        ValidatedResult::from_result(
-                            app_raw::ApplicationWithSource::from_yaml_file(&source),
-                        )
-                    })
-                    .collect::<ValidatedResult<Vec<_>>>()
-                    .map(|raw_apps| LoadedRawApps {
-                        app_root_dir: collected_sources.app_root_dir,
-                        calling_working_dir: collected_sources.calling_working_dir,
-                        raw_apps,
-                    })
+                validate_manifest_versions(&collected_sources.sources).and_then(|()| {
+                    collected_sources
+                        .sources
+                        .into_iter()
+                        .map(|source| {
+                            ValidatedResult::from_result(
+                                app_raw::ApplicationWithSource::from_yaml_file(&source),
+                            )
+                        })
+                        .collect::<ValidatedResult<Vec<_>>>()
+                        .map(|raw_apps| LoadedRawApps {
+                            app_root_dir: collected_sources.app_root_dir,
+                            calling_working_dir: collected_sources.calling_working_dir,
+                            raw_apps,
+                        })
+                })
             })
         })
     }
@@ -701,10 +709,7 @@ struct CollectedSources {
 fn collect_sources_and_switch_to_app_root(
     root_manifest: Option<&Path>,
 ) -> Option<ValidatedResult<CollectedSources>> {
-    let calling_working_dir = std::env::current_dir()
-        .expect("Failed to get current working directory")
-        .canonicalize()
-        .expect("Failed to canonicalize current working directory");
+    let calling_working_dir = fs::current_dir_lexical().unwrap();
 
     log_action("Collecting", "application manifests");
     let _indent = LogIndent::new();
@@ -740,7 +745,7 @@ fn collect_sources_and_switch_to_app_root(
             Some(source) => collect_by_main_source(&source),
             None => None,
         },
-        Some(source) => match source.canonicalize() {
+        Some(source) => match fs::absolute_lexical_path(source) {
             Ok(source) => collect_by_main_source(&source),
             Err(err) => Some(ValidatedResult::from_error(format!(
                 "Cannot resolve requested application manifest source {}: {}",

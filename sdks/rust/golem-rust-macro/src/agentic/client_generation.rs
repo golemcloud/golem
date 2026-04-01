@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::helpers::{is_static_method, FunctionOutputInfo};
+use crate::agentic::helpers::{FunctionOutputInfo, is_static_method};
 use crate::agentic::{generic_type_in_agent_method_error, generic_type_in_agent_return_type_error};
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
@@ -307,20 +307,20 @@ fn validate_return_type(
     sig: &syn::Signature,
     type_params: &[String],
 ) -> Result<(), proc_macro2::TokenStream> {
-    if let syn::ReturnType::Type(_, ty) = &sig.output {
-        if let syn::Type::Path(path) = &**ty {
-            let ident = &path.path.segments.last().unwrap().ident;
+    if let syn::ReturnType::Type(_, ty) = &sig.output
+        && let syn::Type::Path(path) = &**ty
+    {
+        let ident = &path.path.segments.last().unwrap().ident;
 
-            if ident == "Self" {
-                return Ok(()); // skip Self, still valid
-            }
+        if ident == "Self" {
+            return Ok(()); // skip Self, still valid
+        }
 
-            if type_params.contains(&ident.to_string()) {
-                return Err(generic_type_in_agent_return_type_error(
-                    sig.ident.span(),
-                    &ident.to_string(),
-                ));
-            }
+        if type_params.contains(&ident.to_string()) {
+            return Err(generic_type_in_agent_return_type_error(
+                sig.ident.span(),
+                &ident.to_string(),
+            ));
         }
     }
     Ok(())
@@ -331,15 +331,15 @@ fn validate_input_types(
     type_params: &[String],
 ) -> Result<(), proc_macro2::TokenStream> {
     for fn_arg in &sig.inputs {
-        if let FnArg::Typed(pat_type) = fn_arg {
-            if let Type::Path(type_path) = &*pat_type.ty {
-                let type_name = type_path.path.segments.last().unwrap().ident.to_string();
-                if type_params.contains(&type_name) {
-                    return Err(generic_type_in_agent_method_error(
-                        pat_type.ty.span(),
-                        &type_name,
-                    ));
-                }
+        if let FnArg::Typed(pat_type) = fn_arg
+            && let Type::Path(type_path) = &*pat_type.ty
+        {
+            let type_name = type_path.path.segments.last().unwrap().ident.to_string();
+            if type_params.contains(&type_name) {
+                return Err(generic_type_in_agent_method_error(
+                    pat_type.ty.span(),
+                    &type_name,
+                ));
             }
         }
     }
@@ -360,20 +360,19 @@ fn collect_input_idents_without_principal(sig: &syn::Signature) -> Vec<syn::Iden
     sig.inputs
         .iter()
         .filter_map(|arg| {
-            if let FnArg::Typed(pat_type) = arg {
-                if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-                    if let Type::Path(type_path) = &*pat_type.ty {
-                        if type_path
-                            .path
-                            .segments
-                            .last()
-                            .is_some_and(|seg| seg.ident == "Principal")
-                        {
-                            return None;
-                        }
-                    }
-                    return Some(pat_ident.ident.clone());
+            if let FnArg::Typed(pat_type) = arg
+                && let syn::Pat::Ident(pat_ident) = &*pat_type.pat
+            {
+                if let Type::Path(type_path) = &*pat_type.ty
+                    && type_path
+                        .path
+                        .segments
+                        .last()
+                        .is_some_and(|seg| seg.ident == "Principal")
+                {
+                    return None;
                 }
+                return Some(pat_ident.ident.clone());
             }
             None
         })

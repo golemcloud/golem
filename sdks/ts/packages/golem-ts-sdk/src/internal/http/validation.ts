@@ -63,6 +63,25 @@ export function validateHttpEndpoint(
   }
 }
 
+/**
+ * Validates all HTTP mount and endpoint configuration for an agent type.
+ * Throws an error with a descriptive message if validation fails.
+ */
+export function validateAgentHttpConfig(
+  agentTypeName: string,
+  httpMount: HttpMountDetails | undefined,
+  constructor: AgentConstructor,
+  methods: AgentMethod[],
+) {
+  if (httpMount) {
+    validateHttpMount(agentTypeName, httpMount, constructor);
+  }
+
+  for (const method of methods) {
+    validateHttpEndpoint(agentTypeName, method, httpMount);
+  }
+}
+
 export function rejectEmptyString(name: string, entityName: string) {
   if (name.length === 0) {
     throw new Error(`HTTP ${entityName} must not be empty`);

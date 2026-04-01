@@ -14,14 +14,14 @@
 
 use crate::StartedComponents;
 use anyhow::Context;
+use poem::EndpointExt;
 use poem::listener::{Acceptor, Listener};
 use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, Tracing};
-use poem::EndpointExt;
 use poem::{Route, Server};
 use std::net::Ipv4Addr;
 use tokio::task::JoinSet;
-use tracing::info;
 use tracing::Instrument;
+use tracing::info;
 
 pub async fn start_router(
     listener_addr: &str,
@@ -57,6 +57,7 @@ pub async fn start_router(
 
     let app = Route::new()
         // Worker endpoints
+        .at("/v1/agents/create-agent", worker_service_api.clone())
         .at("/v1/agents/invoke-agent", worker_service_api.clone())
         .at(
             "/v1/components/:component_id/workers",

@@ -14,7 +14,6 @@
 
 pub use crate::repo::model::account::AccountRecord;
 use crate::repo::model::account_usage::{AccountUsage, UsageGrouping, UsageTracking, UsageType};
-use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::model::plan::PlanRecord;
 use async_trait::async_trait;
 use chrono::Datelike;
@@ -24,8 +23,9 @@ use futures::future::BoxFuture;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool};
+use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::RepoResult;
-use golem_service_base::repo::numeric::NumericU64;
+use golem_service_base::repo::SqlDateTime;
 use indoc::indoc;
 use sqlx::{Database, Row};
 use std::collections::BTreeMap;
@@ -409,9 +409,13 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
                 SELECT
-                    p.plan_id, p.name, p.max_memory_per_worker, p.max_table_elements_per_worker, p.max_disk_space_per_worker, p.total_app_count,
+                    p.plan_id, p.name, p.max_memory_per_worker, p.max_table_elements_per_worker, p.max_disk_space_per_worker,
+                    p.max_concurrent_agents_per_executor,
+                    p.total_app_count,
                     p.total_env_count, p.total_component_count, p.total_worker_count, p.total_worker_connection_count,
-                    p.total_component_storage_bytes, p.monthly_gas_limit, p.monthly_component_upload_limit_bytes
+                    p.total_component_storage_bytes, p.monthly_gas_limit, p.monthly_component_upload_limit_bytes,
+                    p.per_invocation_http_call_limit, p.per_invocation_rpc_call_limit,
+                    p.monthly_http_call_limit, p.monthly_rpc_call_limit
                 FROM accounts a
                 JOIN account_revisions ar ON ar.account_id = a.account_id AND ar.revision_id = a.current_revision_id
                 JOIN plans p ON p.plan_id = ar.plan_id

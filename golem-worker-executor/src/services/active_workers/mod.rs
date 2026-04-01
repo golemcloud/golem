@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod concurrent_agents_semaphore;
 pub mod fs_semaphore;
 #[cfg(test)]
 mod tests;
 
+pub use concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
 pub use fs_semaphore::{
+    FILESYSTEM_STORAGE_PERMIT_SIZE_KB, FilesystemStorageSemaphore,
     bytes_to_filesystem_storage_permits, filesystem_storage_pool_bytes_to_permits,
-    FilesystemStorageSemaphore, FILESYSTEM_STORAGE_PERMIT_SIZE_KB,
 };
 
 use std::collections::BTreeMap;
@@ -26,10 +28,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
-use tracing::{debug, Instrument};
+use tracing::{Instrument, debug};
 
-use crate::services::golem_config::{FilesystemStorageConfig, MemoryConfig};
 use crate::services::HasAll;
+use crate::services::golem_config::{FilesystemStorageConfig, MemoryConfig};
+use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -46,6 +49,7 @@ pub struct ActiveWorkers<Ctx: WorkerCtx> {
     workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
     worker_memory: Arc<Semaphore>,
     worker_filesystem_storage: Arc<FilesystemStorageSemaphore>,
+    concurrent_agents: Arc<ConcurrentAgentsSemaphore>,
     priority_allocation_lock: Arc<Mutex<()>>,
     acquire_retry_delay: Duration,
 }
@@ -65,6 +69,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 storage_config.worker_filesystem_storage(),
                 storage_config.acquire_retry_delay,
             )),
+            concurrent_agents: Arc::new(ConcurrentAgentsSemaphore::new()),
             acquire_retry_delay: memory_config.acquire_retry_delay,
             priority_allocation_lock: Arc::new(Mutex::new(())),
         }
@@ -151,7 +156,10 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 }
                 Err(TryAcquireError::Closed) => panic!("worker memory semaphore has been closed"),
                 Err(TryAcquireError::NoPermits) => {
-                    debug!("Not enough memory to allocate {mem32} (available: {}), trying to free some up", self.worker_memory.available_permits());
+                    debug!(
+                        "Not enough memory to allocate {mem32} (available: {}), trying to free some up",
+                        self.worker_memory.available_permits()
+                    );
                     if self.try_free_up_memory(memory).await {
                         debug!("Freed up some memory, retrying");
                         // We have enough memory unless another worker has taken it in the meantime,
@@ -219,11 +227,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             // Collecting the workers which are currently idle but loaded into memory
             let pairs = self.workers.iter().await;
             for (agent_id, worker) in pairs {
-                if worker.is_currently_idle_but_running().await {
-                    if let Ok(mem) = worker.memory_requirement().await {
-                        let last_changed = worker.last_execution_state_change();
-                        possibilities.push((agent_id, worker, mem, last_changed));
-                    }
+                if worker.is_currently_idle_but_running().await
+                    && let Ok(mem) = worker.memory_requirement().await
+                {
+                    let last_changed = worker.last_execution_state_change();
+                    possibilities.push((agent_id, worker, mem, last_changed));
                 }
             }
 
@@ -286,6 +294,67 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         self.worker_filesystem_storage.clone()
     }
 
+    /// Register an account with the per-account concurrent agent semaphore.
+    ///
+    /// Must be called (from `Worker::new`) before any `acquire_concurrent_agent`
+    /// call for the account. Idempotent — safe to call multiple times.
+    pub async fn register_account_concurrency(
+        &self,
+        account_id: AccountId,
+        resource_entry: Arc<AtomicResourceEntry>,
+    ) {
+        self.concurrent_agents
+            .register_account(account_id, resource_entry)
+            .await;
+    }
+
+    /// Blocking acquire of one concurrent-agent permit for `account_id`.
+    ///
+    /// Before blocking, attempts to evict the oldest idle agent belonging to the
+    /// same account to free up a slot. If no idle agent exists, waits until a
+    /// running agent from the same account stops and returns its permit.
+    ///
+    /// Returns immediately (zero-cost permit) for accounts whose plan limit is
+    /// at or above the unlimited sentinel.
+    pub async fn acquire_concurrent_agent(&self, account_id: AccountId) -> OwnedSemaphorePermit {
+        let workers = self.workers.clone();
+        self.concurrent_agents
+            .acquire(account_id, move || async move {
+                Self::try_free_up_concurrent_agent_slot(&workers, account_id).await
+            })
+            .await
+    }
+
+    /// Evict the oldest idle agent belonging to `account_id` to free a
+    /// concurrent-agent slot. Returns `true` if an agent was successfully
+    /// stopped (its permit will be returned to the semaphore via `Drop`).
+    async fn try_free_up_concurrent_agent_slot(
+        workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
+        account_id: AccountId,
+    ) -> bool {
+        let mut possibilities = Vec::new();
+
+        for (_agent_id, worker) in workers.iter().await {
+            // Only consider idle agents belonging to the same account.
+            if worker.get_initial_worker_metadata().created_by == account_id
+                && worker.is_currently_idle_but_running().await
+            {
+                let last_changed = worker.last_execution_state_change();
+                possibilities.push((worker, last_changed));
+            }
+        }
+
+        // Evict the oldest idle agent (smallest timestamp).
+        possibilities.sort_by_key(|(_, last_changed)| last_changed.to_millis());
+
+        for (worker, _) in possibilities {
+            if worker.stop_if_idle().await {
+                return true;
+            }
+        }
+        false
+    }
+
     async fn try_free_up_filesystem_storage(
         workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
         storage_bytes: u64,
@@ -294,11 +363,11 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
         debug!("Collecting storage eviction possibilities");
         for (agent_id, worker) in workers.iter().await {
-            if worker.is_currently_idle_but_running().await {
-                if let Ok(storage) = worker.filesystem_storage_requirement().await {
-                    let last_changed = worker.last_execution_state_change();
-                    possibilities.push((agent_id, worker, storage, last_changed));
-                }
+            if worker.is_currently_idle_but_running().await
+                && let Ok(storage) = worker.filesystem_storage_requirement().await
+            {
+                let last_changed = worker.last_execution_state_change();
+                possibilities.push((agent_id, worker, storage, last_changed));
             }
         }
 

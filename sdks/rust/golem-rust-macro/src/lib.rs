@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use proc_macro::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::Span;
-use proc_macro_crate::{crate_name, FoundCrate};
 use syn::DeriveInput;
 
 use crate::transaction::golem_operation_impl;

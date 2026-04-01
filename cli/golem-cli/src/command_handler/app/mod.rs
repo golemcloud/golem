@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::build::check::plan_dependency_fixes;
+use crate::app::context::BuildContext;
 use crate::app::error::CustomCommandError;
 use crate::app::template::AppTemplateName;
 use crate::command::builtin_exec_subcommands;
@@ -19,24 +21,25 @@ use crate::command::exec::ExecSubcommand;
 use crate::command::shared_args::{
     BuildArgs, ForceBuildArg, OptionalComponentNames, PostDeployArgs,
 };
+use crate::command_handler::Handlers;
 use crate::command_handler::app::deploy_diff::{
     DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, RollbackDetails, RollbackDiff,
     RollbackEntityDetails, RollbackQuickDiff,
 };
 use crate::command_handler::app::template::TemplateHandler;
-use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::diagnose::diagnose;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit};
+use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{
-    log_action, log_error, log_failed_to, log_finished_ok, log_finished_up_to_date,
-    log_skipping_up_to_date, log_warn, log_warn_action, logged_failed_to,
-    logged_finished_or_failed_to, logln, LogColorize, LogIndent, LogOutput, Output,
+    LogColorize, LogIndent, LogOutput, Output, log_action, log_error, log_failed_to,
+    log_finished_ok, log_finished_up_to_date, log_skipping_up_to_date, log_warn, log_warn_action,
+    logged_failed_to, logged_finished_or_failed_to, logln,
 };
+use crate::model::GuestLanguage;
 use crate::model::app::{
-    ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
+    AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
 };
 use crate::model::deploy::{
     DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult,
@@ -44,25 +47,24 @@ use crate::model::deploy::{
 };
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::text::deployment::DeploymentNewView;
-use crate::model::text::diff::log_unified_diff;
+use crate::model::text::diff::{log_unified_diff, log_unified_diff_for_path};
 use crate::model::text::fmt::{log_fuzzy_matches, log_text_view};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
-use crate::model::GuestLanguage;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::{StreamExt, TryStreamExt, stream};
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::agent::DeployedRegisteredAgentType;
+use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
-    CurrentDeployment, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDeploymentEntry,
-    DeploymentRevision, DeploymentVersion,
+    CurrentDeployment, DeploymentAgentSecretDefault, DeploymentPlanComponentEntry,
+    DeploymentPlanHttpApiDeploymentEntry, DeploymentRevision, DeploymentVersion,
 };
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
@@ -118,7 +120,8 @@ impl AppCommandHandler {
         let build_config = {
             let mut build_config = BuildConfig::new()
                 .with_steps_filter(build_args.step.into_iter().collect())
-                .with_skip_up_to_date_checks(build_args.force_build.force_build);
+                .with_skip_up_to_date_checks(build_args.force_build.force_build)
+                .with_skip_check(build_args.skip_check);
 
             if let Some(repl_bridge_sdk_target) = build_args.repl_bridge_sdk_target {
                 let app_ctx = self.ctx.app_context_lock().await;
@@ -408,17 +411,6 @@ impl AppCommandHandler {
         self.ctx.log_handler().log_view(&agent_types);
 
         Ok(())
-    }
-
-    pub async fn cmd_diagnose(
-        &self,
-        component_names: OptionalComponentNames,
-    ) -> anyhow::Result<()> {
-        self.diagnose(
-            component_names.component_name,
-            &ApplicationComponentSelectMode::All,
-        )
-        .await
     }
 
     pub async fn list_agent_types(
@@ -730,19 +722,18 @@ impl AppCommandHandler {
             return Ok(None);
         }
 
-        log_action("Diffing", "");
+        let (stage_is_same_as_current, deploy_diff) = {
+            log_action("Diffing", "");
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
 
-        let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
-        debug!("deploy_diff: {:#?}", deploy_diff);
+            let deploy_diff = self.deploy_diff(deploy_quick_diff).await?;
+            debug!("deploy_diff: {:#?}", deploy_diff);
 
-        let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
-        debug!("detailed deploy_diff: {:#?}", deploy_diff);
+            let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
+            debug!("detailed deploy_diff: {:#?}", deploy_diff);
 
-        let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive());
-        let stage_is_same_as_current = deploy_diff.is_stage_same_as_current();
-
-        {
-            let _indent = LogIndent::new();
+            let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive());
+            let stage_is_same_as_current = deploy_diff.is_stage_same_as_current();
 
             log_action(
                 "Comparing",
@@ -760,7 +751,7 @@ impl AppCommandHandler {
                 match &unified_diffs.deployment_diff_stage {
                     Some(diff) => {
                         log_action("Diffing", "with staging area");
-                        let _indent = self.ctx.log_handler().nested_text_view_indent();
+                        let _indent = self.ctx.log_handler().decorated_indent_secondary();
                         log_unified_diff(diff);
                         if let Some(diff) = unified_diffs.agent_diff_stage {
                             logln("");
@@ -780,24 +771,26 @@ impl AppCommandHandler {
                     log_action("Diffing", "with current deployment");
                 }
 
-                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                let _indent = self.ctx.log_handler().decorated_indent_secondary();
                 log_unified_diff(&unified_diffs.deployment_diff);
                 if let Some(diff) = unified_diffs.agent_diff {
                     logln("");
                     log_unified_diff(&diff);
                 }
             }
-        }
+
+            (stage_is_same_as_current, deploy_diff)
+        };
 
         {
             log_action("Planning", "");
-            let _indent = LogIndent::new();
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
 
             if !stage_is_same_as_current {
                 match &deploy_diff.diff_stage {
                     Some(diff_stage) => {
                         log_action("Planned", "changes to be applied to the staging area:");
-                        let _indent = self.ctx.log_handler().nested_text_view_indent();
+                        let _indent = self.ctx.log_handler().decorated_indent_secondary();
                         self.ctx.log_handler().log_view(diff_stage)
                     }
                     None => log_skipping_up_to_date("planning changes for staging area"),
@@ -813,7 +806,7 @@ impl AppCommandHandler {
                 } else {
                     log_action("Planned", "changes to be applied to the environment:");
                 }
-                let _indent = self.ctx.log_handler().nested_text_view_indent();
+                let _indent = self.ctx.log_handler().decorated_indent_secondary();
                 self.ctx.log_handler().log_view(&deploy_diff.diff)
             }
         }
@@ -973,7 +966,9 @@ impl AppCommandHandler {
         let Some(diff) =
             diffable_current_deployment.diff_with_new(&deploy_quick_diff.diffable_local_deployment)
         else {
-            bail!(anyhow!("The environment was changed concurrently while diffing. Retry planning and deploying!"))
+            bail!(anyhow!(
+                "The environment was changed concurrently while diffing. Retry planning and deploying!"
+            ))
         };
 
         let diff_stage =
@@ -1113,7 +1108,7 @@ impl AppCommandHandler {
         deployment_revision: DeploymentRevision,
     ) -> anyhow::Result<Option<RollbackDiff>> {
         log_action("Preparing", "rollback");
-        let _indent = LogIndent::new();
+        let _indent = self.ctx.log_handler().decorated_indent_primary();
 
         log_action("Diffing", "current deployment with target revision");
 
@@ -1135,7 +1130,7 @@ impl AppCommandHandler {
         let unified_diffs = rollback_diff.unified_diffs(self.ctx.show_sensitive());
 
         {
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_secondary();
             log_unified_diff(&unified_diffs.deployment_diff);
             if let Some(diff) = unified_diffs.agent_diff {
                 logln("");
@@ -1145,7 +1140,7 @@ impl AppCommandHandler {
 
         {
             log_action("Planned", "changes to be applied to the environment:");
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_secondary();
             self.ctx.log_handler().log_view(&rollback_diff.diff)
         }
 
@@ -1200,7 +1195,9 @@ impl AppCommandHandler {
 
         let Some(diff) = diffable_target_deployment.diff_with_current(&diffable_current_deployment)
         else {
-            bail!("Illegal state: empty diff between current and target deployment after fetching summaries")
+            bail!(
+                "Illegal state: empty diff between current and target deployment after fetching summaries"
+            )
         };
 
         Ok(RollbackDiff {
@@ -1476,10 +1473,11 @@ impl AppCommandHandler {
     ) -> anyhow::Result<CurrentDeployment> {
         let agent_secret_defaults = {
             let app_ctx = self.ctx.app_context_lock().await;
-            app_ctx
+            let defaults = app_ctx
                 .some_or_err()?
                 .application()
-                .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name)
+                .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name);
+            resolve_secret_defaults(defaults)?
         };
 
         let clients = self.ctx.golem_clients().await?;
@@ -1691,7 +1689,80 @@ impl AppCommandHandler {
             .await?;
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
+
+        // NOTE: dependency checks are done here, as they are interactive, and they modify
+        //       the projects, tool checks are done as part of app_ctx.build
+        if build_config.should_run_step(AppBuildStep::Check) {
+            self.plan_and_apply_dependency_fixes(&BuildContext::new(app_ctx, build_config))?;
+        }
+
         app_ctx.build(build_config).await
+    }
+
+    fn plan_and_apply_dependency_fixes(&self, build_ctx: &BuildContext<'_>) -> anyhow::Result<()> {
+        let plan = plan_dependency_fixes(build_ctx)?;
+
+        for warning in &plan.warnings {
+            logln("");
+            log_warn(warning);
+            logln("");
+        }
+
+        if plan.is_empty() {
+            return Ok(());
+        }
+
+        {
+            logln("");
+            log_warn_action(
+                "Found",
+                "missing or incompatible dependencies or configurations",
+            );
+            log_action(
+                "Planned",
+                "required changes for dependencies and configurations",
+            );
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
+
+            for step in &plan.steps {
+                let path = step.path.display().to_string();
+                logln(format!(
+                    "- {} {}",
+                    "update".green(),
+                    path.log_color_highlight()
+                ));
+                let _indent = LogIndent::new();
+                let _indent = self.ctx.log_handler().decorated_indent_secondary();
+                log_unified_diff_for_path(
+                    &step.path,
+                    &diff::unified_diff(step.current.as_str(), step.new.as_str()),
+                );
+            }
+        }
+
+        if !self
+            .ctx
+            .interactive_handler()
+            .confirm_dependency_fix_plan_apply()?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
+        {
+            logln("");
+            log_action("Applying", "dependency and configuration updates");
+            let _indent = LogIndent::new();
+
+            for step in &plan.steps {
+                log_action(
+                    "Updating",
+                    format!("{}", step.path.display().to_string().log_color_highlight()),
+                );
+                fs::write_str(&step.path, step.new.as_str())?;
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn clean(
@@ -2015,45 +2086,6 @@ impl AppCommandHandler {
         Ok(())
     }
 
-    pub async fn diagnose(
-        &self,
-        component_names: Vec<ComponentName>,
-        default_component_select_mode: &ApplicationComponentSelectMode,
-    ) -> anyhow::Result<()> {
-        self.must_select_components(component_names, default_component_select_mode)
-            .await?;
-
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
-
-        let selected_component_names = app_ctx
-            .selected_component_names()
-            .iter()
-            .collect::<Vec<_>>();
-
-        if selected_component_names.is_empty() {
-            log_warn("The application has no components.");
-        }
-
-        for component_name in selected_component_names {
-            log_action(
-                "Diagnosing",
-                format!(
-                    "component {} for recommended tooling",
-                    component_name.as_str().log_color_highlight()
-                ),
-            );
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
-
-            diagnose(
-                app_ctx.application().component(component_name).source(),
-                None,
-            );
-        }
-
-        Ok(())
-    }
-
     async fn show_available_deployments(
         &self,
         environment: &ResolvedEnvironmentIdentity,
@@ -2081,4 +2113,22 @@ impl AppCommandHandler {
             log_error(format!("Failed to show available deployments: {}", err));
         }
     }
+}
+
+fn resolve_secret_defaults(
+    defaults: Vec<DeploymentAgentSecretDefault>,
+) -> anyhow::Result<Vec<DeploymentAgentSecretDefault>> {
+    let renderer = crate::command_handler::template::EnvVarRenderer::new();
+
+    defaults
+        .into_iter()
+        .map(|default| {
+            let resolved_value = renderer.render_json_value(&default.secret_value)
+                .map_err(|err| anyhow!("Failed to substitute environment variable(s) in secret default value: {err}"))?;
+            Ok(DeploymentAgentSecretDefault {
+                path: default.path,
+                secret_value: resolved_value,
+            })
+        })
+        .collect()
 }

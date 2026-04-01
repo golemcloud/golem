@@ -16,8 +16,8 @@ use crate::benchmarks::{delete_workers, invoke_and_await_agent};
 use async_trait::async_trait;
 use futures_concurrency::future::Join;
 use golem_common::base_model::agent::ParsedAgentId;
-use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::model::AgentId;
+use golem_common::model::component::{ComponentDto, ComponentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::config::benchmark::TestMode;
@@ -25,7 +25,7 @@ use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use indoc::indoc;
-use tracing::{info, Instrument, Level};
+use tracing::{Instrument, Level, info};
 
 pub struct DurabilityOverhead {
     config: RunConfig,

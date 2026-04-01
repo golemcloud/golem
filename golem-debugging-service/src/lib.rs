@@ -28,7 +28,7 @@ use crate::debug_context::DebugContext;
 use crate::debug_session::{DebugSessions, DebugSessionsDefault};
 use crate::oplog::debug_oplog_service::DebugOplogService;
 use crate::services::auth::{AuthService, GrpcAuthService};
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::storage::blob::BlobStorage;
@@ -44,8 +44,8 @@ use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::services::key_value::KeyValueService;
-use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::OplogService;
+use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use golem_worker_executor::services::scheduler::SchedulerService;
@@ -58,22 +58,22 @@ use golem_worker_executor::services::worker_enumeration::{
 };
 use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{rdbms, resource_limits, All};
+use golem_worker_executor::services::{All, rdbms, resource_limits};
 use golem_worker_executor::wasi_host::create_linker;
-use golem_worker_executor::{create_worker_executor_impl, Bootstrap, RunDetails};
+use golem_worker_executor::{Bootstrap, RunDetails, create_worker_executor_impl};
 use humansize::ISizeFormatter;
+use poem::EndpointExt;
+use poem::Route;
 use poem::endpoint::PrometheusExporter;
 use poem::listener::{Acceptor, Listener};
 use poem::middleware::{CookieJarManager, Cors};
-use poem::EndpointExt;
-use poem::Route;
 use prometheus::Registry;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
-use tracing::{debug, info, Instrument};
-use wasmtime::component::{HasSelf, Linker};
+use tracing::{Instrument, debug, info};
 use wasmtime::Engine;
+use wasmtime::component::{HasSelf, Linker};
 
 #[cfg(test)]
 test_r::enable!();
@@ -147,6 +147,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<DebugContext>> {
         let auth_service: Arc<dyn AuthService> =
@@ -203,6 +204,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
             http_connection_pool.clone(),
+            websocket_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -240,6 +242,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             http_connection_pool.clone(),
+            websocket_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -274,6 +277,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             resource_limits,
             shutdown_token,
             http_connection_pool,
+            websocket_connection_pool,
             environment_state_service,
             additional_deps,
             leak_sentinel,

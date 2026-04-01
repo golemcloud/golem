@@ -17,7 +17,9 @@ world golem {
   import wasi:keyvalue/wasi-keyvalue-error@0.1.0;
   import wasi:logging/logging;
   import wasi:config/store@0.2.0-draft;
+  import golem:rdbms/ignite2@1.5.0;
   import golem:rdbms/mysql@1.5.0;
   import golem:rdbms/postgres@1.5.0;
   import golem:rdbms/types@1.5.0;
+  import golem:websocket/client@1.5.0;
 }

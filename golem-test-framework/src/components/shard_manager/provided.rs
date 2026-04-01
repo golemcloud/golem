@@ -23,7 +23,9 @@ pub struct ProvidedShardManager {
 
 impl ProvidedShardManager {
     pub fn new(host: String, http_port: u16, grpc_port: u16) -> Self {
-        info!("Using already running golem-shard-manager on {host}, http port: {http_port}, grpc port: {grpc_port}");
+        info!(
+            "Using already running golem-shard-manager on {host}, http port: {http_port}, grpc port: {grpc_port}"
+        );
         Self { host, grpc_port }
     }
 }

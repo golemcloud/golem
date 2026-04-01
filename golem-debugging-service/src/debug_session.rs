@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::oplog::host_functions::{
-    host_request_from_value_and_type, host_response_from_value_and_type, HostFunctionName,
+    HostFunctionName, host_request_from_value_and_type, host_response_from_value_and_type,
 };
 use golem_common::model::oplog::public_oplog_entry::{
     AgentInvocationFinishedParams, AgentInvocationStartedParams, CreateParams,
@@ -497,6 +497,44 @@ fn get_oplog_entry_from_public_oplog_entry(
                     serde_json::to_vec(&json.data).map_err(|e| e.to_string())?,
                     "application/json".to_string(),
                 ),
+                PublicSnapshotData::Multipart(multipart) => {
+                    use golem_common::base_model::oplog::multipart::extract_boundary;
+                    use golem_common::model::oplog::MultipartPartData;
+
+                    let boundary = extract_boundary(&multipart.mime_type)
+                        .unwrap_or("boundary")
+                        .to_string();
+                    let mut output = Vec::new();
+                    for part in &multipart.parts {
+                        output.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+                        output.extend_from_slice(
+                            format!("Content-Type: {}\r\n", part.content_type).as_bytes(),
+                        );
+                        output.extend_from_slice(
+                            format!(
+                                "Content-Disposition: attachment; name=\"{}\"\r\n",
+                                part.name
+                            )
+                            .as_bytes(),
+                        );
+                        output.extend_from_slice(b"\r\n");
+                        match &part.data {
+                            MultipartPartData::Json(json) => {
+                                output.extend_from_slice(
+                                    serde_json::to_vec(&json.data)
+                                        .unwrap_or_default()
+                                        .as_slice(),
+                                );
+                            }
+                            MultipartPartData::Raw(raw) => {
+                                output.extend_from_slice(&raw.data);
+                            }
+                        }
+                        output.extend_from_slice(b"\r\n");
+                    }
+                    output.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+                    (output, multipart.mime_type)
+                }
             };
             Ok(OplogEntry::Snapshot {
                 timestamp: snapshot_params.timestamp,
@@ -540,6 +578,47 @@ fn public_agent_invocation_result_to_raw(
                     data: serde_json::to_vec(&json.data).map_err(|e| e.to_string())?,
                     mime_type: "application/json".to_string(),
                 },
+                PublicSnapshotData::Multipart(multipart) => {
+                    use golem_common::base_model::oplog::multipart::extract_boundary;
+                    use golem_common::model::oplog::MultipartPartData;
+
+                    let boundary = extract_boundary(&multipart.mime_type)
+                        .unwrap_or("boundary")
+                        .to_string();
+                    let mut output = Vec::new();
+                    for part in &multipart.parts {
+                        output.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+                        output.extend_from_slice(
+                            format!("Content-Type: {}\r\n", part.content_type).as_bytes(),
+                        );
+                        output.extend_from_slice(
+                            format!(
+                                "Content-Disposition: attachment; name=\"{}\"\r\n",
+                                part.name
+                            )
+                            .as_bytes(),
+                        );
+                        output.extend_from_slice(b"\r\n");
+                        match &part.data {
+                            MultipartPartData::Json(json) => {
+                                output.extend_from_slice(
+                                    serde_json::to_vec(&json.data)
+                                        .unwrap_or_default()
+                                        .as_slice(),
+                                );
+                            }
+                            MultipartPartData::Raw(raw) => {
+                                output.extend_from_slice(&raw.data);
+                            }
+                        }
+                        output.extend_from_slice(b"\r\n");
+                    }
+                    output.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+                    RawSnapshotData {
+                        data: output,
+                        mime_type: multipart.mime_type,
+                    }
+                }
             };
             Ok(AgentInvocationResult::SaveSnapshot { snapshot })
         }

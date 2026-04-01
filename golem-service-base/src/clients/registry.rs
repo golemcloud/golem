@@ -20,36 +20,36 @@ use crate::model::component::Component;
 use crate::model::environment::EnvironmentState;
 use crate::model::{AccountResourceLimits, ResourceLimits};
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::registry::FuelUsageUpdate;
+use golem_api_grpc::proto::golem::registry::ResourceUsageUpdate as GrpcResourceUsageUpdate;
 use golem_api_grpc::proto::golem::registry::v1::registry_service_client::RegistryServiceClient;
 use golem_api_grpc::proto::golem::registry::v1::{
-    AuthenticateTokenRequest, BatchUpdateFuelUsageRequest, DownloadComponentRequest,
+    AuthenticateTokenRequest, BatchUpdateResourceUsageRequest, DownloadComponentRequest,
     GetActiveMcpForDomainRequest, GetActiveRoutesForDomainRequest, GetAgentTypeRequest,
     GetAllAgentTypesRequest, GetAllDeployedComponentRevisionsRequest,
     GetAuthDetailsForEnvironmentRequest, GetComponentMetadataRequest,
     GetCurrentEnvironmentStateRequest, GetDeployedComponentMetadataRequest,
     GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
-    ResolveAgentTypeAtDeploymentRequest, ResolveAgentTypeByNamesRequest, ResolveComponentRequest,
-    UpdateWorkerConnectionLimitRequest, UpdateWorkerLimitRequest, authenticate_token_response,
-    batch_update_fuel_usage_response, download_component_response,
-    get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
-    get_agent_type_response, get_all_agent_types_response,
+    ResolveAgentTypeByNamesRequest, ResolveComponentRequest, UpdateWorkerConnectionLimitRequest,
+    UpdateWorkerLimitRequest, authenticate_token_response, batch_update_resource_usage_response,
+    download_component_response, get_active_mcp_for_domain_response,
+    get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
     get_component_metadata_response, get_current_environment_state_response,
     get_deployed_component_metadata_response, get_resource_definition_by_id_response,
     get_resource_definition_by_name_response, get_resource_limits_response,
-    resolve_agent_type_at_deployment_response, resolve_agent_type_by_names_response,
-    resolve_component_response, resolve_latest_agent_type_by_names_response,
+    resolve_agent_type_by_names_response, resolve_component_response,
     update_worker_connection_limit_response, update_worker_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, ResolvedAgentType};
+use golem_common::model::agent::{
+    AgentTypeName, RegisteredAgentType, RegistryInvalidationEvent, ResolvedAgentType,
+};
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::resource_definition::{
@@ -60,9 +60,25 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
+use tracing::{info, warn};
+
+#[async_trait]
+pub trait RegistryInvalidationHandler: Send + Sync {
+    async fn on_event(&self, event: RegistryInvalidationEvent);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResourceUsageUpdate {
+    pub fuel_delta: i64,
+    pub http_call_count_delta: u64,
+    pub rpc_call_count_delta: u64,
+}
 
 #[async_trait]
 // mirrors golem-api-grpc/proto/golem/registry/v1/registry_service.proto
@@ -102,9 +118,9 @@ pub trait RegistryService: Send + Sync {
 
     // will be a noop if the account no longer exists
     // will return all current limits of updated accounts
-    async fn batch_update_fuel_usage(
+    async fn batch_update_resource_usage(
         &self,
-        updates: HashMap<AccountId, i64>,
+        updates: HashMap<AccountId, ResourceUsageUpdate>,
     ) -> Result<AccountResourceLimits, RegistryServiceError>;
 
     // components api
@@ -159,23 +175,6 @@ pub trait RegistryService: Send + Sync {
         name: &AgentTypeName,
     ) -> Result<RegisteredAgentType, RegistryServiceError>;
 
-    async fn resolve_latest_agent_type_by_names(
-        &self,
-        account_id: &AccountId,
-        app_name: &ApplicationName,
-        environment_name: &EnvironmentName,
-        agent_type_name: &AgentTypeName,
-    ) -> Result<RegisteredAgentType, RegistryServiceError>;
-
-    async fn resolve_agent_type_at_deployment(
-        &self,
-        account_id: &AccountId,
-        app_name: &ApplicationName,
-        environment_name: &EnvironmentName,
-        agent_type_name: &AgentTypeName,
-        deployment_revision: DeploymentRevision,
-    ) -> Result<RegisteredAgentType, RegistryServiceError>;
-
     async fn resolve_agent_type_by_names(
         &self,
         app_name: &ApplicationName,
@@ -228,6 +227,32 @@ pub trait RegistryService: Send + Sync {
         >,
         RegistryServiceError,
     >;
+
+    /// Common helper on top of subscribe_registry_invalidations to consume and dispatch
+    /// the invalidations events.
+    async fn run_registry_invalidation_event_subscriber(
+        &self,
+        service_name: &'static str,
+        shutdown_token: Option<CancellationToken>,
+        handler: Arc<dyn RegistryInvalidationHandler>,
+    );
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RegistryInvalidationEventSubscriberConfig {
+    #[serde(with = "humantime_serde")]
+    pub initial_backoff: Duration,
+    #[serde(with = "humantime_serde")]
+    pub max_backoff: Duration,
+}
+
+impl Default for RegistryInvalidationEventSubscriberConfig {
+    fn default() -> Self {
+        Self {
+            initial_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(30),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -237,6 +262,8 @@ pub struct GrpcRegistryServiceConfig {
     pub max_message_size: usize,
     #[serde(flatten)]
     pub client_config: GrpcClientConfig,
+    #[serde(default)]
+    pub invalidation_event_subscriber: RegistryInvalidationEventSubscriberConfig,
 }
 
 impl GrpcRegistryServiceConfig {
@@ -251,6 +278,16 @@ impl SafeDisplay for GrpcRegistryServiceConfig {
         let _ = writeln!(&mut result, "host: {}", self.host);
         let _ = writeln!(&mut result, "port: {}", self.port);
         let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
+        let _ = writeln!(
+            &mut result,
+            "invalidation_event_subscriber.initial_backoff: {:?}",
+            self.invalidation_event_subscriber.initial_backoff
+        );
+        let _ = writeln!(
+            &mut result,
+            "invalidation_event_subscriber.max_backoff: {:?}",
+            self.invalidation_event_subscriber.max_backoff
+        );
         let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
         result
     }
@@ -262,6 +299,7 @@ impl Default for GrpcRegistryServiceConfig {
             host: "localhost".to_string(),
             port: 8080,
             max_message_size: 50 * 1024 * 1024,
+            invalidation_event_subscriber: RegistryInvalidationEventSubscriberConfig::default(),
             client_config: GrpcClientConfig::default(),
         }
     }
@@ -276,6 +314,7 @@ impl HasConfigExamples<GrpcRegistryServiceConfig> for GrpcRegistryServiceConfig 
 #[derive(Clone)]
 pub struct GrpcRegistryService {
     client: GrpcClient<RegistryServiceClient<OtelGrpcService<Channel>>>,
+    config: GrpcRegistryServiceConfig,
 }
 
 impl GrpcRegistryService {
@@ -292,12 +331,120 @@ impl GrpcRegistryService {
             config.uri(),
             config.client_config.clone(),
         );
-        Self { client }
+        Self {
+            client,
+            config: config.clone(),
+        }
     }
 }
 
 #[async_trait]
 impl RegistryService for GrpcRegistryService {
+    async fn run_registry_invalidation_event_subscriber(
+        &self,
+        service_name: &'static str,
+        shutdown_token: Option<CancellationToken>,
+        handler: Arc<dyn RegistryInvalidationHandler>,
+    ) {
+        use futures::StreamExt;
+
+        let config = self.config.invalidation_event_subscriber.clone();
+        let mut last_seen_event_id: Option<u64> = None;
+        let mut backoff = config.initial_backoff;
+
+        loop {
+            let connect_result = if let Some(shutdown_token) = shutdown_token.as_ref() {
+                tokio::select! {
+                    result = self.subscribe_registry_invalidations(last_seen_event_id) => result,
+                    _ = shutdown_token.cancelled() => {
+                        info!(service = service_name, "Registry event subscriber shutting down");
+                        return;
+                    }
+                }
+            } else {
+                self.subscribe_registry_invalidations(last_seen_event_id)
+                    .await
+            };
+
+            match connect_result {
+                Ok(mut stream) => {
+                    info!(
+                        service = service_name,
+                        "Connected to registry invalidation stream"
+                    );
+                    backoff = config.initial_backoff;
+
+                    loop {
+                        let item = if let Some(shutdown_token) = shutdown_token.as_ref() {
+                            tokio::select! {
+                                item = stream.next() => item,
+                                _ = shutdown_token.cancelled() => {
+                                    info!(service = service_name, "Registry event subscriber shutting down");
+                                    return;
+                                }
+                            }
+                        } else {
+                            stream.next().await
+                        };
+
+                        match item {
+                            Some(Ok(event)) => {
+                                if let Some(last_seen) = last_seen_event_id
+                                    && event.event_id() <= last_seen
+                                {
+                                    warn!(
+                                        service = service_name,
+                                        event_id = event.event_id(),
+                                        last_seen_event_id = last_seen,
+                                        "Ignoring out-of-order or duplicate registry event"
+                                    );
+                                    continue;
+                                }
+
+                                last_seen_event_id = Some(event.event_id());
+                                handler.on_event(event).await;
+                            }
+                            Some(Err(e)) => {
+                                warn!(
+                                    service = service_name,
+                                    "Error receiving registry event: {e}, reconnecting"
+                                );
+                                break;
+                            }
+                            None => {
+                                warn!(
+                                    service = service_name,
+                                    "Registry invalidation stream ended, reconnecting"
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        service = service_name,
+                        "Failed to connect to registry invalidation stream: {e}"
+                    );
+                }
+            }
+
+            if let Some(shutdown_token) = shutdown_token.as_ref() {
+                tokio::select! {
+                    _ = tokio::time::sleep(backoff) => {}
+                    _ = shutdown_token.cancelled() => {
+                        info!(service = service_name, "Registry event subscriber shutting down");
+                        return;
+                    }
+                }
+            } else {
+                tokio::time::sleep(backoff).await;
+            }
+
+            backoff = (backoff * 2).min(config.max_backoff);
+        }
+    }
+
     async fn authenticate_token(
         &self,
         token: &TokenSecret,
@@ -440,40 +587,42 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
-    async fn batch_update_fuel_usage(
+    async fn batch_update_resource_usage(
         &self,
-        updates: HashMap<AccountId, i64>,
+        updates: HashMap<AccountId, ResourceUsageUpdate>,
     ) -> Result<AccountResourceLimits, RegistryServiceError> {
-        let updates: Vec<FuelUsageUpdate> = updates
+        let updates: Vec<GrpcResourceUsageUpdate> = updates
             .into_iter()
-            .map(|(k, v)| FuelUsageUpdate {
+            .map(|(k, v)| GrpcResourceUsageUpdate {
                 account_id: Some(k.into()),
-                value: v,
+                fuel_delta: v.fuel_delta,
+                http_call_count_delta: v.http_call_count_delta,
+                rpc_call_count_delta: v.rpc_call_count_delta,
             })
             .collect();
 
         let response = self
             .client
-            .call("batch_update_fuel_usage", move |client| {
-                let request = BatchUpdateFuelUsageRequest {
+            .call("batch_update_resource_usage", move |client| {
+                let request = BatchUpdateResourceUsageRequest {
                     updates: updates.clone(),
                 };
 
-                Box::pin(client.batch_update_fuel_usage(request))
+                Box::pin(client.batch_update_resource_usage(request))
             })
             .await?
             .into_inner();
 
         match response.result {
             None => Err(RegistryServiceError::empty_response()),
-            Some(batch_update_fuel_usage_response::Result::Success(payload)) => {
+            Some(batch_update_resource_usage_response::Result::Success(payload)) => {
                 let converted = payload
                     .account_resource_limits
                     .ok_or("missing account_resource_limits field")?
                     .try_into()?;
                 Ok(converted)
             }
-            Some(batch_update_fuel_usage_response::Result::Error(error)) => Err(error.into()),
+            Some(batch_update_resource_usage_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -707,78 +856,6 @@ impl RegistryService for GrpcRegistryService {
         }
     }
 
-    async fn resolve_latest_agent_type_by_names(
-        &self,
-        account_id: &AccountId,
-        app_name: &ApplicationName,
-        environment_name: &EnvironmentName,
-        agent_type_name: &AgentTypeName,
-    ) -> Result<RegisteredAgentType, RegistryServiceError> {
-        let response = self
-            .client
-            .call("resolve_latest_agent_type_by_names", move |client| {
-                let request = golem_api_grpc::proto::golem::registry::v1::ResolveLatestAgentTypeByNamesRequest {
-                    account_id: Some((*account_id).into()),
-                    app_name: app_name.0.clone(),
-                    environment_name: environment_name.0.clone(),
-                    agent_type_name: agent_type_name.0.clone(),
-                };
-                Box::pin(client.resolve_latest_agent_type_by_names(request))
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            None => Err(RegistryServiceError::empty_response()),
-            Some(resolve_latest_agent_type_by_names_response::Result::Success(payload)) => {
-                Ok(payload
-                    .agent_type
-                    .ok_or("missing agent_type field")?
-                    .try_into()?)
-            }
-            Some(resolve_latest_agent_type_by_names_response::Result::Error(error)) => {
-                Err(error.into())
-            }
-        }
-    }
-
-    async fn resolve_agent_type_at_deployment(
-        &self,
-        account_id: &AccountId,
-        app_name: &ApplicationName,
-        environment_name: &EnvironmentName,
-        agent_type_name: &AgentTypeName,
-        deployment_revision: DeploymentRevision,
-    ) -> Result<RegisteredAgentType, RegistryServiceError> {
-        let response = self
-            .client
-            .call("resolve_agent_type_at_deployment", move |client| {
-                let request = ResolveAgentTypeAtDeploymentRequest {
-                    account_id: Some((*account_id).into()),
-                    app_name: app_name.0.clone(),
-                    environment_name: environment_name.0.clone(),
-                    agent_type_name: agent_type_name.0.clone(),
-                    deployment_revision: deployment_revision.get(),
-                };
-                Box::pin(client.resolve_agent_type_at_deployment(request))
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            None => Err(RegistryServiceError::empty_response()),
-            Some(resolve_agent_type_at_deployment_response::Result::Success(payload)) => {
-                Ok(payload
-                    .agent_type
-                    .ok_or("missing agent_type field")?
-                    .try_into()?)
-            }
-            Some(resolve_agent_type_at_deployment_response::Result::Error(error)) => {
-                Err(error.into())
-            }
-        }
-    }
-
     async fn resolve_agent_type_by_names(
         &self,
         app_name: &ApplicationName,
@@ -817,10 +894,16 @@ impl RegistryService for GrpcRegistryService {
                     .try_into()?;
                 let deployment_revision = DeploymentRevision::try_from(payload.deployment_revision)
                     .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+                let current_deployment_revision = payload
+                    .current_deployment_revision
+                    .map(CurrentDeploymentRevision::try_from)
+                    .transpose()
+                    .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
                 Ok(ResolvedAgentType {
                     registered_agent_type,
                     environment_id,
                     deployment_revision,
+                    current_deployment_revision,
                 })
             }
             Some(resolve_agent_type_by_names_response::Result::Error(error)) => Err(error.into()),
@@ -1033,6 +1116,7 @@ fn proto_registry_event_to_model(
                     event_id,
                     environment_id,
                     deployment_revision: dc.deployment_revision,
+                    current_deployment_revision: dc.current_deployment_revision,
                 },
             )
         }
@@ -1112,6 +1196,36 @@ fn proto_registry_event_to_model(
                 golem_common::model::agent::RegistryInvalidationEvent::SecuritySchemeChanged {
                     event_id,
                     environment_id,
+                },
+            )
+        }
+        Some(Payload::ResourceDefinitionChanged(rdc)) => {
+            let environment_id = rdc
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in ResourceDefinitionChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            let resource_definition_id = rdc
+                .resource_definition_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing resource_definition_id in ResourceDefinitionChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::ResourceDefinitionChanged {
+                    event_id,
+                    environment_id,
+                    resource_definition_id,
+                    resource_name: golem_common::model::resource_definition::ResourceName(
+                        rdc.resource_name,
+                    ),
                 },
             )
         }

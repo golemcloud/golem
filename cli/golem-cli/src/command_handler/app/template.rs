@@ -18,17 +18,17 @@ use crate::app::template::{
     MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
     SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, UnsafeTemplatePlan,
 };
-use crate::command_handler::app::AppCommandHandler;
 use crate::command_handler::Handlers;
+use crate::command_handler::app::AppCommandHandler;
 use crate::context::Context;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::log::{
-    log_action, log_anyhow_error, log_error, log_failed_to, log_finished_ok,
-    log_skipping_up_to_date, logln, LogColorize, LogIndent,
+    LogColorize, LogIndent, log_action, log_anyhow_error, log_error, log_failed_to,
+    log_finished_ok, log_skipping_up_to_date, logln,
 };
-use crate::model::text::diff::log_unified_diff;
 use crate::model::GuestLanguage;
+use crate::model::text::diff::log_unified_diff_for_path;
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
@@ -126,7 +126,7 @@ impl TemplateHandler {
             &context.existing_components,
         )?;
 
-        let template_plan = self.build_new_template_plan(
+        let template_plan = self.plan_applying_new_template(
             &selections.application_name,
             &context.application_path,
             &template_mapping.template_to_component,
@@ -171,7 +171,9 @@ impl TemplateHandler {
                     logln("");
                     log_error("Cannot create new application in existing application directory");
                     logln("");
-                    logln("To add new agents or component to the current application, use the 'golem new .' command!");
+                    logln(
+                        "To add new agents or component to the current application, use the 'golem new .' command!",
+                    );
                     logln("");
                     logln("To create a new application, switch to new directory without one!");
                     bail!(NonSuccessfulExit);
@@ -261,7 +263,10 @@ impl TemplateHandler {
                 Some(application_name) => application_name,
                 None => {
                     logln("");
-                    log_error(format!("In non-interactive mode, APPLICATION_PATH must end with a valid application name: {}", err));
+                    log_error(format!(
+                        "In non-interactive mode, APPLICATION_PATH must end with a valid application name: {}",
+                        err
+                    ));
                     bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
                 }
             },
@@ -304,17 +309,17 @@ impl TemplateHandler {
         for template_name in template_names {
             match component_name {
                 Some(component_name) => {
-                    if let Some(existing_component) = existing_components.get(component_name) {
-                        if template_name.language() != existing_component.language {
-                            validation.add_error(format!(
+                    if let Some(existing_component) = existing_components.get(component_name)
+                        && template_name.language() != existing_component.language
+                    {
+                        validation.add_error(format!(
                                 "Cannot add {} template {} to existing {} component {}, language mismatch!",
                                 template_name.language().name().log_color_highlight(),
                                 template_name.as_str().log_color_error_highlight(),
                                 existing_component.language.name().log_color_highlight(),
                                 component_name.as_str().log_color_highlight(),
                             ));
-                            continue;
-                        }
+                        continue;
                     }
 
                     template_to_component.insert(template_name.clone(), component_name.clone());
@@ -408,19 +413,16 @@ impl TemplateHandler {
 
             if let Some(common_template) =
                 app_template_repo.common_template(template_name.language())?
+                && !common_templates.contains_key(&common_template.0.name)
             {
-                if !common_templates.contains_key(&common_template.0.name) {
-                    common_templates
-                        .insert(common_template.0.name.clone(), common_template.clone());
-                }
+                common_templates.insert(common_template.0.name.clone(), common_template.clone());
             }
 
-            if !component_templates.contains_key(component_name) {
-                if let Some(component_template) =
+            if !component_templates.contains_key(component_name)
+                && let Some(component_template) =
                     app_template_repo.component_templates(template_name.language())?
-                {
-                    component_templates.insert(component_name.clone(), component_template.clone());
-                }
+            {
+                component_templates.insert(component_name.clone(), component_template.clone());
             }
 
             match app_template_repo.agent_template(template_name) {
@@ -509,7 +511,7 @@ impl TemplateHandler {
 
                         let component_template =
                             app_template_repo.component_template(component.language)?;
-                        let upgrade_plan = self.build_multi_component_layout_upgrade_plan(
+                        let upgrade_plan = self.plan_multi_component_layout_upgrade(
                             component,
                             application_path,
                             &new_component_dir,
@@ -550,12 +552,11 @@ impl TemplateHandler {
 
         // We extend the component templates again to include promoted existing components
         for component_name in all_component_directories.keys() {
-            if let Some(component) = existing_components.get(component_name) {
-                if let Some(component_template) =
+            if let Some(component) = existing_components.get(component_name)
+                && let Some(component_template) =
                     app_template_repo.component_template(component.language)?
-                {
-                    component_templates.insert(component_name.clone(), component_template.clone());
-                }
+            {
+                component_templates.insert(component_name.clone(), component_template.clone());
             }
         }
 
@@ -567,7 +568,7 @@ impl TemplateHandler {
         })
     }
 
-    fn build_new_template_plan(
+    fn plan_applying_new_template(
         &self,
         application_name: &ApplicationName,
         application_path: &Path,
@@ -642,7 +643,7 @@ impl TemplateHandler {
         Ok(template_plan_builder.build())
     }
 
-    fn build_multi_component_layout_upgrade_plan(
+    fn plan_multi_component_layout_upgrade(
         &self,
         component: &ExistingComponent,
         application_path: &Path,
@@ -706,7 +707,7 @@ impl TemplateHandler {
                 component_name.as_str().log_color_highlight()
             ),
         );
-        let _indent = self.ctx.log_handler().nested_text_view_indent();
+        let _indent = self.ctx.log_handler().decorated_indent_primary();
 
         for step in upgrade_plan.steps() {
             match step {
@@ -781,7 +782,7 @@ impl TemplateHandler {
         if !validation_errors.is_empty() {
             logln("");
             log_failed_to("validate Multi-component layout upgrade plan");
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
 
             logln("");
             logln(
@@ -841,7 +842,7 @@ impl TemplateHandler {
         if !overwrites.is_empty() || !failed_plans.is_empty() {
             logln("");
             log_failed_to("plan the required changes to apply the selected template(s)");
-            let _indent = self.ctx.log_handler().nested_text_view_indent();
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
 
             logln("");
 
@@ -887,7 +888,7 @@ impl TemplateHandler {
             "Planned",
             "required changes for applying the selected template(s)",
         );
-        let _indent = self.ctx.log_handler().nested_text_view_indent();
+        let _indent = self.ctx.log_handler().decorated_indent_primary();
         for (path, step) in safe_template_plan.file_steps() {
             match step {
                 SafeTemplatePlanStep::Create { .. } => {
@@ -904,8 +905,8 @@ impl TemplateHandler {
                         path.log_color_highlight()
                     ));
                     let _indent = LogIndent::new();
-                    let _indent = self.ctx.log_handler().nested_text_view_indent();
-                    log_unified_diff(&diff::unified_diff(current, new));
+                    let _indent = self.ctx.log_handler().decorated_indent_secondary();
+                    log_unified_diff_for_path(path, &diff::unified_diff(current, new));
                 }
                 SafeTemplatePlanStep::SkipSame { .. } => {
                     logln(format!(

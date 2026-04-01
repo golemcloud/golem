@@ -63,12 +63,13 @@ impl InMemoryIndexedStorage {
     #[allow(clippy::type_complexity)]
     fn match_key(
         namespace: IndexedStorageMetaNamespace,
-        prefix: &str,
+        prefix: Option<&str>,
     ) -> Box<dyn Fn(&str) -> Option<String> + Send + Sync> {
+        let prefix = prefix.unwrap_or("");
         match namespace {
             IndexedStorageMetaNamespace::Oplog => {
                 let pattern: String =
-                    format!(r"^oplog/([^/]+)/([^/]+)/({}.+)$", regex::escape(prefix));
+                    format!(r"^oplog/([^/]+)/([^/]+)/({}.*)$", regex::escape(prefix));
                 let regex = Regex::new(&pattern).unwrap();
 
                 Box::new(move |key| {
@@ -79,7 +80,7 @@ impl InMemoryIndexedStorage {
             }
             IndexedStorageMetaNamespace::CompressedOplog { level } => {
                 let pattern: String = format!(
-                    r"^compressed-oplog/{level}/([^/]+)/([^/]+)/({}.+)$",
+                    r"^compressed-oplog/{level}/([^/]+)/([^/]+)/({}.*)$",
                     regex::escape(prefix)
                 );
                 let regex = Regex::new(&pattern).unwrap();
@@ -130,47 +131,41 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
         namespace: IndexedStorageMetaNamespace,
-        pattern: &str,
+        prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String> {
         let mut result = Vec::new();
+        let matcher = Self::match_key(namespace, prefix);
+        let mut idx = 0;
+        let mut has_more = false;
 
-        if pattern.ends_with('*') && !pattern[0..pattern.len() - 1].contains('*') {
-            let key_prefix = &pattern[0..pattern.len() - 1];
-            let matcher = Self::match_key(namespace, key_prefix);
-            let mut idx = 0;
-            let mut has_more = false;
+        self.data
+            .iter_async(|key, _| {
+                idx += 1;
+                if idx > cursor {
+                    if let Some(matched) = matcher(key) {
+                        result.push(matched);
 
-            self.data
-                .iter_async(|key, _| {
-                    idx += 1;
-                    if idx > cursor {
-                        if let Some(matched) = matcher(key) {
-                            result.push(matched);
-
-                            if (result.len() as u64) == count {
-                                has_more = true;
-                                false
-                            } else {
-                                true
-                            }
+                        if (result.len() as u64) == count {
+                            has_more = true;
+                            false
                         } else {
                             true
                         }
                     } else {
                         true
                     }
-                })
-                .await;
+                } else {
+                    true
+                }
+            })
+            .await;
 
-            if has_more {
-                Ok((idx, result))
-            } else {
-                Ok((0, result))
-            }
+        if has_more {
+            Ok((idx, result))
         } else {
-            Err("Pattern not supported by the in-memory indexed storage implementation".to_string())
+            Ok((0, result))
         }
     }
 
@@ -333,8 +328,8 @@ mod tests {
 
     use crate::storage::indexed::{IndexedStorageLabelledApi, IndexedStorageNamespace};
     use assert2::check;
-    use golem_common::model::component::ComponentId;
     use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
 
     fn test_agent_id() -> AgentId {
         use std::sync::OnceLock;

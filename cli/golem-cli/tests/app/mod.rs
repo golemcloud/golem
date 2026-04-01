@@ -29,24 +29,23 @@ sequential_suite!(plugins);
 tag_suite!(build_and_deploy_all, group2);
 sequential_suite!(build_and_deploy_all);
 
-tag_suite!(agents, group3);
 sequential_suite!(agents);
 
 inherit_test_dep!(Tracing);
 
-use crate::{crate_path, workspace_path, Tracing};
+use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
 use colored::Colorize;
 use expectrl::Expect;
 use golem_cli::app::edit;
 use golem_cli::fs;
 use golem_cli::sdk_overrides::sdk_overrides;
-use golem_client::api::HealthCheckClient;
 use golem_client::Security;
+use golem_client::api::HealthCheckClient;
 use itertools::Itertools;
 use lenient_bool::LenientBool;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -90,6 +89,7 @@ mod flag {
     pub static LANGUAGE: &str = "--language";
     pub static SCRIPT: &str = "--script";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
+    pub static STEP: &str = "--step";
     pub static TEMPLATE: &str = "--template";
     pub static YES: &str = "--yes";
 }
@@ -298,7 +298,7 @@ struct TestContext {
     quiet: bool,
     golem_path: PathBuf,
     golem_cli_path: PathBuf,
-    _test_dir: TempDir,
+    _test_dir: Option<TempDir>,
     config_dir: TempDir,
     data_dir: TempDir,
     ports_file: PathBuf,
@@ -328,8 +328,25 @@ impl TestContext {
             .unwrap_or_default()
             .0;
 
-        let test_dir = TempDir::new().unwrap();
-        let working_dir = test_dir.path().to_path_buf();
+        // NOTE: GOLEM_CLI_TEST_DIR is intended to be used for debugging one test at a time,
+        //       locally, while keeping the test dir
+        let (test_dir, working_dir) = match std::env::var("GOLEM_CLI_TEST_DIR") {
+            Ok(path) if !path.trim().is_empty() => {
+                let path = PathBuf::from(path);
+                println!(
+                    "{} {}",
+                    "> using GOLEM_CLI_TEST_DIR override:".bold(),
+                    path.display()
+                );
+                fs::create_dir_all(&path).unwrap();
+                (None, path)
+            }
+            _ => {
+                let test_dir = TempDir::new().unwrap();
+                let working_dir = test_dir.path().to_path_buf();
+                (Some(test_dir), working_dir)
+            }
+        };
 
         let mut env = HashMap::new();
 
@@ -347,14 +364,20 @@ impl TestContext {
         let ctx = Self {
             quiet,
             golem_path: {
-                let path = workspace_path().join("target/debug/golem");
+                let path = workspace_path().join(format!(
+                    "target/debug/golem{}",
+                    std::env::consts::EXE_SUFFIX
+                ));
                 if !path.exists() {
                     panic!("golem binary not found at {}", path.display());
                 }
                 path
             },
             golem_cli_path: {
-                let path = workspace_path().join("target/debug/golem-cli");
+                let path = workspace_path().join(format!(
+                    "target/debug/golem-cli{}",
+                    std::env::consts::EXE_SUFFIX
+                ));
                 if !path.exists() {
                     panic!("golem-cli binary not found at {}", path.display());
                 }
@@ -437,7 +460,7 @@ impl TestContext {
             );
             all_args
         };
-        let working_dir = &self.working_dir.canonicalize().unwrap();
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
 
         println!(
             "{} {}",
@@ -449,7 +472,7 @@ impl TestContext {
         let mut child = Command::new(&self.golem_cli_path)
             .args(args)
             .envs(&self.env)
-            .current_dir(working_dir)
+            .current_dir(&working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -479,7 +502,7 @@ impl TestContext {
             );
             all_args
         };
-        let working_dir = self.working_dir.canonicalize().unwrap();
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
 
         println!(
             "{} {}",
@@ -795,6 +818,7 @@ fn find_manifest_files(root: &Path) -> Vec<PathBuf> {
     manifests
 }
 
+#[allow(dead_code)]
 pub trait InteractiveSession {
     fn set_expect_timeout(&mut self, timeout: Option<Duration>);
     fn send(&mut self, line: &str) -> anyhow::Result<()>;
@@ -813,28 +837,28 @@ pub trait InteractiveSession {
     fn send_and_expect_str(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
         self.send(line)?;
         self.expect_str(expected)
-            .with_context(|| format!("after sending: {line}"))?;
+            .with_context(|| format!("after sending: {line:?}"))?;
         Ok(())
     }
 
     fn send_and_expect_regex(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
         self.send(line)?;
         self.expect_regex(expected)
-            .with_context(|| format!("after sending: {line}"))?;
+            .with_context(|| format!("after sending: {line:?}"))?;
         Ok(())
     }
 
     fn send_line_and_expect_str(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
         self.send_line(line)?;
         self.expect_str(expected)
-            .with_context(|| format!("after sending line: {line}"))?;
+            .with_context(|| format!("after sending line: {line:?}"))?;
         Ok(())
     }
 
     fn send_line_and_expect_regex(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
         self.send_line(line)?;
         self.expect_regex(expected)
-            .with_context(|| format!("after sending line: {line}"))?;
+            .with_context(|| format!("after sending line: {line:?}"))?;
         Ok(())
     }
 }

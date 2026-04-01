@@ -24,7 +24,9 @@ pub struct ProvidedComponentCompilationService {
 
 impl ProvidedComponentCompilationService {
     pub fn new(host: String, grpc_port: u16) -> Self {
-        info!("Using already running golem-compilation-component-service on {host}, grpc port: {grpc_port}");
+        info!(
+            "Using already running golem-compilation-component-service on {host}, grpc port: {grpc_port}"
+        );
         Self { host, grpc_port }
     }
 }

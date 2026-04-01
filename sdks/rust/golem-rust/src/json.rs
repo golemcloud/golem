@@ -14,8 +14,8 @@
 
 use crate::await_promise;
 use crate::bindings::golem::api::host::PromiseId;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 /// Awaits a promise blocking the execution of the agent. The agent is going to be
 /// suspended until the promise is completed.

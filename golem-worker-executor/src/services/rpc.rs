@@ -16,21 +16,22 @@ use super::agent_webhooks::AgentWebhooksService;
 use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
 use super::{HasAgentWebhooksService, HasEnvironmentStateService};
+use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
-    active_workers, agent_types, blob_store, component, golem_config, key_value, oplog, promise,
-    rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
     HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
     HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService,
     HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasRdbmsService,
     HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
     HasShardManagerService, HasShardService, HasShutdownToken, HasWasmtimeEngine,
-    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
-    HasWorkerService,
+    HasWebSocketConnectionPool, HasWorkerActivator, HasWorkerEnumerationService,
+    HasWorkerForkService, HasWorkerProxy, HasWorkerService, active_workers, agent_types,
+    blob_store, component, golem_config, key_value, oplog, promise, rdbms, scheduler,
+    shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -403,6 +404,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
     http_connection_pool: Option<HttpConnectionPool>,
+    websocket_connection_pool: WebSocketConnectionPool,
     extra_deps: Ctx::ExtraDeps,
     leak_sentinel: Arc<()>,
 }
@@ -439,6 +441,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             agent_types_service: self.agent_types_service.clone(),
             agent_webhooks_service: self.agent_webhooks_service.clone(),
             http_connection_pool: self.http_connection_pool.clone(),
+            websocket_connection_pool: self.websocket_connection_pool.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -629,6 +632,12 @@ impl<Ctx: WorkerCtx> HasHttpConnectionPool for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasWebSocketConnectionPool for DirectWorkerInvocationRpc<Ctx> {
+    fn websocket_connection_pool(&self) -> WebSocketConnectionPool {
+        self.websocket_connection_pool.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasEnvironmentStateService for DirectWorkerInvocationRpc<Ctx> {
     fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
         self.environment_state_service.clone()
@@ -670,6 +679,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         http_connection_pool: Option<HttpConnectionPool>,
+        websocket_connection_pool: WebSocketConnectionPool,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -703,6 +713,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             agent_types_service,
             agent_webhooks_service,
             http_connection_pool,
+            websocket_connection_pool,
             extra_deps,
             leak_sentinel,
         }

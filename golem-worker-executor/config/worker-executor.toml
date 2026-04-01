@@ -1,6 +1,7 @@
 ## Generated from default config
 http_address = "0.0.0.0"
 http_port = 8082
+max_websocket_connections = 100
 tracing_file_name_with_port = true
 
 [active_workers]
@@ -127,6 +128,12 @@ plugin_max_elapsed_time = "5s"
 [oplog.default_snapshotting]
 type = "Disabled"
 
+[oplog.oplog_processor_snapshotting]
+type = "EveryNInvocation"
+
+[oplog.oplog_processor_snapshotting.config]
+count = 10
+
 [public_worker_api]
 connect_timeout = "10s"
 host = "localhost"
@@ -159,6 +166,10 @@ host = "localhost"
 max_message_size = 52428800
 port = 8080
 request_timeout = "30s"
+
+[registry_service.invalidation_event_subscriber]
+initial_backoff = "100ms"
+max_backoff = "30s"
 
 [registry_service.retries_on_unavailable]
 max_attempts = 5
@@ -274,6 +285,7 @@ without_time = false
 ## Generated from example config: with redis indexed_storage, s3 blob storage, single shard manager service
 # http_address = "0.0.0.0"
 # http_port = 8082
+# max_websocket_connections = 100
 # tracing_file_name_with_port = true
 # 
 # [active_workers]
@@ -414,6 +426,12 @@ without_time = false
 # [oplog.default_snapshotting]
 # type = "Disabled"
 # 
+# [oplog.oplog_processor_snapshotting]
+# type = "EveryNInvocation"
+# 
+# [oplog.oplog_processor_snapshotting.config]
+# count = 10
+# 
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
@@ -446,6 +464,10 @@ without_time = false
 # max_message_size = 52428800
 # port = 8080
 # request_timeout = "30s"
+# 
+# [registry_service.invalidation_event_subscriber]
+# initial_backoff = "100ms"
+# max_backoff = "30s"
 # 
 # [registry_service.retries_on_unavailable]
 # max_attempts = 5
@@ -538,6 +560,7 @@ without_time = false
 ## Generated from example config: with in-memory key value storage, indexed storage and blob storage
 # http_address = "0.0.0.0"
 # http_port = 8082
+# max_websocket_connections = 100
 # tracing_file_name_with_port = true
 # 
 # [active_workers]
@@ -649,6 +672,12 @@ without_time = false
 # [oplog.default_snapshotting]
 # type = "Disabled"
 # 
+# [oplog.oplog_processor_snapshotting]
+# type = "EveryNInvocation"
+# 
+# [oplog.oplog_processor_snapshotting.config]
+# count = 10
+# 
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
@@ -681,6 +710,10 @@ without_time = false
 # max_message_size = 52428800
 # port = 8080
 # request_timeout = "30s"
+# 
+# [registry_service.invalidation_event_subscriber]
+# initial_backoff = "100ms"
+# max_backoff = "30s"
 # 
 # [registry_service.retries_on_unavailable]
 # max_attempts = 5

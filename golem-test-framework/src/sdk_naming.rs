@@ -16,11 +16,11 @@ use golem_common::model::agent::{
     ComponentModelElementValue, DataValue, ElementValue, ElementValues, NamedElementValue,
     NamedElementValues,
 };
+use golem_wasm::ValueAndType;
 use golem_wasm::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeHandle, TypeList,
     TypeOption, TypeRecord, TypeResult, TypeTuple, TypeVariant,
 };
-use golem_wasm::ValueAndType;
 use heck::{ToLowerCamelCase, ToPascalCase, ToSnakeCase};
 
 /// Transforms an AnalysedType's naming to match Rust SDK conventions.

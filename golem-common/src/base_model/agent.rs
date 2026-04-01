@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::AgentId;
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
-use crate::base_model::deployment::DeploymentRevision;
+use crate::base_model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use crate::base_model::environment::EnvironmentId;
-use crate::base_model::AgentId;
 use crate::model::Empty;
 use async_trait::async_trait;
 use golem_wasm::agentic::unstructured_binary::{AllowedMimeTypes, UnstructuredBinary};
@@ -116,6 +116,9 @@ pub struct ResolvedAgentType {
     pub registered_agent_type: RegisteredAgentType,
     pub environment_id: EnvironmentId,
     pub deployment_revision: DeploymentRevision,
+    // Present only when resolving at the latest current deployment (no explicit deployment
+    // revision requested).
+    pub current_deployment_revision: Option<CurrentDeploymentRevision>,
 }
 
 /// Event received from the registry service when any registry state changes.
@@ -128,6 +131,7 @@ pub enum RegistryInvalidationEvent {
         event_id: u64,
         environment_id: EnvironmentId,
         deployment_revision: u64,
+        current_deployment_revision: u64,
     },
     /// Domain registrations changed (created/deleted).
     DomainRegistrationChanged {
@@ -151,6 +155,13 @@ pub enum RegistryInvalidationEvent {
         event_id: u64,
         environment_id: EnvironmentId,
     },
+    /// A resource definition was created, updated, or deleted.
+    ResourceDefinitionChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+        resource_definition_id: crate::base_model::resource_definition::ResourceDefinitionId,
+        resource_name: crate::base_model::resource_definition::ResourceName,
+    },
 }
 
 impl RegistryInvalidationEvent {
@@ -162,6 +173,7 @@ impl RegistryInvalidationEvent {
             Self::AccountTokensInvalidated { event_id, .. } => *event_id,
             Self::EnvironmentPermissionsChanged { event_id, .. } => *event_id,
             Self::SecuritySchemeChanged { event_id, .. } => *event_id,
+            Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
         }
     }
 }

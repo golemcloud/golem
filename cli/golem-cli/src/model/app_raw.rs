@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
+use crate::model::GuestLanguage;
 use crate::model::cascade::property::map::MapMergeMode;
 use crate::model::cascade::property::vec::VecMergeMode;
 use crate::model::format::Format;
-use crate::model::GuestLanguage;
-use crate::{fs, APP_MANIFEST_JSON_SCHEMA};
-use anyhow::{anyhow, Context};
+use crate::{APP_MANIFEST_JSON_SCHEMA, fs};
+use anyhow::{Context, anyhow};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use golem_common::model::diff;
@@ -61,6 +61,19 @@ pub struct ApplicationWithSource {
     pub application: Application,
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ApplicationMetadata {
+    pub manifest_version: Option<String>,
+    pub includes: Vec<String>,
+}
+
+impl ApplicationMetadata {
+    pub fn from_yaml_str(yaml: &str) -> Result<Self, serde_yaml::Error> {
+        serde_yaml::from_str(yaml)
+    }
+}
+
 impl ApplicationWithSource {
     pub fn from_yaml_file(file: &Path) -> anyhow::Result<Self> {
         Self::from_yaml_string(file.to_path_buf(), &fs::read_to_string(file)?)
@@ -82,6 +95,8 @@ impl ApplicationWithSource {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Application {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -12,29 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
 use crate::components::component_compilation_service::ComponentCompilationService;
+use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
+use crate::components::rdb::Rdb;
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
 use crate::components::rdb::sqlite::SqliteRdb;
-use crate::components::rdb::Rdb;
+use crate::components::redis::Redis;
 use crate::components::redis::provided::ProvidedRedis;
 use crate::components::redis::spawned::SpawnedRedis;
-use crate::components::redis::Redis;
-use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use crate::components::redis_monitor::RedisMonitor;
-use crate::components::registry_service::spawned::SpawnedRegistryService;
+use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use crate::components::registry_service::RegistryService;
-use crate::components::shard_manager::spawned::SpawnedShardManager;
+use crate::components::registry_service::spawned::SpawnedRegistryService;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCluster;
+use crate::components::shard_manager::spawned::SpawnedShardManager;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
-use crate::components::worker_service::spawned::SpawnedWorkerService;
+use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
+use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::config::{DbType, TestDependencies};
 use async_trait::async_trait;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -124,15 +124,6 @@ impl EnvBasedTestDependenciesConfig {
     fn debug_targets_dirs(&self) -> PathBuf {
         self.golem_repo_root.join("target/debug")
     }
-
-    fn storage_dir(&self) -> PathBuf {
-        self.golem_repo_root.join("target/test_dependencies")
-    }
-
-    async fn canonicalize_dirs(&mut self) -> anyhow::Result<()> {
-        self.golem_repo_root = tokio::fs::canonicalize(&self.golem_repo_root).await?;
-        Ok(())
-    }
 }
 
 impl Default for EnvBasedTestDependenciesConfig {
@@ -175,11 +166,11 @@ impl Debug for EnvBasedTestDependencies {
 }
 
 impl EnvBasedTestDependencies {
-    async fn make_rdb(config: &EnvBasedTestDependenciesConfig) -> Arc<dyn Rdb> {
+    async fn make_rdb(config: &EnvBasedTestDependenciesConfig, temp_dir: &Path) -> Arc<dyn Rdb> {
         match config.db_type {
             DbType::Sqlite => {
-                let sqlite_path = &config.storage_dir().join("golem_test_db");
-                Arc::new(SqliteRdb::new(sqlite_path))
+                let sqlite_db_dir = &temp_dir.join("sqlite");
+                Arc::new(SqliteRdb::new(sqlite_db_dir))
             }
             DbType::Postgres => {
                 Arc::new(DockerPostgresRdb::new(&config.unique_network_id, false).await)
@@ -239,7 +230,8 @@ impl EnvBasedTestDependencies {
 
     async fn make_shard_manager(
         config: &EnvBasedTestDependenciesConfig,
-        redis: Arc<dyn Redis>,
+        rdb: Arc<dyn Rdb>,
+        registry_service: Arc<dyn RegistryService>,
     ) -> Arc<dyn ShardManager> {
         Arc::new(
             SpawnedShardManager::new(
@@ -248,7 +240,8 @@ impl EnvBasedTestDependencies {
                 config.number_of_shards_override,
                 9021,
                 9020,
-                redis,
+                rdb,
+                registry_service,
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
@@ -334,10 +327,11 @@ impl EnvBasedTestDependencies {
         )
     }
 
-    pub async fn new(mut config: EnvBasedTestDependenciesConfig) -> anyhow::Result<Self> {
-        config.canonicalize_dirs().await?;
+    pub async fn new(config: EnvBasedTestDependenciesConfig) -> anyhow::Result<Self> {
+        let temp_directory =
+            Arc::new(TempDir::new().expect("Failed to create temporary directory"));
 
-        let blob_storage_root = &config.storage_dir().join("blob_storage");
+        let blob_storage_root = &temp_directory.path().join("blob_storage");
         tokio::fs::create_dir_all(&blob_storage_root).await?;
 
         let blob_storage = Arc::new(FileSystemBlobStorage::new(blob_storage_root).await.unwrap());
@@ -353,14 +347,15 @@ impl EnvBasedTestDependencies {
 
         let redis_monitor = Self::make_redis_monitor(&config, redis.clone()).await;
 
-        let rdb = Self::make_rdb(&config).await;
-
-        let shard_manager = Self::make_shard_manager(&config, redis.clone()).await;
+        let rdb = Self::make_rdb(&config, temp_directory.path()).await;
 
         let component_compilation_service = Self::make_component_compilation_service(&config).await;
 
-        let registry_service: Arc<dyn RegistryService> =
+        let registry_service =
             Self::make_registry_service(&config, &rdb, &component_compilation_service).await;
+
+        let shard_manager =
+            Self::make_shard_manager(&config, rdb.clone(), registry_service.clone()).await;
 
         let worker_service =
             Self::make_worker_service(&config, &shard_manager, &rdb, &registry_service).await;
@@ -381,7 +376,7 @@ impl EnvBasedTestDependencies {
             blob_storage,
             initial_component_files_service,
             registry_service,
-            temp_directory: Arc::new(TempDir::new().expect("Failed to create temporary directory")),
+            temp_directory,
             shard_manager,
             component_compilation_service,
             worker_executor_cluster,
