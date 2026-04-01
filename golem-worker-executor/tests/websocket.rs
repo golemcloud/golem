@@ -321,9 +321,12 @@ async fn websocket_async_bidirectional_test(
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
 
-    assert_eq!(result, Value::Result(Ok(Some(Box::new(Value::String(
-        "msg-a|msg-b|msg-c".to_string()
-    ))))));
+    assert_eq!(
+        result,
+        Value::Result(Ok(Some(Box::new(Value::String(
+            "msg-a|msg-b|msg-c".to_string()
+        )))))
+    );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
