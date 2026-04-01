@@ -39,8 +39,8 @@ fn wasmImportMoveObject(
 ) = "wasi:blobstore/blobstore" "move-object"
 
 ///|
-extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load8_u)
+extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load)
 
 ///|
 extern "wasm" fn mbt_ffi_free(position : Int) =
@@ -61,10 +61,10 @@ extern "wasm" fn mbt_ffi_ptr2str(ptr : Int, len : Int) -> String =
   #| local.get 2)
 
 ///|
-extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
-  #|(func (param i32) (result i32) local.get 0 i32.load)
-
-///|
 #owned(str)
 extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.const 8 i32.add)
+
+///|
+extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
+  #|(func (param i32) (result i32) local.get 0 i32.load8_u)

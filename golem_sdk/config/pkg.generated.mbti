@@ -8,9 +8,13 @@ import {
 }
 
 // Values
+pub fn[T : ConfigField] collect_entries_of(@schema.TypeTag[T], Array[String]) -> Array[@common.AgentConfigDeclaration] raise @common.AgentError
+
 pub fn[T : ConfigField] load_config(@schema.TypeTag[T]) -> Config[T] raise @common.AgentError
 
 pub fn[T : @schema.HasElementSchema + @schema.FromExtractor] load_config_value(Array[String]) -> T raise @common.AgentError
+
+pub fn[T : ConfigField] load_field(@schema.TypeTag[T], Array[String]) -> T raise @common.AgentError
 
 pub fn[T : @schema.HasElementSchema] wit_type_of(@schema.TypeTag[T]) -> @types.WitType raise @common.AgentError
 
@@ -32,7 +36,7 @@ pub impl[T : @schema.HasElementSchema + @schema.FromExtractor] ConfigField for S
 
 // Traits
 pub(open) trait ConfigField {
-  collect_entries(Array[String]) -> Array[@common.ConfigKeyValueType] raise @common.AgentError
+  collect_entries(Array[String]) -> Array[@common.AgentConfigDeclaration] raise @common.AgentError
   load(Array[String]) -> Self raise @common.AgentError
 }
 pub impl ConfigField for Bool

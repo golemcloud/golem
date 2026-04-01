@@ -7,16 +7,33 @@ pub(all) struct AgentClient {
 }
 
 ///|
+fn make_client(
+  agent_type_name : String,
+  constructor_data_value : @types.DataValue,
+  phantom_id : @types.Uuid?,
+  agent_config : Array[@common.TypedAgentConfigValue],
+) -> AgentClient raise @common.AgentError {
+  let rpc = @agentHost.WasmRpc::wasm_rpc(
+    agent_type_name, constructor_data_value, phantom_id, agent_config,
+  )
+  { agent_type_name, constructor_data_value, phantom_id, rpc }
+}
+
+///|
 pub fn AgentClient::get(
   agent_type_name : String,
   constructor_data_value : @types.DataValue,
 ) -> AgentClient raise @common.AgentError {
-  let rpc = @agentHost.WasmRpc::wasm_rpc(
-    agent_type_name,
-    constructor_data_value,
-    None,
-  )
-  { agent_type_name, constructor_data_value, phantom_id: None, rpc }
+  make_client(agent_type_name, constructor_data_value, None, [])
+}
+
+///|
+pub fn AgentClient::get_with_config(
+  agent_type_name : String,
+  constructor_data_value : @types.DataValue,
+  agent_config : Array[@common.TypedAgentConfigValue],
+) -> AgentClient raise @common.AgentError {
+  make_client(agent_type_name, constructor_data_value, None, agent_config)
 }
 
 ///|
@@ -29,17 +46,39 @@ pub fn AgentClient::new_phantom(
 }
 
 ///|
+pub fn AgentClient::new_phantom_with_config(
+  agent_type_name : String,
+  constructor_data_value : @types.DataValue,
+  agent_config : Array[@common.TypedAgentConfigValue],
+) -> AgentClient raise @common.AgentError {
+  let phantom_id = @apiHost.generate_idempotency_key()
+  AgentClient::get_phantom_with_config(
+    agent_type_name, constructor_data_value, phantom_id, agent_config,
+  )
+}
+
+///|
 pub fn AgentClient::get_phantom(
   agent_type_name : String,
   constructor_data_value : @types.DataValue,
   phantom_id : @types.Uuid,
 ) -> AgentClient raise @common.AgentError {
-  let rpc = @agentHost.WasmRpc::wasm_rpc(
+  make_client(agent_type_name, constructor_data_value, Some(phantom_id), [])
+}
+
+///|
+pub fn AgentClient::get_phantom_with_config(
+  agent_type_name : String,
+  constructor_data_value : @types.DataValue,
+  phantom_id : @types.Uuid,
+  agent_config : Array[@common.TypedAgentConfigValue],
+) -> AgentClient raise @common.AgentError {
+  make_client(
     agent_type_name,
     constructor_data_value,
     Some(phantom_id),
+    agent_config,
   )
-  { agent_type_name, constructor_data_value, phantom_id: Some(phantom_id), rpc }
 }
 
 ///|

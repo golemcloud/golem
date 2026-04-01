@@ -65,13 +65,6 @@ fn wasmImportMethodVacancyVacancyFill(p0 : Int, p1 : Int, p2 : Int) -> Int = "wa
 fn wasmImportDelete(p0 : Int, p1 : Int) -> Int = "wasi:keyvalue/cache@0.1.0" "delete"
 
 ///|
-extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
-  #|(func (param i32) (result i32) (local i32)
-  #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
-  #| local.tee 1 i32.const 0 call $moonbit.init_array8
-  #| local.get 1 i32.const 8 i32.add)
-
-///|
 extern "wasm" fn mbt_ffi_load32(offset : Int) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.load)
 
@@ -81,9 +74,16 @@ extern "wasm" fn mbt_ffi_str2ptr(str : String) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.const 8 i32.add)
 
 ///|
-extern "wasm" fn mbt_ffi_free(position : Int) =
-  #|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)
+extern "wasm" fn mbt_ffi_malloc(size : Int) -> Int =
+  #|(func (param i32) (result i32) (local i32)
+  #| local.get 0 i32.const 4 i32.add call $moonbit.gc.malloc
+  #| local.tee 1 i32.const 0 call $moonbit.init_array8
+  #| local.get 1 i32.const 8 i32.add)
 
 ///|
 extern "wasm" fn mbt_ffi_load8_u(offset : Int) -> Int =
   #|(func (param i32) (result i32) local.get 0 i32.load8_u)
+
+///|
+extern "wasm" fn mbt_ffi_free(position : Int) =
+  #|(func (param i32) local.get 0 i32.const 8 i32.sub call $moonbit.decref)

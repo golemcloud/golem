@@ -1,3 +1,5 @@
+manifestVersion: 1.5.0
+
 app: golem-sdk-example1
 
 httpApi:
@@ -29,10 +31,7 @@ componentTemplates:
           - command: mkdir -p _build/wasm/debug
           - command: wasm-tools component embed wit _build/wasm/release/build/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm --encoding utf16 --output _build/wasm/debug/{{ component_name | to_snake_case }}.embed.wasm
           - command: wasm-tools component new _build/wasm/debug/{{ component_name | to_snake_case }}.embed.wasm --output _build/wasm/debug/{{ component_name | to_snake_case }}.agent.wasm
-        sourceWit: wit
-        generatedWit: golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
         componentWasm: _build/wasm/debug/{{ component_name | to_snake_case }}.agent.wasm
-        outputWasm: golem-temp/agents/{{ component_name | to_snake_case }}_debug.wasm
       release:
         build:
           - command: moon run cmd -- reexports ../golem_sdk ../golem_sdk_example1/{{ component_name | to_snake_case }}
@@ -42,11 +41,9 @@ componentTemplates:
           - command: moon build --target wasm --release
           - command: wasm-tools component embed wit _build/wasm/release/build/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm --encoding utf16 --output _build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm
           - command: wasm-tools component new _build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm --output _build/wasm/release/{{ component_name | to_snake_case }}.agent.wasm
-        sourceWit: wit
-        generatedWit: golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
         componentWasm: _build/wasm/release/{{ component_name | to_snake_case }}.agent.wasm
-        outputWasm: golem-temp/agents/{{ component_name | to_snake_case }}_release.wasm
 
 components:
   golem:moonbit-examples:
     templates: moonbit
+    dir: ""

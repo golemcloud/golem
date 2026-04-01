@@ -12,9 +12,7 @@ pub fn resolution() -> Datetime
 pub(all) struct Datetime {
   seconds : UInt64
   nanoseconds : UInt
-}
-pub impl Eq for Datetime
-pub impl Show for Datetime
+} derive(Eq, Show)
 
 // Type aliases
 

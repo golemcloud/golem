@@ -59,7 +59,7 @@ pub fn[T : ConfigField] load_config(
 pub fn[T : ConfigField] collect_entries_of(
   _tag : @schema.TypeTag[T],
   path : Array[String],
-) -> Array[@common.ConfigKeyValueType] raise @common.AgentError {
+) -> Array[@common.AgentConfigDeclaration] raise @common.AgentError {
   T::collect_entries(path)
 }
 
@@ -73,7 +73,7 @@ pub fn[T : ConfigField] load_field(
 
 ///|
 pub(open) trait ConfigField {
-  collect_entries(path : Array[String]) -> Array[@common.ConfigKeyValueType] raise @common.AgentError
+  collect_entries(path : Array[String]) -> Array[@common.AgentConfigDeclaration] raise @common.AgentError
   load(path : Array[String]) -> Self raise @common.AgentError
 }
 
@@ -81,13 +81,12 @@ pub(open) trait ConfigField {
 fn[T : @schema.HasElementSchema] local_entry(
   _tag : @schema.TypeTag[T],
   path : Array[String],
-) -> Array[@common.ConfigKeyValueType] raise @common.AgentError {
+) -> Array[@common.AgentConfigDeclaration] raise @common.AgentError {
   [
     {
-      key: path,
-      value: @common.ConfigValueType::Local(
-        extract_wit_type(T::element_schema()),
-      ),
+      source: @common.AgentConfigSource::LOCAL,
+      path,
+      value_type: extract_wit_type(T::element_schema()),
     },
   ]
 }
@@ -96,13 +95,12 @@ fn[T : @schema.HasElementSchema] local_entry(
 fn[T : @schema.HasElementSchema] shared_entry(
   _tag : @schema.TypeTag[T],
   path : Array[String],
-) -> Array[@common.ConfigKeyValueType] raise @common.AgentError {
+) -> Array[@common.AgentConfigDeclaration] raise @common.AgentError {
   [
     {
-      key: path,
-      value: @common.ConfigValueType::Shared(
-        extract_wit_type(T::element_schema()),
-      ),
+      source: @common.AgentConfigSource::SECRET,
+      path,
+      value_type: extract_wit_type(T::element_schema()),
     },
   ]
 }
@@ -223,7 +221,7 @@ pub impl[T : @schema.HasElementSchema + @schema.FromExtractor] ConfigField for T
 ) {
   let inner_wt = extract_wit_type(T::element_schema())
   let wt = @builder.TypeBuilder::new().option_type(inner_wt)
-  [{ key: path, value: @common.ConfigValueType::Local(wt) }]
+  [{ source: @common.AgentConfigSource::LOCAL, path, value_type: wt }]
 }
 
 ///|
@@ -239,7 +237,7 @@ pub impl[T : @schema.HasElementSchema + @schema.FromExtractor] ConfigField for A
 ] with collect_entries(path) {
   let inner_wt = extract_wit_type(T::element_schema())
   let wt = @builder.TypeBuilder::new().list_type(inner_wt)
-  [{ key: path, value: @common.ConfigValueType::Local(wt) }]
+  [{ source: @common.AgentConfigSource::LOCAL, path, value_type: wt }]
 }
 
 ///|
@@ -257,7 +255,7 @@ pub impl[
   let ok_wt = extract_wit_type(T::element_schema())
   let err_wt = extract_wit_type(E::element_schema())
   let wt = @builder.TypeBuilder::new().result_type(ok_wt, err_wt)
-  [{ key: path, value: @common.ConfigValueType::Local(wt) }]
+  [{ source: @common.AgentConfigSource::LOCAL, path, value_type: wt }]
 }
 
 ///|

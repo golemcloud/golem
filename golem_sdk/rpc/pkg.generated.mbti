@@ -15,6 +15,8 @@ pub fn[T : @golemcloud/golem_sdk/agents/types.MultimodalModality] multimodal_to_
 
 pub fn[T : @schema.ToElementValue] to_wit_value(T) -> @golemcloud/golem_sdk/interface/golem/core/types.WitValue raise @common.AgentError
 
+pub fn[T : @schema.ToElementValue + @schema.HasElementSchema] typed_config_value(Array[String], T) -> @common.TypedAgentConfigValue raise @common.AgentError
+
 pub fn unstructured_binary_to_wit_value(@golemcloud/golem_sdk/agents/types.UnstructuredBinary) -> @golemcloud/golem_sdk/interface/golem/core/types.WitValue raise @common.AgentError
 
 pub fn unstructured_text_to_wit_value(@golemcloud/golem_sdk/agents/types.UnstructuredText) -> @golemcloud/golem_sdk/interface/golem/core/types.WitValue raise @common.AgentError
@@ -40,9 +42,12 @@ pub fn AgentClient::drop(Self) -> Unit
 pub fn AgentClient::get(String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> Self raise @common.AgentError
 pub fn AgentClient::get_agent_id(Self) -> String raise @common.AgentError
 pub fn AgentClient::get_phantom(String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue, @golemcloud/golem_sdk/interface/golem/core/types.Uuid) -> Self raise @common.AgentError
+pub fn AgentClient::get_phantom_with_config(String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue, @golemcloud/golem_sdk/interface/golem/core/types.Uuid, Array[@common.TypedAgentConfigValue]) -> Self raise @common.AgentError
+pub fn AgentClient::get_with_config(String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue, Array[@common.TypedAgentConfigValue]) -> Self raise @common.AgentError
 pub fn AgentClient::invoke(Self, String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> Unit
 pub fn AgentClient::invoke_and_await(Self, String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> @golemcloud/golem_sdk/interface/golem/core/types.DataValue
 pub fn AgentClient::new_phantom(String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> Self raise @common.AgentError
+pub fn AgentClient::new_phantom_with_config(String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue, Array[@common.TypedAgentConfigValue]) -> Self raise @common.AgentError
 pub fn AgentClient::phantom_id(Self) -> @golemcloud/golem_sdk/interface/golem/core/types.Uuid?
 pub fn AgentClient::schedule_invocation(Self, @wallClock.Datetime, String, @golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> Unit
 

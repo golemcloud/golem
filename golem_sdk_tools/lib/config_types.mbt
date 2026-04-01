@@ -11,7 +11,7 @@ pub(all) struct ConfigTypeInfo {
 /// The `package` parameter is the relative path of the package within the project.
 pub fn parse_config_types(
   files : Array[(String, String)],
-  package~ : String = "",
+  package? : String = "",
 ) -> Array[ConfigTypeInfo] raise AgentParseError {
   let results : Array[ConfigTypeInfo] = []
   for pair in files {
@@ -66,7 +66,7 @@ pub fn parse_config_types(
 pub fn validate_config_types(
   agents : Array[AgentInfo],
   config_types : Array[ConfigTypeInfo],
-  agent_package~ : String = "",
+  agent_package? : String = "",
 ) -> Unit raise AgentParseError {
   // Build a lookup keyed by bare name, but store all config types with that name
   // to detect ambiguity. Also build a qualified lookup for cross-package refs.

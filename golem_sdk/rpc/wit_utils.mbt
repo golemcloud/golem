@@ -439,3 +439,20 @@ pub fn wit_value_to_unstructured_binary(
       )
   }
 }
+
+///|
+/// Creates a `TypedAgentConfigValue` from a path and a typed value.
+/// The value type must be a ComponentModel type (not unstructured text/binary).
+pub fn[T : @schema.ToElementValue + @schema.HasElementSchema] typed_config_value(
+  path : Array[String],
+  v : T,
+) -> @common.TypedAgentConfigValue raise @common.AgentError {
+  let wv = to_wit_value(v)
+  let es = T::element_schema()
+  guard es is @types.ElementSchema::ComponentModel(wt) else {
+    raise @common.AgentError::InvalidInput(
+      "Config values must use ComponentModel types, not unstructured types",
+    )
+  }
+  { path, value: { value: wv, typ: wt } }
+}

@@ -28,28 +28,22 @@ pub fn read_persisted_durable_function_invocation() -> PersistedDurableFunctionI
 pub(all) struct DurableExecutionState {
   is_live : Bool
   persistence_level : @host.PersistenceLevel
-}
-pub impl Eq for DurableExecutionState
-pub impl Show for DurableExecutionState
+} derive(Eq, Show)
 
-pub(all) struct LazyInitializedPollable(Int)
+pub(all) struct LazyInitializedPollable(Int) derive(Eq, Show)
 pub fn LazyInitializedPollable::drop(Self) -> Unit
 #deprecated
 pub fn LazyInitializedPollable::inner(Self) -> Int
 pub fn LazyInitializedPollable::lazy_initialized_pollable() -> Self
 pub fn LazyInitializedPollable::set(Self, @poll.Pollable) -> Unit
 pub fn LazyInitializedPollable::subscribe(Self) -> @poll.Pollable
-pub impl Eq for LazyInitializedPollable
-pub impl Show for LazyInitializedPollable
 
 pub(all) enum OplogEntryVersion {
   V1
   V2
-}
+} derive(Eq, Show)
 pub fn OplogEntryVersion::from(Int) -> Self
 pub fn OplogEntryVersion::ordinal(Self) -> Int
-pub impl Eq for OplogEntryVersion
-pub impl Show for OplogEntryVersion
 
 pub(all) struct PersistedDurableFunctionInvocation {
   timestamp : @wallClock.Datetime
@@ -57,9 +51,7 @@ pub(all) struct PersistedDurableFunctionInvocation {
   response : @types.ValueAndType
   function_type : @oplog.WrappedFunctionType
   entry_version : OplogEntryVersion
-}
-pub impl Eq for PersistedDurableFunctionInvocation
-pub impl Show for PersistedDurableFunctionInvocation
+} derive(Eq, Show)
 
 // Type aliases
 

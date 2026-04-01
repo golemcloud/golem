@@ -21,56 +21,44 @@ pub fn set(String, @types.OutgoingValue, UInt?) -> FutureResult
 // Errors
 
 // Types and methods
-pub(all) struct FutureExistsResult(Int)
+pub(all) struct FutureExistsResult(Int) derive(Eq, Show)
 pub fn FutureExistsResult::drop(Self) -> Unit
 pub fn FutureExistsResult::future_exists_result_get(Self) -> Result[Bool, @wasiKeyvalueError.Error_]?
 #deprecated
 pub fn FutureExistsResult::inner(Self) -> Int
 pub fn FutureExistsResult::listen_to_future_exists_result(Self) -> @poll.Pollable
-pub impl Eq for FutureExistsResult
-pub impl Show for FutureExistsResult
 
-pub(all) struct FutureGetOrSetResult(Int)
+pub(all) struct FutureGetOrSetResult(Int) derive(Eq, Show)
 pub fn FutureGetOrSetResult::drop(Self) -> Unit
 pub fn FutureGetOrSetResult::future_get_or_set_result_get(Self) -> Result[GetOrSetEntry, @wasiKeyvalueError.Error_]?
 #deprecated
 pub fn FutureGetOrSetResult::inner(Self) -> Int
 pub fn FutureGetOrSetResult::listen_to_future_get_or_set_result(Self) -> @poll.Pollable
-pub impl Eq for FutureGetOrSetResult
-pub impl Show for FutureGetOrSetResult
 
-pub(all) struct FutureGetResult(Int)
+pub(all) struct FutureGetResult(Int) derive(Eq, Show)
 pub fn FutureGetResult::drop(Self) -> Unit
 pub fn FutureGetResult::future_get_result_get(Self) -> Result[@types.IncomingValue?, @wasiKeyvalueError.Error_]?
 #deprecated
 pub fn FutureGetResult::inner(Self) -> Int
 pub fn FutureGetResult::listen_to_future_get_result(Self) -> @poll.Pollable
-pub impl Eq for FutureGetResult
-pub impl Show for FutureGetResult
 
-pub(all) struct FutureResult(Int)
+pub(all) struct FutureResult(Int) derive(Eq, Show)
 pub fn FutureResult::drop(Self) -> Unit
 pub fn FutureResult::future_result_get(Self) -> Result[Unit, @wasiKeyvalueError.Error_]?
 #deprecated
 pub fn FutureResult::inner(Self) -> Int
 pub fn FutureResult::listen_to_future_result(Self) -> @poll.Pollable
-pub impl Eq for FutureResult
-pub impl Show for FutureResult
 
 pub(all) enum GetOrSetEntry {
   Occupied(@types.IncomingValue)
   Vacant(Vacancy)
-}
-pub impl Eq for GetOrSetEntry
-pub impl Show for GetOrSetEntry
+} derive(Eq, Show)
 
-pub(all) struct Vacancy(Int)
+pub(all) struct Vacancy(Int) derive(Eq, Show)
 pub fn Vacancy::drop(Self) -> Unit
 #deprecated
 pub fn Vacancy::inner(Self) -> Int
 pub fn Vacancy::vacancy_fill(Self, UInt?) -> @types.OutgoingValue
-pub impl Eq for Vacancy
-pub impl Show for Vacancy
 
 // Type aliases
 

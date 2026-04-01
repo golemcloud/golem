@@ -10,59 +10,43 @@ pub(all) struct Date {
   year : Int
   month : Byte
   day : Byte
-}
-pub impl Eq for Date
-pub impl Show for Date
+} derive(Eq, Show)
 
 pub(all) enum IpAddress {
   Ipv4((Byte, Byte, Byte, Byte))
   Ipv6((UInt, UInt, UInt, UInt, UInt, UInt, UInt, UInt))
-}
-pub impl Eq for IpAddress
-pub impl Show for IpAddress
+} derive(Eq, Show)
 
 pub(all) struct MacAddress {
   octets : (Byte, Byte, Byte, Byte, Byte, Byte)
-}
-pub impl Eq for MacAddress
-pub impl Show for MacAddress
+} derive(Eq, Show)
 
 pub(all) struct Time {
   hour : Byte
   minute : Byte
   second : Byte
   nanosecond : UInt
-}
-pub impl Eq for Time
-pub impl Show for Time
+} derive(Eq, Show)
 
 pub(all) struct Timestamp {
   date : Date
   time : Time
-}
-pub impl Eq for Timestamp
-pub impl Show for Timestamp
+} derive(Eq, Show)
 
 pub(all) struct Timestamptz {
   timestamp : Timestamp
   offset : Int
-}
-pub impl Eq for Timestamptz
-pub impl Show for Timestamptz
+} derive(Eq, Show)
 
 pub(all) struct Timetz {
   time : Time
   offset : Int
-}
-pub impl Eq for Timetz
-pub impl Show for Timetz
+} derive(Eq, Show)
 
 pub(all) struct Uuid {
   high_bits : UInt64
   low_bits : UInt64
-}
-pub impl Eq for Uuid
-pub impl Show for Uuid
+} derive(Eq, Show)
 
 // Type aliases
 

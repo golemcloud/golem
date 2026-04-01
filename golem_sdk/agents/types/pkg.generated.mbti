@@ -17,53 +17,43 @@ pub(all) enum CustomModality[T] {
   Text(UnstructuredText)
   Binary(UnstructuredBinary)
   Structured(T)
-}
+} derive(Eq, Show)
 pub impl[T : @schema.HasElementSchema + @schema.ToElementValue + @schema.FromElementValue] MultimodalModality for CustomModality[T]
-pub impl[T : Eq] Eq for CustomModality[T]
-pub impl[T : Show] Show for CustomModality[T]
 
 pub(all) struct Multimodal[T] {
   items : Array[T]
-}
+} derive(Eq, Show)
 pub fn[T : MultimodalModality] Multimodal::from_data_value(@golemcloud/golem_sdk/interface/golem/core/types.DataValue) -> Self[T] raise @common.AgentError
 pub fn[T] Multimodal::new(Array[T]) -> Self[T]
 pub fn[T : MultimodalModality] Multimodal::to_data_value(Self[T]) -> @golemcloud/golem_sdk/interface/golem/core/types.DataValue raise @common.AgentError
-pub impl[T : Eq] Eq for Multimodal[T]
-pub impl[T : Show] Show for Multimodal[T]
 
 pub(all) enum TextOrBinary {
   Text(UnstructuredText)
   Binary(UnstructuredBinary)
-}
+} derive(Eq, Show)
 pub impl MultimodalModality for TextOrBinary
-pub impl Eq for TextOrBinary
-pub impl Show for TextOrBinary
 
 pub(all) enum UnstructuredBinary {
   Url(String)
   Inline(data~ : Bytes, mime_type~ : String)
-}
+} derive(Eq, Show)
 pub fn UnstructuredBinary::from_inline(Bytes, mime_type~ : String) -> Self
 pub fn UnstructuredBinary::from_url(String) -> Self
 pub impl @schema.FromElementValue for UnstructuredBinary
 pub impl @schema.FromExtractor for UnstructuredBinary
 pub impl @schema.HasElementSchema for UnstructuredBinary
 pub impl @schema.ToElementValue for UnstructuredBinary
-pub impl Eq for UnstructuredBinary
-pub impl Show for UnstructuredBinary
 
 pub(all) enum UnstructuredText {
   Url(String)
   Inline(text~ : String, language_code~ : String?)
-}
+} derive(Eq, Show)
 pub fn UnstructuredText::from_inline(String, language_code? : String?) -> Self
 pub fn UnstructuredText::from_url(String) -> Self
 pub impl @schema.FromElementValue for UnstructuredText
 pub impl @schema.FromExtractor for UnstructuredText
 pub impl @schema.HasElementSchema for UnstructuredText
 pub impl @schema.ToElementValue for UnstructuredText
-pub impl Eq for UnstructuredText
-pub impl Show for UnstructuredText
 
 // Type aliases
 

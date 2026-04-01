@@ -344,6 +344,8 @@ test "generate_client_code - agent with params" {
   }
   let impls = @lib.generate_client_code([agent])
   let output = @formatter.impls_to_string(impls)
+  // Verify no with_config methods are generated for agents without config
+  assert_false(output.contains("with_config"))
   inspect(
     output,
     content=(
@@ -460,4 +462,289 @@ test "generate_client_code - agent with params" {
       #|
     ),
   )
+}
+
+///|
+test "generate_client_code - all secret config generates no with_config methods" {
+  let agent : @lib.AgentInfo = {
+    name: "SecretAgent",
+    description: "Agent with all-secret config",
+    mode: @lib.AgentMode::Durable,
+    constructor_params: [
+      ("name", @lib.ParamType::Simple("String")),
+      (
+        "config",
+        @lib.ParamType::Parameterized("Config", [
+          @lib.ParamType::Simple("AllSecretConfig"),
+        ]),
+      ),
+    ],
+    constructor_description: "Creates agent",
+    constructor_prompt_hint: None,
+    methods: [],
+    has_init: false,
+    constructor_schema_options: {},
+    has_snapshottable: false,
+    has_json_derives: false,
+    snapshotting: Disabled,
+    fields: [],
+    http_mount: None,
+    config_type: Some("AllSecretConfig"),
+  }
+  let config_types : Array[@lib.ConfigTypeInfo] = [
+    {
+      name: "AllSecretConfig",
+      package: "",
+      fields: [
+        (
+          "api_key",
+          @lib.ParamType::Parameterized("Secret", [
+            @lib.ParamType::Simple("String"),
+          ]),
+        ),
+        (
+          "db_password",
+          @lib.ParamType::Parameterized("Secret", [
+            @lib.ParamType::Simple("String"),
+          ]),
+        ),
+      ],
+    },
+  ]
+  let impls = @lib.generate_client_code(
+    [agent],
+    config_types~,
+    agent_package="",
+  )
+  let output = @formatter.impls_to_string(impls)
+  assert_false(output.contains("with_config"))
+}
+
+///|
+test "generate_client_code - mixed config generates with_config methods" {
+  let agent : @lib.AgentInfo = {
+    name: "ConfiguredAgent",
+    description: "Agent with mixed config",
+    mode: @lib.AgentMode::Durable,
+    constructor_params: [
+      ("name", @lib.ParamType::Simple("String")),
+      (
+        "config",
+        @lib.ParamType::Parameterized("Config", [
+          @lib.ParamType::Simple("MixedConfig"),
+        ]),
+      ),
+    ],
+    constructor_description: "Creates agent",
+    constructor_prompt_hint: None,
+    methods: [
+      {
+        name: "get_value",
+        description: "Gets value",
+        prompt_hint: None,
+        params: [],
+        return_type: Some(@lib.ParamType::Simple("String")),
+        param_schema_options: {},
+        http_endpoint: None,
+      },
+    ],
+    has_init: false,
+    constructor_schema_options: {},
+    has_snapshottable: false,
+    has_json_derives: false,
+    snapshotting: Disabled,
+    fields: [],
+    http_mount: None,
+    config_type: Some("MixedConfig"),
+  }
+  let config_types : Array[@lib.ConfigTypeInfo] = [
+    {
+      name: "MixedConfig",
+      package: "",
+      fields: [
+        (
+          "api_key",
+          @lib.ParamType::Parameterized("Secret", [
+            @lib.ParamType::Simple("String"),
+          ]),
+        ),
+        ("timeout", @lib.ParamType::Simple("UInt64")),
+      ],
+    },
+  ]
+  let impls = @lib.generate_client_code(
+    [agent],
+    config_types~,
+    agent_package="",
+  )
+  let output = @formatter.impls_to_string(impls)
+  // Should contain the 6 with_config variants
+  assert_true(output.contains("get_with_config"))
+  assert_true(output.contains("new_phantom_with_config"))
+  assert_true(output.contains("get_phantom_with_config"))
+  assert_true(output.contains("scoped_with_config"))
+  assert_true(output.contains("scoped_new_phantom_with_config"))
+  assert_true(output.contains("scoped_get_phantom_with_config"))
+  // Should reference the override type and walker
+  assert_true(output.contains("MixedConfigOverride"))
+  assert_true(output.contains("collect_mixed_config_overrides"))
+  // Should call the _with_config runtime methods
+  assert_true(output.contains("AgentClient::get_with_config"))
+  assert_true(output.contains("AgentClient::new_phantom_with_config"))
+  assert_true(output.contains("AgentClient::get_phantom_with_config"))
+}
+
+///|
+test "generate_config_override_types - flat config" {
+  let config_types : Array[@lib.ConfigTypeInfo] = [
+    {
+      name: "MyConfig",
+      package: "",
+      fields: [
+        (
+          "api_key",
+          @lib.ParamType::Parameterized("Secret", [
+            @lib.ParamType::Simple("String"),
+          ]),
+        ),
+        ("timeout", @lib.ParamType::Simple("UInt64")),
+        ("name", @lib.ParamType::Simple("String")),
+      ],
+    },
+  ]
+  let impls = @lib.generate_config_override_types(config_types)
+  let output = @formatter.impls_to_string(impls)
+  // api_key (Secret) should be omitted, timeout and name should be present as Option
+  assert_true(output.contains("MyConfigOverride"))
+  assert_true(output.contains("timeout : UInt64?"))
+  assert_true(output.contains("name : String?"))
+  assert_false(output.contains("api_key"))
+  assert_true(output.contains("::empty()"))
+}
+
+///|
+test "generate_config_override_types - nested config" {
+  let config_types : Array[@lib.ConfigTypeInfo] = [
+    {
+      name: "DbConfig",
+      package: "",
+      fields: [
+        ("host", @lib.ParamType::Simple("String")),
+        ("port", @lib.ParamType::Simple("UInt")),
+      ],
+    },
+    {
+      name: "AppConfig",
+      package: "",
+      fields: [
+        ("db", @lib.ParamType::Simple("DbConfig")),
+        ("name", @lib.ParamType::Simple("String")),
+      ],
+    },
+  ]
+  let impls = @lib.generate_config_override_types(config_types)
+  let output = @formatter.impls_to_string(impls)
+  // DbConfig -> DbConfigOverride with host and port
+  assert_true(output.contains("DbConfigOverride"))
+  assert_true(output.contains("host : String?"))
+  assert_true(output.contains("port : UInt?"))
+  // AppConfig -> AppConfigOverride with db as DbConfigOverride? and name as String?
+  assert_true(output.contains("AppConfigOverride"))
+  assert_true(output.contains("db : DbConfigOverride?"))
+  assert_true(output.contains("name : String?"))
+}
+
+///|
+test "generate_config_override_walkers - flat config" {
+  let config_types : Array[@lib.ConfigTypeInfo] = [
+    {
+      name: "MyConfig",
+      package: "",
+      fields: [
+        (
+          "api_key",
+          @lib.ParamType::Parameterized("Secret", [
+            @lib.ParamType::Simple("String"),
+          ]),
+        ),
+        ("timeout", @lib.ParamType::Simple("UInt64")),
+      ],
+    },
+  ]
+  let impls = @lib.generate_config_override_walkers(config_types)
+  let output = @formatter.impls_to_string(impls)
+  assert_true(output.contains("collect_my_config_overrides"))
+  assert_true(output.contains("config.timeout"))
+  assert_true(output.contains("typed_config_value"))
+  // Secret fields should not appear
+  assert_false(output.contains("api_key"))
+}
+
+///|
+test "generate_config_override_walkers - nested config" {
+  let config_types : Array[@lib.ConfigTypeInfo] = [
+    {
+      name: "DbConfig",
+      package: "",
+      fields: [("host", @lib.ParamType::Simple("String"))],
+    },
+    {
+      name: "AppConfig",
+      package: "",
+      fields: [
+        ("db", @lib.ParamType::Simple("DbConfig")),
+        ("name", @lib.ParamType::Simple("String")),
+      ],
+    },
+  ]
+  let impls = @lib.generate_config_override_walkers(config_types)
+  let output = @formatter.impls_to_string(impls)
+  // Nested db field should call collect_db_config_overrides recursively
+  assert_true(output.contains("collect_db_config_overrides"))
+  assert_true(output.contains("collect_app_config_overrides"))
+  // Leaf name field should call typed_config_value
+  assert_true(output.contains("typed_config_value"))
+}
+
+///|
+test "generate_config_override_types - all secret yields empty" {
+  let config_types : Array[@lib.ConfigTypeInfo] = [
+    {
+      name: "AllSecret",
+      package: "",
+      fields: [
+        (
+          "key1",
+          @lib.ParamType::Parameterized("Secret", [
+            @lib.ParamType::Simple("String"),
+          ]),
+        ),
+        (
+          "key2",
+          @lib.ParamType::Parameterized("@config.Secret", [
+            @lib.ParamType::Simple("String"),
+          ]),
+        ),
+      ],
+    },
+  ]
+  let impls = @lib.generate_config_override_types(config_types)
+  let output = @formatter.impls_to_string(impls)
+  // All fields are secret, no override struct should be generated
+  assert_false(output.contains("AllSecretOverride"))
+}
+
+///|
+test "pascal_to_snake conversion" {
+  // Test indirectly via walker function names
+  let config_types : Array[@lib.ConfigTypeInfo] = [
+    {
+      name: "DatabaseConfig",
+      package: "",
+      fields: [("host", @lib.ParamType::Simple("String"))],
+    },
+  ]
+  let impls = @lib.generate_config_override_walkers(config_types)
+  let output = @formatter.impls_to_string(impls)
+  assert_true(output.contains("collect_database_config_overrides"))
 }

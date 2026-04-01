@@ -10,9 +10,7 @@ pub fn get_all() -> Result[Array[(String, String)], Error_]
 pub(all) suberror Error_ {
   Upstream(String)
   Io(String)
-}
-pub impl Eq for Error_
-pub impl Show for Error_
+} derive(Eq, Show)
 
 // Types and methods
 

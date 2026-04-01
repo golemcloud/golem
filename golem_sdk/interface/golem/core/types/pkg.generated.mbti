@@ -11,148 +11,106 @@ pub fn uuid_to_string(Uuid) -> String
 // Types and methods
 pub(all) struct AccountId {
   uuid : Uuid
-}
-pub impl Eq for AccountId
-pub impl Show for AccountId
+} derive(Eq, Show)
 
 pub(all) struct AgentId {
   component_id : ComponentId
   agent_id : String
-}
-pub impl Eq for AgentId
-pub impl Show for AgentId
+} derive(Eq, Show)
 
 pub(all) struct BinaryDescriptor {
   restrictions : Array[BinaryType]?
-}
-pub impl Eq for BinaryDescriptor
-pub impl Show for BinaryDescriptor
+} derive(Eq, Show)
 
 pub(all) enum BinaryReference {
   Url(String)
   Inline(BinarySource)
-}
-pub impl Eq for BinaryReference
-pub impl Show for BinaryReference
+} derive(Eq, Show)
 
 pub(all) struct BinarySource {
   data : FixedArray[Byte]
   binary_type : BinaryType
-}
-pub impl Eq for BinarySource
-pub impl Show for BinarySource
+} derive(Eq, Show)
 
 pub(all) struct BinaryType {
   mime_type : String
-}
-pub impl Eq for BinaryType
-pub impl Show for BinaryType
+} derive(Eq, Show)
 
 pub(all) struct ComponentId {
   uuid : Uuid
-}
-pub impl Eq for ComponentId
-pub impl Show for ComponentId
+} derive(Eq, Show)
 
 pub(all) enum DataSchema {
   Tuple(Array[(String, ElementSchema)])
   Multimodal(Array[(String, ElementSchema)])
-}
-pub impl Eq for DataSchema
-pub impl Show for DataSchema
+} derive(Eq, Show)
 
 pub(all) enum DataValue {
   Tuple(Array[ElementValue])
   Multimodal(Array[(String, ElementValue)])
-}
-pub impl Eq for DataValue
-pub impl Show for DataValue
+} derive(Eq, Show)
 
 pub(all) enum ElementSchema {
   ComponentModel(WitType)
   UnstructuredText(TextDescriptor)
   UnstructuredBinary(BinaryDescriptor)
-}
-pub impl Eq for ElementSchema
-pub impl Show for ElementSchema
+} derive(Eq, Show)
 
 pub(all) enum ElementValue {
   ComponentModel(WitValue)
   UnstructuredText(TextReference)
   UnstructuredBinary(BinaryReference)
-}
-pub impl Eq for ElementValue
-pub impl Show for ElementValue
+} derive(Eq, Show)
 
 pub(all) struct NamedWitTypeNode {
   name : String?
   owner : String?
   type_ : WitTypeNode
-}
-pub impl Eq for NamedWitTypeNode
-pub impl Show for NamedWitTypeNode
+} derive(Eq, Show)
 
 pub(all) struct PromiseId {
   agent_id : AgentId
   oplog_idx : UInt64
-}
-pub impl Eq for PromiseId
-pub impl Show for PromiseId
+} derive(Eq, Show)
 
 pub(all) enum ResourceMode {
   OWNED
   BORROWED
-}
+} derive(Eq, Show)
 pub fn ResourceMode::from(Int) -> Self
 pub fn ResourceMode::ordinal(Self) -> Int
-pub impl Eq for ResourceMode
-pub impl Show for ResourceMode
 
 pub(all) struct TextDescriptor {
   restrictions : Array[TextType]?
-}
-pub impl Eq for TextDescriptor
-pub impl Show for TextDescriptor
+} derive(Eq, Show)
 
 pub(all) enum TextReference {
   Url(String)
   Inline(TextSource)
-}
-pub impl Eq for TextReference
-pub impl Show for TextReference
+} derive(Eq, Show)
 
 pub(all) struct TextSource {
   data : String
   text_type : TextType?
-}
-pub impl Eq for TextSource
-pub impl Show for TextSource
+} derive(Eq, Show)
 
 pub(all) struct TextType {
   language_code : String
-}
-pub impl Eq for TextType
-pub impl Show for TextType
+} derive(Eq, Show)
 
 pub(all) struct Uri {
   value : String
-}
-pub impl Eq for Uri
-pub impl Show for Uri
+} derive(Eq, Show)
 
 pub(all) struct Uuid {
   high_bits : UInt64
   low_bits : UInt64
-}
-pub impl Eq for Uuid
-pub impl Show for Uuid
+} derive(Eq, Show)
 
 pub(all) struct ValueAndType {
   value : WitValue
   typ : WitType
-}
-pub impl Eq for ValueAndType
-pub impl Show for ValueAndType
+} derive(Eq, Show)
 
 pub(all) enum WitNode {
   RecordValue(Array[Int])
@@ -177,15 +135,11 @@ pub(all) enum WitNode {
   PrimBool(Bool)
   PrimString(String)
   Handle((Uri, UInt64))
-}
-pub impl Eq for WitNode
-pub impl Show for WitNode
+} derive(Eq, Show)
 
 pub(all) struct WitType {
   nodes : Array[NamedWitTypeNode]
-}
-pub impl Eq for WitType
-pub impl Show for WitType
+} derive(Eq, Show)
 
 pub(all) enum WitTypeNode {
   RecordType(Array[(String, Int)])
@@ -210,15 +164,11 @@ pub(all) enum WitTypeNode {
   PrimBoolType
   PrimStringType
   HandleType((UInt64, ResourceMode))
-}
-pub impl Eq for WitTypeNode
-pub impl Show for WitTypeNode
+} derive(Eq, Show)
 
 pub(all) struct WitValue {
   nodes : Array[WitNode]
-}
-pub impl Eq for WitValue
-pub impl Show for WitValue
+} derive(Eq, Show)
 
 // Type aliases
 

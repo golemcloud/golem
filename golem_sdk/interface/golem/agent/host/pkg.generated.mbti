@@ -28,29 +28,23 @@ pub(all) suberror RpcError {
   NotFound(String)
   RemoteInternalError(String)
   RemoteAgentError(@common.AgentError)
-}
-pub impl Eq for RpcError
-pub impl Show for RpcError
+} derive(Eq, Show)
 
 // Types and methods
-pub(all) struct CancellationToken(Int)
+pub(all) struct CancellationToken(Int) derive(Eq, Show)
 pub fn CancellationToken::cancel(Self) -> Unit
 pub fn CancellationToken::drop(Self) -> Unit
 #deprecated
 pub fn CancellationToken::inner(Self) -> Int
-pub impl Eq for CancellationToken
-pub impl Show for CancellationToken
 
-pub(all) struct FutureInvokeResult(Int)
+pub(all) struct FutureInvokeResult(Int) derive(Eq, Show)
 pub fn FutureInvokeResult::drop(Self) -> Unit
 pub fn FutureInvokeResult::get(Self) -> Result[@types.DataValue, RpcError]?
 #deprecated
 pub fn FutureInvokeResult::inner(Self) -> Int
 pub fn FutureInvokeResult::subscribe(Self) -> @poll.Pollable
-pub impl Eq for FutureInvokeResult
-pub impl Show for FutureInvokeResult
 
-pub(all) struct WasmRpc(Int)
+pub(all) struct WasmRpc(Int) derive(Eq, Show)
 pub fn WasmRpc::async_invoke_and_await(Self, String, @types.DataValue) -> FutureInvokeResult
 pub fn WasmRpc::drop(Self) -> Unit
 #deprecated
@@ -59,9 +53,7 @@ pub fn WasmRpc::invoke(Self, String, @types.DataValue) -> Result[Unit, RpcError]
 pub fn WasmRpc::invoke_and_await(Self, String, @types.DataValue) -> Result[@types.DataValue, RpcError]
 pub fn WasmRpc::schedule_cancelable_invocation(Self, @wallClock.Datetime, String, @types.DataValue) -> CancellationToken
 pub fn WasmRpc::schedule_invocation(Self, @wallClock.Datetime, String, @types.DataValue) -> Unit
-pub fn WasmRpc::wasm_rpc(String, @types.DataValue, @types.Uuid?) -> Self
-pub impl Eq for WasmRpc
-pub impl Show for WasmRpc
+pub fn WasmRpc::wasm_rpc(String, @types.DataValue, @types.Uuid?, Array[@common.TypedAgentConfigValue]) -> Self
 
 // Type aliases
 

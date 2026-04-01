@@ -28,8 +28,7 @@ pub fn set_agent_instance(AgentInstance) -> Unit
 // Errors
 pub suberror JsonCodecError {
   JsonCodecError(String)
-}
-pub impl Show for JsonCodecError
+} derive(Show)
 
 // Types and methods
 pub(all) struct AgentInstance {
@@ -56,9 +55,7 @@ pub(all) struct RegisteredAgent {
 pub(all) enum SnapshotFormat {
   Json
   Binary
-}
-pub impl Eq for SnapshotFormat
-pub impl Show for SnapshotFormat
+} derive(Eq, Show)
 
 // Type aliases
 

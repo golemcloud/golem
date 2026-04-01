@@ -7,7 +7,10 @@ world moonbit-examples {
 
   import golem:rdbms/postgres@1.5.0;
   import golem:rdbms/mysql@1.5.0;
+  import golem:rdbms/ignite2@1.5.0;
   import golem:rdbms/types@1.5.0;
+
+  import golem:websocket/client@1.5.0;
 
   import golem:api/context@1.5.0;
   import golem:api/oplog@1.5.0;

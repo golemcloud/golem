@@ -50,9 +50,7 @@ pub fn[T : ToElementValue] to_element_value_as(T) -> @types.ElementValue raise @
 pub(all) struct SchemaOptions {
   text_languages : Array[String]
   binary_mime_types : Array[String]
-}
-pub impl Eq for SchemaOptions
-pub impl Show for SchemaOptions
+} derive(Eq, Show)
 
 pub(all) struct TypeTag[T] {
 }

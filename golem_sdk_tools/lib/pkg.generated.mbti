@@ -13,6 +13,10 @@ pub fn build_raw_agent_impl(AgentInfo) -> @syntax.Impl
 
 pub fn decode_qualified(String) -> (String, String)?
 
+pub fn discover_and_scan(String) -> Array[PackageScanResult] raise
+
+pub fn discover_packages(String) -> Array[PackageInfo] raise
+
 pub fn encode_qualified(String, String) -> ParamType
 
 pub fn ensure_pkg_import(String, String, String) -> String
@@ -23,7 +27,13 @@ pub fn find_principal_index(Array[(String, ParamType)]) -> Int?
 
 pub fn generate_agent_registration(Array[AgentInfo]) -> @list.List[@syntax.Impl]
 
-pub fn generate_client_code(Array[AgentInfo]) -> @list.List[@syntax.Impl]
+pub fn generate_client_code(Array[AgentInfo], config_types? : Array[ConfigTypeInfo], agent_package? : String) -> @list.List[@syntax.Impl]
+
+pub fn generate_config_field_impls(Array[ConfigTypeInfo]) -> @list.List[@syntax.Impl]
+
+pub fn generate_config_override_types(Array[ConfigTypeInfo]) -> @list.List[@syntax.Impl]
+
+pub fn generate_config_override_walkers(Array[ConfigTypeInfo]) -> @list.List[@syntax.Impl]
 
 pub fn generate_multimodal_impls(Array[MultimodalEnumInfo]) -> @list.List[@syntax.Impl]
 
@@ -53,7 +63,7 @@ pub fn param_type_to_type_string(ParamType) -> String
 
 pub fn parse_agents(Array[(String, String)]) -> Array[AgentInfo] raise AgentParseError
 
-pub fn parse_config_types(Array[(String, String)]) -> Array[ConfigTypeInfo] raise AgentParseError
+pub fn parse_config_types(Array[(String, String)], package? : String) -> Array[ConfigTypeInfo] raise AgentParseError
 
 pub fn parse_duration_seconds(String) -> UInt64 raise AgentParseError
 
@@ -71,6 +81,8 @@ pub fn parse_value_types(Array[(String, String)]) -> Array[ValueTypeInfo] raise 
 
 pub fn rpc_function_name(String, String) -> String
 
+pub fn scan_package(PackageInfo) -> PackageScanResult raise
+
 pub fn syntax_type_to_param_type(@syntax.Type) -> ParamType raise AgentParseError
 
 pub fn transform_exports(Array[String]) -> Array[String]
@@ -81,7 +93,7 @@ pub fn unwrap_secret_type(ParamType) -> ParamType?
 
 pub fn update_pkg_link(String, Array[String]) -> String
 
-pub fn validate_config_types(Array[AgentInfo], Array[ConfigTypeInfo]) -> Unit raise AgentParseError
+pub fn validate_config_types(Array[AgentInfo], Array[ConfigTypeInfo], agent_package? : String) -> Unit raise AgentParseError
 
 pub fn validate_http_routes(Array[AgentInfo]) -> Unit raise AgentParseError
 
@@ -90,13 +102,11 @@ pub fn visible_params(Array[(String, ParamType)]) -> Array[(String, ParamType)]
 // Errors
 pub suberror AgentParseError {
   AgentParseError(String)
-}
-pub impl Show for AgentParseError
+} derive(Show)
 
 pub suberror HttpPathParseError {
   HttpPathParseError(String)
-}
-pub impl Show for HttpPathParseError
+} derive(Show)
 
 // Types and methods
 pub(all) struct AgentInfo {
@@ -115,31 +125,25 @@ pub(all) struct AgentInfo {
   fields : Array[(String, Bool)]
   http_mount : HttpMountInfo?
   config_type : String?
-}
-pub impl Show for AgentInfo
+} derive(Show)
 
 pub(all) enum AgentMode {
   Durable
   Ephemeral
-}
-pub impl Eq for AgentMode
-pub impl Show for AgentMode
+} derive(Eq, Show)
 
 pub(all) enum AgentSnapshotting {
   Disabled
   Default
   Periodic(UInt64)
   EveryNInvocation(UInt)
-}
-pub impl Eq for AgentSnapshotting
-pub impl Show for AgentSnapshotting
+} derive(Eq, Show)
 
 pub(all) struct ConfigTypeInfo {
   name : String
+  package : String
   fields : Array[(String, ParamType)]
-}
-pub impl Eq for ConfigTypeInfo
-pub impl Show for ConfigTypeInfo
+} derive(Eq, Show)
 
 pub(all) struct FnSignature {
   gen_name : String
@@ -154,9 +158,7 @@ pub(all) struct HttpEndpointInfo {
   headers : Array[(String, String)]
   auth : Bool?
   cors : Array[String]
-}
-pub impl Eq for HttpEndpointInfo
-pub impl Show for HttpEndpointInfo
+} derive(Eq, Show)
 
 pub(all) struct HttpMountInfo {
   path : String
@@ -164,9 +166,7 @@ pub(all) struct HttpMountInfo {
   phantom : Bool
   cors : Array[String]
   webhook_suffix : String?
-}
-pub impl Eq for HttpMountInfo
-pub impl Show for HttpMountInfo
+} derive(Eq, Show)
 
 pub(all) struct MethodInfo {
   name : String
@@ -176,14 +176,22 @@ pub(all) struct MethodInfo {
   return_type : ParamType?
   param_schema_options : Map[String, SchemaOptions]
   http_endpoint : HttpEndpointInfo?
-}
-pub impl Show for MethodInfo
+} derive(Show)
 
 pub(all) struct MultimodalEnumInfo {
   name : String
   variants : Array[(String, ParamType)]
-}
-pub impl Show for MultimodalEnumInfo
+} derive(Show)
+
+pub(all) struct PackageInfo {
+  rel_path : String
+  dir : String
+} derive(Show)
+
+pub(all) struct PackageScanResult {
+  pkg : PackageInfo
+  files : Array[(String, String)]
+} derive(Show)
 
 pub(all) enum ParamType {
   Simple(String)
@@ -193,68 +201,50 @@ pub(all) enum ParamType {
   Tuple(Array[ParamType])
   MultimodalType(ParamType)
   Parameterized(String, Array[ParamType])
-}
-pub impl Eq for ParamType
-pub impl Show for ParamType
+} derive(Eq, Show)
 
 pub(all) struct PathSegmentInfo {
   kind : PathSegmentKind
-}
-pub impl Eq for PathSegmentInfo
-pub impl Show for PathSegmentInfo
+} derive(Eq, Show)
 
 pub(all) enum PathSegmentKind {
   Literal(String)
   PathVariable(String)
   RemainingPathVariable(String)
   SystemVariable(SystemVariableKind)
-}
-pub impl Eq for PathSegmentKind
-pub impl Show for PathSegmentKind
+} derive(Eq, Show)
 
 pub(all) struct QueryVarInfo {
   query_param_name : String
   variable_name : String
-}
-pub impl Eq for QueryVarInfo
-pub impl Show for QueryVarInfo
+} derive(Eq, Show)
 
 pub(all) struct SchemaOptions {
   text_languages : Array[String]
   binary_mime_types : Array[String]
-}
-pub impl Eq for SchemaOptions
-pub impl Show for SchemaOptions
+} derive(Eq, Show)
 
 pub(all) enum SystemVariableKind {
   AgentType
   AgentVersion
-}
-pub impl Eq for SystemVariableKind
-pub impl Show for SystemVariableKind
+} derive(Eq, Show)
 
 pub(all) struct ValueTypeInfo {
   name : String
   kind : ValueTypeKind
-}
-pub impl Eq for ValueTypeInfo
-pub impl Show for ValueTypeInfo
+} derive(Eq, Show)
 
 pub(all) enum ValueTypeKind {
   Record(Array[(String, ParamType)])
   SimpleEnum(Array[String])
   VariantEnum(Array[(String, VariantPayload)])
-}
-pub impl Eq for ValueTypeKind
-pub impl Show for ValueTypeKind
+} derive(Eq, Show)
 
 pub(all) enum VariantPayload {
   None
   Single(ParamType)
   Multi(Array[(String, ParamType)], Bool)
-}
-pub impl Eq for VariantPayload
-pub impl Show for VariantPayload
+} derive(Eq, Show)
 
 // Type aliases
 

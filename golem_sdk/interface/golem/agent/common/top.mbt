@@ -173,16 +173,6 @@ pub(all) struct AgentDependency {
 } derive(Show, Eq)
 
 ///|
-/// Agent-level failures
-pub(all) suberror AgentError {
-  InvalidInput(String)
-  InvalidMethod(String)
-  InvalidType(String)
-  InvalidAgentId(String)
-  CustomError(@types.ValueAndType)
-} derive(Show, Eq)
-
-///|
 pub(all) enum SnapshottingConfig {
   Default
   Periodic(UInt64)
@@ -196,15 +186,33 @@ pub(all) enum Snapshotting {
 } derive(Show, Eq)
 
 ///|
-pub(all) enum ConfigValueType {
-  Local(@types.WitType)
-  Shared(@types.WitType)
+pub(all) enum AgentConfigSource {
+  LOCAL
+  SECRET
 } derive(Show, Eq)
 
 ///|
-pub(all) struct ConfigKeyValueType {
-  key : Array[String]
-  value : ConfigValueType
+pub fn AgentConfigSource::ordinal(self : AgentConfigSource) -> Int {
+  match self {
+    LOCAL => 0
+    SECRET => 1
+  }
+}
+
+///|
+pub fn AgentConfigSource::from(self : Int) -> AgentConfigSource {
+  match self {
+    0 => LOCAL
+    1 => SECRET
+    _ => panic()
+  }
+}
+
+///|
+pub(all) struct AgentConfigDeclaration {
+  source : AgentConfigSource
+  path : Array[String]
+  value_type : @types.WitType
 } derive(Show, Eq)
 
 ///|
@@ -218,7 +226,7 @@ pub(all) struct AgentType {
   mode : AgentMode
   http_mount : HttpMountDetails?
   snapshotting : Snapshotting
-  config : Array[ConfigKeyValueType]
+  config : Array[AgentConfigDeclaration]
 } derive(Show, Eq)
 
 ///|
@@ -226,4 +234,20 @@ pub(all) struct AgentType {
 pub(all) struct RegisteredAgentType {
   agent_type : AgentType
   implemented_by : @types.ComponentId
+} derive(Show, Eq)
+
+///|
+pub(all) struct TypedAgentConfigValue {
+  path : Array[String]
+  value : @types.ValueAndType
+} derive(Show, Eq)
+
+///|
+/// Agent-level failures
+pub(all) suberror AgentError {
+  InvalidInput(String)
+  InvalidMethod(String)
+  InvalidType(String)
+  InvalidAgentId(String)
+  CustomError(@types.ValueAndType)
 } derive(Show, Eq)

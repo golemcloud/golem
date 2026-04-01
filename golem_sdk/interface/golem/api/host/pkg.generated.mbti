@@ -60,38 +60,28 @@ pub fn update_agent(@types.AgentId, UInt64, UpdateMode) -> Unit
 // Types and methods
 pub(all) struct AgentAllFilter {
   filters : Array[AgentPropertyFilter]
-}
-pub impl Eq for AgentAllFilter
-pub impl Show for AgentAllFilter
+} derive(Eq, Show)
 
 pub(all) struct AgentAnyFilter {
   filters : Array[AgentAllFilter]
-}
-pub impl Eq for AgentAnyFilter
-pub impl Show for AgentAnyFilter
+} derive(Eq, Show)
 
 pub(all) struct AgentConfigVarsFilter {
   name : String
   comparator : StringFilterComparator
   value : String
-}
-pub impl Eq for AgentConfigVarsFilter
-pub impl Show for AgentConfigVarsFilter
+} derive(Eq, Show)
 
 pub(all) struct AgentCreatedAtFilter {
   comparator : FilterComparator
   value : UInt64
-}
-pub impl Eq for AgentCreatedAtFilter
-pub impl Show for AgentCreatedAtFilter
+} derive(Eq, Show)
 
 pub(all) struct AgentEnvFilter {
   name : String
   comparator : StringFilterComparator
   value : String
-}
-pub impl Eq for AgentEnvFilter
-pub impl Show for AgentEnvFilter
+} derive(Eq, Show)
 
 pub(all) struct AgentMetadata {
   agent_id : @types.AgentId
@@ -102,16 +92,12 @@ pub(all) struct AgentMetadata {
   component_revision : UInt64
   retry_count : UInt64
   environment_id : EnvironmentId
-}
-pub impl Eq for AgentMetadata
-pub impl Show for AgentMetadata
+} derive(Eq, Show)
 
 pub(all) struct AgentNameFilter {
   comparator : StringFilterComparator
   value : String
-}
-pub impl Eq for AgentNameFilter
-pub impl Show for AgentNameFilter
+} derive(Eq, Show)
 
 pub(all) enum AgentPropertyFilter {
   Name(AgentNameFilter)
@@ -120,9 +106,7 @@ pub(all) enum AgentPropertyFilter {
   CreatedAt(AgentCreatedAtFilter)
   Env(AgentEnvFilter)
   WasiConfigVars(AgentConfigVarsFilter)
-}
-pub impl Eq for AgentPropertyFilter
-pub impl Show for AgentPropertyFilter
+} derive(Eq, Show)
 
 pub(all) enum AgentStatus {
   RUNNING
@@ -132,31 +116,23 @@ pub(all) enum AgentStatus {
   RETRYING
   FAILED
   EXITED
-}
+} derive(Eq, Show)
 pub fn AgentStatus::from(Int) -> Self
 pub fn AgentStatus::ordinal(Self) -> Int
-pub impl Eq for AgentStatus
-pub impl Show for AgentStatus
 
 pub(all) struct AgentStatusFilter {
   comparator : FilterComparator
   value : AgentStatus
-}
-pub impl Eq for AgentStatusFilter
-pub impl Show for AgentStatusFilter
+} derive(Eq, Show)
 
 pub(all) struct AgentVersionFilter {
   comparator : FilterComparator
   value : UInt64
-}
-pub impl Eq for AgentVersionFilter
-pub impl Show for AgentVersionFilter
+} derive(Eq, Show)
 
 pub(all) struct EnvironmentId {
   uuid : @types.Uuid
-}
-pub impl Eq for EnvironmentId
-pub impl Show for EnvironmentId
+} derive(Eq, Show)
 
 pub(all) enum FilterComparator {
   EQUAL
@@ -165,50 +141,38 @@ pub(all) enum FilterComparator {
   GREATER
   LESS_EQUAL
   LESS
-}
+} derive(Eq, Show)
 pub fn FilterComparator::from(Int) -> Self
 pub fn FilterComparator::ordinal(Self) -> Int
-pub impl Eq for FilterComparator
-pub impl Show for FilterComparator
 
 pub(all) struct ForkDetails {
   forked_phantom_id : @types.Uuid
-}
-pub impl Eq for ForkDetails
-pub impl Show for ForkDetails
+} derive(Eq, Show)
 
 pub(all) enum ForkResult {
   Original(ForkDetails)
   Forked(ForkDetails)
-}
-pub impl Eq for ForkResult
-pub impl Show for ForkResult
+} derive(Eq, Show)
 
-pub(all) struct GetAgents(Int)
+pub(all) struct GetAgents(Int) derive(Eq, Show)
 pub fn GetAgents::drop(Self) -> Unit
 pub fn GetAgents::get_agents(@types.ComponentId, AgentAnyFilter?, Bool) -> Self
 pub fn GetAgents::get_next(Self) -> Array[AgentMetadata]?
 #deprecated
 pub fn GetAgents::inner(Self) -> Int
-pub impl Eq for GetAgents
-pub impl Show for GetAgents
 
-pub(all) struct GetPromiseResult(Int)
+pub(all) struct GetPromiseResult(Int) derive(Eq, Show)
 pub fn GetPromiseResult::drop(Self) -> Unit
 pub fn GetPromiseResult::get(Self) -> FixedArray[Byte]?
 #deprecated
 pub fn GetPromiseResult::inner(Self) -> Int
 pub fn GetPromiseResult::subscribe(Self) -> @poll.Pollable
-pub impl Eq for GetPromiseResult
-pub impl Show for GetPromiseResult
 
 pub(all) enum PersistenceLevel {
   PersistNothing
   PersistRemoteSideEffects
   Smart
-}
-pub impl Eq for PersistenceLevel
-pub impl Show for PersistenceLevel
+} derive(Eq, Show)
 
 pub(all) struct RetryPolicy {
   max_attempts : UInt
@@ -216,23 +180,17 @@ pub(all) struct RetryPolicy {
   max_delay : UInt64
   multiplier : Double
   max_jitter_factor : Double?
-}
-pub impl Eq for RetryPolicy
-pub impl Show for RetryPolicy
+} derive(Eq, Show)
 
 pub(all) enum RevertAgentTarget {
   RevertToOplogIndex(UInt64)
   RevertLastInvocations(UInt64)
-}
-pub impl Eq for RevertAgentTarget
-pub impl Show for RevertAgentTarget
+} derive(Eq, Show)
 
 pub(all) struct Snapshot {
   data : FixedArray[Byte]
   mime_type : String
-}
-pub impl Eq for Snapshot
-pub impl Show for Snapshot
+} derive(Eq, Show)
 
 pub(all) enum StringFilterComparator {
   EQUAL
@@ -240,20 +198,16 @@ pub(all) enum StringFilterComparator {
   LIKE
   NOT_LIKE
   STARTS_WITH
-}
+} derive(Eq, Show)
 pub fn StringFilterComparator::from(Int) -> Self
 pub fn StringFilterComparator::ordinal(Self) -> Int
-pub impl Eq for StringFilterComparator
-pub impl Show for StringFilterComparator
 
 pub(all) enum UpdateMode {
   AUTOMATIC
   SNAPSHOT_BASED
-}
+} derive(Eq, Show)
 pub fn UpdateMode::from(Int) -> Self
 pub fn UpdateMode::ordinal(Self) -> Int
-pub impl Eq for UpdateMode
-pub impl Show for UpdateMode
 
 // Type aliases
 

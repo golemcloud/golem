@@ -8,6 +8,10 @@ interface oplog {
     use host.{component-revision, oplog-index, persistence-level, environment-id, retry-policy, uuid, agent-id, snapshot};
     use context.{attribute, attribute-value, span-id, trace-id};
 
+    record environment-plugin-grant-id {
+        uuid: uuid,
+    }
+
     variant wrapped-function-type {
         /// The side-effect reads from the agent's local state (for example local file system,
         /// random generator, etc.)
@@ -36,12 +40,12 @@ interface oplog {
     }
 
     record raw-local-agent-config-entry {
-        key: list<string>,
+        path: list<string>,
         value: wit-value
     }
 
     record local-agent-config-entry {
-        key: list<string>,
+        path: list<string>,
         value: value-and-type
     }
 
@@ -231,6 +235,11 @@ interface oplog {
         delta: u64
     }
 
+    record filesystem-storage-usage-update-parameters {
+        timestamp: datetime,
+        delta: s64
+    }
+
     type agent-resource-id = u64;
 
     record create-resource-parameters {
@@ -326,6 +335,15 @@ interface oplog {
         mime-type: string
     }
 
+    record oplog-processor-checkpoint-parameters {
+        timestamp: datetime,
+        plugin: plugin-installation-description,
+        target-agent-id: agent-id,
+        confirmed-up-to: oplog-index,
+        sending-up-to: oplog-index,
+        last-batch-start: oplog-index,
+    }
+
     record timestamp {
         timestamp: datetime
     }
@@ -349,6 +367,14 @@ interface oplog {
         out-of-memory,
         exceeded-memory-limit,
         internal-error(string),
+        deterministic-trap(string),
+        transient-error(string),
+        permanent-error(string),
+        exceeded-table-limit,
+        exceeded-http-call-limit,
+        exceeded-rpc-call-limit,
+        node-out-of-filesystem-storage,
+        agent-exceeded-filesystem-storage-limit,
     }
 
     record raw-create-parameters {
@@ -361,7 +387,7 @@ interface oplog {
         parent: option<agent-id>,
         component-size: u64,
         initial-total-linear-memory-size: u64,
-        initial-active-plugins: list<s32>,
+        initial-active-plugins: list<environment-plugin-grant-id>,
         config-vars: list<tuple<string, string>>,
         local-agent-config: list<raw-local-agent-config-entry>,
         original-phantom-id: option<uuid>
@@ -394,7 +420,8 @@ interface oplog {
     record raw-error-parameters {
         timestamp: datetime,
         error: worker-error,
-        retry-from: oplog-index
+        retry-from: oplog-index,
+        inside-atomic-region: bool,
     }
 
     record raw-pending-agent-invocation-parameters {
@@ -429,7 +456,7 @@ interface oplog {
         timestamp: datetime,
         target-revision: component-revision,
         new-component-size: u64,
-        new-active-plugins: list<s32>
+        new-active-plugins: list<environment-plugin-grant-id>
     }
 
     record resource-type-id {
@@ -451,12 +478,12 @@ interface oplog {
 
     record raw-activate-plugin-parameters {
         timestamp: datetime,
-        plugin-priority: s32
+        plugin-grant-id: environment-plugin-grant-id
     }
 
     record raw-deactivate-plugin-parameters {
         timestamp: datetime,
-        plugin-priority: s32
+        plugin-grant-id: environment-plugin-grant-id
     }
 
     record raw-begin-remote-transaction-parameters {
@@ -469,6 +496,15 @@ interface oplog {
         timestamp: datetime,
         data: oplog-payload,
         mime-type: string
+    }
+
+    record raw-oplog-processor-checkpoint-parameters {
+        timestamp: datetime,
+        plugin-grant-id: environment-plugin-grant-id,
+        target-agent-id: agent-id,
+        confirmed-up-to: oplog-index,
+        sending-up-to: oplog-index,
+        last-batch-start: oplog-index,
     }
 
     variant oplog-entry {
@@ -522,6 +558,8 @@ interface oplog {
         failed-update(failed-update-parameters),
         /// Increased total linear memory size
         grow-memory(grow-memory-parameters),
+        /// Updated filesystem usage by a signed delta
+        filesystem-storage-usage-update(filesystem-storage-usage-update-parameters),
         /// Created a resource instance
         create-resource(raw-create-resource-parameters),
         /// Dropped a resource instance
@@ -557,7 +595,9 @@ interface oplog {
         /// Rolled back transaction operation, indicating that the transaction was rolled back
         rolled-back-remote-transaction(remote-transaction-parameters),
         /// A snapshot of the agent's state
-        snapshot(raw-snapshot-parameters)
+        snapshot(raw-snapshot-parameters),
+        /// Checkpoint for oplog processor plugin delivery tracking
+        oplog-processor-checkpoint(raw-oplog-processor-checkpoint-parameters)
     }
 
     variant public-oplog-entry {
@@ -611,6 +651,8 @@ interface oplog {
         failed-update(failed-update-parameters),
         /// Increased total linear memory size
         grow-memory(grow-memory-parameters),
+        /// Updated filesystem usage by a signed delta
+        filesystem-storage-usage-update(filesystem-storage-usage-update-parameters),
         /// Created a resource instance
         create-resource(create-resource-parameters),
         /// Dropped a resource instance
@@ -646,7 +688,9 @@ interface oplog {
         /// Rolled back transaction operation, indicating that the transaction was rolled back
         rolled-back-remote-transaction(remote-transaction-parameters),
         /// A snapshot of the worker's state
-        snapshot(snapshot-parameters)
+        snapshot(snapshot-parameters),
+        /// Checkpoint for oplog processor plugin delivery tracking
+        oplog-processor-checkpoint(oplog-processor-checkpoint-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads

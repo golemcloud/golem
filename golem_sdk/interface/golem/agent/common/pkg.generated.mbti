@@ -14,28 +14,35 @@ pub(all) suberror AgentError {
   InvalidType(String)
   InvalidAgentId(String)
   CustomError(@types.ValueAndType)
-}
-pub impl Eq for AgentError
-pub impl Show for AgentError
+} derive(Eq, Show)
 
 // Types and methods
+pub(all) struct AgentConfigDeclaration {
+  source : AgentConfigSource
+  path : Array[String]
+  value_type : @types.WitType
+} derive(Eq, Show)
+
+pub(all) enum AgentConfigSource {
+  LOCAL
+  SECRET
+} derive(Eq, Show)
+pub fn AgentConfigSource::from(Int) -> Self
+pub fn AgentConfigSource::ordinal(Self) -> Int
+
 pub(all) struct AgentConstructor {
   name : String?
   description : String
   prompt_hint : String?
   input_schema : @types.DataSchema
-}
-pub impl Eq for AgentConstructor
-pub impl Show for AgentConstructor
+} derive(Eq, Show)
 
 pub(all) struct AgentDependency {
   type_name : String
   description : String?
   constructor_ : AgentConstructor
   methods : Array[AgentMethod]
-}
-pub impl Eq for AgentDependency
-pub impl Show for AgentDependency
+} derive(Eq, Show)
 
 pub(all) struct AgentMethod {
   name : String
@@ -44,24 +51,18 @@ pub(all) struct AgentMethod {
   prompt_hint : String?
   input_schema : @types.DataSchema
   output_schema : @types.DataSchema
-}
-pub impl Eq for AgentMethod
-pub impl Show for AgentMethod
+} derive(Eq, Show)
 
 pub(all) enum AgentMode {
   DURABLE
   EPHEMERAL
-}
+} derive(Eq, Show)
 pub fn AgentMode::from(Int) -> Self
 pub fn AgentMode::ordinal(Self) -> Int
-pub impl Eq for AgentMode
-pub impl Show for AgentMode
 
 pub(all) struct AgentPrincipal {
   agent_id : @types.AgentId
-}
-pub impl Eq for AgentPrincipal
-pub impl Show for AgentPrincipal
+} derive(Eq, Show)
 
 pub(all) struct AgentType {
   type_name : String
@@ -73,49 +74,25 @@ pub(all) struct AgentType {
   mode : AgentMode
   http_mount : HttpMountDetails?
   snapshotting : Snapshotting
-  config : Array[ConfigKeyValueType]
-}
-pub impl Eq for AgentType
-pub impl Show for AgentType
+  config : Array[AgentConfigDeclaration]
+} derive(Eq, Show)
 
 pub(all) struct AuthDetails {
   required : Bool
-}
-pub impl Eq for AuthDetails
-pub impl Show for AuthDetails
-
-pub(all) struct ConfigKeyValueType {
-  key : Array[String]
-  value : ConfigValueType
-}
-pub impl Eq for ConfigKeyValueType
-pub impl Show for ConfigKeyValueType
-
-pub(all) enum ConfigValueType {
-  Local(@types.WitType)
-  Shared(@types.WitType)
-}
-pub impl Eq for ConfigValueType
-pub impl Show for ConfigValueType
+} derive(Eq, Show)
 
 pub(all) struct CorsOptions {
   allowed_patterns : Array[String]
-}
-pub impl Eq for CorsOptions
-pub impl Show for CorsOptions
+} derive(Eq, Show)
 
 pub(all) struct GolemUserPrincipal {
   account_id : @types.AccountId
-}
-pub impl Eq for GolemUserPrincipal
-pub impl Show for GolemUserPrincipal
+} derive(Eq, Show)
 
 pub(all) struct HeaderVariable {
   header_name : String
   variable_name : String
-}
-pub impl Eq for HeaderVariable
-pub impl Show for HeaderVariable
+} derive(Eq, Show)
 
 pub(all) struct HttpEndpointDetails {
   http_method : HttpMethod
@@ -124,9 +101,7 @@ pub(all) struct HttpEndpointDetails {
   query_vars : Array[QueryVariable]
   auth_details : AuthDetails?
   cors_options : CorsOptions
-}
-pub impl Eq for HttpEndpointDetails
-pub impl Show for HttpEndpointDetails
+} derive(Eq, Show)
 
 pub(all) enum HttpMethod {
   Get
@@ -139,9 +114,7 @@ pub(all) enum HttpMethod {
   Trace
   Patch
   Custom(String)
-}
-pub impl Eq for HttpMethod
-pub impl Show for HttpMethod
+} derive(Eq, Show)
 
 pub(all) struct HttpMountDetails {
   path_prefix : Array[PathSegment]
@@ -149,9 +122,7 @@ pub(all) struct HttpMountDetails {
   phantom_agent : Bool
   cors_options : CorsOptions
   webhook_suffix : Array[PathSegment]
-}
-pub impl Eq for HttpMountDetails
-pub impl Show for HttpMountDetails
+} derive(Eq, Show)
 
 pub(all) struct OidcPrincipal {
   sub : String
@@ -164,71 +135,58 @@ pub(all) struct OidcPrincipal {
   picture : String?
   preferred_username : String?
   claims : String
-}
-pub impl Eq for OidcPrincipal
-pub impl Show for OidcPrincipal
+} derive(Eq, Show)
 
 pub(all) enum PathSegment {
   Literal(String)
   SystemVariable(SystemVariable)
   PathVariable(PathVariable)
   RemainingPathVariable(PathVariable)
-}
-pub impl Eq for PathSegment
-pub impl Show for PathSegment
+} derive(Eq, Show)
 
 pub(all) struct PathVariable {
   variable_name : String
-}
-pub impl Eq for PathVariable
-pub impl Show for PathVariable
+} derive(Eq, Show)
 
 pub(all) enum Principal {
   Oidc(OidcPrincipal)
   Agent(AgentPrincipal)
   GolemUser(GolemUserPrincipal)
   Anonymous
-}
-pub impl Eq for Principal
-pub impl Show for Principal
+} derive(Eq, Show)
 
 pub(all) struct QueryVariable {
   query_param_name : String
   variable_name : String
-}
-pub impl Eq for QueryVariable
-pub impl Show for QueryVariable
+} derive(Eq, Show)
 
 pub(all) struct RegisteredAgentType {
   agent_type : AgentType
   implemented_by : @types.ComponentId
-}
-pub impl Eq for RegisteredAgentType
-pub impl Show for RegisteredAgentType
+} derive(Eq, Show)
 
 pub(all) enum Snapshotting {
   Disabled
   Enabled(SnapshottingConfig)
-}
-pub impl Eq for Snapshotting
-pub impl Show for Snapshotting
+} derive(Eq, Show)
 
 pub(all) enum SnapshottingConfig {
   Default
   Periodic(UInt64)
   EveryNInvocation(UInt)
-}
-pub impl Eq for SnapshottingConfig
-pub impl Show for SnapshottingConfig
+} derive(Eq, Show)
 
 pub(all) enum SystemVariable {
   AGENT_TYPE
   AGENT_VERSION
-}
+} derive(Eq, Show)
 pub fn SystemVariable::from(Int) -> Self
 pub fn SystemVariable::ordinal(Self) -> Int
-pub impl Eq for SystemVariable
-pub impl Show for SystemVariable
+
+pub(all) struct TypedAgentConfigValue {
+  path : Array[String]
+  value : @types.ValueAndType
+} derive(Eq, Show)
 
 // Type aliases
 

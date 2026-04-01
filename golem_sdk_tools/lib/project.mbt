@@ -21,10 +21,7 @@ let skip_dirs : Array[String] = [
 ///|
 /// Generated files to exclude when scanning package source files.
 let generated_files : Array[String] = [
-  "golem_agents.mbt",
-  "golem_reexports.mbt",
-  "golem_derive.mbt",
-  "golem_clients.mbt",
+  "golem_agents.mbt", "golem_reexports.mbt", "golem_derive.mbt", "golem_clients.mbt",
 ]
 
 ///|
@@ -32,7 +29,7 @@ let generated_files : Array[String] = [
 /// MoonBit project, starting from `project_root`.
 pub fn discover_packages(project_root : String) -> Array[PackageInfo] raise {
   let root = if project_root.has_suffix("/") {
-    project_root[:(project_root.length() - 1)].to_string()
+    project_root[:project_root.length() - 1].to_string()
   } else {
     project_root
   }
@@ -59,7 +56,7 @@ fn walk_dir(
     let rel_path = if dir == root {
       ""
     } else {
-      dir[(root.length() + 1):].to_string()
+      dir[root.length() + 1:].to_string()
     }
     packages.push(PackageInfo::{ rel_path, dir })
   }
@@ -93,7 +90,7 @@ pub fn scan_package(pkg : PackageInfo) -> PackageScanResult raise {
 ///|
 /// Discovers all packages in a project and scans each one for source files.
 pub fn discover_and_scan(
-  project_root : String
+  project_root : String,
 ) -> Array[PackageScanResult] raise {
   let packages = discover_packages(project_root)
   let results : Array[PackageScanResult] = []
