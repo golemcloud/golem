@@ -47,6 +47,8 @@ pub trait RegistryService: Send + Sync {
     fn default_plan(&self) -> PlanId;
     fn low_fuel_plan(&self) -> PlanId;
     fn low_disk_space_plan(&self) -> PlanId;
+    fn low_http_calls_plan(&self) -> PlanId;
+    fn low_rpc_calls_plan(&self) -> PlanId;
 
     async fn kill(&self);
 
@@ -89,6 +91,8 @@ async fn env_vars(
     default_plan_id: &PlanId,
     low_fuel_plan_id: &PlanId,
     low_disk_space_plan_id: &PlanId,
+    low_http_calls_plan_id: &PlanId,
+    low_rpc_calls_plan_id: &PlanId,
     otlp: bool,
     otlp_wasm_path: Option<&Path>,
 ) -> HashMap<String, String> {
@@ -312,6 +316,120 @@ async fn env_vars(
         .with(
             "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__WORKER_LIMIT",
             "10000000000000000".to_string(),
+        )
+        // Low HTTP calls plan — monthly HTTP call limit of 1 so the first HTTP call exhausts it
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__PLAN_ID",
+            low_http_calls_plan_id.to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__PLAN_NAME",
+            "low_http_calls".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__APP_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__COMPONENT_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__ENV_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MAX_MEMORY_PER_WORKER",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MAX_DISK_SPACE_PER_WORKER",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_GAS_LIMIT",
+            "1000000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_UPLOAD_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__STORAGE_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__WORKER_CONNECTION_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__WORKER_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_HTTP_CALL_LIMIT",
+            "1".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__MONTHLY_RPC_CALL_LIMIT",
+            "1000000000000000000".to_string(),
+        )
+        // Low RPC calls plan — monthly RPC call limit of 1 so the first RPC call exhausts it
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__PLAN_ID",
+            low_rpc_calls_plan_id.to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__PLAN_NAME",
+            "low_rpc_calls".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__APP_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__COMPONENT_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__ENV_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MAX_MEMORY_PER_WORKER",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MAX_DISK_SPACE_PER_WORKER",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_GAS_LIMIT",
+            "1000000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_UPLOAD_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__STORAGE_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__WORKER_CONNECTION_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__WORKER_LIMIT",
+            "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_HTTP_CALL_LIMIT",
+            "1000000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__MONTHLY_RPC_CALL_LIMIT",
+            "1".to_string(),
         )
         //
         .with("GOLEM__GRPC__PORT", grpc_port.to_string())

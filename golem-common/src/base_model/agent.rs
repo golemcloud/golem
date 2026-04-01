@@ -15,7 +15,7 @@
 use crate::base_model::AgentId;
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
-use crate::base_model::deployment::DeploymentRevision;
+use crate::base_model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use crate::base_model::environment::EnvironmentId;
 use crate::model::Empty;
 use async_trait::async_trait;
@@ -116,6 +116,9 @@ pub struct ResolvedAgentType {
     pub registered_agent_type: RegisteredAgentType,
     pub environment_id: EnvironmentId,
     pub deployment_revision: DeploymentRevision,
+    // Present only when resolving at the latest current deployment (no explicit deployment
+    // revision requested).
+    pub current_deployment_revision: Option<CurrentDeploymentRevision>,
 }
 
 /// Event received from the registry service when any registry state changes.
@@ -128,6 +131,7 @@ pub enum RegistryInvalidationEvent {
         event_id: u64,
         environment_id: EnvironmentId,
         deployment_revision: u64,
+        current_deployment_revision: u64,
     },
     /// Domain registrations changed (created/deleted).
     DomainRegistrationChanged {

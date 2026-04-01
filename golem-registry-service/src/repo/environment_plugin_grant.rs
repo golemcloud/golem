@@ -17,13 +17,13 @@ use super::model::environment_plugin_grant::{
     EnvironmentPluginGrantWithDetailsRecord,
 };
 use crate::repo::model::BindFields;
-use crate::repo::model::datetime::SqlDateTime;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::repo::ResultExt;
+use golem_service_base::repo::SqlDateTime;
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;

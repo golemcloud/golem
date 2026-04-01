@@ -3,6 +3,14 @@ http_port = 8081
 number_of_shards = 1024
 rebalance_threshold = 0.1
 
+[db]
+type = "Sqlite"
+
+[db.config]
+database = "golem_shard_manager.db"
+foreign_keys = false
+max_connections = 10
+
 [grpc]
 port = 9092
 
@@ -20,25 +28,6 @@ type = "Grpc"
 
 [health_check.mode.config]
 
-[persistence]
-type = "Redis"
-
-[persistence.config]
-database = 0
-host = "localhost"
-key_prefix = ""
-pool_size = 8
-port = 6380
-tls = false
-tracing = false
-
-[persistence.config.retries]
-max_attempts = 5
-max_delay = "2s"
-max_jitter_factor = 0.15
-min_delay = "100ms"
-multiplier = 2.0
-
 [quota]
 definition_staleness_ttl = "5m"
 exhausted_retry_after = "30s"
@@ -50,6 +39,10 @@ connect_timeout = "10s"
 host = "localhost"
 max_message_size = 52428800
 port = 8080
+
+[registry_service.invalidation_event_subscriber]
+initial_backoff = "100ms"
+max_backoff = "30s"
 
 [registry_service.retries_on_unavailable]
 max_attempts = 5
@@ -150,6 +143,14 @@ type = "Disabled"
 # number_of_shards = 1024
 # rebalance_threshold = 0.1
 # 
+# [db]
+# type = "Sqlite"
+# 
+# [db.config]
+# database = "golem_shard_manager.db"
+# foreign_keys = false
+# max_connections = 10
+# 
 # [grpc]
 # port = 9092
 # 
@@ -168,25 +169,6 @@ type = "Disabled"
 # [health_check.mode.config]
 # namespace = "namespace"
 # 
-# [persistence]
-# type = "Redis"
-# 
-# [persistence.config]
-# database = 0
-# host = "localhost"
-# key_prefix = ""
-# pool_size = 8
-# port = 6380
-# tls = false
-# tracing = false
-# 
-# [persistence.config.retries]
-# max_attempts = 5
-# max_delay = "2s"
-# max_jitter_factor = 0.15
-# min_delay = "100ms"
-# multiplier = 2.0
-# 
 # [quota]
 # definition_staleness_ttl = "5m"
 # exhausted_retry_after = "30s"
@@ -198,6 +180,10 @@ type = "Disabled"
 # host = "localhost"
 # max_message_size = 52428800
 # port = 8080
+# 
+# [registry_service.invalidation_event_subscriber]
+# initial_backoff = "100ms"
+# max_backoff = "30s"
 # 
 # [registry_service.retries_on_unavailable]
 # max_attempts = 5

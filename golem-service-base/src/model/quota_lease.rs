@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use chrono::{DateTime, Utc};
 use golem_common::model::Pod;
 use golem_common::model::resource_definition::{
     EnforcementAction, ResourceDefinitionId, ResourceLimit,
@@ -71,22 +72,24 @@ pub enum QuotaLease {
         pod: Pod,
         epoch: LeaseEpoch,
         allocation: QuotaAllocation,
-        expires_after: Duration,
+        expires_at: DateTime<Utc>,
         resource_limit: ResourceLimit,
         enforcement_action: EnforcementAction,
     },
     /// The resource definition does not exist or was deleted.
     /// The executor may use unlimited capacity but must renew
     /// to detect if a limit is later imposed.
-    Unlimited { pod: Pod, expires_after: Duration },
+    Unlimited { pod: Pod, expires_at: DateTime<Utc> },
 }
 
 mod protobuf {
     use super::*;
+    use applying::Apply;
     use golem_api_grpc::proto::golem::common::{
         QuotaAllocation as GrpcQuotaAllocation, QuotaLease as GrpcQuotaLease, quota_allocation,
         quota_lease,
     };
+    use std::time::SystemTime;
 
     impl TryFrom<GrpcQuotaAllocation> for QuotaAllocation {
         type Error = String;
@@ -107,7 +110,7 @@ mod protobuf {
         fn try_from(value: GrpcQuotaLease) -> Result<Self, Self::Error> {
             match value.kind.ok_or("QuotaLease.kind missing")? {
                 quota_lease::Kind::Bounded(b) => {
-                    let pod: Pod = b.pod.ok_or("BoundedQuotaLease.pod missing")?.into();
+                    let pod: Pod = b.pod.ok_or("BoundedQuotaLease.pod missing")?.try_into()?;
                     let resource_definition_id = b
                         .resource_definition_id
                         .ok_or("BoundedQuotaLease.resource_definition_id missing")?
@@ -116,32 +119,47 @@ mod protobuf {
                         .allocation
                         .ok_or("BoundedQuotaLease.allocation missing")?
                         .try_into()?;
+
+                    let expires_at = b
+                        .expires_at
+                        .ok_or("missing expires_at")?
+                        .apply(SystemTime::try_from)
+                        .map_err(|_| "Failed to convert timestamp".to_string())?
+                        .into();
+
                     let resource_limit = b
                         .resource_limit
                         .ok_or("BoundedQuotaLease.resource_limit missing")?
                         .try_into()?;
+
                     let enforcement_action =
                         golem_api_grpc::proto::golem::common::EnforcementAction::try_from(
                             b.enforcement_action,
                         )
                         .map_err(|_| "Unknown enforcement_action value")?
                         .try_into()?;
+
                     Ok(Self::Bounded {
                         resource_definition_id,
                         pod,
                         epoch: LeaseEpoch(b.epoch),
                         allocation,
-                        expires_after: Duration::from_nanos(b.expires_after_nanos),
+                        expires_at,
                         resource_limit,
                         enforcement_action,
                     })
                 }
                 quota_lease::Kind::Unlimited(u) => {
-                    let pod: Pod = u.pod.ok_or("UnlimitedQuotaLease.pod missing")?.into();
-                    Ok(Self::Unlimited {
-                        pod,
-                        expires_after: Duration::from_nanos(u.expires_after_nanos),
-                    })
+                    let pod: Pod = u.pod.ok_or("UnlimitedQuotaLease.pod missing")?.try_into()?;
+
+                    let expires_at = u
+                        .expires_at
+                        .ok_or("missing expires_at")?
+                        .apply(SystemTime::try_from)
+                        .map_err(|_| "Failed to convert timestamp".to_string())?
+                        .into();
+
+                    Ok(Self::Unlimited { pod, expires_at })
                 }
             }
         }

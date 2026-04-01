@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::repo::model::datetime::SqlDateTime;
+use golem_service_base::repo::SqlDateTime;
 use uuid::Uuid;
 
 /// Audit fields for resources that can only be created and deleted, not updated.

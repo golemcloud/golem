@@ -283,6 +283,12 @@ impl AgentId {
     pub fn to_agent_urn(&self) -> String {
         format!("urn:worker:{}/{}", self.component_id, self.agent_id)
     }
+
+    /// Returns the agent name percent-encoded so it is safe to use as a
+    /// single filesystem path component.
+    pub fn agent_name_encoded(&self) -> String {
+        urlencoding::encode(&self.agent_id).into_owned()
+    }
 }
 
 impl FromStr for AgentId {

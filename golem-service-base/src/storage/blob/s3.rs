@@ -14,7 +14,10 @@
 
 use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
-use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
+use crate::storage::blob::{
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_path_to_string,
+    validate_relative_blob_path,
+};
 use anyhow::Error;
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
@@ -157,6 +160,19 @@ impl S3BlobStorage {
         }
     }
 
+    fn encode_copy_source_key(key: &str) -> String {
+        let mut encoded = String::with_capacity(key.len());
+        for b in key.bytes() {
+            let ch = b as char;
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '~' | '/') {
+                encoded.push(ch);
+            } else {
+                encoded.push_str(&format!("%{:02X}", b));
+            }
+        }
+        encoded
+    }
+
     async fn list_objects(
         &self,
         target_label: &'static str,
@@ -166,25 +182,26 @@ impl S3BlobStorage {
     ) -> Result<Vec<Object>, Error> {
         let mut result = Vec::new();
         let mut cont: Option<String> = None;
+        let prefix_str = blob_path_to_string(prefix)?;
+        let prefix_with_slash = if prefix_str.ends_with('/') {
+            prefix_str.clone()
+        } else {
+            format!("{prefix_str}/")
+        };
 
         loop {
             let response = with_retries_customized(
                 target_label,
                 op_label,
-                Some(format!("{bucket} - {}", prefix.to_string_lossy())),
+                Some(format!("{bucket} - {prefix_str}")),
                 &self.config.retries,
-                &(self.client.clone(), bucket, prefix, cont),
+                &(self.client.clone(), bucket, prefix_with_slash.clone(), cont),
                 |(client, bucket, prefix, cont)| {
                     Box::pin(async move {
-                        let prefix = if prefix.to_string_lossy().ends_with('/') {
-                            prefix.to_string_lossy().to_string()
-                        } else {
-                            format!("{}/", prefix.to_string_lossy())
-                        };
                         client
                             .list_objects_v2()
                             .bucket(*bucket)
-                            .prefix(prefix)
+                            .prefix(prefix.clone())
                             .set_continuation_token(cont.clone())
                             .send()
                             .await
@@ -318,21 +335,23 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
+        let key_str = blob_path_to_string(&key)?;
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key),
+            &(self.client.clone(), bucket, key_str),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
                         .get_object()
                         .bucket(*bucket)
-                        .key(key.to_string_lossy())
+                        .key(key.clone())
                         .send()
                         .await
                 })
@@ -366,21 +385,23 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
+        let key_str = blob_path_to_string(&key)?;
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key),
+            &(self.client.clone(), bucket, key_str),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
                         .get_object()
                         .bucket(*bucket)
-                        .key(key.to_string_lossy())
+                        .key(key.clone())
                         .send()
                         .await
                 })
@@ -415,21 +436,23 @@ impl BlobStorage for S3BlobStorage {
         start: u64,
         end: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
+        let key_str = blob_path_to_string(&key)?;
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key),
+            &(self.client.clone(), bucket, key_str),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
                         .get_object()
                         .bucket(*bucket)
-                        .key(key.to_string_lossy())
+                        .key(key.clone())
                         .range(format!("bytes={start}-{end}"))
                         .send()
                         .await
@@ -464,8 +487,10 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
+        let key_str = blob_path_to_string(&key)?;
         let op_id = format!("{bucket} - {key:?}");
 
         let file_head_result = with_retries_customized(
@@ -473,13 +498,13 @@ impl BlobStorage for S3BlobStorage {
             op_label,
             Some(op_id.clone()),
             &self.config.retries,
-            &(self.client.clone(), bucket, key.clone()),
+            &(self.client.clone(), bucket, key_str.clone()),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
                         .head_object()
                         .bucket(*bucket)
-                        .key(key.to_string_lossy())
+                        .key(key.clone())
                         .send()
                         .await
                 })
@@ -504,18 +529,19 @@ impl BlobStorage for S3BlobStorage {
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 HeadObjectError::NotFound(_) => {
                     let marker = key.join("__dir_marker");
+                    let marker_str = blob_path_to_string(&marker)?;
                     let dir_marker_head_result = with_retries_customized(
                         target_label,
                         op_label,
                         Some(op_id),
                         &self.config.retries,
-                        &(self.client.clone(), bucket, marker),
+                        &(self.client.clone(), bucket, marker_str),
                         |(client, bucket, marker)| {
                             Box::pin(async move {
                                 client
                                     .head_object()
                                     .bucket(*bucket)
-                                    .key(marker.to_string_lossy())
+                                    .key(marker.clone())
                                     .send()
                                     .await
                             })
@@ -560,21 +586,23 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
+        let key_str = blob_path_to_string(&key)?;
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key, data),
+            &(self.client.clone(), bucket, key_str, data),
             |(client, bucket, key, bytes)| {
                 Box::pin(async move {
                     client
                         .put_object()
                         .bucket(*bucket)
-                        .key(key.to_string_lossy())
+                        .key(key.clone())
                         .body(ByteStream::from(bytes.to_vec()))
                         .send()
                         .await
@@ -597,14 +625,16 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
+        let key_str = blob_path_to_string(&key)?;
 
         fn go<'a>(
             args: &'a (
                 Client,
                 &String,
-                PathBuf,
+                String,
                 &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
             ),
         ) -> Pin<
@@ -630,7 +660,7 @@ impl BlobStorage for S3BlobStorage {
                 client
                     .put_object()
                     .bucket(*bucket)
-                    .key(key.to_string_lossy())
+                    .key(key.clone())
                     .content_length(stream_length as i64)
                     .body(byte_stream)
                     .send()
@@ -645,7 +675,7 @@ impl BlobStorage for S3BlobStorage {
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key, stream),
+            &(self.client.clone(), bucket, key_str, stream),
             go,
             |err| err.is_retriable(Self::is_put_object_error_retriable),
             SdkErrorOrCustomError::as_loggable,
@@ -664,21 +694,23 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
+        let key_str = blob_path_to_string(&key)?;
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key),
+            &(self.client.clone(), bucket, key_str),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
                         .delete_object()
                         .bucket(*bucket)
-                        .key(key.to_string_lossy())
+                        .key(key.clone())
                         .send()
                         .await
                 })
@@ -699,6 +731,9 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         paths: &[PathBuf],
     ) -> Result<(), Error> {
+        for path in paths {
+            validate_relative_blob_path(path)?;
+        }
         let bucket = self.bucket_of(&namespace);
         let prefix = self.prefix_of(&namespace);
 
@@ -706,8 +741,9 @@ impl BlobStorage for S3BlobStorage {
             .iter()
             .map(|path| {
                 let key = prefix.join(path);
+                let key = blob_path_to_string(&key)?;
                 ObjectIdentifier::builder()
-                    .key(key.to_string_lossy())
+                    .key(key)
                     .build()
                     .map_err(|e| e.into())
             })
@@ -750,22 +786,24 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let marker = key.join("__dir_marker");
+        let marker_str = blob_path_to_string(&marker)?;
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, marker),
+            &(self.client.clone(), bucket, marker_str),
             |(client, bucket, marker)| {
                 Box::pin(async move {
                     client
                         .put_object()
                         .bucket(*bucket)
-                        .key(marker.to_string_lossy())
+                        .key(marker.clone())
                         .body(ByteStream::from(Bytes::new()))
                         .send()
                         .await
@@ -787,6 +825,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let namespace_root = self.prefix_of(&namespace);
         let key = namespace_root.join(path);
@@ -827,6 +866,7 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -881,8 +921,10 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
+        let key_str = blob_path_to_string(&key)?;
         let op_id = format!("{bucket} - {key:?}");
 
         let file_head_result = with_retries_customized(
@@ -890,13 +932,13 @@ impl BlobStorage for S3BlobStorage {
             op_label,
             Some(op_id.clone()),
             &self.config.retries,
-            &(self.client.clone(), bucket, key.clone()),
+            &(self.client.clone(), bucket, key_str.clone()),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
                         .head_object()
                         .bucket(*bucket)
-                        .key(key.to_string_lossy())
+                        .key(key.clone())
                         .send()
                         .await
                 })
@@ -911,18 +953,19 @@ impl BlobStorage for S3BlobStorage {
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 HeadObjectError::NotFound(_) => {
                     let marker = key.join("__dir_marker");
+                    let marker_str = blob_path_to_string(&marker)?;
                     let dir_marker_head_result = with_retries_customized(
                         target_label,
                         op_label,
                         Some(op_id),
                         &self.config.retries,
-                        &(self.client.clone(), bucket, marker),
+                        &(self.client.clone(), bucket, marker_str),
                         |(client, bucket, marker)| {
                             Box::pin(async move {
                                 client
                                     .head_object()
                                     .bucket(*bucket)
-                                    .key(marker.to_string_lossy())
+                                    .key(marker.clone())
                                     .send()
                                     .await
                             })
@@ -957,23 +1000,28 @@ impl BlobStorage for S3BlobStorage {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(from)?;
+        validate_relative_blob_path(to)?;
         let bucket = self.bucket_of(&namespace);
         let from_key = self.prefix_of(&namespace).join(from);
         let to_key = self.prefix_of(&namespace).join(to);
+        let from_key_str = blob_path_to_string(&from_key)?;
+        let to_key_str = blob_path_to_string(&to_key)?;
+        let encoded_from_key = Self::encode_copy_source_key(&from_key_str);
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {from_key:?} -> {to_key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, from_key, to_key),
-            |(client, bucket, from_key, to_key)| {
+            &(self.client.clone(), bucket, encoded_from_key, to_key_str),
+            |(client, bucket, encoded_from_key, to_key)| {
                 Box::pin(async move {
                     client
                         .copy_object()
                         .bucket(*bucket)
-                        .copy_source(format!("/{}/{}", *bucket, from_key.to_string_lossy()))
-                        .key(to_key.to_string_lossy())
+                        .copy_source(format!("/{}/{}", *bucket, encoded_from_key))
+                        .key(to_key.clone())
                         .send()
                         .await
                 })

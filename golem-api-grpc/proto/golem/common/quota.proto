@@ -9,6 +9,7 @@ import "golem/common/environment.proto";
 import "golem/shardmanager/pod.proto";
 import "wasm/rpc/type.proto";
 import "wasm/rpc/val.proto";
+import "google/protobuf/timestamp.proto";
 
 message ResourceDefinitionId {
   golem.common.UUID value = 1;
@@ -92,13 +93,13 @@ message QuotaLease {
     golem.shardmanager.Pod pod = 2;
     uint64 epoch = 3;
     QuotaAllocation allocation = 4;
-    uint64 expires_after_nanos = 5;
+    google.protobuf.Timestamp expires_at = 5;
     ResourceLimit resource_limit = 6;
     EnforcementAction enforcement_action = 7;
   }
 
   message Unlimited {
     golem.shardmanager.Pod pod = 1;
-    uint64 expires_after_nanos = 2;
+    google.protobuf.Timestamp expires_at = 2;
   }
 }

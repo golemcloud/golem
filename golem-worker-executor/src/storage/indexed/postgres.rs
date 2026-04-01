@@ -95,12 +95,10 @@ impl PostgresIndexedStorage {
         })
     }
 
-    fn to_like_pattern(pattern: &str) -> String {
-        let mut result = String::with_capacity(pattern.len());
-        for ch in pattern.chars() {
+    fn to_like_prefix(prefix: &str) -> String {
+        let mut result = String::with_capacity(prefix.len() + 1);
+        for ch in prefix.chars() {
             match ch {
-                '*' => result.push('%'),
-                '?' => result.push('_'),
                 '%' | '_' | '\\' => {
                     result.push('\\');
                     result.push(ch);
@@ -108,6 +106,7 @@ impl PostgresIndexedStorage {
                 _ => result.push(ch),
             }
         }
+        result.push('%');
         result
     }
 }
@@ -158,20 +157,30 @@ impl IndexedStorage for PostgresIndexedStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageMetaNamespace,
-        pattern: &str,
+        prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String> {
-        let key = Self::to_like_pattern(pattern);
         let count_i64 = Self::to_i64(count, "count")?;
         let cursor_i64 = Self::to_i64(cursor, "cursor")?;
-        let query = sqlx::query_as::<_, (String,)>(
-            "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key LIKE $2 ESCAPE '\\' ORDER BY key LIMIT $3 OFFSET $4;",
-        )
-        .bind(Self::meta_namespace(namespace))
-        .bind(&key)
-        .bind(count_i64)
-        .bind(cursor_i64);
+        let query = match prefix {
+            Some(prefix) => {
+                let key = Self::to_like_prefix(prefix);
+                sqlx::query_as(
+                    "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key LIKE $2 ESCAPE '\\' ORDER BY key LIMIT $3 OFFSET $4;",
+                )
+                .bind(Self::meta_namespace(namespace))
+                .bind(key)
+                .bind(count_i64)
+                .bind(cursor_i64)
+            }
+            None => sqlx::query_as(
+                "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 ORDER BY key LIMIT $2 OFFSET $3;",
+            )
+            .bind(Self::meta_namespace(namespace))
+            .bind(count_i64)
+            .bind(cursor_i64),
+        };
 
         let keys = self
             .pool

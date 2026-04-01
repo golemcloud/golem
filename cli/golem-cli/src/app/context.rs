@@ -266,7 +266,7 @@ impl ApplicationContext {
         log_action("Selecting", "components");
         let _indent = LogIndent::new();
 
-        let current_dir = fs::canonicalize_path(&std::env::current_dir()?)?;
+        let current_dir = fs::current_dir_lexical()?;
 
         let selected_component_names: ValidatedResult<BTreeSet<ComponentName>> =
             match component_select_mode {
@@ -280,7 +280,8 @@ impl ApplicationContext {
                         )
                     };
 
-                    let called_from_project_root = self.calling_working_dir == current_dir;
+                    let called_from_project_root =
+                        fs::path_eq_normalized(&self.calling_working_dir, &current_dir);
                     if called_from_project_root {
                         all_components()
                     } else {
@@ -288,10 +289,12 @@ impl ApplicationContext {
                             .application
                             .component_names()
                             .filter(|component_name| {
-                                self.application
-                                    .component(component_name)
-                                    .component_dir()
-                                    .starts_with(self.calling_working_dir.as_path())
+                                let component = self.application.component(component_name);
+                                let component_dir = component.component_dir();
+                                fs::path_starts_with_normalized(
+                                    component_dir,
+                                    self.calling_working_dir.as_path(),
+                                )
                             })
                             .cloned()
                             .collect::<BTreeSet<_>>();
@@ -706,10 +709,7 @@ struct CollectedSources {
 fn collect_sources_and_switch_to_app_root(
     root_manifest: Option<&Path>,
 ) -> Option<ValidatedResult<CollectedSources>> {
-    let calling_working_dir = std::env::current_dir()
-        .expect("Failed to get current working directory")
-        .canonicalize()
-        .expect("Failed to canonicalize current working directory");
+    let calling_working_dir = fs::current_dir_lexical().unwrap();
 
     log_action("Collecting", "application manifests");
     let _indent = LogIndent::new();
@@ -745,7 +745,7 @@ fn collect_sources_and_switch_to_app_root(
             Some(source) => collect_by_main_source(&source),
             None => None,
         },
-        Some(source) => match source.canonicalize() {
+        Some(source) => match fs::absolute_lexical_path(source) {
             Ok(source) => collect_by_main_source(&source),
             Err(err) => Some(ValidatedResult::from_error(format!(
                 "Cannot resolve requested application manifest source {}: {}",

@@ -38,6 +38,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
         self.observe_function_call("http::outgoing_handler", "handle");
 
+        // Check the per-invocation HTTP call limit before initiating the call.
+        // Only counted in live mode; replay is a no-op.
+        self.state
+            .check_and_increment_http_call_count()
+            .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
+
+        // Record against the monthly account-level HTTP call quota (live mode only).
+        // Returns Err(WorkerMonthlyHttpCallBudgetExhausted) when exhausted,
+        // which maps to RetryDecision::TryStop — suspending the worker until
+        // the registry replenishes the budget (e.g. next billing month).
+        self.record_monthly_http_call()
+            .map_err(|e| HttpError::trap(wasmtime::Error::from_anyhow(e)))?;
+
         // Durability is handled by the WasiHttpView send_request method and the follow-up calls to await/poll the response future
         let begin_index = self
             .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))

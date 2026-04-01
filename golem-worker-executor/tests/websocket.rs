@@ -366,3 +366,84 @@ async fn websocket_polling_test(
 
     Ok(())
 }
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn websocket_async_bidirectional_test(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let ws_port = listener.local_addr().unwrap().port();
+
+    // Echo server that supports multiple inbound/outbound messages on one connection.
+    let ws_server = spawn(
+        async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let ws_stream = tokio_tungstenite::accept_async(stream)
+                    .await
+                    .expect("WS handshake failed");
+                let (mut write, mut read) = StreamExt::split(ws_stream);
+                while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
+                    if msg.is_close() {
+                        break;
+                    }
+                    if msg.is_text() || msg.is_binary() {
+                        SinkExt::send(&mut write, msg).await.ok();
+                    }
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
+
+    let agent_id = agent_id!("WebsocketTest", "websocket-async-bidi-test");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env_vars,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "async_bidi_test",
+            data_value!(format!("ws://localhost:{ws_port}")),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(
+        result,
+        Value::Result(Ok(Some(Box::new(Value::String(
+            "msg-a|msg-b|msg-c".to_string()
+        )))))
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    ws_server.abort();
+
+    Ok(())
+}

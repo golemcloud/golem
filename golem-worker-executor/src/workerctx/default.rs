@@ -44,8 +44,9 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, NoAdditionalDeps, worker_enumeration};
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
-    InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
+    CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -231,6 +232,20 @@ impl FuelManagement for Context {
         let consumed = self.fuel_tracker.on_return(current_level);
         debug!("reset fuel mark to {}", current_level);
         consumed
+    }
+}
+
+impl CallCountManagement for Context {
+    fn reset_invocation_call_counts(&mut self) {
+        self.durable_ctx.reset_invocation_call_counts();
+    }
+
+    fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
+        self.durable_ctx.record_monthly_http_call()
+    }
+
+    fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
+        self.durable_ctx.record_monthly_rpc_call()
     }
 }
 
@@ -788,6 +803,8 @@ impl WorkerCtx for Context {
             websocket_connection_pool,
             pending_update,
             original_phantom_id,
+            account_resource_limits.per_invocation_http_call_limit(),
+            account_resource_limits.per_invocation_rpc_call_limit(),
         )
         .await?;
         Ok(Self::new(golem_ctx, config, account_resource_limits))

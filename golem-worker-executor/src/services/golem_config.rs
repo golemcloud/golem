@@ -1441,6 +1441,17 @@ pub struct FilesystemStorageConfig {
     pub total_worker_filesystem_storage_bytes: Option<u64>,
     #[serde(with = "humantime_serde")]
     pub acquire_retry_delay: Duration,
+    /// When set, use deterministic per-agent directory names rooted at this
+    /// path instead of random OS temp directories. The directory structure is:
+    ///
+    /// ```text
+    /// <root>/<environment_id>/<component_id>/<agent_name>/
+    /// ```
+    ///
+    /// This allows external tools to locate an agent's filesystem by its id.
+    /// Directories are cleaned up when the worker is dropped, just like temp
+    /// dirs. When `None` (the default), random temp directories are used.
+    pub deterministic_root_dir: Option<PathBuf>,
 }
 
 impl FilesystemStorageConfig {
@@ -1463,6 +1474,9 @@ impl SafeDisplay for FilesystemStorageConfig {
             "acquire retry delay: {:?}",
             self.acquire_retry_delay
         );
+        if let Some(root) = &self.deterministic_root_dir {
+            let _ = writeln!(&mut result, "deterministic root dir: {}", root.display());
+        }
         result
     }
 }
@@ -1472,6 +1486,7 @@ impl Default for FilesystemStorageConfig {
         Self {
             total_worker_filesystem_storage_bytes: None,
             acquire_retry_delay: Duration::from_millis(500),
+            deterministic_root_dir: None,
         }
     }
 }

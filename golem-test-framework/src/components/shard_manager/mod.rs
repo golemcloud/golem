@@ -15,7 +15,8 @@
 pub mod provided;
 pub mod spawned;
 
-use crate::components::redis::Redis;
+use super::rdb::Rdb;
+use super::registry_service::RegistryService;
 use crate::components::{EnvVarBuilder, wait_for_startup_grpc};
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -56,7 +57,9 @@ pub trait ShardManager: Send + Sync {
             shardmanager::v1::GetRoutingTableResponse {
                 result:
                     Some(shardmanager::v1::get_routing_table_response::Result::Success(routing_table)),
-            } => Ok(routing_table.into()),
+            } => Ok(routing_table
+                .try_into()
+                .map_err(|e| anyhow!("Failed converting routing table: {e}"))?),
             shardmanager::v1::GetRoutingTableResponse {
                 result: Some(shardmanager::v1::get_routing_table_response::Result::Failure(err)),
             } => Err(anyhow!("Failed to get routing table: {err:?}")),
@@ -86,20 +89,27 @@ async fn env_vars(
     number_of_shards_override: Option<usize>,
     http_port: u16,
     grpc_port: u16,
-    redis: Arc<dyn Redis + Send + Sync + 'static>,
+    rdb: &Arc<dyn Rdb>,
+    rdb_private_connection: bool,
+    registry_service: &Arc<dyn RegistryService>,
     verbosity: Level,
     otlp: bool,
 ) -> HashMap<String, String> {
     let mut builder = EnvVarBuilder::golem_service(verbosity)
         .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
-        .with("GOLEM__PERSISTENCE__TYPE", "Redis".to_string())
-        .with("GOLEM__PERSISTENCE__CONFIG__HOST", redis.private_host())
-        .with(
-            "GOLEM__PERSISTENCE__CONFIG__PORT",
-            redis.private_port().to_string(),
+        .with_str(
+            "GOLEM__REGISTRY_SERVICE__HOST",
+            &registry_service.grpc_host(),
         )
-        .with_str("GOLEM__PERSISTENCE__CONFIG__KEY_PREFIX", redis.prefix())
+        .with(
+            "GOLEM__REGISTRY_SERVICE__PORT",
+            registry_service.grpc_port().to_string(),
+        )
+        .with_all(
+            rdb.info()
+                .env("golem_shard_manager", rdb_private_connection),
+        )
         .with_optional_otlp("shard_manager", otlp);
 
     if let Some(number_of_shards) = number_of_shards_override {

@@ -123,9 +123,9 @@ use golem_worker_executor::services::{All, HasAll, rdbms, resource_limits};
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
-    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, StatusManagement,
-    UpdateManagement, WorkerCtx,
+    CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails};
 use prometheus::Registry;
@@ -504,6 +504,12 @@ pub async fn start_customized(
         engine: EngineConfig {
             enable_fs_cache: true,
         },
+        // Use Disabled resource limits so Worker::new() can call
+        // initialize_account without attempting a gRPC connection to a registry
+        // service that does not exist in this test setup. Tests that need custom
+        // resource limits inject their own ResourceLimits implementation via
+        // ProductionContextTestServerBootstrap (which overrides this config).
+        resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
         ..Default::default()
     };
     if let Some(retry) = retry_override {
@@ -616,6 +622,20 @@ impl FuelManagement for TestWorkerCtx {
 
     fn return_fuel(&mut self, _current_level: u64) -> u64 {
         0
+    }
+}
+
+impl CallCountManagement for TestWorkerCtx {
+    fn reset_invocation_call_counts(&mut self) {
+        self.durable_ctx.reset_invocation_call_counts();
+    }
+
+    fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
+        Ok(()) // test context: monthly limits are always unlimited
+    }
+
+    fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
+        Ok(()) // test context: monthly limits are always unlimited
     }
 }
 
@@ -850,6 +870,7 @@ impl WorkerCtx for TestWorkerCtx {
             usize::MAX,
             usize::MAX,
             u64::MAX,
+            u64::MAX,
         ));
 
         let durable_ctx = DurableWorkerCtx::create(
@@ -883,6 +904,8 @@ impl WorkerCtx for TestWorkerCtx {
             websocket_connection_pool,
             pending_update,
             original_phantom_id,
+            u64::MAX,
+            u64::MAX,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -1646,6 +1669,7 @@ impl ResourceLimits for FixedTableLimitResourceLimits {
             usize::MAX,
             self.max_table_elements,
             u64::MAX,
+            u64::MAX,
         )))
     }
 }
@@ -1777,6 +1801,53 @@ pub async fn start_with_table_limit(
     .await
 }
 
+/// A `ResourceLimits` implementation that provides a fixed per-executor
+/// concurrent agent limit while keeping all other limits unlimited.
+/// Used by concurrent agent limit tests.
+struct FixedConcurrentAgentLimitResourceLimits {
+    max_concurrent_agents_per_executor: u64,
+}
+
+#[async_trait]
+impl ResourceLimits for FixedConcurrentAgentLimitResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: golem_common::model::account::AccountId,
+    ) -> Result<
+        Arc<AtomicResourceEntry>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        Ok(Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            self.max_concurrent_agents_per_executor,
+        )))
+    }
+}
+
+/// Starts a worker executor with a per-executor concurrent agent limit.
+///
+/// All agents running on this executor count against the per-account limit.
+/// When the limit is reached, new agents wait until a running agent stops
+/// or an idle agent is evicted.
+pub async fn start_with_concurrent_agent_limit(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_concurrent_agents: u64,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedConcurrentAgentLimitResourceLimits {
+            max_concurrent_agents_per_executor: max_concurrent_agents,
+        }),
+        "Timeout waiting for concurrent-agent-limit server to start",
+    )
+    .await
+}
+
 /// A `ResourceLimits` implementation that provides a fixed per-worker disk
 /// space limit while keeping fuel, memory, and table elements unlimited.
 /// Used by storage quota tests.
@@ -1798,6 +1869,7 @@ impl ResourceLimits for FixedFilesystemStorageQuotaResourceLimits {
             usize::MAX,
             usize::MAX,
             self.max_disk_space_bytes,
+            u64::MAX,
         )))
     }
 }
@@ -1820,6 +1892,110 @@ pub async fn start_with_agent_storage_quota(
             max_disk_space_bytes,
         }),
         "Timeout waiting for agent-storage-quota server to start",
+    )
+    .await
+}
+
+/// A `ResourceLimits` implementation that enforces fixed per-invocation HTTP and RPC
+/// call limits while keeping fuel, memory, and table elements unlimited.
+/// Used by per-invocation call-limit tests.
+struct FixedInvocationLimitResourceLimits {
+    per_invocation_http_call_limit: u64,
+    per_invocation_rpc_call_limit: u64,
+}
+
+#[async_trait]
+impl ResourceLimits for FixedInvocationLimitResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: golem_common::model::account::AccountId,
+    ) -> Result<
+        Arc<AtomicResourceEntry>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        Ok(Arc::new(AtomicResourceEntry::new_with_invocation_limits(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            self.per_invocation_http_call_limit,
+            self.per_invocation_rpc_call_limit,
+        )))
+    }
+}
+
+/// Starts a worker executor that uses the production [`Context`] worker context,
+/// with specific per-invocation HTTP and RPC call limits enforced.
+///
+/// Fuel, memory, and table elements remain unlimited.
+pub async fn start_with_invocation_limits(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    per_invocation_http_call_limit: u64,
+    per_invocation_rpc_call_limit: u64,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedInvocationLimitResourceLimits {
+            per_invocation_http_call_limit,
+            per_invocation_rpc_call_limit,
+        }),
+        "Timeout waiting for invocation-limit server to start",
+    )
+    .await
+}
+
+/// A `ResourceLimits` implementation that enforces fixed monthly account-level
+/// HTTP and RPC call budgets while keeping everything else unlimited.
+struct FixedMonthlyCallLimitResourceLimits {
+    monthly_http_calls: u64,
+    monthly_rpc_calls: u64,
+}
+
+#[async_trait]
+impl ResourceLimits for FixedMonthlyCallLimitResourceLimits {
+    async fn initialize_account(
+        &self,
+        _account_id: golem_common::model::account::AccountId,
+    ) -> Result<
+        Arc<AtomicResourceEntry>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        Ok(Arc::new(AtomicResourceEntry::new_with_all_limits(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            self.monthly_http_calls,
+            self.monthly_rpc_calls,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+        )))
+    }
+}
+
+/// Starts a worker executor that uses the production [`Context`] worker context,
+/// with specific monthly account-level HTTP and RPC call budgets enforced.
+///
+/// When the budget is exhausted the worker is suspended (not trapped) — the same
+/// mechanism as fuel exhaustion. Per-invocation limits, fuel, memory, and disk
+/// remain unlimited.
+pub async fn start_with_monthly_call_limits(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    monthly_http_calls: u64,
+    monthly_rpc_calls: u64,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedMonthlyCallLimitResourceLimits {
+            monthly_http_calls,
+            monthly_rpc_calls,
+        }),
+        "Timeout waiting for monthly-call-limit server to start",
     )
     .await
 }
