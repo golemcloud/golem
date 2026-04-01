@@ -1670,6 +1670,69 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/agents/create-agent:
+    post:
+      tags:
+      - Agent
+      operationId: create_agent
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/CreateAgentRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/CreateAgentResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/accounts/{account_id}/tokens:
     get:
       tags:
@@ -10421,6 +10484,43 @@ components:
           $ref: '#/components/schemas/ValueAndType'
       required:
       - value
+    CreateAgentRequest:
+      title: CreateAgentRequest
+      type: object
+      properties:
+        appName:
+          type: string
+        envName:
+          type: string
+        agentTypeName:
+          type: string
+        parameters:
+          $ref: '#/components/schemas/UntypedJsonDataValue'
+        phantomId:
+          type: string
+          format: uuid
+        agentConfig:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkerAgentConfigEntry'
+      required:
+      - appName
+      - envName
+      - agentTypeName
+      - parameters
+    CreateAgentResponse:
+      title: CreateAgentResponse
+      type: object
+      properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        componentRevision:
+          type: integer
+          format: uint64
+      required:
+      - agentId
+      - componentRevision
     DataValue:
       discriminator:
         propertyName: type
@@ -12854,10 +12954,13 @@ components:
         retryFrom:
           type: integer
           format: uint64
+        insideAtomicRegion:
+          type: boolean
       required:
       - timestamp
       - error
       - retryFrom
+      - insideAtomicRegion
     r#ExitedParams:
       title: r#ExitedParams
       type: object

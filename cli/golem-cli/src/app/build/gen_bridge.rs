@@ -232,6 +232,9 @@ async fn gen_bridge_sdk_target(
                         &output_dir,
                         false,
                     )?),
+                    GuestLanguage::Scala => {
+                        bail!("Bridge generation is not yet supported for Scala")
+                    }
                 };
 
                 fs::remove(&output_dir)?;

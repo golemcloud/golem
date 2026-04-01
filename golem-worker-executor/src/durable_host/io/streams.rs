@@ -15,6 +15,7 @@
 use wasmtime::component::Resource;
 use wasmtime_wasi::StreamError;
 
+use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{
@@ -67,7 +68,9 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 let result = HostInputStream::read(self.table(), self_, len).await;
 
                 durability
-                    .try_trigger_retry(self, &ignore_closed_error(&result))
+                    .try_trigger_retry(self, &ignore_closed_error(&result), |_| {
+                        HostFailureKind::Transient
+                    })
                     .await
                     .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
 
@@ -111,7 +114,9 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 let result = HostInputStream::blocking_read(self.table(), self_, len).await;
 
                 durability
-                    .try_trigger_retry(self, &ignore_closed_error(&result))
+                    .try_trigger_retry(self, &ignore_closed_error(&result), |_| {
+                        HostFailureKind::Transient
+                    })
                     .await
                     .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
                 durability
@@ -149,7 +154,9 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 let request = get_http_stream_request(self, handle)?;
                 let result = HostInputStream::skip(self.table(), self_, len).await;
                 durability
-                    .try_trigger_retry(self, &ignore_closed_error(&result))
+                    .try_trigger_retry(self, &ignore_closed_error(&result), |_| {
+                        HostFailureKind::Transient
+                    })
                     .await
                     .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
                 durability
@@ -192,7 +199,9 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 let request = get_http_stream_request(self, handle)?;
                 let result = HostInputStream::blocking_skip(self.table(), self_, len).await;
                 durability
-                    .try_trigger_retry(self, &ignore_closed_error(&result))
+                    .try_trigger_retry(self, &ignore_closed_error(&result), |_| {
+                        HostFailureKind::Transient
+                    })
                     .await
                     .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
                 durability

@@ -94,10 +94,10 @@ export class LanguageService {
   }
 
   addSnippetToHistory(snippet: string) {
-    if (!this.snippetHistory.endsWith('\n')) {
-      snippet = snippet + '\n';
-    }
-    this.snippetHistory = this.snippetHistory + snippet;
+    const normalizedSnippet = snippet.trimEnd();
+    if (!normalizedSnippet) return;
+
+    this.snippetHistory = this.snippetHistory + normalizedSnippet + ';\n';
     this.updateProjectSnippet();
   }
 
@@ -319,8 +319,11 @@ export class LanguageService {
   ): Array<{ name: string; signature: string }> | undefined {
     if (!isValidIdentifier(agentTypeName)) return;
 
+    // Use Awaited<> to unwrap Promise if .get() is async
     const sourceText =
-      this.snippetImports + `const __client = ${agentTypeName}.get();\n` + 'void __client;\n';
+      this.snippetImports +
+      `const __client = null! as Awaited<ReturnType<typeof ${agentTypeName}.get>>;\n` +
+      'void __client;\n';
     const sourceFile = this.project.createSourceFile('__client_info__.ts', sourceText, {
       overwrite: true,
     });

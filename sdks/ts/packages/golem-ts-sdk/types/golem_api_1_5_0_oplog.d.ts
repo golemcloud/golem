@@ -414,6 +414,18 @@ declare module 'golem:api/oplog@1.5.0' {
     val: string
   } |
   {
+    tag: 'deterministic-trap'
+    val: string
+  } |
+  {
+    tag: 'transient-error'
+    val: string
+  } |
+  {
+    tag: 'permanent-error'
+    val: string
+  } |
+  {
     tag: 'exceeded-table-limit'
   } |
   {
@@ -468,6 +480,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     error: WorkerError;
     retryFrom: OplogIndex;
+    insideAtomicRegion: boolean;
   };
   export type RawPendingAgentInvocationParameters = {
     timestamp: Datetime;

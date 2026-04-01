@@ -660,6 +660,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         retry_config: &RetryConfig,
         previous_tries: &HashMap<OplogIndex, u32>,
         trap_type: &TrapType,
+        in_atomic_region: bool,
     ) -> RetryDecision {
         match trap_type {
             TrapType::Interrupt(InterruptKind::Interrupt(ts)) => RetryDecision::TryStop(*ts),
@@ -708,7 +709,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => RetryDecision::None,
             TrapType::Error {
-                error: AgentError::Unknown(_),
+                error: AgentError::DeterministicTrap(_),
+                retry_from,
+            } if in_atomic_region => {
+                let previous_tries = previous_tries.get(retry_from).copied().unwrap_or_default();
+                let retryable = previous_tries < retry_config.max_attempts;
+                if retryable {
+                    match get_delay(retry_config, previous_tries) {
+                        Some(delay) => RetryDecision::Delayed(delay),
+                        None => RetryDecision::None,
+                    }
+                } else {
+                    RetryDecision::None
+                }
+            }
+            TrapType::Error {
+                error: AgentError::DeterministicTrap(_),
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::PermanentError(_),
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::Unknown(_) | AgentError::TransientError(_),
                 retry_from,
             } => {
                 let previous_tries = previous_tries.get(retry_from).copied().unwrap_or_default();
@@ -1875,7 +1899,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 ..
             } => current_idempotency_key.map(OplogEntry::cancel_pending_invocation),
             TrapType::Error { error, retry_from } => {
-                Some(OplogEntry::error(error.clone(), *retry_from))
+                let inside_atomic_region = self.state.outermost_atomic_region_has_side_effects();
+                Some(OplogEntry::error(
+                    error.clone(),
+                    *retry_from,
+                    inside_atomic_region,
+                ))
             }
         };
 
@@ -1929,14 +1958,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .unwrap_or(default_retry_config)
             .clone();
 
+        let in_atomic_region = !self.state.active_atomic_regions.is_empty();
         let decision = Self::get_recovery_decision_on_trap(
             &retry_config,
             &latest_status.current_retry_count,
             trap_type,
+            in_atomic_region,
         );
 
         debug!(
-            "Recovery decision for {trap_type:?} with {:?} retries: {:?}",
+            "Recovery decision for {trap_type:?} with {:?} retries (in_atomic_region={in_atomic_region}): {:?}",
             latest_status.current_retry_count, decision
         );
 
@@ -2008,8 +2039,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_current_retry_point(&self) -> OplogIndex {
-        if let Some(idx) = self.state.active_atomic_regions.last() {
-            *idx
+        if let Some(region) = self.state.active_atomic_regions.last() {
+            region.begin_index
         } else {
             self.state.current_retry_point
         }
@@ -3109,6 +3140,12 @@ pub(crate) struct HttpOutputStreamState {
 }
 
 #[derive(Debug, Clone)]
+struct ActiveAtomicRegion {
+    begin_index: OplogIndex,
+    has_side_effects: bool,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct FilesystemOutputStreamState {
     pub descriptor_rep: u32,
     pub position: Option<u64>,
@@ -3209,7 +3246,7 @@ struct PrivateDurableWorkerState {
     /// persisted host call, if there is an active atomic region, the error is associated with that. Otherwise retried
     /// failures within atomic regions would not be grouped by the same retry point as the whole atomic region gets retried
     /// from scratch.
-    active_atomic_regions: Vec<OplogIndex>,
+    active_atomic_regions: Vec<ActiveAtomicRegion>,
 
     // Update that is pending and should be applied at the end of replay.
     // Other parts of the worker configuration already reflect the worker state implied by the update (component version, env vars, ifs, etc.)
@@ -3354,6 +3391,20 @@ impl PrivateDurableWorkerState {
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
             resource_limit_entry,
+        }
+    }
+
+    /// Returns whether the outermost active atomic region has side effects
+    pub fn outermost_atomic_region_has_side_effects(&self) -> bool {
+        self.active_atomic_regions
+            .first()
+            .is_some_and(|region| region.has_side_effects)
+    }
+
+    /// Mark the outermost active atomic region as having side effects
+    pub fn mark_atomic_region_has_side_effects(&mut self) {
+        if let Some(region) = self.active_atomic_regions.first_mut() {
+            region.has_side_effects = true;
         }
     }
 
