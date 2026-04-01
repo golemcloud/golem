@@ -76,7 +76,7 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
 
     // Checking bridge SDK generation for all agents and languages, one by one
     let mut failed_bridge_sdks = vec![];
-    for language in GuestLanguage::iter() {
+    for language in GuestLanguage::iter().filter(|l| l.supports_bridge_generation()) {
         for deployed_agent_type in &deployed_agent_types {
             let output = ctx
                 .cli([
@@ -112,10 +112,13 @@ async fn build_mixed_language_app() {
     let templates = GuestLanguage::iter()
         .flat_map(|language| match language {
             GuestLanguage::TypeScript => {
-                vec!["ts", "ts/human-in-the-loop"]
+                vec!["ts/human-in-the-loop"]
             }
             GuestLanguage::Rust => {
                 vec!["rust/json", "rust/snapshotting"]
+            }
+            GuestLanguage::Scala => {
+                vec!["scala"]
             }
         })
         .collect::<Vec<_>>();

@@ -78,11 +78,14 @@ impl FromStr for ReplLanguage {
     }
 }
 
-impl From<GuestLanguage> for ReplLanguage {
-    fn from(guest_language: GuestLanguage) -> Self {
+impl TryFrom<GuestLanguage> for ReplLanguage {
+    type Error = anyhow::Error;
+
+    fn try_from(guest_language: GuestLanguage) -> Result<Self, Self::Error> {
         match guest_language {
-            GuestLanguage::Rust => ReplLanguage::Rust,
-            GuestLanguage::TypeScript => ReplLanguage::TypeScript,
+            GuestLanguage::Rust => Ok(ReplLanguage::Rust),
+            GuestLanguage::TypeScript => Ok(ReplLanguage::TypeScript),
+            GuestLanguage::Scala => Err(anyhow::anyhow!("REPL is not yet supported for Scala")),
         }
     }
 }
