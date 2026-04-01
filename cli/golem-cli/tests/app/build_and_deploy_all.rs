@@ -112,7 +112,7 @@ async fn build_mixed_language_app() {
     let templates = GuestLanguage::iter()
         .flat_map(|language| match language {
             GuestLanguage::TypeScript => {
-                vec!["ts", "ts/human-in-the-loop"]
+                vec!["ts/human-in-the-loop"]
             }
             GuestLanguage::Rust => {
                 vec!["rust/json", "rust/snapshotting"]

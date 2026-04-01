@@ -56,7 +56,7 @@ pub mod rust_dep {
 }
 
 pub mod scala_dep {
-    pub const SCALA_VERSION: &str = "3.3.7";
+    pub const SCALA_VERSION: &str = "3.8.2";
     pub const SCALAJS_PLUGIN_VERSION: &str = "1.20.2";
     pub const SBT_VERSION: &str = "1.12.0";
 }

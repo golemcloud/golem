@@ -8,9 +8,9 @@ componentTemplates:
       sources:
       - "{{ componentDir }}/src"
       targets:
-      - ".golem/{{ component_name | to_snake_case }}.js"
-    - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
-      module: ".golem/{{ component_name | to_snake_case }}.js"
+      - "{{ appRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
+    - injectToPrebuiltQuickjs: "{{ appRootDir }}/.generated/agent_guest.wasm"
+      module: "{{ appRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
       into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
     - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
       into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"

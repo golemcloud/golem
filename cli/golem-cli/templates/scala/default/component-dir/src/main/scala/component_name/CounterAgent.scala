@@ -1,16 +1,17 @@
 package component_name
 
-import golem.runtime.annotations.{agentDefinition, description, prompt}
+import golem.runtime.annotations.{agentDefinition, description, endpoint, prompt}
 import golem.BaseAgent
 
 import scala.concurrent.Future
 
-@agentDefinition()
+@agentDefinition(mount = "/counters/{name}")
 trait CounterAgent extends BaseAgent {
 
   class Id(val name: String)
 
   @prompt("Increase the count by one")
   @description("Increases the count by one and returns the new value")
+  @endpoint(method = "POST", path = "/increment")
   def increment(): Future[Int]
 }
