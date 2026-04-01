@@ -13,7 +13,7 @@ components:
     templates: scala.js
     buildMergeMode: replace
     build:
-    - command: bash -c 'COMP_DIR="$PWD" && cd ../.. && sbt -batch -no-colors -Dsbt.supershell=false "++3.8.2!" "project zioGolemTestAgents" "golemBuildComponent scala:examples $COMP_DIR/.golem/scala.js"'
+    - command: bash -c 'COMP_DIR="$PWD" && cd .. && sbt -batch -no-colors -Dsbt.supershell=false "++3.8.2!" "project testAgents" "golemBuildComponent scala:examples $COMP_DIR/.golem/scala.js"'
       sources:
       - src
       targets:
@@ -21,6 +21,10 @@ components:
     - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
       module: .golem/scala.js
       into: .golem/agents/scala_examples.dynamic.wasm
+    - preinitializeJs: .golem/agents/scala_examples.dynamic.wasm
+      into: .golem/agents/scala_examples.preinitialized.wasm
+    componentWasm: .golem/agents/scala_examples.preinitialized.wasm
+    outputWasm: .golem/agents/scala_examples.wasm
 
     agents:
       ConfigAgent:

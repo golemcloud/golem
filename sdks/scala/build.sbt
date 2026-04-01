@@ -225,12 +225,13 @@ lazy val sbtPlugin = project
 
 lazy val testAgents = project
   .in(file("test-agents"))
-  .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin)
+  .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin, golem.sbt.GolemPlugin)
   .dependsOn(core, macros)
   .settings(commonSettings)
   .settings(jsSettings)
   .settings(
     name               := "golem-scala-test-agents",
+    golem.sbt.GolemPlugin.autoImport.golemBasePackage := Some("example"),
     crossScalaVersions := Seq(Scala3Golem, Scala213),
     publish / skip     := true,
     scalaJSUseMainModuleInitializer := false,
