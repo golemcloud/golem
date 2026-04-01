@@ -110,7 +110,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             .with("compressed_oplog", "scan")
             .scan(
                 IndexedStorageMetaNamespace::CompressedOplog { level: self.level },
-                &PrimaryOplogService::key_pattern(component_id),
+                Some(&PrimaryOplogService::key_prefix(component_id)),
                 cursor,
                 count,
             )

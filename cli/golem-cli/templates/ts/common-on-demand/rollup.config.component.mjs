@@ -59,6 +59,10 @@ function componentRollupConfig() {
     }
 
     const componentDir = process.cwd();
+    const metadataModulePath = path.relative(
+        componentDir,
+        path.resolve(golemTemp, 'ts-metadata', componentName, '.metadata', 'generated-types.ts')
+    ).split(path.sep).join('/');
 
     const { aliasEntries, tsIncludes } = readTsConfigPaths(componentDir);
 
@@ -84,7 +88,7 @@ function componentRollupConfig() {
                 if (id === resolvedVirtualAgentMainId) {
                     return `
 import { TypescriptTypeRegistry } from '@golemcloud/golem-ts-sdk';
-import { Metadata } from '${golemTemp}/ts-metadata/${componentName}/.metadata/generated-types';
+import { Metadata } from './${metadataModulePath}';
 
 TypescriptTypeRegistry.register(Metadata);
 

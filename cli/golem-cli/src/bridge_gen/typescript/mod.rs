@@ -30,8 +30,8 @@ use crate::sdk_overrides::{sdk_overrides, workspace_root};
 use anyhow::anyhow;
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_common::model::agent::{
-    AgentMethod, AgentMode, AgentType, BinaryDescriptor, DataSchema, ElementSchema,
-    NamedElementSchema, NamedElementSchemas, TextDescriptor,
+    AgentConfigDeclaration, AgentConfigSource, AgentMethod, AgentMode, AgentType, BinaryDescriptor,
+    DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm::analysis::AnalysedType;
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
@@ -102,7 +102,7 @@ impl TypeScriptBridgeGenerator {
             .to_string());
         }
 
-        Ok(sdk_overrides()?.ts_package_dep("golem-ts-bridge"))
+        sdk_overrides()?.ts_package_dep("golem-ts-bridge")
     }
 
     /// Generates the client library's package.json
@@ -477,7 +477,7 @@ impl TypeScriptBridgeGenerator {
 
         self.generate_ts_class_fields(writer);
         self.generate_ts_class_constructor(writer);
-        self.generate_ts_constructor_methods(writer, class_name)?;
+        self.generate_ts_constructor_methods(writer, class_name, config_var)?;
         self.generate_ts_config_getter(writer, config_var);
         self.generate_ts_remote_methods(writer, class_name)?;
 
@@ -510,13 +510,45 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut TsWriter,
         class_name: &str,
+        config_var: &str,
     ) -> anyhow::Result<()> {
         if self.agent_type.mode == AgentMode::Durable {
-            self.generate_ts_constructor_get_method(writer, class_name)?;
+            self.generate_ts_constructor_get_method(writer, class_name, config_var)?;
         }
 
-        self.generate_ts_constructor_get_phantom_method(writer, class_name)?;
-        self.generate_ts_constructor_new_phantom_method(writer, class_name)?;
+        self.generate_ts_constructor_get_phantom_method(writer, class_name, config_var)?;
+        self.generate_ts_constructor_new_phantom_method(writer, class_name, config_var)?;
+
+        // Generate WithConfig variants if there are local config declarations
+        let local_configs: Vec<_> = self
+            .agent_type
+            .config
+            .iter()
+            .filter(|c| c.source == AgentConfigSource::Local)
+            .collect();
+
+        if !local_configs.is_empty() {
+            if self.agent_type.mode == AgentMode::Durable {
+                self.generate_ts_constructor_get_with_config_method(
+                    writer,
+                    class_name,
+                    config_var,
+                    &local_configs,
+                )?;
+            }
+            self.generate_ts_constructor_get_phantom_with_config_method(
+                writer,
+                class_name,
+                config_var,
+                &local_configs,
+            )?;
+            self.generate_ts_constructor_new_phantom_with_config_method(
+                writer,
+                class_name,
+                config_var,
+                &local_configs,
+            )?;
+        }
 
         Ok(())
     }
@@ -526,18 +558,20 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut TsWriter,
         class_name: &str,
+        config_var: &str,
     ) -> anyhow::Result<()> {
         writer.write_doc(&format!(
             "Gets or creates an instance of this agent\n{}",
             self.agent_type.constructor.description
         ));
-        let mut get = writer.begin_static_method("get");
+        let mut get = writer.begin_static_async_method("get");
         self.write_parameter_list(&mut get, &self.agent_type.constructor.input_schema)?;
         get.result(class_name);
 
         get.write_line("const parameters: base.DataValue = ");
         self.write_encode_data_value(&mut get, &self.agent_type.constructor.input_schema)?;
         get.write_line("const phantomId = undefined;");
+        self.write_create_agent_call(&mut get, config_var, "[]");
         get.write_line(format!("return new {class_name}(parameters, phantomId);"));
 
         Ok(())
@@ -548,18 +582,20 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut TsWriter,
         class_name: &str,
+        config_var: &str,
     ) -> anyhow::Result<()> {
         writer.write_doc(&format!(
             "Gets or creates a phantom instance of this agent with a specific phantom ID\n{}",
             self.agent_type.constructor.description
         ));
-        let mut get_phantom = writer.begin_static_method("getPhantom");
+        let mut get_phantom = writer.begin_static_async_method("getPhantom");
         get_phantom.param("phantomId", "base.PhantomId");
         self.write_parameter_list(&mut get_phantom, &self.agent_type.constructor.input_schema)?;
         get_phantom.result(class_name);
 
         get_phantom.write_line("const parameters: base.DataValue = ");
         self.write_encode_data_value(&mut get_phantom, &self.agent_type.constructor.input_schema)?;
+        self.write_create_agent_call(&mut get_phantom, config_var, "[]");
         get_phantom.write_line(format!("return new {class_name}(parameters, phantomId);"));
 
         Ok(())
@@ -570,21 +606,182 @@ impl TypeScriptBridgeGenerator {
         &self,
         writer: &mut TsWriter,
         class_name: &str,
+        config_var: &str,
     ) -> anyhow::Result<()> {
         writer.write_doc(&format!(
             "Creates a new phantom instance of this agent\n{}",
             self.agent_type.constructor.description
         ));
-        let mut new_phantom = writer.begin_static_method("newPhantom");
+        let mut new_phantom = writer.begin_static_async_method("newPhantom");
         self.write_parameter_list(&mut new_phantom, &self.agent_type.constructor.input_schema)?;
         new_phantom.result(class_name);
 
         new_phantom.write_line("const parameters: base.DataValue = ");
         self.write_encode_data_value(&mut new_phantom, &self.agent_type.constructor.input_schema)?;
         new_phantom.write_line("const phantomId = uuidv4();");
+        self.write_create_agent_call(&mut new_phantom, config_var, "[]");
         new_phantom.write_line(format!("return new {class_name}(parameters, phantomId);"));
 
         Ok(())
+    }
+
+    /// Writes the `await base.createAgent(...)` call into the constructor
+    fn write_create_agent_call(
+        &self,
+        writer: &mut TsFunctionWriter<'_>,
+        config_var: &str,
+        agent_config_expr: &str,
+    ) {
+        let agent_type_name = &self.agent_type.type_name.0;
+        writer.write_line(format!("const __config = {config_var};"));
+        writer.write_line(format!(
+            "if (!__config) {{ throw new Error(\"{agent_type_name} configuration is not set\"); }}"
+        ));
+        writer.write_line("await base.createAgent(__config.server, {");
+        writer.indent();
+        writer.write_line("appName: __config.application,");
+        writer.write_line("envName: __config.environment,");
+        writer.write_line(format!("agentTypeName: \"{agent_type_name}\","));
+        writer.write_line("parameters,");
+        writer.write_line("phantomId,");
+        writer.write_line(format!("agentConfig: {agent_config_expr},"));
+        writer.unindent();
+        writer.write_line("});");
+    }
+
+    /// Generates the `getWithConfig` constructor method
+    fn generate_ts_constructor_get_with_config_method(
+        &self,
+        writer: &mut TsWriter,
+        class_name: &str,
+        config_var: &str,
+        local_configs: &[&AgentConfigDeclaration],
+    ) -> anyhow::Result<()> {
+        writer.write_doc(&format!(
+            "Gets or creates an instance of this agent with configuration\n{}",
+            self.agent_type.constructor.description
+        ));
+        let mut method = writer.begin_static_async_method("getWithConfig");
+        self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
+        self.write_config_parameter_list(&mut method, local_configs)?;
+        method.result(class_name);
+
+        method.write_line("const parameters: base.DataValue = ");
+        self.write_encode_data_value(&mut method, &self.agent_type.constructor.input_schema)?;
+        method.write_line("const phantomId = undefined;");
+        self.write_config_encoding(&mut method, local_configs);
+        self.write_create_agent_call(&mut method, config_var, "agentConfig");
+        method.write_line(format!("return new {class_name}(parameters, phantomId);"));
+
+        Ok(())
+    }
+
+    /// Generates the `getPhantomWithConfig` constructor method
+    fn generate_ts_constructor_get_phantom_with_config_method(
+        &self,
+        writer: &mut TsWriter,
+        class_name: &str,
+        config_var: &str,
+        local_configs: &[&AgentConfigDeclaration],
+    ) -> anyhow::Result<()> {
+        writer.write_doc(&format!(
+            "Gets or creates a phantom instance of this agent with configuration and a specific phantom ID\n{}",
+            self.agent_type.constructor.description
+        ));
+        let mut method = writer.begin_static_async_method("getPhantomWithConfig");
+        method.param("phantomId", "base.PhantomId");
+        self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
+        self.write_config_parameter_list(&mut method, local_configs)?;
+        method.result(class_name);
+
+        method.write_line("const parameters: base.DataValue = ");
+        self.write_encode_data_value(&mut method, &self.agent_type.constructor.input_schema)?;
+        self.write_config_encoding(&mut method, local_configs);
+        self.write_create_agent_call(&mut method, config_var, "agentConfig");
+        method.write_line(format!("return new {class_name}(parameters, phantomId);"));
+
+        Ok(())
+    }
+
+    /// Generates the `newPhantomWithConfig` constructor method
+    fn generate_ts_constructor_new_phantom_with_config_method(
+        &self,
+        writer: &mut TsWriter,
+        class_name: &str,
+        config_var: &str,
+        local_configs: &[&AgentConfigDeclaration],
+    ) -> anyhow::Result<()> {
+        writer.write_doc(&format!(
+            "Creates a new phantom instance of this agent with configuration\n{}",
+            self.agent_type.constructor.description
+        ));
+        let mut method = writer.begin_static_async_method("newPhantomWithConfig");
+        self.write_parameter_list(&mut method, &self.agent_type.constructor.input_schema)?;
+        self.write_config_parameter_list(&mut method, local_configs)?;
+        method.result(class_name);
+
+        method.write_line("const parameters: base.DataValue = ");
+        self.write_encode_data_value(&mut method, &self.agent_type.constructor.input_schema)?;
+        method.write_line("const phantomId = uuidv4();");
+        self.write_config_encoding(&mut method, local_configs);
+        self.write_create_agent_call(&mut method, config_var, "agentConfig");
+        method.write_line(format!("return new {class_name}(parameters, phantomId);"));
+
+        Ok(())
+    }
+
+    /// Writes optional config parameters to the method signature
+    fn write_config_parameter_list(
+        &self,
+        writer: &mut TsFunctionWriter<'_>,
+        local_configs: &[&AgentConfigDeclaration],
+    ) -> anyhow::Result<()> {
+        for config in local_configs {
+            let param_name = format!(
+                "config{}?",
+                config
+                    .path
+                    .iter()
+                    .map(|s| s.to_upper_camel_case())
+                    .collect::<String>()
+            );
+            let param_type = self.type_reference(&config.value_type)?;
+            writer.param(&param_name, &param_type);
+        }
+        Ok(())
+    }
+
+    /// Writes code that builds the agentConfig array from optional config params
+    fn write_config_encoding(
+        &self,
+        writer: &mut TsFunctionWriter<'_>,
+        local_configs: &[&AgentConfigDeclaration],
+    ) {
+        writer.write_line("const agentConfig: base.WorkerAgentConfigEntry[] = [];");
+        for config in local_configs {
+            let param_name = format!(
+                "config{}",
+                config
+                    .path
+                    .iter()
+                    .map(|s| s.to_upper_camel_case())
+                    .collect::<String>()
+            );
+            let path_array = config
+                .path
+                .iter()
+                .map(|s| format!("\"{}\"", s))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let encoded_value = self.encode_wit_value(&param_name, &config.value_type);
+            writer.write_line(format!("if ({param_name} !== undefined) {{"));
+            writer.indent();
+            writer.write_line(format!(
+                "agentConfig.push({{ path: [{path_array}], value: {encoded_value} }});"
+            ));
+            writer.unindent();
+            writer.write_line("}");
+        }
     }
 
     /// Generates a private helper method for getting the global configuration and failing if it is missing

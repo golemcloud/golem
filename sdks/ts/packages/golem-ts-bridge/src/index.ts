@@ -142,6 +142,73 @@ export interface AgentInvocationResult {
   result?: DataValue;
 }
 
+export interface WorkerAgentConfigEntry {
+  path: string[];
+  value: unknown;
+}
+
+export interface CreateAgentRequest {
+  appName: ApplicationName;
+  envName: EnvironmentName;
+  agentTypeName: AgentTypeName;
+  parameters: DataValue;
+  phantomId?: PhantomId;
+  agentConfig?: WorkerAgentConfigEntry[];
+}
+
+export interface CreateAgentResponse {
+  agentId: string;
+  componentRevision: number;
+}
+
+export async function createAgent(
+  server: GolemServer,
+  request: CreateAgentRequest,
+): Promise<CreateAgentResponse> {
+  let baseUrl: string;
+  let token: string;
+
+  switch (server.type) {
+    case 'local':
+      baseUrl = 'http://localhost:9881';
+      token = LOCAL_WELL_KNOWN_TOKEN;
+      break;
+    case 'cloud':
+      baseUrl = 'https://api.golem.cloud';
+      token = server.token;
+      break;
+    case 'custom':
+      baseUrl = server.url;
+      token = server.token;
+      break;
+  }
+
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json',
+  };
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const rawResponse = await fetch(`${baseUrl}/v1/agents/create-agent`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(request),
+  });
+
+  if (!rawResponse.ok) {
+    const body = await rawResponse.text().catch(() => undefined);
+    if (body) {
+      throw new Error(`Agent creation failed: ${rawResponse.statusText}, ${body}`);
+    } else {
+      throw new Error(`Agent creation failed: ${rawResponse.statusText}`);
+    }
+  }
+
+  return await (rawResponse.json() as Promise<CreateAgentResponse>);
+}
+
 function throwIfAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
 
