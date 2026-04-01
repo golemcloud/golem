@@ -2,6 +2,10 @@ import path from 'path';
 import { describe, expect, it } from 'vitest';
 import { normalizeCliPath, normalizeFilePatterns } from '../src/bin/path-normalization.js';
 
+function toForwardSlashPath(inputPath: string): string {
+  return inputPath.split(path.sep).join('/');
+}
+
 describe('path normalization', () => {
   it('normalizes dotted absolute paths', () => {
     const input = '/tmp/test-components/agent-promise/./src/**/*.ts';
@@ -22,10 +26,24 @@ describe('path normalization', () => {
     const cwd = '/tmp/work';
     const inputs = ['./src/**/*.ts', '/tmp/work/./other/**/*.ts'];
     const expected = [
-      path.normalize(path.resolve(cwd, 'src/**/*.ts')),
-      path.normalize('/tmp/work/other/**/*.ts'),
+      toForwardSlashPath(path.normalize(path.resolve(cwd, 'src/**/*.ts'))),
+      toForwardSlashPath(path.normalize('/tmp/work/other/**/*.ts')),
     ];
 
     expect(normalizeFilePatterns(inputs, cwd)).toEqual(expected);
   });
+
+  it.runIf(process.platform === 'win32')(
+    'normalizes windows-style glob patterns to forward slashes',
+    () => {
+      const cwd = 'C:\\workspace\\golem-test\\test-app';
+      const inputs = ['.\\src\\**\\*.ts', 'C:\\workspace\\golem-test\\test-app\\other\\**\\*.ts'];
+      const expected = [
+        'C:/workspace/golem-test/test-app/src/**/*.ts',
+        'C:/workspace/golem-test/test-app/other/**/*.ts',
+      ];
+
+      expect(normalizeFilePatterns(inputs, cwd)).toEqual(expected);
+    },
+  );
 });

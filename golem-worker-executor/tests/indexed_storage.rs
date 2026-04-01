@@ -503,7 +503,7 @@ async fn scan_empty(
     let mut cursor = ScanCursor::default();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), "*", cursor, 10)
+            .scan("svc", "api", ns.meta.clone(), None, cursor, 10)
             .await
             .unwrap();
         result.extend(chunk);
@@ -542,7 +542,7 @@ async fn scan_with_no_pattern_single_paged(
     let mut cursor = ScanCursor::default();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), "*", cursor, 10)
+            .scan("svc", "api", ns.meta.clone(), None, cursor, 10)
             .await
             .unwrap();
         result.extend(chunk);
@@ -623,7 +623,7 @@ async fn scan_with_no_pattern_paginated(
     let mut cursor = ScanCursor::default();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), "*", cursor, 1)
+            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
             .await
             .unwrap();
         r1.extend(chunk);
@@ -637,7 +637,7 @@ async fn scan_with_no_pattern_paginated(
     let mut r2: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), "*", cursor, 1)
+            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
             .await
             .unwrap();
         r2.extend(chunk);
@@ -651,7 +651,7 @@ async fn scan_with_no_pattern_paginated(
     let mut r3: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), "*", cursor, 1)
+            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
             .await
             .unwrap();
         r3.extend(chunk);
@@ -707,7 +707,7 @@ async fn scan_with_prefix_pattern_single_paged(
     let mut cursor = ScanCursor::default();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), "key*", cursor, 10)
+            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 10)
             .await
             .unwrap();
         result.extend(chunk);
@@ -753,7 +753,7 @@ async fn scan_with_prefix_pattern_paginated(
     let mut cursor = ScanCursor::default();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), "key*", cursor, 1)
+            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 1)
             .await
             .unwrap();
         r1.extend(chunk);
@@ -767,7 +767,7 @@ async fn scan_with_prefix_pattern_paginated(
     let mut r2: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), "key*", cursor, 1)
+            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 1)
             .await
             .unwrap();
         r2.extend(chunk);

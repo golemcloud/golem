@@ -4038,6 +4038,7 @@ dependencies = [
  "wasm-rquickjs",
  "wasmtime-wasi",
  "wax",
+ "which",
  "wit-component",
  "wit-parser 0.244.0",
 ]
@@ -4134,6 +4135,7 @@ dependencies = [
  "tracing-test",
  "typed-path",
  "url",
+ "urlencoding",
  "uuid",
  "wasm-wave",
  "wasmparser 0.244.0",
