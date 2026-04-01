@@ -446,10 +446,11 @@ jobs:
       - name: Cache scala dependencies
         uses: coursier/cache-action@v8
 
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip1
-
-      - uses: cargo-bins/cargo-binstall@main
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip1'
+          install-cargo-binstall: 'true'
 
       - name: Install WASI SDK
         run: |
