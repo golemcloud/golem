@@ -510,6 +510,10 @@ pub async fn start_with_overrides(
         engine: EngineConfig {
             enable_fs_cache: true,
         },
+        // Use Disabled resource limits so Worker::new() can call
+        // initialize_account without attempting a gRPC connection to a registry
+        // service that does not exist in this test setup.
+        resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
         ..Default::default()
     };
 
