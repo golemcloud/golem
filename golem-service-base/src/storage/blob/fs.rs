@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use super::ErasedReplayableStream;
-use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
+use crate::storage::blob::{
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, validate_relative_blob_path,
+};
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -120,6 +122,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
+        validate_relative_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -138,6 +141,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+        validate_relative_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -157,6 +161,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
+        validate_relative_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -182,6 +187,7 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -204,6 +210,7 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -234,6 +241,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -248,6 +256,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -263,6 +272,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
+        validate_relative_blob_path(path)?;
         let namespace_root = self.path_of(&namespace, Path::new(""));
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
@@ -285,6 +295,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
+        validate_relative_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -308,6 +319,7 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
+        validate_relative_blob_path(path)?;
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -330,6 +342,8 @@ impl BlobStorage for FileSystemBlobStorage {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
+        validate_relative_blob_path(from)?;
+        validate_relative_blob_path(to)?;
         let from_full_path = self.path_of(&namespace, from);
         let to_full_path = self.path_of(&namespace, to);
         self.ensure_path_is_inside_root(&from_full_path)?;

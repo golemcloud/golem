@@ -15,19 +15,21 @@
 use super::{
     AgentError, AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, AgentResourceId, FallibleResultParameters, JsonSnapshotData,
-    LoadSnapshotParameters, LogLevel, ManualUpdateParameters, OplogCursor,
-    PluginInstallationDescription, ProcessOplogEntriesParameters,
-    ProcessOplogEntriesResultParameters, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicExternalSpanData,
-    PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex, PublicRetryConfig,
-    PublicSnapshotData, PublicSpanData, PublicUpdateDescription, RawSnapshotData,
-    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters, StringAttributeValue,
-    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    LoadSnapshotParameters, LogLevel, ManualUpdateParameters, MultipartPartData,
+    MultipartSnapshotData, MultipartSnapshotPart, OplogCursor, PluginInstallationDescription,
+    ProcessOplogEntriesParameters, ProcessOplogEntriesResultParameters, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
+    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex,
+    PublicRetryConfig, PublicSnapshotData, PublicSpanData, PublicUpdateDescription,
+    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
+    StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
+use crate::model::Empty;
 use crate::model::agent::DataValue;
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
+use crate::model::oplog::PersistenceLevel;
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
@@ -41,14 +43,12 @@ use crate::model::oplog::public_oplog_entry::{
     RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
     StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
-use crate::model::oplog::PersistenceLevel;
 use crate::model::regions::OplogRegion;
 use crate::model::worker::ParsedWorkerAgentConfigEntry;
-use crate::model::Empty;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
-    invocation_span, oplog_entry, wrapped_function_type, AttributeValue, ExternalParentSpan,
-    InvocationSpan, LocalInvocationSpan,
+    AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan, invocation_span,
+    oplog_entry, wrapped_function_type,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
@@ -104,6 +104,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
             Error::TransientError(inner) => Ok(Self::TransientError(inner.details)),
             Error::PermanentError(inner) => Ok(Self::PermanentError(inner.details)),
             Error::ExceededTableLimit(_) => Ok(Self::ExceededTableLimit),
+            Error::ExceededHttpCallLimit(_) => Ok(Self::ExceededHttpCallLimit),
+            Error::ExceededRpcCallLimit(_) => Ok(Self::ExceededRpcCallLimit),
             Error::NodeOutOfFilesystemStorage(_) => Ok(Self::NodeOutOfFilesystemStorage),
             Error::AgentExceededFilesystemStorageLimit(_) => {
                 Ok(Self::AgentExceededFilesystemStorageLimit)
@@ -142,6 +144,12 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
             }
             AgentError::ExceededTableLimit => {
                 Error::ExceededTableLimit(grpc_worker::ExceededTableLimit {})
+            }
+            AgentError::ExceededHttpCallLimit => {
+                Error::ExceededHttpCallLimit(grpc_worker::ExceededHttpCallLimit {})
+            }
+            AgentError::ExceededRpcCallLimit => {
+                Error::ExceededRpcCallLimit(grpc_worker::ExceededRpcCallLimit {})
             }
             AgentError::NodeOutOfFilesystemStorage => {
                 Error::NodeOutOfFilesystemStorage(grpc_worker::NodeOutOfFilesystemStorage {})
@@ -641,6 +649,35 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     ) => PublicSnapshotData::Json(JsonSnapshotData {
                         data: serde_json::from_str(&json.data).map_err(|e| e.to_string())?,
                     }),
+                    golem_api_grpc::proto::golem::worker::snapshot_data_parameters::Data::Multipart(
+                        multipart,
+                    ) => PublicSnapshotData::Multipart(MultipartSnapshotData {
+                        mime_type: multipart.mime_type,
+                        parts: multipart.parts.into_iter().map(|p| {
+                            let data = match p.data.and_then(|d| d.data) {
+                                Some(golem_api_grpc::proto::golem::worker::multipart_part_data::Data::Json(json)) => {
+                                    MultipartPartData::Json(JsonSnapshotData {
+                                        data: serde_json::from_str(&json.data).unwrap_or_default(),
+                                    })
+                                }
+                                Some(golem_api_grpc::proto::golem::worker::multipart_part_data::Data::Raw(raw)) => {
+                                    MultipartPartData::Raw(RawSnapshotData {
+                                        data: raw.data,
+                                        mime_type: raw.mime_type,
+                                    })
+                                }
+                                None => MultipartPartData::Raw(RawSnapshotData {
+                                    data: vec![],
+                                    mime_type: String::new(),
+                                }),
+                            };
+                            MultipartSnapshotPart {
+                                name: p.name,
+                                content_type: p.content_type,
+                                data,
+                            }
+                        }).collect(),
+                    }),
                 };
                 Ok(PublicOplogEntry::Snapshot(SnapshotParams {
                     timestamp: snapshot.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -1102,6 +1139,40 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             },
                         )
                     }
+                    PublicSnapshotData::Multipart(multipart) => {
+                        let parts = multipart.parts.into_iter().map(|p| {
+                            let data = match p.data {
+                                MultipartPartData::Json(json) => {
+                                    golem_api_grpc::proto::golem::worker::multipart_part_data::Data::Json(
+                                        golem_api_grpc::proto::golem::worker::JsonSnapshotData {
+                                            data: serde_json::to_string(&json.data).unwrap_or_default(),
+                                        },
+                                    )
+                                }
+                                MultipartPartData::Raw(raw) => {
+                                    golem_api_grpc::proto::golem::worker::multipart_part_data::Data::Raw(
+                                        golem_api_grpc::proto::golem::worker::RawSnapshotData {
+                                            data: raw.data,
+                                            mime_type: raw.mime_type,
+                                        },
+                                    )
+                                }
+                            };
+                            golem_api_grpc::proto::golem::worker::MultipartSnapshotPart {
+                                name: p.name,
+                                content_type: p.content_type,
+                                data: Some(golem_api_grpc::proto::golem::worker::MultipartPartData {
+                                    data: Some(data),
+                                }),
+                            }
+                        }).collect();
+                        golem_api_grpc::proto::golem::worker::snapshot_data_parameters::Data::Multipart(
+                            golem_api_grpc::proto::golem::worker::MultipartSnapshotData {
+                                mime_type: multipart.mime_type,
+                                parts,
+                            },
+                        )
+                    }
                 };
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::Snapshot(
@@ -1340,6 +1411,35 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocation>
                             data: serde_json::from_str(&json.data).map_err(|e| e.to_string())?,
                         })
                     }
+                    golem_api_grpc::proto::golem::worker::snapshot_data::Data::Multipart(
+                        multipart,
+                    ) => PublicSnapshotData::Multipart(MultipartSnapshotData {
+                        mime_type: multipart.mime_type,
+                        parts: multipart.parts.into_iter().map(|p| {
+                            let data = match p.data.and_then(|d| d.data) {
+                                Some(golem_api_grpc::proto::golem::worker::multipart_part_data::Data::Json(json)) => {
+                                    MultipartPartData::Json(JsonSnapshotData {
+                                        data: serde_json::from_str(&json.data).unwrap_or_default(),
+                                    })
+                                }
+                                Some(golem_api_grpc::proto::golem::worker::multipart_part_data::Data::Raw(raw)) => {
+                                    MultipartPartData::Raw(RawSnapshotData {
+                                        data: raw.data,
+                                        mime_type: raw.mime_type,
+                                    })
+                                }
+                                None => MultipartPartData::Raw(RawSnapshotData {
+                                    data: vec![],
+                                    mime_type: String::new(),
+                                }),
+                            };
+                            MultipartSnapshotPart {
+                                name: p.name,
+                                content_type: p.content_type,
+                                data,
+                            }
+                        }).collect(),
+                    }),
                 };
                 Ok(PublicAgentInvocation::LoadSnapshot(
                     LoadSnapshotParameters { snapshot: data },
@@ -1436,6 +1536,44 @@ impl TryFrom<PublicAgentInvocation>
                             ),
                         }
                     }
+                    PublicSnapshotData::Multipart(multipart) => {
+                        let parts = multipart.parts.into_iter().map(|p| {
+                            let data = match p.data {
+                                MultipartPartData::Json(json) => {
+                                    golem_api_grpc::proto::golem::worker::multipart_part_data::Data::Json(
+                                        golem_api_grpc::proto::golem::worker::JsonSnapshotData {
+                                            data: serde_json::to_string(&json.data).unwrap_or_default(),
+                                        },
+                                    )
+                                }
+                                MultipartPartData::Raw(raw) => {
+                                    golem_api_grpc::proto::golem::worker::multipart_part_data::Data::Raw(
+                                        golem_api_grpc::proto::golem::worker::RawSnapshotData {
+                                            data: raw.data,
+                                            mime_type: raw.mime_type,
+                                        },
+                                    )
+                                }
+                            };
+                            golem_api_grpc::proto::golem::worker::MultipartSnapshotPart {
+                                name: p.name,
+                                content_type: p.content_type,
+                                data: Some(golem_api_grpc::proto::golem::worker::MultipartPartData {
+                                    data: Some(data),
+                                }),
+                            }
+                        }).collect();
+                        golem_api_grpc::proto::golem::worker::SnapshotData {
+                            data: Some(
+                                golem_api_grpc::proto::golem::worker::snapshot_data::Data::Multipart(
+                                    golem_api_grpc::proto::golem::worker::MultipartSnapshotData {
+                                        mime_type: multipart.mime_type,
+                                        parts,
+                                    },
+                                ),
+                            ),
+                        }
+                    }
                 };
                 Invocation::LoadSnapshot(
                     golem_api_grpc::proto::golem::worker::LoadSnapshotInvocationParameters {
@@ -1507,6 +1645,35 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PublicAgentInvocationResult>
                             data: serde_json::from_str(&json.data).map_err(|e| e.to_string())?,
                         })
                     }
+                    golem_api_grpc::proto::golem::worker::snapshot_data::Data::Multipart(
+                        multipart,
+                    ) => PublicSnapshotData::Multipart(MultipartSnapshotData {
+                        mime_type: multipart.mime_type,
+                        parts: multipart.parts.into_iter().map(|p| {
+                            let data = match p.data.and_then(|d| d.data) {
+                                Some(golem_api_grpc::proto::golem::worker::multipart_part_data::Data::Json(json)) => {
+                                    MultipartPartData::Json(JsonSnapshotData {
+                                        data: serde_json::from_str(&json.data).unwrap_or_default(),
+                                    })
+                                }
+                                Some(golem_api_grpc::proto::golem::worker::multipart_part_data::Data::Raw(raw)) => {
+                                    MultipartPartData::Raw(RawSnapshotData {
+                                        data: raw.data,
+                                        mime_type: raw.mime_type,
+                                    })
+                                }
+                                None => MultipartPartData::Raw(RawSnapshotData {
+                                    data: vec![],
+                                    mime_type: String::new(),
+                                }),
+                            };
+                            MultipartSnapshotPart {
+                                name: p.name,
+                                content_type: p.content_type,
+                                data,
+                            }
+                        }).collect(),
+                    }),
                 };
                 Ok(PublicAgentInvocationResult::SaveSnapshot(
                     SaveSnapshotResultParameters { snapshot: data },
@@ -1578,6 +1745,44 @@ impl TryFrom<PublicAgentInvocationResult>
                                     golem_api_grpc::proto::golem::worker::JsonSnapshotData {
                                         data: serde_json::to_string(&json.data)
                                             .map_err(|e| e.to_string())?,
+                                    },
+                                ),
+                            ),
+                        }
+                    }
+                    PublicSnapshotData::Multipart(multipart) => {
+                        let parts = multipart.parts.into_iter().map(|p| {
+                            let data = match p.data {
+                                MultipartPartData::Json(json) => {
+                                    golem_api_grpc::proto::golem::worker::multipart_part_data::Data::Json(
+                                        golem_api_grpc::proto::golem::worker::JsonSnapshotData {
+                                            data: serde_json::to_string(&json.data).unwrap_or_default(),
+                                        },
+                                    )
+                                }
+                                MultipartPartData::Raw(raw) => {
+                                    golem_api_grpc::proto::golem::worker::multipart_part_data::Data::Raw(
+                                        golem_api_grpc::proto::golem::worker::RawSnapshotData {
+                                            data: raw.data,
+                                            mime_type: raw.mime_type,
+                                        },
+                                    )
+                                }
+                            };
+                            golem_api_grpc::proto::golem::worker::MultipartSnapshotPart {
+                                name: p.name,
+                                content_type: p.content_type,
+                                data: Some(golem_api_grpc::proto::golem::worker::MultipartPartData {
+                                    data: Some(data),
+                                }),
+                            }
+                        }).collect();
+                        golem_api_grpc::proto::golem::worker::SnapshotData {
+                            data: Some(
+                                golem_api_grpc::proto::golem::worker::snapshot_data::Data::Multipart(
+                                    golem_api_grpc::proto::golem::worker::MultipartSnapshotData {
+                                        mime_type: multipart.mime_type,
+                                        parts,
                                     },
                                 ),
                             ),
@@ -1691,10 +1896,10 @@ fn encode_public_span_data(spans: Vec<InvocationSpan>) -> Result<Vec<Vec<PublicS
 
     for stack in &mut result {
         for span in stack {
-            if let PublicSpanData::LocalSpan(ref mut local_span) = span {
-                if let Some(linked_id) = &mut local_span.linked_context {
-                    *linked_id += 1;
-                }
+            if let PublicSpanData::LocalSpan(local_span) = span
+                && let Some(linked_id) = &mut local_span.linked_context
+            {
+                *linked_id += 1;
             }
         }
     }

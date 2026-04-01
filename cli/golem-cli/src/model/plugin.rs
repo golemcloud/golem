@@ -67,9 +67,16 @@ impl FromStr for PluginReference {
                 let version = segments.pop().unwrap().to_string();
                 let name = segments.pop().unwrap().to_string();
                 let account_email = segments.pop().unwrap().to_string();
-                Ok(Self::FullyQualified { account_email, name, version })
+                Ok(Self::FullyQualified {
+                    account_email,
+                    name,
+                    version,
+                })
             }
-            _ => Err(format!("Unknown format for plugin: {}. Expected either <PLUGIN_NAME>/<PLUGIN_VERSION> or <ACCOUNT_EMAIL>/<PLUGIN_NAME>/<PLUGIN_VERSION>", s.log_color_highlight()))
+            _ => Err(format!(
+                "Unknown format for plugin: {}. Expected either <PLUGIN_NAME>/<PLUGIN_VERSION> or <ACCOUNT_EMAIL>/<PLUGIN_NAME>/<PLUGIN_VERSION>",
+                s.log_color_highlight()
+            )),
         }
     }
 }

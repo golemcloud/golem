@@ -19,6 +19,7 @@ mod tests;
 
 use crate::model::agent::{AgentTypeName, DataValue, RegisteredAgentType, UntypedDataValue};
 use crate::model::component::ComponentRevision;
+use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
     SerializableSocketError,
@@ -30,7 +31,6 @@ use crate::model::oplog::types::{
     SerializableRdbmsRequest, SerializableRpcError, SerializableScheduledInvocation,
     SerializableStreamError,
 };
-use crate::model::oplog::PayloadId;
 use crate::model::worker::RevertWorkerTarget;
 use crate::model::{AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId};
 use crate::oplog_payload;
@@ -374,6 +374,14 @@ pub mod host_functions {
         (RdbmsPostgresDbTransactionQuery => "rdbms::postgres::db-transaction", "query", GolemRdbmsRequest, GolemRdbmsResult),
         (RdbmsPostgresDbTransactionExecute => "rdbms::postgres::db-transaction", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
         (RdbmsPostgresDbTransactionQueryStream => "rdbms::postgres::db-transaction", "query-stream", NoInput, GolemRdbmsRequest),
+        (RdbmsIgnite2DbConnectionExecute => "rdbms::ignite2::db-connection", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
+        (RdbmsIgnite2DbConnectionQuery => "rdbms::ignite2::db-connection", "query", GolemRdbmsRequest, GolemRdbmsResult),
+        (RdbmsIgnite2DbConnectionQueryStream => "rdbms::ignite2::db-connection", "query-stream", NoInput, GolemRdbmsRequest),
+        (RdbmsIgnite2DbResultStreamGetColumns => "rdbms::ignite2::db-result-stream", "get-columns", NoInput, GolemRdbmsColumns),
+        (RdbmsIgnite2DbResultStreamGetNext => "rdbms::ignite2::db-result-stream", "get-next", NoInput, GolemRdbmsResultChunk),
+        (RdbmsIgnite2DbTransactionQuery => "rdbms::ignite2::db-transaction", "query", GolemRdbmsRequest, GolemRdbmsResult),
+        (RdbmsIgnite2DbTransactionExecute => "rdbms::ignite2::db-transaction", "execute", GolemRdbmsRequest, GolemRdbmsRowCount),
+        (RdbmsIgnite2DbTransactionQueryStream => "rdbms::ignite2::db-transaction", "query-stream", NoInput, GolemRdbmsRequest),
         (KeyvalueEventualGet => "keyvalue::eventual", "get", KVBucketAndKey, KVGet),
         (KeyvalueEventualSet => "keyvalue::eventual", "set", KVBucketKeyAndSize, KVUnit),
         (KeyvalueEventualDelete => "keyvalue::eventual", "delete", KVBucketAndKey, KVUnit),

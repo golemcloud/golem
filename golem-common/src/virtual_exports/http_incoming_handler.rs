@@ -16,10 +16,10 @@ use crate::model::parsed_function_name::{
     ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite,
 };
 use bytes::Bytes;
-use golem_wasm::analysis::analysed_type::{
-    case, field, list, option, record, str, tuple, u16, u8, unit_case, variant,
-};
 use golem_wasm::analysis::AnalysedType;
+use golem_wasm::analysis::analysed_type::{
+    case, field, list, option, record, str, tuple, u8, u16, unit_case, variant,
+};
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
 use golem_wasm::{Value, ValueAndType};
 use std::sync::LazyLock;

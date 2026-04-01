@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::environment::{EnvironmentError, EnvironmentService};
+use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::resource_definition::{
     ResourceDefinitionCreationArgs, ResourceDefinitionRepoError, ResourceDefinitionRevisionRecord,
@@ -73,16 +74,19 @@ error_forwarding!(
 pub struct ResourceDefinitionService {
     environment_service: Arc<EnvironmentService>,
     resource_definition_repo: Arc<dyn ResourceDefinitionRepo>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl ResourceDefinitionService {
     pub fn new(
         environment_service: Arc<EnvironmentService>,
         resource_definition_repo: Arc<dyn ResourceDefinitionRepo>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             environment_service,
             resource_definition_repo,
+            registry_change_notifier,
         }
     }
 
@@ -134,6 +138,7 @@ impl ResourceDefinitionService {
                 }
                 other => other.into(),
             })?
+            .signal_new_events_available(&self.registry_change_notifier)
             .try_into()?;
 
         Ok(stored_resource_definition)
@@ -200,6 +205,7 @@ impl ResourceDefinitionService {
                 }
                 other => other.into(),
             })?
+            .signal_new_events_available(&self.registry_change_notifier)
             .try_into()?;
 
         Ok(stored_resource_definition)
@@ -240,7 +246,8 @@ impl ResourceDefinitionService {
                     ResourceDefinitionError::ConcurrentUpdate
                 }
                 other => other.into(),
-            })?;
+            })?
+            .signal_new_events_available(&self.registry_change_notifier);
 
         Ok(())
     }

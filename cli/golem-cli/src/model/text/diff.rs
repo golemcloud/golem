@@ -12,10 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::log::{logln, LogColorize};
+use crate::log::{LogColorize, logln};
 use crate::model::text::fmt::TextView;
 use colored::Colorize;
 use golem_common::model::diff::{BTreeMapDiffValue, DeploymentDiff, DiffForHashOf, VecDiffValue};
+use std::path::Path;
+
+const DIFF_COLLAPSE_THRESHOLD: usize = 12;
+const DIFF_COLLAPSE_KEEP_HEAD: usize = 3;
+const DIFF_COLLAPSE_KEEP_TAIL: usize = 3;
+const DIFF_COLLAPSE_DOTS: usize = 3;
 
 impl TextView for DeploymentDiff {
     fn log(&self) {
@@ -258,14 +264,126 @@ impl TextView for DeploymentDiff {
 
 pub fn log_unified_diff(diff: &str) {
     for line in diff.lines() {
-        if line.starts_with('+') && !line.starts_with("+++") {
-            logln(line.green().bold().to_string());
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            logln(line.red().bold().to_string());
-        } else if line.starts_with("@@") {
-            logln(line.bold().to_string());
-        } else {
-            logln(line);
+        log_unified_diff_line(classify_diff_line(line));
+    }
+}
+
+pub fn log_unified_diff_for_path(path: &Path, diff: &str) {
+    if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md") {
+        log_unified_diff_compact(diff);
+    } else {
+        log_unified_diff(diff);
+    }
+}
+
+fn log_unified_diff_compact(diff: &str) {
+    let lines: Vec<DiffLine<'_>> = diff.lines().map(classify_diff_line).collect();
+    let runs = regroup_diff_lines(&lines);
+
+    for run in runs {
+        render_diff_run(run);
+    }
+}
+
+fn regroup_diff_lines<'a>(lines: &'a [DiffLine<'a>]) -> Vec<DiffRun<'a>> {
+    let mut runs = Vec::new();
+
+    for line in lines {
+        match line {
+            DiffLine::Added(_) => push_change_line(&mut runs, ChangeKind::Added, *line),
+            DiffLine::Removed(_) => push_change_line(&mut runs, ChangeKind::Removed, *line),
+            _ => push_other_line(&mut runs, *line),
         }
     }
+
+    runs
+}
+
+fn push_change_line<'a>(runs: &mut Vec<DiffRun<'a>>, kind: ChangeKind, line: DiffLine<'a>) {
+    match runs.last_mut() {
+        Some(DiffRun::Change {
+            kind: existing_kind,
+            lines,
+        }) if *existing_kind == kind => lines.push(line),
+        _ => runs.push(DiffRun::Change {
+            kind,
+            lines: vec![line],
+        }),
+    }
+}
+
+fn push_other_line<'a>(runs: &mut Vec<DiffRun<'a>>, line: DiffLine<'a>) {
+    match runs.last_mut() {
+        Some(DiffRun::Other(lines)) => lines.push(line),
+        _ => runs.push(DiffRun::Other(vec![line])),
+    }
+}
+
+fn render_diff_run(run: DiffRun<'_>) {
+    match run {
+        DiffRun::Change { lines, .. } if lines.len() > DIFF_COLLAPSE_THRESHOLD => {
+            let head_keep = DIFF_COLLAPSE_KEEP_HEAD.min(lines.len());
+            let tail_keep = DIFF_COLLAPSE_KEEP_TAIL.min(lines.len() - head_keep);
+
+            for line in lines.iter().take(head_keep) {
+                log_unified_diff_line(*line);
+            }
+
+            for _ in 0..DIFF_COLLAPSE_DOTS {
+                logln(".".dimmed().to_string());
+            }
+
+            for line in lines.iter().skip(lines.len() - tail_keep).take(tail_keep) {
+                log_unified_diff_line(*line);
+            }
+        }
+        DiffRun::Change { lines, .. } | DiffRun::Other(lines) => {
+            for line in lines {
+                log_unified_diff_line(line);
+            }
+        }
+    }
+}
+
+fn log_unified_diff_line(line: DiffLine<'_>) {
+    match line {
+        DiffLine::Added(raw) => logln(raw.green().bold().to_string()),
+        DiffLine::Removed(raw) => logln(raw.red().bold().to_string()),
+        DiffLine::Hunk(raw) => logln(raw.bold().to_string()),
+        DiffLine::Other(raw) => logln(raw),
+    }
+}
+
+fn classify_diff_line(line: &str) -> DiffLine<'_> {
+    if line.starts_with('+') && !line.starts_with("+++") {
+        DiffLine::Added(line)
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        DiffLine::Removed(line)
+    } else if line.starts_with("@@") {
+        DiffLine::Hunk(line)
+    } else {
+        DiffLine::Other(line)
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ChangeKind {
+    Added,
+    Removed,
+}
+
+#[derive(Clone, Copy)]
+enum DiffLine<'a> {
+    Added(&'a str),
+    Removed(&'a str),
+    Hunk(&'a str),
+    Other(&'a str),
+}
+
+enum DiffRun<'a> {
+    Change {
+        kind: ChangeKind,
+        lines: Vec<DiffLine<'a>>,
+    },
+    Other(Vec<DiffLine<'a>>),
 }

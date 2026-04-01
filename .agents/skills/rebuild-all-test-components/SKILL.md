@@ -5,7 +5,7 @@ description: "Rebuilds all test WASM components from scratch. Use when explicitl
 
 # Rebuild All Test Components
 
-Clean rebuild of every test WASM component in `test-components/`. This is a heavyweight operation — only use when all components need regeneration (e.g., after merge conflicts in `.wasm` files or major SDK/WIT changes).
+Clean rebuild of every test WASM component in `test-components/`. This is a heavyweight operation — use it when all components need regeneration, or when worker executor / integration / CLI integration tests need many test-component artifacts and targeted rebuilds would be slower.
 
 ## Quick Path (single command)
 
@@ -60,7 +60,7 @@ If any component fails to build, fix the issue and re-run `./build-components.sh
 
 ### 5. Verify
 
-After rebuilding, the `.wasm` files in `test-components/` should be present. Note: these files are gitignored and built on CI automatically.
+After rebuilding, the `.wasm` files in `test-components/` should be present. Note: these files are gitignored and must be built before tests that use them.
 
 ## Troubleshooting
 

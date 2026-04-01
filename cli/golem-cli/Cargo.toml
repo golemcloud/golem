@@ -1,7 +1,7 @@
 [package]
 name = "golem-cli"
 version = "0.0.0"
-edition = "2021"
+ edition = "2024"
 homepage = "https://golem.cloud/"
 repository = "https://github.com/golemcloud/golem"
 description = "Command line interface for Golem."
@@ -81,6 +81,7 @@ serde = { workspace = true }
 serde_derive = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+semver = { workspace = true }
 shadow-rs = { workspace = true }
 shlex = { workspace = true }
 strum = { workspace = true }
@@ -111,6 +112,7 @@ version-compare = { workspace = true }
 wac-graph = { workspace = true }
 walkdir = { workspace = true }
 wax = { workspace = true }
+which = { workspace = true }
 wasm-metadata = { workspace = true }
 wasm-rquickjs = { workspace = true }
 wasmtime-wasi = { workspace = true }

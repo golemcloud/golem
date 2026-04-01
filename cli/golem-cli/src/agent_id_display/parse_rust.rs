@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::lexer::{Lexer, Token};
-use super::parse_common::{self, parse_cm_value, parse_uint, perr, Dialect, ParseError};
+use super::parse_common::{self, Dialect, ParseError, parse_cm_value, parse_uint, perr};
 use golem_common::model::agent::{
     BinaryReference, BinarySource, BinaryType, DataSchema, DataValue, TextReference, TextSource,
     TextType, Url,
@@ -65,10 +65,10 @@ impl Dialect for RustDialect {
     ) -> Result<ValueAndType, ParseError> {
         if let Some(name) = &tr.name {
             let camel = name.to_upper_camel_case();
-            if let Token::Ident(id) = lexer.peek()? {
-                if id == &camel {
-                    lexer.next_token()?;
-                }
+            if let Token::Ident(id) = lexer.peek()?
+                && id == &camel
+            {
+                lexer.next_token()?;
             }
         }
         lexer.expect(&Token::LBrace)?;
@@ -118,11 +118,11 @@ impl Dialect for RustDialect {
     ) -> Result<ValueAndType, ParseError> {
         if let Some(name) = &tv.name {
             let camel = name.to_upper_camel_case();
-            if let Token::Ident(id) = lexer.peek()? {
-                if id == &camel {
-                    lexer.next_token()?;
-                    lexer.expect(&Token::DoubleColon)?;
-                }
+            if let Token::Ident(id) = lexer.peek()?
+                && id == &camel
+            {
+                lexer.next_token()?;
+                lexer.expect(&Token::DoubleColon)?;
             }
         }
         let (case_name, cp, _) = lexer.expect_ident()?;
@@ -156,11 +156,11 @@ impl Dialect for RustDialect {
     ) -> Result<ValueAndType, ParseError> {
         if let Some(name) = &te.name {
             let camel = name.to_upper_camel_case();
-            if let Token::Ident(id) = lexer.peek()? {
-                if id == &camel {
-                    lexer.next_token()?;
-                    lexer.expect(&Token::DoubleColon)?;
-                }
+            if let Token::Ident(id) = lexer.peek()?
+                && id == &camel
+            {
+                lexer.next_token()?;
+                lexer.expect(&Token::DoubleColon)?;
             }
         }
         let (case_name, cp, _) = lexer.expect_ident()?;
@@ -239,10 +239,10 @@ impl Dialect for RustDialect {
     ) -> Result<ValueAndType, ParseError> {
         if let Some(name) = &tf.name {
             let camel = name.to_upper_camel_case();
-            if let Token::Ident(id) = lexer.peek()? {
-                if id == &camel {
-                    lexer.next_token()?;
-                }
+            if let Token::Ident(id) = lexer.peek()?
+                && id == &camel
+            {
+                lexer.next_token()?;
             }
         }
         lexer.expect(&Token::LBrace)?;

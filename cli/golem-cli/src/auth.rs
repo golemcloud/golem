@@ -19,11 +19,11 @@ use crate::config::{
 };
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::LogColorize;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use colored::Colorize;
+use golem_client::Security;
 use golem_client::api::{LoginClient, LoginClientLive, LoginPollOauth2WebflowError};
 use golem_client::model::{OAuth2Provider, OAuth2WebflowData, Token, TokenWithSecret};
-use golem_client::Security;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::login::OAuth2WebflowStateId;
@@ -178,7 +178,7 @@ impl Auth {
         &self,
         state: OAuth2WebflowStateId,
     ) -> anyhow::Result<TokenWithSecret> {
-        use tokio::time::{sleep, Duration};
+        use tokio::time::{Duration, sleep};
 
         info!("Complete OAuth2 workflow");
         let mut attempts = 0;

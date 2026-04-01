@@ -16,7 +16,7 @@ use crate::command::api::deployment::ApiDeploymentSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::{AnyhowMapServiceError, ServiceError};
-use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
+use crate::log::{LogColorize, LogIndent, log_action, log_warn_action};
 use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
 use crate::model::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
 use crate::model::text::http_api_deployment::HttpApiDeploymentGetView;

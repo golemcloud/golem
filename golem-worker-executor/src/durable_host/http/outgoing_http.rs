@@ -16,10 +16,10 @@ use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
 };
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
+use golem_common::model::IdempotencyKey;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::types::SerializableHttpMethod;
 use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest};
-use golem_common::model::IdempotencyKey;
 use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
@@ -37,6 +37,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         options: Option<Resource<types::RequestOptions>>,
     ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
         self.observe_function_call("http::outgoing_handler", "handle");
+
+        // Check the per-invocation HTTP call limit before initiating the call.
+        // Only counted in live mode; replay is a no-op.
+        self.state
+            .check_and_increment_http_call_count()
+            .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
+
+        // Record against the monthly account-level HTTP call quota (live mode only).
+        // Returns Err(WorkerMonthlyHttpCallBudgetExhausted) when exhausted,
+        // which maps to RetryDecision::TryStop — suspending the worker until
+        // the registry replenishes the budget (e.g. next billing month).
+        self.record_monthly_http_call()
+            .map_err(|e| HttpError::trap(wasmtime::Error::from_anyhow(e)))?;
 
         // Durability is handled by the WasiHttpView send_request method and the follow-up calls to await/poll the response future
         let begin_index = self

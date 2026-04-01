@@ -141,11 +141,7 @@ where
             }
         }
 
-        if diff.is_empty() {
-            None
-        } else {
-            Some(diff)
-        }
+        if diff.is_empty() { None } else { Some(diff) }
     }
 }
 
@@ -186,11 +182,7 @@ where
             }
         }
 
-        if diff.is_empty() {
-            None
-        } else {
-            Some(diff)
-        }
+        if diff.is_empty() { None } else { Some(diff) }
     }
 }
 
@@ -264,11 +256,7 @@ where
             }
         }
 
-        if diff.is_empty() {
-            None
-        } else {
-            Some(diff)
-        }
+        if diff.is_empty() { None } else { Some(diff) }
     }
 }
 
@@ -280,10 +268,10 @@ pub fn into_normalized_json(mut value: serde_json::Value) -> serde_json::Value {
 fn normalize_json(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Number(n) => {
-            if let Some(f) = n.as_f64() {
-                if f.fract() == 0.0 {
-                    *value = serde_json::Value::Number(serde_json::Number::from(f as i64));
-                }
+            if let Some(f) = n.as_f64()
+                && f.fract() == 0.0
+            {
+                *value = serde_json::Value::Number(serde_json::Number::from(f as i64));
             }
         }
         serde_json::Value::Array(arr) => {

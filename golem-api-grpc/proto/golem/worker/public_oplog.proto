@@ -181,6 +181,7 @@ message SnapshotData {
   oneof data {
     RawSnapshotData raw = 1;
     JsonSnapshotData json = 2;
+    MultipartSnapshotData multipart = 3;
   }
 }
 
@@ -362,6 +363,7 @@ message SnapshotDataParameters {
   oneof data {
     RawSnapshotData raw = 2;
     JsonSnapshotData json = 3;
+    MultipartSnapshotData multipart = 4;
   }
 }
 
@@ -372,6 +374,24 @@ message RawSnapshotData {
 
 message JsonSnapshotData {
   string data = 1;
+}
+
+message MultipartPartData {
+  oneof data {
+    JsonSnapshotData json = 1;
+    RawSnapshotData raw = 2;
+  }
+}
+
+message MultipartSnapshotPart {
+  string name = 1;
+  string content_type = 2;
+  MultipartPartData data = 3;
+}
+
+message MultipartSnapshotData {
+  string mime_type = 1;
+  repeated MultipartSnapshotPart parts = 2;
 }
 
 message OplogProcessorCheckpointParameters {

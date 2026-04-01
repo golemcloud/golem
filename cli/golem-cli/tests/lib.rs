@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+use golem_cli::fs;
+use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use test_r::{tag_suite, test_dep};
@@ -45,12 +46,7 @@ static WORKSPACE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn workspace_path() -> PathBuf {
     WORKSPACE_PATH
-        .get_or_init(|| {
-            crate_path()
-                .join("../..")
-                .canonicalize()
-                .expect("Failed to canonicalize workspace path")
-        })
+        .get_or_init(|| fs::normalize_path_lexically(&crate_path().join("../..")))
         .clone()
 }
 

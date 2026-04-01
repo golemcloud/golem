@@ -14,7 +14,7 @@
 
 use crate::repo::model::plan::PlanRecord;
 use golem_service_base::model::ResourceLimits;
-use golem_service_base::repo::numeric::NumericU64;
+use golem_service_base::repo::NumericU64;
 use sqlx::FromRow;
 use std::collections::BTreeMap;
 use strum_macros::EnumIter;
@@ -47,6 +47,8 @@ pub enum UsageType {
     TotalEnvCount = 5,
     TotalComponentCount = 6,
     TotalComponentStorageBytes = 7,
+    MonthlyHttpCalls = 8,
+    MonthlyRpcCalls = 9,
 }
 
 impl UsageType {
@@ -58,9 +60,10 @@ impl UsageType {
             | UsageType::TotalWorkerCount
             | UsageType::TotalWorkerConnectionCount
             | UsageType::TotalComponentStorageBytes => UsageGrouping::Total,
-            UsageType::MonthlyGasLimit | UsageType::MonthlyComponentUploadLimitBytes => {
-                UsageGrouping::Monthly
-            }
+            UsageType::MonthlyGasLimit
+            | UsageType::MonthlyComponentUploadLimitBytes
+            | UsageType::MonthlyHttpCalls
+            | UsageType::MonthlyRpcCalls => UsageGrouping::Monthly,
         }
     }
 
@@ -73,7 +76,9 @@ impl UsageType {
             UsageType::TotalWorkerCount
             | UsageType::TotalWorkerConnectionCount
             | UsageType::MonthlyGasLimit
-            | UsageType::MonthlyComponentUploadLimitBytes => UsageTracking::Stats,
+            | UsageType::MonthlyComponentUploadLimitBytes
+            | UsageType::MonthlyHttpCalls
+            | UsageType::MonthlyRpcCalls => UsageTracking::Stats,
         }
     }
 }
@@ -135,11 +140,24 @@ impl AccountUsage {
         let available_fuel =
             fuel_limit.saturating_sub(self.final_value(UsageType::MonthlyGasLimit));
 
+        let http_limit = self.plan.limit(UsageType::MonthlyHttpCalls);
+        let available_http_calls =
+            http_limit.saturating_sub(self.final_value(UsageType::MonthlyHttpCalls));
+
+        let rpc_limit = self.plan.limit(UsageType::MonthlyRpcCalls);
+        let available_rpc_calls =
+            rpc_limit.saturating_sub(self.final_value(UsageType::MonthlyRpcCalls));
+
         ResourceLimits {
             available_fuel,
             max_memory_per_worker: self.plan.max_memory_per_worker.get(),
             max_table_elements_per_worker: self.plan.max_table_elements_per_worker.get(),
             max_disk_space_per_worker: self.plan.max_disk_space_per_worker.get(),
+            per_invocation_http_call_limit: self.plan.per_invocation_http_call_limit.get(),
+            per_invocation_rpc_call_limit: self.plan.per_invocation_rpc_call_limit.get(),
+            available_http_calls,
+            available_rpc_calls,
+            max_concurrent_agents_per_executor: self.plan.max_concurrent_agents_per_executor.get(),
         }
     }
 }

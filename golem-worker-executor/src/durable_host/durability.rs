@@ -22,18 +22,18 @@ use crate::worker::RetryDecision;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::Timestamp;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
     PersistenceLevel,
 };
-use golem_common::model::Timestamp;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::IntoValueAndType;
 use std::fmt::{Debug, Display};
 use tracing::error;
 use wasmtime::component::Resource;
-use wasmtime_wasi::{dynamic_subscribe, DynPollable, DynamicPollable, Pollable};
+use wasmtime_wasi::{DynPollable, DynamicPollable, Pollable, dynamic_subscribe};
 
 /// Classification of host function failures for semantic retry decisions
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

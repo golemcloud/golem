@@ -28,6 +28,8 @@ Always run `cargo make build` before starting work to ensure all dependencies ar
 
 Tests use [test-r](https://test-r.vigoo.dev). **Important:** Each test file must import `test_r::test` or tests will not run.
 
+Worker executor tests, integration tests, and CLI integration tests may depend on built test components from `test-components/`. These `.wasm` artifacts are not checked into the repository anymore, so build the specific components needed by the selected tests before running them. Use the `modifying-test-components` skill for targeted rebuilds, or `rebuild-all-test-components` when a full rebuild is needed.
+
 **Do not run `cargo make test`** — it runs all tests and takes a very long time. Instead, choose the appropriate test command:
 
 | Change Type | Test Command |

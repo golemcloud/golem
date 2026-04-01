@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::redis::Redis;
 use crate::components::ChildProcessLogger;
+use crate::components::redis::Redis;
 use async_trait::async_trait;
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
-use tracing::{info, Level};
+use tracing::{Level, info};
 
 /// Pre-generated CA certificate (valid 10 years) that signed the server cert.
 /// Use this to build a `RootCertStore` when connecting clients in tests.

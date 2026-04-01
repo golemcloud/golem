@@ -14,8 +14,8 @@
 
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
-use futures::future::ready;
 use futures::Stream;
+use futures::future::ready;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, AgentTypeName};
 use golem_common::model::component::ComponentRevision;
@@ -34,7 +34,7 @@ use golem_service_base::error::worker_executor::{
 use nonempty_collections::NEVec;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
-use std::future::{pending, Future};
+use std::future::{Future, pending};
 use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::Trap;
@@ -295,6 +295,18 @@ impl TrapType {
                             error: AgentError::ExceededTableLimit,
                             retry_from,
                         },
+                        Some(GolemSpecificWasmTrap::WorkerExceededHttpCallLimit) => {
+                            TrapType::Error {
+                                error: AgentError::ExceededHttpCallLimit,
+                                retry_from,
+                            }
+                        }
+                        Some(GolemSpecificWasmTrap::WorkerExceededRpcCallLimit) => {
+                            TrapType::Error {
+                                error: AgentError::ExceededRpcCallLimit,
+                                retry_from,
+                            }
+                        }
                         Some(GolemSpecificWasmTrap::NodeOutOfFilesystemStorage) => {
                             TrapType::Error {
                                 error: AgentError::NodeOutOfFilesystemStorage,
@@ -306,6 +318,15 @@ impl TrapType {
                                 error: AgentError::AgentExceededFilesystemStorageLimit,
                                 retry_from,
                             }
+                        }
+                        // Monthly budget exhausted → suspend and retry when replenished.
+                        // Maps to TryStop which writes a Suspend oplog entry and transitions
+                        // the worker to Suspended status.
+                        Some(GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted) => {
+                            TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc()))
+                        }
+                        Some(GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted) => {
+                            TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc()))
                         }
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
@@ -504,17 +525,17 @@ impl InvocationContext {
         }
 
         for span in to_update {
-            if let Some(parent) = span.parent() {
-                if reassigned.contains(parent.span_id()) {
-                    let parent = self.spans.get(parent.span_id()).unwrap().clone();
-                    span.replace_parent(Some(parent));
-                }
+            if let Some(parent) = span.parent()
+                && reassigned.contains(parent.span_id())
+            {
+                let parent = self.spans.get(parent.span_id()).unwrap().clone();
+                span.replace_parent(Some(parent));
             }
-            if let Some(linked_context) = span.linked_context() {
-                if reassigned.contains(linked_context.span_id()) {
-                    let linked_context = self.spans.get(linked_context.span_id()).unwrap().clone();
-                    span.add_link(linked_context);
-                }
+            if let Some(linked_context) = span.linked_context()
+                && reassigned.contains(linked_context.span_id())
+            {
+                let linked_context = self.spans.get(linked_context.span_id()).unwrap().clone();
+                span.add_link(linked_context);
             }
         }
 

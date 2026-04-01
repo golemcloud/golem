@@ -15,9 +15,9 @@
 use golem_client::api::{
     AgentClient, AgentError, RegistryServiceClient, RegistryServiceGetEnvironmentShareError,
 };
+use golem_common::model::IdempotencyKey;
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment_share::{EnvironmentShareCreation, EnvironmentShareUpdate};
-use golem_common::model::IdempotencyKey;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};

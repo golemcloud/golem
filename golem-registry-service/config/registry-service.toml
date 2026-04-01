@@ -11,7 +11,9 @@ type = "LocalFileSystem"
 root = "../data/blob_storage"
 
 [builtin_plugins]
-enabled = false
+type = "Disabled"
+
+[builtin_plugins.config]
 
 [component_compilation]
 type = "Enabled"
@@ -37,7 +39,7 @@ type = "Disabled"
 type = "Sqlite"
 
 [db.config]
-database = "golem_service.db"
+database = "golem_registry_service.db"
 foreign_keys = false
 max_connections = 10
 
@@ -86,11 +88,16 @@ token = "lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28"
 app_limit = 10
 component_limit = 100
 env_limit = 40
+max_concurrent_agents_per_executor = 1000000000000000000
 max_disk_space_per_worker = 1073741824
 max_memory_per_worker = 1073741824
 max_table_elements_per_worker = 16384
 monthly_gas_limit = 1000000000000000000
+monthly_http_call_limit = 1000000000000000000
+monthly_rpc_call_limit = 1000000000000000000
 monthly_upload_limit = 1000000000
+per_invocation_http_call_limit = 1000000000000000000
+per_invocation_rpc_call_limit = 1000000000000000000
 plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
 plan_name = "default"
 storage_limit = 500000000

@@ -14,10 +14,10 @@
 
 use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::mysql::types::{DbColumn, DbColumnType, DbValue};
-use crate::services::rdbms::mysql::{MysqlType, MYSQL};
+use crate::services::rdbms::mysql::{MYSQL, MysqlType};
 use crate::services::rdbms::sqlx_common::{
-    create_db_result, GolemTransactionRepo, PoolCreator, QueryExecutor, QueryParamsBinder,
-    SqlxDbResultStream, SqlxRdbms,
+    GolemTransactionRepo, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxDbResultStream,
+    SqlxRdbms, create_db_result,
 };
 use crate::services::rdbms::{
     DbResult, DbResultStream, DbRow, Rdbms, RdbmsError, RdbmsTransactionStatus,

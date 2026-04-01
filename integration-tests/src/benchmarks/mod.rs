@@ -16,8 +16,8 @@ use golem_common::base_model::agent::{DataValue, ParsedAgentId};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_test_framework::benchmark::{BenchmarkRecorder, ResultKey};
-use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::BenchmarkTestDependencies;
+use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
 use opentelemetry::propagation::TextMapPropagator;
@@ -26,7 +26,7 @@ use reqwest::{Client, Request};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
-use tracing::{info, warn, Instrument};
+use tracing::{Instrument, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 pub mod cold_start_unknown;

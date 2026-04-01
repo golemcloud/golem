@@ -14,8 +14,8 @@
 
 mod r#impl;
 
-use crate::analysis::AnalysedType;
 use crate::ValueAndType;
+use crate::analysis::AnalysedType;
 use serde::ser::Error;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as JsonValue;

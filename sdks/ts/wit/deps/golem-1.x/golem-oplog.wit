@@ -371,6 +371,8 @@ interface oplog {
         transient-error(string),
         permanent-error(string),
         exceeded-table-limit,
+        exceeded-http-call-limit,
+        exceeded-rpc-call-limit,
         node-out-of-filesystem-storage,
         agent-exceeded-filesystem-storage-limit,
     }

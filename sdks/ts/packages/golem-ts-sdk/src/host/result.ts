@@ -120,6 +120,12 @@ const prototype = {
    * }).assertErrorInstanceOf(Error)
    */
   assertErrorInstanceOf,
+  /**
+   * Returns the successful value of the result, or reverts to the given checkpoint if the result is an error.
+   * @param checkpoint - An object with a `revert(): never` method (e.g. a {@link Checkpoint}).
+   * @returns The successful value.
+   */
+  unwrapOrRevert,
 } as const;
 
 /** Type representing success or failure. */
@@ -341,4 +347,9 @@ function assertErrorInstanceOf<T, E, C extends abstract new (..._: unknown[]) =>
   if (this.val instanceof constructor) return this as Result<T, E & InstanceType<C>>;
 
   throw new TypeError(`Assertion failed: Expected error to be an instance of ${constructor.name}.`);
+}
+
+function unwrapOrRevert<T, E>(this: Result<T, E>, checkpoint: { revert(): never }): T {
+  if (this.isOk()) return this.val;
+  checkpoint.revert();
 }

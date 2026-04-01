@@ -170,12 +170,12 @@ impl<A: IntoValue, B: IntoValue, C: IntoValue, D: IntoValue, E: IntoValue> IntoV
 }
 
 impl<
-        A: FromValueAndType,
-        B: FromValueAndType,
-        C: FromValueAndType,
-        D: FromValueAndType,
-        E: FromValueAndType,
-    > FromValueAndType for (A, B, C, D, E)
+    A: FromValueAndType,
+    B: FromValueAndType,
+    C: FromValueAndType,
+    D: FromValueAndType,
+    E: FromValueAndType,
+> FromValueAndType for (A, B, C, D, E)
 {
     fn from_extractor<'a, 'b>(
         extractor: &'a impl golem_wasm::WitValueExtractor<'a, 'b>,
@@ -237,13 +237,13 @@ impl<A: IntoValue, B: IntoValue, C: IntoValue, D: IntoValue, E: IntoValue, F: In
 }
 
 impl<
-        A: FromValueAndType,
-        B: FromValueAndType,
-        C: FromValueAndType,
-        D: FromValueAndType,
-        E: FromValueAndType,
-        F: FromValueAndType,
-    > FromValueAndType for (A, B, C, D, E, F)
+    A: FromValueAndType,
+    B: FromValueAndType,
+    C: FromValueAndType,
+    D: FromValueAndType,
+    E: FromValueAndType,
+    F: FromValueAndType,
+> FromValueAndType for (A, B, C, D, E, F)
 {
     fn from_extractor<'a, 'b>(
         extractor: &'a impl golem_wasm::WitValueExtractor<'a, 'b>,
@@ -284,14 +284,14 @@ impl<
 
 // 7-tuple
 impl<
-        A: IntoValue,
-        B: IntoValue,
-        C: IntoValue,
-        D: IntoValue,
-        E: IntoValue,
-        F: IntoValue,
-        G: IntoValue,
-    > IntoValue for (A, B, C, D, E, F, G)
+    A: IntoValue,
+    B: IntoValue,
+    C: IntoValue,
+    D: IntoValue,
+    E: IntoValue,
+    F: IntoValue,
+    G: IntoValue,
+> IntoValue for (A, B, C, D, E, F, G)
 {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         let mut builder = builder.tuple();
@@ -319,14 +319,14 @@ impl<
 }
 
 impl<
-        A: FromValueAndType,
-        B: FromValueAndType,
-        C: FromValueAndType,
-        D: FromValueAndType,
-        E: FromValueAndType,
-        F: FromValueAndType,
-        G: FromValueAndType,
-    > FromValueAndType for (A, B, C, D, E, F, G)
+    A: FromValueAndType,
+    B: FromValueAndType,
+    C: FromValueAndType,
+    D: FromValueAndType,
+    E: FromValueAndType,
+    F: FromValueAndType,
+    G: FromValueAndType,
+> FromValueAndType for (A, B, C, D, E, F, G)
 {
     fn from_extractor<'a, 'b>(
         extractor: &'a impl golem_wasm::WitValueExtractor<'a, 'b>,
@@ -372,15 +372,15 @@ impl<
 
 // 8-tuple
 impl<
-        A: IntoValue,
-        B: IntoValue,
-        C: IntoValue,
-        D: IntoValue,
-        E: IntoValue,
-        F: IntoValue,
-        G: IntoValue,
-        H: IntoValue,
-    > IntoValue for (A, B, C, D, E, F, G, H)
+    A: IntoValue,
+    B: IntoValue,
+    C: IntoValue,
+    D: IntoValue,
+    E: IntoValue,
+    F: IntoValue,
+    G: IntoValue,
+    H: IntoValue,
+> IntoValue for (A, B, C, D, E, F, G, H)
 {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         let mut builder = builder.tuple();
@@ -410,15 +410,15 @@ impl<
 }
 
 impl<
-        A: FromValueAndType,
-        B: FromValueAndType,
-        C: FromValueAndType,
-        D: FromValueAndType,
-        E: FromValueAndType,
-        F: FromValueAndType,
-        G: FromValueAndType,
-        H: FromValueAndType,
-    > FromValueAndType for (A, B, C, D, E, F, G, H)
+    A: FromValueAndType,
+    B: FromValueAndType,
+    C: FromValueAndType,
+    D: FromValueAndType,
+    E: FromValueAndType,
+    F: FromValueAndType,
+    G: FromValueAndType,
+    H: FromValueAndType,
+> FromValueAndType for (A, B, C, D, E, F, G, H)
 {
     fn from_extractor<'a, 'b>(
         extractor: &'a impl golem_wasm::WitValueExtractor<'a, 'b>,
@@ -469,16 +469,16 @@ impl<
 
 // 9-tuple
 impl<
-        A: IntoValue,
-        B: IntoValue,
-        C: IntoValue,
-        D: IntoValue,
-        E: IntoValue,
-        F: IntoValue,
-        G: IntoValue,
-        H: IntoValue,
-        I: IntoValue,
-    > IntoValue for (A, B, C, D, E, F, G, H, I)
+    A: IntoValue,
+    B: IntoValue,
+    C: IntoValue,
+    D: IntoValue,
+    E: IntoValue,
+    F: IntoValue,
+    G: IntoValue,
+    H: IntoValue,
+    I: IntoValue,
+> IntoValue for (A, B, C, D, E, F, G, H, I)
 {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         let mut builder = builder.tuple();
@@ -510,16 +510,16 @@ impl<
 }
 
 impl<
-        A: FromValueAndType,
-        B: FromValueAndType,
-        C: FromValueAndType,
-        D: FromValueAndType,
-        E: FromValueAndType,
-        F: FromValueAndType,
-        G: FromValueAndType,
-        H: FromValueAndType,
-        I: FromValueAndType,
-    > FromValueAndType for (A, B, C, D, E, F, G, H, I)
+    A: FromValueAndType,
+    B: FromValueAndType,
+    C: FromValueAndType,
+    D: FromValueAndType,
+    E: FromValueAndType,
+    F: FromValueAndType,
+    G: FromValueAndType,
+    H: FromValueAndType,
+    I: FromValueAndType,
+> FromValueAndType for (A, B, C, D, E, F, G, H, I)
 {
     fn from_extractor<'a, 'b>(
         extractor: &'a impl golem_wasm::WitValueExtractor<'a, 'b>,
@@ -575,17 +575,17 @@ impl<
 
 // 10-tuple
 impl<
-        A: IntoValue,
-        B: IntoValue,
-        C: IntoValue,
-        D: IntoValue,
-        E: IntoValue,
-        F: IntoValue,
-        G: IntoValue,
-        H: IntoValue,
-        I: IntoValue,
-        J: IntoValue,
-    > IntoValue for (A, B, C, D, E, F, G, H, I, J)
+    A: IntoValue,
+    B: IntoValue,
+    C: IntoValue,
+    D: IntoValue,
+    E: IntoValue,
+    F: IntoValue,
+    G: IntoValue,
+    H: IntoValue,
+    I: IntoValue,
+    J: IntoValue,
+> IntoValue for (A, B, C, D, E, F, G, H, I, J)
 {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         let mut builder = builder.tuple();
@@ -619,17 +619,17 @@ impl<
 }
 
 impl<
-        A: FromValueAndType,
-        B: FromValueAndType,
-        C: FromValueAndType,
-        D: FromValueAndType,
-        E: FromValueAndType,
-        F: FromValueAndType,
-        G: FromValueAndType,
-        H: FromValueAndType,
-        I: FromValueAndType,
-        J: FromValueAndType,
-    > FromValueAndType for (A, B, C, D, E, F, G, H, I, J)
+    A: FromValueAndType,
+    B: FromValueAndType,
+    C: FromValueAndType,
+    D: FromValueAndType,
+    E: FromValueAndType,
+    F: FromValueAndType,
+    G: FromValueAndType,
+    H: FromValueAndType,
+    I: FromValueAndType,
+    J: FromValueAndType,
+> FromValueAndType for (A, B, C, D, E, F, G, H, I, J)
 {
     fn from_extractor<'a, 'b>(
         extractor: &'a impl golem_wasm::WitValueExtractor<'a, 'b>,
@@ -690,18 +690,18 @@ impl<
 
 // 11-tuple
 impl<
-        A: IntoValue,
-        B: IntoValue,
-        C: IntoValue,
-        D: IntoValue,
-        E: IntoValue,
-        F: IntoValue,
-        G: IntoValue,
-        H: IntoValue,
-        I: IntoValue,
-        J: IntoValue,
-        K: IntoValue,
-    > IntoValue for (A, B, C, D, E, F, G, H, I, J, K)
+    A: IntoValue,
+    B: IntoValue,
+    C: IntoValue,
+    D: IntoValue,
+    E: IntoValue,
+    F: IntoValue,
+    G: IntoValue,
+    H: IntoValue,
+    I: IntoValue,
+    J: IntoValue,
+    K: IntoValue,
+> IntoValue for (A, B, C, D, E, F, G, H, I, J, K)
 {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         let mut builder = builder.tuple();
@@ -737,18 +737,18 @@ impl<
 }
 
 impl<
-        A: FromValueAndType,
-        B: FromValueAndType,
-        C: FromValueAndType,
-        D: FromValueAndType,
-        E: FromValueAndType,
-        F: FromValueAndType,
-        G: FromValueAndType,
-        H: FromValueAndType,
-        I: FromValueAndType,
-        J: FromValueAndType,
-        K: FromValueAndType,
-    > FromValueAndType for (A, B, C, D, E, F, G, H, I, J, K)
+    A: FromValueAndType,
+    B: FromValueAndType,
+    C: FromValueAndType,
+    D: FromValueAndType,
+    E: FromValueAndType,
+    F: FromValueAndType,
+    G: FromValueAndType,
+    H: FromValueAndType,
+    I: FromValueAndType,
+    J: FromValueAndType,
+    K: FromValueAndType,
+> FromValueAndType for (A, B, C, D, E, F, G, H, I, J, K)
 {
     fn from_extractor<'a, 'b>(
         extractor: &'a impl golem_wasm::WitValueExtractor<'a, 'b>,
@@ -814,19 +814,19 @@ impl<
 
 // 12-tuple
 impl<
-        A: IntoValue,
-        B: IntoValue,
-        C: IntoValue,
-        D: IntoValue,
-        E: IntoValue,
-        F: IntoValue,
-        G: IntoValue,
-        H: IntoValue,
-        I: IntoValue,
-        J: IntoValue,
-        K: IntoValue,
-        L: IntoValue,
-    > IntoValue for (A, B, C, D, E, F, G, H, I, J, K, L)
+    A: IntoValue,
+    B: IntoValue,
+    C: IntoValue,
+    D: IntoValue,
+    E: IntoValue,
+    F: IntoValue,
+    G: IntoValue,
+    H: IntoValue,
+    I: IntoValue,
+    J: IntoValue,
+    K: IntoValue,
+    L: IntoValue,
+> IntoValue for (A, B, C, D, E, F, G, H, I, J, K, L)
 {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         let mut builder = builder.tuple();
@@ -864,19 +864,19 @@ impl<
 }
 
 impl<
-        A: FromValueAndType,
-        B: FromValueAndType,
-        C: FromValueAndType,
-        D: FromValueAndType,
-        E: FromValueAndType,
-        F: FromValueAndType,
-        G: FromValueAndType,
-        H: FromValueAndType,
-        I: FromValueAndType,
-        J: FromValueAndType,
-        K: FromValueAndType,
-        L: FromValueAndType,
-    > FromValueAndType for (A, B, C, D, E, F, G, H, I, J, K, L)
+    A: FromValueAndType,
+    B: FromValueAndType,
+    C: FromValueAndType,
+    D: FromValueAndType,
+    E: FromValueAndType,
+    F: FromValueAndType,
+    G: FromValueAndType,
+    H: FromValueAndType,
+    I: FromValueAndType,
+    J: FromValueAndType,
+    K: FromValueAndType,
+    L: FromValueAndType,
+> FromValueAndType for (A, B, C, D, E, F, G, H, I, J, K, L)
 {
     fn from_extractor<'a, 'b>(
         extractor: &'a impl golem_wasm::WitValueExtractor<'a, 'b>,

@@ -39,9 +39,9 @@ pub enum InvocationMode {
     Replay,
 }
 use golem_wasm::validate_value_matches_type;
-use golem_wasm::wasmtime::{decode_param, encode_output, DecodeParamResult};
+use golem_wasm::wasmtime::{DecodeParamResult, decode_param, encode_output};
 use golem_wasm::{FromValue, IntoValue, Value};
-use tracing::{debug, span, Instrument, Level};
+use tracing::{Instrument, Level, debug, span};
 use wasmtime::component::{Func, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
 
@@ -413,6 +413,8 @@ async fn call_exported_function<Ctx: WorkerCtx>(
     raw_function_name: &str,
 ) -> Result<(wasmtime::Result<Vec<Val>>, u64), WorkerExecutorError> {
     let mut store = store.as_context_mut();
+
+    store.data_mut().reset_invocation_call_counts();
 
     let idempotency_key = store.data().get_current_idempotency_key().await;
     if let Some(idempotency_key) = &idempotency_key {

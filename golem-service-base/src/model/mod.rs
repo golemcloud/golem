@@ -17,6 +17,7 @@ pub mod auth;
 pub mod component;
 pub mod environment;
 pub mod plugin_registration;
+pub mod quota_lease;
 
 use derive_more::Display;
 use desert_rust::BinaryCodec;
@@ -144,6 +145,23 @@ pub struct ResourceLimits {
     pub max_memory_per_worker: u64,
     pub max_table_elements_per_worker: u64,
     pub max_disk_space_per_worker: u64,
+    pub per_invocation_http_call_limit: u64,
+    pub per_invocation_rpc_call_limit: u64,
+    pub available_http_calls: u64,
+    pub available_rpc_calls: u64,
+    pub max_concurrent_agents_per_executor: u64,
+}
+
+const UNLIMITED_CONCURRENT_AGENTS_PER_EXECUTOR: u64 = 1_000_000_000_000_000_000;
+
+fn normalize_concurrent_agents_limit(limit: u64) -> u64 {
+    if limit == 0 {
+        // Backward-compatibility with older registry versions that do not send
+        // this proto field (proto3 scalar default = 0).
+        UNLIMITED_CONCURRENT_AGENTS_PER_EXECUTOR
+    } else {
+        limit
+    }
 }
 
 impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
@@ -153,6 +171,11 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
             max_memory_per_worker: value.max_memory_per_worker,
             max_table_elements_per_worker: value.max_table_elements_per_worker,
             max_disk_space_per_worker: value.max_disk_space_per_worker,
+            per_invocation_http_call_limit: value.per_invocation_http_call_limit,
+            per_invocation_rpc_call_limit: value.per_invocation_rpc_call_limit,
+            available_http_calls: value.available_http_calls,
+            available_rpc_calls: value.available_rpc_calls,
+            max_concurrent_agents_per_executor: value.max_concurrent_agents_per_executor,
         }
     }
 }
@@ -164,6 +187,13 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
             max_memory_per_worker: value.max_memory_per_worker,
             max_table_elements_per_worker: value.max_table_elements_per_worker,
             max_disk_space_per_worker: value.max_disk_space_per_worker,
+            per_invocation_http_call_limit: value.per_invocation_http_call_limit,
+            per_invocation_rpc_call_limit: value.per_invocation_rpc_call_limit,
+            available_http_calls: value.available_http_calls,
+            available_rpc_calls: value.available_rpc_calls,
+            max_concurrent_agents_per_executor: normalize_concurrent_agents_limit(
+                value.max_concurrent_agents_per_executor,
+            ),
         }
     }
 }
@@ -442,5 +472,51 @@ impl From<golem_api_grpc::proto::golem::registry::AgentDeploymentDetails>
             agent_type_name: AgentTypeName(value.agent_type_name),
             webhook_prefix_authority_and_path: value.webhook_prefix_authority_and_path,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    #[test]
+    fn resource_limits_proto_zero_limit_maps_to_unlimited_sentinel() {
+        let proto = golem_api_grpc::proto::golem::common::ResourceLimits {
+            available_fuel: 1,
+            max_memory_per_worker: 2,
+            max_table_elements_per_worker: 3,
+            max_disk_space_per_worker: 4,
+            per_invocation_http_call_limit: 0,
+            per_invocation_rpc_call_limit: 0,
+            available_http_calls: 0,
+            available_rpc_calls: 0,
+            max_concurrent_agents_per_executor: 0,
+        };
+
+        let converted: super::ResourceLimits = proto.into();
+
+        assert_eq!(
+            converted.max_concurrent_agents_per_executor,
+            1_000_000_000_000_000_000
+        );
+    }
+
+    #[test]
+    fn resource_limits_proto_non_zero_limit_is_preserved() {
+        let proto = golem_api_grpc::proto::golem::common::ResourceLimits {
+            available_fuel: 1,
+            max_memory_per_worker: 2,
+            max_table_elements_per_worker: 3,
+            max_disk_space_per_worker: 4,
+            per_invocation_http_call_limit: 0,
+            per_invocation_rpc_call_limit: 0,
+            available_http_calls: 0,
+            available_rpc_calls: 0,
+            max_concurrent_agents_per_executor: 7,
+        };
+
+        let converted: super::ResourceLimits = proto.into();
+
+        assert_eq!(converted.max_concurrent_agents_per_executor, 7);
     }
 }

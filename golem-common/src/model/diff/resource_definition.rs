@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::diff::{hash_from_serialized_value, Diffable, Hash, Hashable};
+use crate::model::diff::{Diffable, Hash, Hashable, hash_from_serialized_value};
 use crate::model::resource_definition::{EnforcementAction, TimePeriod};
 use serde::Serialize;
 
@@ -56,6 +56,7 @@ impl Hashable for ResourceDefinition {
 pub struct ResourceLimit {
     pub value: u64,
     pub period: Option<TimePeriod>,
+    pub max: Option<u64>,
 }
 
 impl From<crate::model::resource_definition::ResourceLimit> for ResourceLimit {
@@ -66,14 +67,17 @@ impl From<crate::model::resource_definition::ResourceLimit> for ResourceLimit {
             DomainResourceLimit::Rate(inner) => ResourceLimit {
                 value: inner.value,
                 period: Some(inner.period),
+                max: Some(inner.max),
             },
             DomainResourceLimit::Capacity(inner) => ResourceLimit {
                 value: inner.value,
                 period: None,
+                max: None,
             },
             DomainResourceLimit::Concurrency(inner) => ResourceLimit {
                 value: inner.value,
                 period: None,
+                max: None,
             },
         }
     }

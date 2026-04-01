@@ -16,26 +16,26 @@ use crate::command_handler::worker::parse_worker_error;
 use crate::command_handler::worker::stream_output::WorkerStreamOutput;
 use crate::model::format::Format;
 use crate::model::worker::AgentLogStreamOptions;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use bytes::Bytes;
 use futures_util::future::Either;
 use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{future, pin_mut, SinkExt, StreamExt, TryStreamExt};
+use futures_util::{SinkExt, StreamExt, TryStreamExt, future, pin_mut};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::ComponentId;
 use golem_common::model::{AgentEvent, IdempotencyKey, LogLevel, Timestamp};
 use native_tls::TlsConnector;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::{task, time};
+use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::client::Request;
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{
-    connect_async_tls_with_config, tungstenite, Connector, MaybeTlsStream, WebSocketStream,
+    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config, tungstenite,
 };
 use tracing::{debug, error, info, trace};
 use url::Url;

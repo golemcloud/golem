@@ -1662,6 +1662,69 @@ paths:
       - Cookie: []
       - Token: []
       operationId: invoke_agent
+  /v1/agents/create-agent:
+    post:
+      tags:
+      - Agent
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/CreateAgentRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/CreateAgentResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_agent
 components:
   schemas:
     ActivatePluginResponse:
@@ -2605,6 +2668,43 @@ components:
       properties:
         value:
           $ref: '#/components/schemas/ValueAndType'
+    CreateAgentRequest:
+      type: object
+      title: CreateAgentRequest
+      required:
+      - appName
+      - envName
+      - agentTypeName
+      - parameters
+      properties:
+        appName:
+          type: string
+        envName:
+          type: string
+        agentTypeName:
+          type: string
+        parameters:
+          $ref: '#/components/schemas/UntypedJsonDataValue'
+        phantomId:
+          type: string
+          format: uuid
+        agentConfig:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/WorkerAgentConfigEntry'
+    CreateAgentResponse:
+      type: object
+      title: CreateAgentResponse
+      required:
+      - agentId
+      - componentRevision
+      properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        componentRevision:
+          type: integer
+          format: uint64
     DataValue:
       type: object
       oneOf:
@@ -2892,6 +2992,67 @@ components:
         targetRevision:
           type: integer
           format: uint64
+    MultipartPartData:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/MultipartPartData_JsonSnapshotData'
+      - $ref: '#/components/schemas/MultipartPartData_RawSnapshotData'
+      discriminator:
+        propertyName: type
+        mapping:
+          Json: '#/components/schemas/MultipartPartData_JsonSnapshotData'
+          Raw: '#/components/schemas/MultipartPartData_RawSnapshotData'
+    MultipartPartData_JsonSnapshotData:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Json
+            example: Json
+      - $ref: '#/components/schemas/JsonSnapshotData'
+    MultipartPartData_RawSnapshotData:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Raw
+            example: Raw
+      - $ref: '#/components/schemas/RawSnapshotData'
+    MultipartSnapshotData:
+      type: object
+      title: MultipartSnapshotData
+      required:
+      - mimeType
+      - parts
+      properties:
+        mimeType:
+          type: string
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/MultipartSnapshotPart'
+    MultipartSnapshotPart:
+      type: object
+      title: MultipartSnapshotPart
+      required:
+      - name
+      - contentType
+      - data
+      properties:
+        name:
+          type: string
+        contentType:
+          type: string
+        data:
+          $ref: '#/components/schemas/MultipartPartData'
     NameOptionTypePair:
       type: object
       title: NameOptionTypePair
@@ -3930,11 +4091,13 @@ components:
       oneOf:
       - $ref: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
       - $ref: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+      - $ref: '#/components/schemas/PublicSnapshotData_MultipartSnapshotData'
       discriminator:
         propertyName: type
         mapping:
           Raw: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
           Json: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+          Multipart: '#/components/schemas/PublicSnapshotData_MultipartSnapshotData'
     PublicSnapshotData_JsonSnapshotData:
       allOf:
       - type: object
@@ -3947,6 +4110,18 @@ components:
             - Json
             example: Json
       - $ref: '#/components/schemas/JsonSnapshotData'
+    PublicSnapshotData_MultipartSnapshotData:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Multipart
+            example: Multipart
+      - $ref: '#/components/schemas/MultipartSnapshotData'
     PublicSnapshotData_RawSnapshotData:
       allOf:
       - type: object

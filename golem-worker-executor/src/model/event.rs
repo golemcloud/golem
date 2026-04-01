@@ -1,5 +1,5 @@
 use golem_common::model::oplog::OplogEntry;
-use golem_common::model::{oplog, AgentEvent, IdempotencyKey, LogLevel, Timestamp};
+use golem_common::model::{AgentEvent, IdempotencyKey, LogLevel, Timestamp, oplog};
 
 // Internal version of AgentEvent, without any operational details.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -18,7 +18,7 @@ use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
-    invoke_observed_and_traced, lower_invocation, InvocationMode, InvokeResult,
+    InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
 use crate::worker::{
     FinalWorkerState, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker, WorkerCommand,
@@ -33,12 +33,12 @@ use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::{ComponentFilePath, ComponentRevision};
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
-    invocation_context::{AttributeValue, InvocationContextStack},
-    OplogIndex,
-};
-use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
     IdempotencyKey, OwnedAgentId, TimestampedAgentInvocation,
+};
+use golem_common::model::{
+    AgentStatusRecord, OplogIndex, Timestamp,
+    invocation_context::{AttributeValue, InvocationContextStack},
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -47,13 +47,15 @@ use golem_service_base::model::GetFileSystemNodeResult;
 use golem_common::model::agent::structural_format::format_structural;
 use std::collections::VecDeque;
 use std::ops::DerefMut;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::mpsc::UnboundedReceiver;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{debug, span, warn, Instrument, Level, Span};
-use wasmtime::component::Instance;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::task::JoinHandle;
+use tracing::{Instrument, Level, Span, debug, span, warn};
 use wasmtime::Store;
+use wasmtime::component::Instance;
 
 /// Context of a running worker's invocation loop
 pub struct InvocationLoop<Ctx: WorkerCtx> {
@@ -103,6 +105,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     instance: &instance,
                     store: &store,
                     invocations_since_snapshot: 0,
+                    idle_snapshot_task: None,
                 };
 
                 final_decision = inner_loop.run().await;
@@ -280,6 +283,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     instance: &'a Instance,
     store: &'a Mutex<Store<Ctx>>,
     invocations_since_snapshot: u64,
+    idle_snapshot_task: Option<JoinHandle<()>>,
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
@@ -304,7 +308,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
         // Exits when RunningWorker is dropped
         self.waiting_for_command.store(true, Ordering::Release);
-        while let Some(cmd) = self.receiver.recv().await {
+        while let Some(cmd) = self.next_wakeup().await {
             self.waiting_for_command.store(false, Ordering::Release);
             let outcome = match cmd {
                 WorkerCommand::Unblock => {
@@ -318,14 +322,19 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         let result = if let Some(message) = message {
                             self.internal_invocation(message).await
                         } else {
-                            // Queue is empty, use last_known_status for pending updates and invocations
-                            break self.drain_pending_from_status().await;
+                            // Queue is empty, use last_known_status for pending updates and invocations.
+                            // This may inject a snapshot as the next action, so stay in the drain loop
+                            // when immediate follow-up work was scheduled.
+                            self.drain_pending_from_status().await
                         };
 
                         match result {
                             CommandOutcome::Continue => {
                                 // Continue draining the queue
                                 continue;
+                            }
+                            CommandOutcome::WaitForWakeup => {
+                                break CommandOutcome::Continue;
                             }
                             other => {
                                 // Break out of the drain loop and handle the outcome
@@ -345,16 +354,55 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     final_decision = Some(decision);
                     break;
                 }
-                CommandOutcome::Continue => {}
+                CommandOutcome::Continue | CommandOutcome::WaitForWakeup => {}
             }
 
             self.waiting_for_command.store(true, Ordering::Release);
         }
+        self.abort_idle_snapshot_task();
         self.waiting_for_command.store(false, Ordering::Release);
 
         debug!(final_decision = ?final_decision, "Invocation queue loop finished");
 
         final_decision
+    }
+
+    async fn next_wakeup(&mut self) -> Option<WorkerCommand> {
+        let mut idle_snapshot_task = self.idle_snapshot_task.take();
+
+        let wakeup = if let Some(task) = idle_snapshot_task.as_mut() {
+            tokio::select! {
+                cmd = self.receiver.recv() => {
+                    task.abort();
+                    cmd
+                }
+                result = &mut *task => {
+                    if let Err(err) = result {
+                        if !err.is_cancelled() {
+                            warn!("Idle snapshot timer failed: {err}");
+                        }
+                        return self.receiver.recv().await;
+                    }
+
+                    match self.receiver.try_recv() {
+                        Ok(cmd) => Some(cmd),
+                        Err(tokio::sync::mpsc::error::TryRecvError::Empty) => Some(WorkerCommand::Unblock),
+                        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => None,
+                    }
+                }
+            }
+        } else {
+            self.receiver.recv().await
+        };
+
+        self.idle_snapshot_task = None;
+        wakeup
+    }
+
+    fn abort_idle_snapshot_task(&mut self) {
+        if let Some(task) = self.idle_snapshot_task.take() {
+            task.abort();
+        }
     }
 
     /// When the main queue becomes empty, process items from last_known_status:
@@ -399,28 +447,83 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
                 match outcome {
                     CommandOutcome::Continue => {
-                        self.on_external_invocation_completed().await;
+                        if self.on_external_invocation_completed().await {
+                            break CommandOutcome::Continue;
+                        }
                         continue;
                     }
                     other => break other,
                 }
             }
 
-            break CommandOutcome::Continue;
+            match self.periodic_snapshot_action(&status) {
+                PeriodicSnapshotAction::DueNow => {
+                    self.inject_snapshot_as_next_action().await;
+                    break CommandOutcome::Continue;
+                }
+                PeriodicSnapshotAction::Wait(delay) => {
+                    self.schedule_idle_snapshot(delay);
+                    break CommandOutcome::WaitForWakeup;
+                }
+                PeriodicSnapshotAction::NotNeeded => {}
+            }
+
+            break CommandOutcome::WaitForWakeup;
         }
     }
 
-    async fn on_external_invocation_completed(&mut self) {
+    async fn on_external_invocation_completed(&mut self) -> bool {
         self.invocations_since_snapshot += 1;
-        if let SnapshotPolicy::EveryNInvocation { count } = self.parent.snapshot_policy() {
-            if self.invocations_since_snapshot >= *count as u64 {
-                self.invocations_since_snapshot = 0;
-                self.active
-                    .write()
-                    .await
-                    .push_back(QueuedWorkerInvocation::SaveSnapshot);
+        match self.parent.snapshot_policy() {
+            SnapshotPolicy::EveryNInvocation { count } => {
+                if self.invocations_since_snapshot >= *count as u64 {
+                    self.invocations_since_snapshot = 0;
+                    self.inject_snapshot_as_next_action().await;
+                    true
+                } else {
+                    false
+                }
             }
+            SnapshotPolicy::Periodic { .. } => {
+                let status = self.parent.get_non_detached_last_known_status().await;
+                if matches!(
+                    self.periodic_snapshot_action(&status),
+                    PeriodicSnapshotAction::DueNow
+                ) {
+                    self.inject_snapshot_as_next_action().await;
+                    true
+                } else {
+                    false
+                }
+            }
+            SnapshotPolicy::Disabled => false,
         }
+    }
+
+    fn periodic_snapshot_action(&self, status: &AgentStatusRecord) -> PeriodicSnapshotAction {
+        let SnapshotPolicy::Periodic { period } = self.parent.snapshot_policy() else {
+            return PeriodicSnapshotAction::NotNeeded;
+        };
+
+        let created_at = self.parent.get_initial_worker_metadata().created_at;
+        let last_snapshot_timestamp =
+            snapshot_baseline_timestamp(status.last_automatic_snapshot_timestamp, created_at);
+
+        snapshot_action_at(last_snapshot_timestamp, *period, Timestamp::now_utc())
+    }
+
+    fn schedule_idle_snapshot(&mut self, delay: Duration) {
+        self.abort_idle_snapshot_task();
+        self.idle_snapshot_task = Some(tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+        }));
+    }
+
+    async fn inject_snapshot_as_next_action(&self) {
+        self.active
+            .write()
+            .await
+            .push_front(QueuedWorkerInvocation::SaveSnapshot);
     }
 
     /// Resumes an interrupted replay process
@@ -1039,15 +1142,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 result: AgentInvocationResult::SaveSnapshot { snapshot },
                 ..
             }) => {
-                let oplog = self.store.data().get_public_state().oplog();
                 let serialized = golem_common::serialization::serialize(&snapshot.data);
                 match serialized {
                     Ok(serialized_bytes) => {
-                        match oplog.upload_raw_payload(serialized_bytes).await {
+                        match self.parent.oplog.upload_raw_payload(serialized_bytes).await {
                             Ok(raw_payload) => match raw_payload.into_payload::<Vec<u8>>() {
                                 Ok(payload) => {
-                                    oplog
-                                        .add_and_commit(OplogEntry::snapshot(
+                                    self.parent
+                                        .add_and_commit_oplog(OplogEntry::snapshot(
                                             payload,
                                             snapshot.mime_type,
                                         ))
@@ -1102,4 +1204,80 @@ enum CommandOutcome {
     BreakInnerLoop(RetryDecision),
     /// Continue processing in the inner loop
     Continue,
+    /// Stop draining for now and wait for the next command or idle timer wakeup
+    WaitForWakeup,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PeriodicSnapshotAction {
+    NotNeeded,
+    DueNow,
+    Wait(Duration),
+}
+
+fn snapshot_baseline_timestamp(
+    last_snapshot_timestamp: Option<Timestamp>,
+    created_at: Timestamp,
+) -> Timestamp {
+    last_snapshot_timestamp.unwrap_or(created_at)
+}
+
+fn snapshot_action_at(
+    last_snapshot_timestamp: Timestamp,
+    period: Duration,
+    now: Timestamp,
+) -> PeriodicSnapshotAction {
+    let period_millis = period.as_millis();
+    if period_millis == 0 {
+        return PeriodicSnapshotAction::DueNow;
+    }
+
+    let now = now.to_millis() as u128;
+    let due_at = last_snapshot_timestamp.to_millis() as u128 + period_millis;
+
+    if now >= due_at {
+        PeriodicSnapshotAction::DueNow
+    } else {
+        PeriodicSnapshotAction::Wait(Duration::from_millis((due_at - now) as u64))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PeriodicSnapshotAction, snapshot_action_at, snapshot_baseline_timestamp};
+    use golem_common::model::Timestamp;
+    use std::time::Duration;
+    use test_r::test;
+
+    #[test]
+    fn periodic_snapshot_uses_creation_time_until_the_first_snapshot() {
+        let created_at = Timestamp::from(1_000);
+
+        let baseline = snapshot_baseline_timestamp(None, created_at);
+
+        assert_eq!(baseline, created_at);
+    }
+
+    #[test]
+    fn periodic_snapshot_is_due_once_the_period_elapsed() {
+        let last_snapshot = Timestamp::from(1_000);
+        let now = Timestamp::from(6_000);
+
+        let action = snapshot_action_at(last_snapshot, Duration::from_secs(5), now);
+
+        assert_eq!(action, PeriodicSnapshotAction::DueNow);
+    }
+
+    #[test]
+    fn periodic_snapshot_waits_for_the_remaining_idle_time() {
+        let last_snapshot = Timestamp::from(1_000);
+        let now = Timestamp::from(4_250);
+
+        let action = snapshot_action_at(last_snapshot, Duration::from_secs(5), now);
+
+        assert_eq!(
+            action,
+            PeriodicSnapshotAction::Wait(Duration::from_millis(1_750))
+        );
+    }
 }

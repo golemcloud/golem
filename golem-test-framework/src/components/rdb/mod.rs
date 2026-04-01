@@ -15,15 +15,16 @@
 use async_trait::async_trait;
 use clap::Args;
 use golem_common::config::{DbConfig, DbPostgresConfig, DbSqliteConfig};
+use sqlx::ConnectOptions;
 use sqlx::mysql::MySqlConnectOptions;
 use sqlx::postgres::PgConnectOptions;
-use sqlx::ConnectOptions;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tracing::{error, info};
 
+pub mod docker_ignite;
 pub mod docker_mysql;
 pub mod docker_postgres;
 pub mod provided_postgres;
@@ -100,7 +101,7 @@ impl DbInfo {
                 (
                     "GOLEM__DB__CONFIG__DATABASE".to_string(),
                     db_path
-                        .join(service_namespace)
+                        .join(format!("{service_namespace}.db"))
                         .to_str()
                         .expect("Invalid Sqlite database path")
                         .to_string(),

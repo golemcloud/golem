@@ -467,18 +467,22 @@ mod tests {
 
     async fn test_container_exists(blob_store: &impl BlobStoreService) {
         let environment_id = EnvironmentId::new();
-        assert!(!blob_store
-            .container_exists(environment_id, "container1".to_string())
-            .await
-            .unwrap());
+        assert!(
+            !blob_store
+                .container_exists(environment_id, "container1".to_string())
+                .await
+                .unwrap()
+        );
         blob_store
             .create_container(environment_id, "container1".to_string())
             .await
             .unwrap();
-        assert!(blob_store
-            .container_exists(environment_id, "container1".to_string())
-            .await
-            .unwrap());
+        assert!(
+            blob_store
+                .container_exists(environment_id, "container1".to_string())
+                .await
+                .unwrap()
+        );
     }
 
     async fn test_container_delete(blob_store: &impl BlobStoreService) {
@@ -491,10 +495,12 @@ mod tests {
             .delete_container(environment_id, "container1".to_string())
             .await
             .unwrap();
-        assert!(!blob_store
-            .container_exists(environment_id, "container1".to_string())
-            .await
-            .unwrap());
+        assert!(
+            !blob_store
+                .container_exists(environment_id, "container1".to_string())
+                .await
+                .unwrap()
+        );
     }
 
     async fn test_container_has_write_read_has(blob_store: &impl BlobStoreService) {
@@ -504,10 +510,12 @@ mod tests {
             .create_container(environment_id, "container1".to_string())
             .await
             .unwrap();
-        assert!(!blob_store
-            .has_object(environment_id, "container1".to_string(), "obj1".to_string())
-            .await
-            .unwrap());
+        assert!(
+            !blob_store
+                .has_object(environment_id, "container1".to_string(), "obj1".to_string())
+                .await
+                .unwrap()
+        );
 
         let original_data = vec![1, 2, 3, 4];
         blob_store
@@ -532,10 +540,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(original_data, read_data);
-        assert!(blob_store
-            .has_object(environment_id, "container1".to_string(), "obj1".to_string())
-            .await
-            .unwrap());
+        assert!(
+            blob_store
+                .has_object(environment_id, "container1".to_string(), "obj1".to_string())
+                .await
+                .unwrap()
+        );
     }
 
     async fn test_container_list_copy_move_list(blob_store: &impl BlobStoreService) {
@@ -550,11 +560,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(blob_store
-            .list_objects(environment_id, "container1".to_string(),)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            blob_store
+                .list_objects(environment_id, "container1".to_string(),)
+                .await
+                .unwrap()
+                .is_empty()
+        );
 
         let original_data = vec![1, 2, 3, 4];
         blob_store

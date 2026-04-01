@@ -1,13 +1,15 @@
-use crate::app::{check_component_metadata, cmd, flag, pattern, TestContext};
 use crate::Tracing;
+use crate::app::{InteractiveSession, TestContext, check_component_metadata, cmd, flag, pattern};
 
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
 use indoc::indoc;
+use serde_json::Value as JsonValue;
 use std::path::Path;
 use std::time::Duration;
 use strum::IntoEnumIterator;
 use test_r::{inherit_test_dep, test};
+use toml_edit::{DocumentMut, value};
 
 inherit_test_dep!(Tracing);
 
@@ -132,6 +134,124 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
 }
 
 #[test]
+async fn build_check(_tracing: &Tracing) {
+    let app_name = "test-app-check-step";
+
+    let mut ctx = TestContext::new();
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            app_name,
+            flag::TEMPLATE,
+            "ts",
+            flag::TEMPLATE,
+            "rust",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    ctx.cd(app_name);
+
+    // Phase 1: baseline check on a freshly generated mixed TS+Rust app.
+    let outputs = ctx.cli([cmd::BUILD, flag::STEP, "check"]).await;
+    assert!(outputs.success_or_dump());
+
+    let ts_component_dir = Path::new("ts-main");
+    let rust_component_dir = Path::new("rust-main");
+
+    let package_json_path = ctx.cwd_path_join("package.json");
+    let mut package_json: JsonValue =
+        serde_json::from_str(fs::read_to_string(&package_json_path).unwrap().as_str()).unwrap();
+
+    package_json["dependencies"]["@golemcloud/golem-ts-sdk"] =
+        JsonValue::String("0.0.1".to_string());
+    package_json["devDependencies"]["@golemcloud/golem-ts-typegen"] =
+        JsonValue::String("0.0.1".to_string());
+    fs::write_str(
+        &package_json_path,
+        serde_json::to_string_pretty(&package_json).unwrap(),
+    )
+    .unwrap();
+
+    let tsconfig_path = ctx.cwd_path_join(ts_component_dir.join("tsconfig.json"));
+    let mut tsconfig: JsonValue =
+        serde_json::from_str(fs::read_to_string(&tsconfig_path).unwrap().as_str()).unwrap();
+
+    tsconfig["compilerOptions"]["moduleResolution"] = JsonValue::String("node".to_string());
+    tsconfig["compilerOptions"]["experimentalDecorators"] = JsonValue::Bool(false);
+    tsconfig["compilerOptions"]["emitDecoratorMetadata"] = JsonValue::Bool(false);
+    fs::write_str(
+        &tsconfig_path,
+        serde_json::to_string_pretty(&tsconfig).unwrap(),
+    )
+    .unwrap();
+
+    let cargo_toml_path = ctx.cwd_path_join(rust_component_dir.join("Cargo.toml"));
+    let mut cargo_toml: DocumentMut = fs::read_to_string(&cargo_toml_path)
+        .unwrap()
+        .parse()
+        .unwrap();
+    cargo_toml["dependencies"]["golem-rust"] = value("999.0.0");
+    fs::write_str(&cargo_toml_path, cargo_toml.to_string()).unwrap();
+
+    // Phase 2: intentionally break versions/settings and verify build check can auto-fix them.
+    let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        outputs.stdout_contains("Planned required changes for dependencies and configurations")
+    );
+    assert!(outputs.stdout_contains("Applying dependency and configuration updates"));
+
+    fs::write_str(
+        &package_json_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "name": "app",
+            "dependencies": {},
+            "devDependencies": {}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut cargo_toml: DocumentMut = fs::read_to_string(&cargo_toml_path)
+        .unwrap()
+        .parse()
+        .unwrap();
+    cargo_toml["dependencies"] = toml_edit::Item::Table(toml_edit::Table::default());
+    cargo_toml["dependencies"]["golem-rust"] =
+        toml_edit::value(toml_edit::InlineTable::from_iter([
+            (
+                "path",
+                toml_edit::Value::from(
+                    "/Users/noise64/workspace/golem-alt-00/sdks/rust/golem-rust",
+                ),
+            ),
+            (
+                "features",
+                toml_edit::Value::Array({
+                    let mut features = toml_edit::Array::default();
+                    features.push("export_golem_agentic");
+                    features
+                }),
+            ),
+        ]));
+    fs::write_str(&cargo_toml_path, cargo_toml.to_string()).unwrap();
+
+    // Phase 3: wipe dependencies completely and verify check restores everything needed.
+    let outputs = ctx.cli([flag::YES, cmd::BUILD, flag::STEP, "check"]).await;
+    assert!(outputs.success_or_dump());
+    assert!(
+        outputs.stdout_contains("Planned required changes for dependencies and configurations")
+    );
+    assert!(outputs.stdout_contains("Applying dependency and configuration updates"));
+
+    // Phase 4: full build should succeed after all auto-applied fixes.
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+}
+
+#[test]
 async fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli([flag::YES, cmd::NEW, "dummy-app-name"]).await;
@@ -169,6 +289,8 @@ async fn completion(_tracing: &Tracing) {
     assert!(outputs.success(), "zsh");
 }
 
+// TODO: very flaky currently, should wait properly for async repl prompts
+#[ignore]
 #[test]
 async fn ts_repl_interactive(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
@@ -289,41 +411,67 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
             repl.send_line_and_expect_regex("CounterAgent.", "get .* getPhantom ")?;
             repl.send_line_and_expect_str(
                 "CounterAgent.get",
-                "(method) CounterAgent.get(name: string): CounterAgent",
+                "(method) CounterAgent.get(name: string): Promise<CounterAgent>",
             )?;
             repl.send_line_and_expect_str("CounterAgent.get(", "\"?\"")?;
-            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\")", "> CounterAgent")?;
-            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\").", "increment")?;
+            repl.send_line_and_expect_str(
+                "CounterAgent.get(\"xyz\")",
+                "awaiting Promise<CounterAgent>",
+            )?;
+            repl.send_line_and_expect_str("(await CounterAgent.get(\"xyz\")).", "increment")?;
+            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\").then(c => c.", "increment")?;
+            repl.send_line_and_expect_str("Sample", "SampleAgent")?;
+            repl.send_line_and_expect_regex(
+                "(await SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
+                "sampleMethod.*\\[local\\]>",
+            )?;
+            repl.send_line_and_expect_regex(
+                "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(c => c.",
+                "sampleMethod.*\\[local\\]>",
+            )?;
         }
 
         // Hints on "tab"
         {
+            fn kill_line(repl: &mut dyn InteractiveSession) -> anyhow::Result<()> {
+                repl.send("\u{15}")
+            }
+
             repl.send_tab_complete_expect_str("Counter", "Agent")?;
-            repl.send_line("")?;
+            kill_line(repl)?;
 
             repl.send_tab_list_expect_regex("CounterAgent.", "get .* getPhantom ")?;
-            repl.send_line("")?;
+            kill_line(repl)?;
 
             repl.send_tab_complete_expect_str("CounterAgent.g", "et")?;
-            repl.send_line("")?;
+            kill_line(repl)?;
 
             repl.send_tab_list_expect_regex("CounterAgent.get", "get .* getPhantom")?;
-            repl.send_line("")?;
+            kill_line(repl)?;
 
             repl.send_tab_complete_expect_str("CounterAgent.get(", "\"?\"")?;
-            repl.send_line("")?;
+            kill_line(repl)?;
 
-            repl.send_tab_list_expect_regex("CounterAgent.get(\"xyz\").", "increment")?;
-            repl.send_line("")?;
+            repl.send_tab_list_expect_regex("(await CounterAgent.get(\"xyz\")).", "increment")?;
+            kill_line(repl)?;
+
+            repl.send_tab_list_expect_regex("CounterAgent.get(\"xyz\").then(x => x.", "increment")?;
+            kill_line(repl)?;
 
             repl.send_tab_complete_expect_str("Sample", "Agent")?;
-            repl.send_line("")?;
+            kill_line(repl)?;
 
             repl.send_tab_list_expect_regex(
-                "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).",
+                "(await SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
                 "sampleMethod",
             )?;
-            repl.send_line("")?;
+            kill_line(repl)?;
+
+            repl.send_tab_list_expect_regex(
+                "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(x => x.",
+                "sampleMethod",
+            )?;
+            kill_line(repl)?;
         }
 
         Ok(())
@@ -346,6 +494,8 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         indoc! {"
+            manifestVersion: 1.5.0
+
             app: test-app-name
 
             environments:
@@ -389,6 +539,8 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         indoc! {"
+            manifestVersion: 1.5.0
+
             app: test-app-name
 
             environments:

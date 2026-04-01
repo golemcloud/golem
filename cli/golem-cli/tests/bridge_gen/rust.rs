@@ -17,15 +17,15 @@ use crate::bridge_gen::fixtures::{
 };
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::Utf8Path;
-use golem_cli::bridge_gen::rust::{RustBridgeGenerator, RustTypeName};
 use golem_cli::bridge_gen::BridgeGenerator;
+use golem_cli::bridge_gen::rust::{RustBridgeGenerator, RustTypeName};
 use golem_cli::model::GuestLanguage;
+use golem_common::model::Empty;
 use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName,
     ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
     NamedElementSchemas, Snapshotting,
 };
-use golem_common::model::Empty;
 use golem_wasm::analysis::analysed_type::{f64, str};
 use tempfile::TempDir;
 use test_r::{test, test_dep};
@@ -196,8 +196,10 @@ fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
         agent_type.type_name, agent_type.description, target_dir
     );
 
-    let mut gen = RustBridgeGenerator::new(agent_type, target_dir, true).unwrap();
-    gen.generate().expect("Failed to generate Rust bridge");
+    let mut generator = RustBridgeGenerator::new(agent_type, target_dir, true).unwrap();
+    generator
+        .generate()
+        .expect("Failed to generate Rust bridge");
 
     let cwd = std::env::current_dir().expect("Failed to get current directory");
     let shared_target_dir = cwd.join("../../target/shared_bridge_tests");

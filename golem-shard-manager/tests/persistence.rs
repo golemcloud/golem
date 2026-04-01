@@ -12,60 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::ShardManagerTestDependencies;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem;
-use golem_common::config::{DbPostgresConfig, RedisConfig};
-use golem_common::model::ShardId;
-use golem_common::redis::RedisPool;
+use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
+use golem_common::model::{Pod, ShardId};
+use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_shard_manager::{
-    Pod, RoutingTable, RoutingTablePersistence, RoutingTablePostgresPersistence,
-    RoutingTableRedisPersistence,
+    DbRoutingTablePersistence, PodState, RoutingTable, RoutingTablePersistence,
 };
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
-use golem_test_framework::components::redis::Redis;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
-use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
+use tempfile::TempDir;
+use test_r::{define_matrix_dimension, test, test_dep};
 use url::Url;
 use uuid::Uuid;
 
 #[async_trait]
-trait GetRoutingTablePersistence: std::fmt::Debug {
-    async fn get_persistence(&self) -> Arc<dyn RoutingTablePersistence + Send + Sync>;
-}
-
-struct RedisRoutingTablePersistence {
-    redis: Arc<dyn Redis + Send + Sync>,
-}
-
-impl std::fmt::Debug for RedisRoutingTablePersistence {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("RedisRoutingTablePersistence")
-    }
-}
-
-#[async_trait]
-impl GetRoutingTablePersistence for RedisRoutingTablePersistence {
-    async fn get_persistence(&self) -> Arc<dyn RoutingTablePersistence + Send + Sync> {
-        let redis_pool = RedisPool::configured(&RedisConfig {
-            host: self.redis.public_host(),
-            port: self.redis.public_port(),
-            database: 0,
-            tracing: false,
-            pool_size: 1,
-            retries: Default::default(),
-            key_prefix: format!("shard-manager-persistence-test:{}:", Uuid::new_v4()),
-            username: None,
-            password: None,
-            tls: false,
-        })
-        .await
-        .expect("Failed to create Redis pool for persistence tests");
-
-        Arc::new(RoutingTableRedisPersistence::new(&redis_pool, 16))
-    }
+trait GetRoutingTablePersistence: std::fmt::Debug + Send + Sync {
+    async fn get_persistence(&self) -> Arc<dyn RoutingTablePersistence>;
 }
 
 struct PostgresRoutingTablePersistence {
@@ -80,7 +45,7 @@ impl std::fmt::Debug for PostgresRoutingTablePersistence {
 
 #[async_trait]
 impl GetRoutingTablePersistence for PostgresRoutingTablePersistence {
-    async fn get_persistence(&self) -> Arc<dyn RoutingTablePersistence + Send + Sync> {
+    async fn get_persistence(&self) -> Arc<dyn RoutingTablePersistence> {
         let db_name = format!("shard_{}", Uuid::new_v4().simple());
 
         let admin_pool = sqlx::postgres::PgPoolOptions::new()
@@ -94,7 +59,7 @@ impl GetRoutingTablePersistence for PostgresRoutingTablePersistence {
             .await
             .expect("Cannot create postgres test database");
 
-        let postgres = DbPostgresConfig {
+        let postgres_config = DbPostgresConfig {
             host: "localhost".to_string(),
             database: db_name,
             username: "postgres".to_string(),
@@ -107,42 +72,83 @@ impl GetRoutingTablePersistence for PostgresRoutingTablePersistence {
             schema: None,
         };
 
-        Arc::new(
-            RoutingTablePostgresPersistence::configured(&postgres, 16)
-                .await
-                .expect("Failed to initialize postgres routing table persistence"),
+        let migrations = IncludedMigrationsDir::new(&golem_shard_manager::DB_MIGRATIONS);
+
+        golem_service_base::db::postgres::migrate(
+            &postgres_config,
+            migrations.postgres_migrations(),
         )
+        .await
+        .expect("Cannot apply postgres migrations");
+
+        let pool = golem_service_base::db::postgres::PostgresPool::configured(&postgres_config)
+            .await
+            .expect("Cannot create postgres pool");
+
+        Arc::new(DbRoutingTablePersistence::new(pool, 16))
     }
 }
 
-#[test_dep(tagged_as = "redis")]
-async fn redis_persistence(
-    deps: &ShardManagerTestDependencies,
-) -> Arc<dyn GetRoutingTablePersistence + Send + Sync> {
-    deps.redis.assert_valid();
-    Arc::new(RedisRoutingTablePersistence {
-        redis: deps.redis.clone(),
-    })
+struct SqliteRoutingTablePersistence {
+    temp_dir: TempDir,
+}
+
+impl std::fmt::Debug for SqliteRoutingTablePersistence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SqliteRoutingTablePersistence")
+    }
+}
+
+#[async_trait]
+impl GetRoutingTablePersistence for SqliteRoutingTablePersistence {
+    async fn get_persistence(&self) -> Arc<dyn RoutingTablePersistence> {
+        let database_file = self
+            .temp_dir
+            .path()
+            .join(format!("shard_{}", Uuid::new_v4().simple()))
+            .to_str()
+            .expect("tempfile path was not valid unicode")
+            .to_string();
+
+        let sqlite_config = DbSqliteConfig {
+            database: database_file,
+            max_connections: 10,
+            foreign_keys: true,
+        };
+
+        let migrations = IncludedMigrationsDir::new(&golem_shard_manager::DB_MIGRATIONS);
+
+        golem_service_base::db::sqlite::migrate(&sqlite_config, migrations.sqlite_migrations())
+            .await
+            .expect("Cannot apply sqlite migrations");
+
+        let pool = golem_service_base::db::sqlite::SqlitePool::configured(&sqlite_config)
+            .await
+            .expect("Cannot create sqlite pool");
+
+        Arc::new(DbRoutingTablePersistence::new(pool, 16))
+    }
+}
+
+#[test_dep(tagged_as = "sqlite")]
+async fn sqlite_persistence() -> Arc<dyn GetRoutingTablePersistence> {
+    let temp_dir = TempDir::new().expect("Cannot create temp dir");
+    Arc::new(SqliteRoutingTablePersistence { temp_dir })
 }
 
 #[test_dep(tagged_as = "postgres")]
-async fn postgres_persistence(
-    _deps: &ShardManagerTestDependencies,
-) -> Arc<dyn GetRoutingTablePersistence + Send + Sync> {
+async fn postgres_persistence() -> Arc<dyn GetRoutingTablePersistence> {
     let unique_network_id = Uuid::new_v4().to_string();
     let postgres = DockerPostgresRdb::new(&unique_network_id, false).await;
     Arc::new(PostgresRoutingTablePersistence { postgres })
 }
 
-inherit_test_dep!(ShardManagerTestDependencies);
-
-define_matrix_dimension!(persistence: Arc<dyn GetRoutingTablePersistence + Send + Sync> -> "redis", "postgres");
+define_matrix_dimension!(persistence: Arc<dyn GetRoutingTablePersistence> -> "sqlite", "postgres");
 
 #[test]
 #[tracing::instrument]
 async fn read_returns_default_when_empty(
-    _deps: &ShardManagerTestDependencies,
-    #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence + Send + Sync>,
+    #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence>,
 ) {
     let persistence = persistence.get_persistence().await;
     let routing_table = persistence
@@ -151,14 +157,13 @@ async fn read_returns_default_when_empty(
         .expect("Reading default routing table should succeed");
 
     assert_eq!(routing_table.number_of_shards, 16);
-    assert!(routing_table.shard_assignments.is_empty());
+    assert!(routing_table.pod_states.is_empty());
 }
 
 #[test]
 #[tracing::instrument]
 async fn write_then_read_roundtrip(
-    _deps: &ShardManagerTestDependencies,
-    #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence + Send + Sync>,
+    #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence>,
 ) {
     let persistence = persistence.get_persistence().await;
     let expected = sample_routing_table(16);
@@ -179,8 +184,7 @@ async fn write_then_read_roundtrip(
 #[test]
 #[tracing::instrument]
 async fn last_write_wins(
-    _deps: &ShardManagerTestDependencies,
-    #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence + Send + Sync>,
+    #[dimension(persistence)] persistence: &Arc<dyn GetRoutingTablePersistence>,
 ) {
     let persistence = persistence.get_persistence().await;
     let first = sample_routing_table(16);
@@ -204,43 +208,49 @@ async fn last_write_wins(
 }
 
 fn sample_routing_table(number_of_shards: usize) -> RoutingTable {
-    let mut assignments: BTreeMap<Pod, BTreeSet<ShardId>> = BTreeMap::new();
-    assignments.insert(
-        pod("pod-a", 9010, Ipv4Addr::new(10, 0, 0, 1)),
-        BTreeSet::from([ShardId::new(0), ShardId::new(1), ShardId::new(2)]),
+    let mut pod_states = BTreeMap::new();
+    pod_states.insert(
+        Pod {
+            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            port: 9010,
+        },
+        PodState {
+            pod_name: None,
+            assigned_shards: BTreeSet::from([ShardId::new(0), ShardId::new(1), ShardId::new(2)]),
+        },
     );
-    assignments.insert(
-        pod("pod-b", 9011, Ipv4Addr::new(10, 0, 0, 2)),
-        BTreeSet::from([ShardId::new(3), ShardId::new(4)]),
+    pod_states.insert(
+        Pod {
+            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2)),
+            port: 9011,
+        },
+        PodState {
+            pod_name: None,
+            assigned_shards: BTreeSet::from([ShardId::new(3), ShardId::new(4)]),
+        },
     );
 
     RoutingTable {
         number_of_shards,
-        shard_assignments: assignments,
+        pod_states,
     }
 }
 
 fn replacement_routing_table(number_of_shards: usize) -> RoutingTable {
-    let mut assignments: BTreeMap<Pod, BTreeSet<ShardId>> = BTreeMap::new();
-    assignments.insert(
-        pod("pod-c", 9012, Ipv4Addr::new(10, 0, 0, 3)),
-        BTreeSet::from([ShardId::new(5), ShardId::new(6), ShardId::new(7)]),
+    let mut pod_states = BTreeMap::new();
+    pod_states.insert(
+        Pod {
+            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
+            port: 9012,
+        },
+        PodState {
+            pod_name: None,
+            assigned_shards: BTreeSet::from([ShardId::new(5), ShardId::new(6), ShardId::new(7)]),
+        },
     );
 
     RoutingTable {
         number_of_shards,
-        shard_assignments: assignments,
+        pod_states,
     }
-}
-
-fn pod(host: &str, port: u16, ip: Ipv4Addr) -> Pod {
-    Pod::from_register_request(
-        IpAddr::V4(ip),
-        golem::shardmanager::v1::RegisterRequest {
-            host: host.to_string(),
-            port: port as i32,
-            pod_name: Some(host.to_string()),
-        },
-    )
-    .expect("Pod fixture should be valid")
 }

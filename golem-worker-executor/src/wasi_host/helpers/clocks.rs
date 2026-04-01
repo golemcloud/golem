@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use cap_std::time::SystemClock;
-use cap_std::{ambient_authority, AmbientAuthority};
+use cap_std::{AmbientAuthority, ambient_authority};
 use cap_time_ext::SystemClockExt;
 use wasmtime_wasi::HostMonotonicClock;
 

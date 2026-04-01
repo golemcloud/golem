@@ -27,7 +27,7 @@ fn main() {
 }
 
 fn generate(yaml_path: PathBuf, out_dir: OsString) {
-    golem_openapi_client_generator::gen(
+    golem_openapi_client_generator::generate(
         parse_openapi_specs(&[yaml_path]).expect("Failed to parse OpenAPI spec."),
         Path::new(&out_dir),
         "golem-client",
@@ -294,6 +294,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "AgentCreationRequest",
                 "golem_common::model::worker::AgentCreationRequest",
+            ),
+            (
+                "WorkerAgentConfigEntry",
+                "golem_common::model::worker::WorkerAgentConfigEntry",
             ),
             (
                 "AgentMetadataDto",

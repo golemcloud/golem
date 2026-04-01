@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use axum::Router;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::post;
-use axum::Router;
 use bytes::Bytes;
 use golem_client::api::RegistryServiceClient;
 use golem_common::model::auth::EnvironmentRole;
@@ -723,7 +723,9 @@ async fn oplog_processor_crash_stress(deps: &EnvBasedTestDependencies) -> anyhow
             .await?;
         }
 
-        tracing::info!("Chaos round {round}: crashing workers immediately after {INVOCATIONS_PER_ROUND} synchronous invocations...");
+        tracing::info!(
+            "Chaos round {round}: crashing workers immediately after {INVOCATIONS_PER_ROUND} synchronous invocations..."
+        );
         crash_user_and_plugin_workers(&user, &worker_id, &plugin_component.id).await;
 
         // Wait for recovery before next round
@@ -1461,8 +1463,7 @@ async fn oplog_processor_deactivation(deps: &EnvBasedTestDependencies) -> anyhow
     let final_batches = received_batches.lock().unwrap().clone();
     let final_count = invocation_count(&final_batches);
     assert_eq!(
-        final_count,
-        pre_deactivation_count,
+        final_count, pre_deactivation_count,
         "No new callbacks should arrive after plugin deactivation, got {final_count} vs {pre_deactivation_count}"
     );
 

@@ -22,9 +22,9 @@ use crate::config::{
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::log_error;
-use crate::log::{log_action, log_warn_action, LogColorize};
-use crate::model::format::Format;
+use crate::log::{LogColorize, log_action, log_warn_action};
 use crate::model::ProfileView;
+use crate::model::format::Format;
 use anyhow::bail;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -87,7 +87,9 @@ impl ProfileCommandHandler {
         let (name, profile, set_active) = match name {
             Some(name) => {
                 if name.is_builtin() {
-                    log_error("The requested profile name {} is a builtin profile. Please choose another profile name!");
+                    log_error(
+                        "The requested profile name {} is a builtin profile. Please choose another profile name!",
+                    );
                     bail!(NonSuccessfulExit);
                 }
 

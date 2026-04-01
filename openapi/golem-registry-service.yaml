@@ -10135,6 +10135,11 @@ components:
       - maxMemoryPerWorker
       - maxTableElementsPerWorker
       - maxDiskSpacePerWorker
+      - perInvocationHttpCallLimit
+      - perInvocationRpcCallLimit
+      - monthlyHttpCallLimit
+      - monthlyRpcCallLimit
+      - maxConcurrentAgentsPerExecutor
       properties:
         planId:
           type: string
@@ -10172,6 +10177,21 @@ components:
           type: integer
           format: uint64
         maxDiskSpacePerWorker:
+          type: integer
+          format: uint64
+        perInvocationHttpCallLimit:
+          type: integer
+          format: uint64
+        perInvocationRpcCallLimit:
+          type: integer
+          format: uint64
+        monthlyHttpCallLimit:
+          type: integer
+          format: uint64
+        monthlyRpcCallLimit:
+          type: integer
+          format: uint64
+        maxConcurrentAgentsPerExecutor:
           type: integer
           format: uint64
     PluginInstallation:
@@ -10551,12 +10571,17 @@ components:
       required:
       - value
       - period
+      - max
       properties:
         value:
           type: integer
           format: uint64
         period:
           $ref: '#/components/schemas/TimePeriod'
+        max:
+          type: integer
+          format: uint64
+          description: Maximum burst capacity. Defaults to `value` if not specified.
     SecuritySchemeAgentSecurity:
       type: object
       title: SecuritySchemeAgentSecurity

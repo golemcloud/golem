@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use crate::repo::Deps;
+use crate::repo::{Deps, TestDb};
 use golem_common::config::DbSqliteConfig;
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
@@ -84,7 +84,7 @@ async fn db_pool(_tracing: &Tracing) -> SqliteDb {
 async fn deps(db: &SqliteDb) -> Deps {
     let deps = Deps {
         account_repo: Box::new(DbAccountRepo::logged(db.pool.clone())),
-        account_usage_repo: Box::new(DbAccountUsageRepo::logged(db.pool.clone())),
+        account_usage_repo: std::sync::Arc::new(DbAccountUsageRepo::logged(db.pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(db.pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(db.pool.clone())),
         plan_repo: Box::new(DbPlanRepo::logged(db.pool.clone())),
@@ -96,6 +96,7 @@ async fn deps(db: &SqliteDb) -> Deps {
         environment_share_repo: Box::new(DbEnvironmentShareRepo::logged(db.pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(db.pool.clone())),
         registry_change_repo: Box::new(DbRegistryChangeRepo::new(db.pool.clone())),
+        test_db: TestDb::Sqlite(db.pool.clone()),
     };
     deps.setup().await;
     deps
@@ -156,6 +157,21 @@ async fn test_http_api_deployment_stage(deps: &Deps) {
 #[test]
 async fn test_account_usage(deps: &Deps) {
     crate::repo::common::test_account_usage(deps).await;
+}
+
+#[test]
+async fn test_update_http_call_counts(deps: &Deps) {
+    crate::repo::common::test_update_http_call_counts(deps).await;
+}
+
+#[test]
+async fn test_update_rpc_call_counts(deps: &Deps) {
+    crate::repo::common::test_update_rpc_call_counts(deps).await;
+}
+
+#[test]
+async fn test_update_call_counts_batch(deps: &Deps) {
+    crate::repo::common::test_update_call_counts_batch(deps).await;
 }
 
 #[test]

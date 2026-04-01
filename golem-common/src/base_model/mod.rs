@@ -48,8 +48,8 @@ pub use worker_filter::*;
 
 use crate::base_model::component::ComponentId;
 use crate::declare_structs;
-use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
 use golem_wasm::analysis::AnalysedType;
+use golem_wasm::analysis::analysed_type::{field, record, u32, u64};
 use golem_wasm::{FromValue, IntoValue, Value};
 use golem_wasm_derive::{FromValue, IntoValue};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -58,7 +58,7 @@ use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::str::FromStr;
 use std::time::Duration;
-use uuid::{uuid, Uuid};
+use uuid::{Uuid, uuid};
 
 declare_structs! {
     pub struct VersionInfo {
@@ -282,6 +282,12 @@ impl AgentId {
 
     pub fn to_agent_urn(&self) -> String {
         format!("urn:worker:{}/{}", self.component_id, self.agent_id)
+    }
+
+    /// Returns the agent name percent-encoded so it is safe to use as a
+    /// single filesystem path component.
+    pub fn agent_name_encoded(&self) -> String {
+        urlencoding::encode(&self.agent_id).into_owned()
     }
 }
 
@@ -745,11 +751,7 @@ impl ScanCursor {
     }
 
     pub fn into_option(self) -> Option<Self> {
-        if self.is_finished() {
-            None
-        } else {
-            Some(self)
-        }
+        if self.is_finished() { None } else { Some(self) }
     }
 }
 

@@ -16,6 +16,8 @@ message AgentError {
     ExceededTableLimit exceeded_table_limit = 10;
     NodeOutOfFilesystemStorage node_out_of_filesystem_storage = 11;
     AgentExceededFilesystemStorageLimit agent_exceeded_filesystem_storage_limit = 12;
+    ExceededHttpCallLimit exceeded_http_call_limit = 13;
+    ExceededRpcCallLimit exceeded_rpc_call_limit = 14;
   }
 }
 
@@ -50,6 +52,10 @@ message PermanentError {
 }
 
 message ExceededTableLimit {}
+
+message ExceededHttpCallLimit {}
+
+message ExceededRpcCallLimit {}
 
 message NodeOutOfFilesystemStorage {}
 

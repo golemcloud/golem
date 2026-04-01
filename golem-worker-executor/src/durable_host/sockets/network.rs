@@ -16,8 +16,8 @@ use wasmtime::component::Resource;
 
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
-use wasmtime_wasi::p2::bindings::sockets::network::{Error, ErrorCode, Host, HostNetwork, Network};
 use wasmtime_wasi::p2::SocketError;
+use wasmtime_wasi::p2::bindings::sockets::network::{Error, ErrorCode, Host, HostNetwork, Network};
 use wasmtime_wasi::sockets::WasiSocketsView as _;
 
 impl<Ctx: WorkerCtx> HostNetwork for DurableWorkerCtx<Ctx> {
