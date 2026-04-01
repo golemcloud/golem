@@ -248,6 +248,10 @@ jobs:
           curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
           sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
 
+      - name: Sync WIT dependencies
+        if: matrix.group.name == 'cli-integration-tests-group2'
+        run: cargo make wit
+
       - name: Build agent_guest.wasm
         if: matrix.group.name == 'cli-integration-tests-group2'
         working-directory: sdks/scala
@@ -343,6 +347,9 @@ jobs:
         run: |
           curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
           sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
+
+      - name: Sync WIT dependencies
+        run: cargo make wit
 
       - name: Build agent_guest.wasm
         working-directory: sdks/scala
@@ -454,6 +461,9 @@ jobs:
 
       - name: Install wasm-rquickjs
         run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
+
+      - name: Sync WIT dependencies
+        run: cargo make wit
 
       - name: Build agent_guest.wasm
         working-directory: sdks/scala

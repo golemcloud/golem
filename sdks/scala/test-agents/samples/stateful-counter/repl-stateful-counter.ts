@@ -1,4 +1,4 @@
-const c = StatefulCounter.get(10);
+const c = await StatefulCounter.get(10);
 const a = await c.increment();
 const b = await c.increment();
 const cur = await c.current();

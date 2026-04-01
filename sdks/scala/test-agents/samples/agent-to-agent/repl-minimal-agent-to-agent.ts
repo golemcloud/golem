@@ -1,4 +1,4 @@
-const c = Coordinator.newPhantom("demo2");
+const c = await Coordinator.newPhantom("demo2");
 const r = await c.route("demo2", 42, "hello");
 
 const p = {
