@@ -46,7 +46,7 @@
     "test": "npm run build && tsc --noEmit && vitest run",
     "dev": "rollup -c -w",
     "generate-agent-template": "node ./scripts/generate-agent-template.mjs",
-    "compile-agent-template": "cargo component build --manifest-path=agent-template/Cargo.toml --release --features full",
+    "compile-agent-template": "cargo component build --manifest-path=agent-template/Cargo.toml --release --features full,golem",
     "copy-agent-template": "node ./scripts/copy-agent-template.mjs",
     "build-agent-template": "pnpm run generate-agent-template && pnpm run compile-agent-template && pnpm run copy-agent-template"
   },
