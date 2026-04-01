@@ -133,9 +133,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         info!(port, "Registering worker executor");
 
+        let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
         let shard_assignment = worker_executor
             .shard_manager_service()
-            .register(port)
+            .register(port, pod_name)
             .await?;
 
         info!(

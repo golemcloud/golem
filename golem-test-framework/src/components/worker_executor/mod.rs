@@ -95,31 +95,15 @@ async fn env_vars(
             registry_service.grpc_port().to_string(),
         )
         .with_str("GOLEM__COMPILED_COMPONENT_SERVICE__TYPE", "Enabled")
-        .with_str("GOLEM__SHARD_MANAGER_SERVICE__TYPE", "Grpc")
-        .with_str(
-            "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST",
-            &shard_manager.grpc_host(),
-        )
+        .with_str("GOLEM__SHARD_MANAGER__HOST", &shard_manager.grpc_host())
         .with(
-            "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT",
+            "GOLEM__SHARD_MANAGER__PORT",
             shard_manager.grpc_port().to_string(),
         )
-        .with_str(
-            "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS",
-            "5",
-        )
-        .with_str(
-            "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY",
-            "100ms",
-        )
-        .with_str(
-            "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY",
-            "2s",
-        )
-        .with_str(
-            "GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER",
-            "2",
-        )
+        .with_str("GOLEM__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS", "5")
+        .with_str("GOLEM__SHARD_MANAGER__RETRIES__MIN_DELAY", "100ms")
+        .with_str("GOLEM__SHARD_MANAGER__RETRIES__MAX_DELAY", "2s")
+        .with_str("GOLEM__SHARD_MANAGER__RETRIES__MULTIPLIER", "2")
         .with_str("GOLEM__LIMITS__FUEL_TO_BORROW", "100000")
         .with_str("GOLEM__ENVIRONMENT_STATE_SERVICE__CACHE_CAPACITY", "0")
         .with_str(

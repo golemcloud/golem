@@ -29,7 +29,7 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
     HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
     HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService,
-    HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService, HasPromiseService,
+    HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasQuotaService,
     HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
     HasShardManagerService, HasShardService, HasShutdownToken, HasWasmtimeEngine,
     HasWebSocketConnectionPool, HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy,
@@ -92,6 +92,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub runtime: Handle,
     pub component_service: Arc<dyn component::ComponentService>,
     pub shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
+    pub quota_service: Arc<dyn crate::services::quota::QuotaService>,
     pub worker_service: Arc<dyn worker::WorkerService>,
     pub worker_proxy: Arc<dyn WorkerProxy>,
     pub worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -254,6 +255,12 @@ impl<Ctx: WorkerCtx> HasShardManagerService for DefaultWorkerFork<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasQuotaService for DefaultWorkerFork<Ctx> {
+    fn quota_service(&self) -> Arc<dyn crate::services::quota::QuotaService> {
+        self.quota_service.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasWorkerActivator<Ctx> for DefaultWorkerFork<Ctx> {
     fn worker_activator(&self) -> Arc<dyn worker_activator::WorkerActivator<Ctx>> {
         self.worker_activator.clone()
@@ -326,6 +333,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             runtime: self.runtime.clone(),
             component_service: self.component_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
+            quota_service: self.quota_service.clone(),
             worker_service: self.worker_service.clone(),
             worker_proxy: self.worker_proxy.clone(),
             worker_enumeration_service: self.worker_enumeration_service.clone(),
@@ -363,6 +371,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         runtime: Handle,
         component_service: Arc<dyn component::ComponentService>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
+        quota_service: Arc<dyn crate::services::quota::QuotaService>,
         worker_service: Arc<dyn worker::WorkerService>,
         worker_proxy: Arc<dyn WorkerProxy>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -401,6 +410,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             runtime,
             component_service,
             shard_manager_service,
+            quota_service,
             worker_service,
             worker_proxy,
             worker_enumeration_service,

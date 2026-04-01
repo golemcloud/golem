@@ -15,7 +15,7 @@
 use super::agent_webhooks::AgentWebhooksService;
 use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
-use super::{HasAgentWebhooksService, HasEnvironmentStateService};
+use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasWebSocketConnectionPool};
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
@@ -25,13 +25,13 @@ use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
     HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
     HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService,
-    HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasRdbmsService,
-    HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
-    HasShardManagerService, HasShardService, HasShutdownToken, HasWasmtimeEngine,
-    HasWebSocketConnectionPool, HasWorkerActivator, HasWorkerEnumerationService,
-    HasWorkerForkService, HasWorkerProxy, HasWorkerService, active_workers, agent_types,
-    blob_store, component, golem_config, key_value, oplog, promise, rdbms, scheduler,
-    shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
+    HasLeakSentinel, HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasQuotaService,
+    HasRdbmsService, HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService,
+    HasSchedulerService, HasShardManagerService, HasShardService, HasShutdownToken,
+    HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService, HasWorkerForkService,
+    HasWorkerProxy, HasWorkerService, active_workers, agent_types, blob_store, component,
+    golem_config, key_value, oplog, promise, rdbms, scheduler, shard_manager, worker,
+    worker_activator, worker_enumeration, worker_fork,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -381,6 +381,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     runtime: Handle,
     component_service: Arc<dyn component::ComponentService>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
+    quota_service: Arc<dyn crate::services::quota::QuotaService>,
     worker_fork: Arc<dyn worker_fork::WorkerForkService>,
     worker_service: Arc<dyn worker::WorkerService>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -419,6 +420,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             runtime: self.runtime.clone(),
             component_service: self.component_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
+            quota_service: self.quota_service.clone(),
             worker_fork: self.worker_fork.clone(),
             worker_service: self.worker_service.clone(),
             worker_enumeration_service: self.worker_enumeration_service.clone(),
@@ -584,6 +586,12 @@ impl<Ctx: WorkerCtx> HasShardManagerService for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasQuotaService for DirectWorkerInvocationRpc<Ctx> {
+    fn quota_service(&self) -> Arc<dyn crate::services::quota::QuotaService> {
+        self.quota_service.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasWorkerActivator<Ctx> for DirectWorkerInvocationRpc<Ctx> {
     fn worker_activator(&self) -> Arc<dyn worker_activator::WorkerActivator<Ctx>> {
         self.worker_activator.clone()
@@ -664,6 +672,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         golem_config: Arc<golem_config::GolemConfig>,
         shard_service: Arc<dyn ShardService>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
+        quota_service: Arc<dyn crate::services::quota::QuotaService>,
         key_value_service: Arc<dyn key_value::KeyValueService>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService>,
         rdbms_service: Arc<dyn rdbms::RdbmsService>,
@@ -691,6 +700,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             runtime,
             component_service,
             shard_manager_service,
+            quota_service,
             worker_fork,
             worker_service,
             worker_enumeration_service,
