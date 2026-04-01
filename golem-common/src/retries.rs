@@ -17,11 +17,11 @@ use crate::metrics::external_calls::{
 };
 use crate::model::RetryConfig;
 use crate::retriable_error::IsRetriableError;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
-use tracing::{error, info, warn, Level};
+use tracing::{Level, error, info, warn};
 
 /// Returns the delay to be waited before the next retry attempt.
 /// To be called after a failed attempt, with the number of attempts so far.

@@ -29,24 +29,23 @@ sequential_suite!(plugins);
 tag_suite!(build_and_deploy_all, group2);
 sequential_suite!(build_and_deploy_all);
 
-tag_suite!(agents, group3);
 sequential_suite!(agents);
 
 inherit_test_dep!(Tracing);
 
-use crate::{crate_path, workspace_path, Tracing};
+use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
 use colored::Colorize;
 use expectrl::Expect;
 use golem_cli::app::edit;
 use golem_cli::fs;
 use golem_cli::sdk_overrides::sdk_overrides;
-use golem_client::api::HealthCheckClient;
 use golem_client::Security;
+use golem_client::api::HealthCheckClient;
 use itertools::Itertools;
 use lenient_bool::LenientBool;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -90,6 +89,7 @@ mod flag {
     pub static LANGUAGE: &str = "--language";
     pub static SCRIPT: &str = "--script";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
+    pub static STEP: &str = "--step";
     pub static TEMPLATE: &str = "--template";
     pub static YES: &str = "--yes";
 }
@@ -347,14 +347,20 @@ impl TestContext {
         let ctx = Self {
             quiet,
             golem_path: {
-                let path = workspace_path().join("target/debug/golem");
+                let path = workspace_path().join(format!(
+                    "target/debug/golem{}",
+                    std::env::consts::EXE_SUFFIX
+                ));
                 if !path.exists() {
                     panic!("golem binary not found at {}", path.display());
                 }
                 path
             },
             golem_cli_path: {
-                let path = workspace_path().join("target/debug/golem-cli");
+                let path = workspace_path().join(format!(
+                    "target/debug/golem-cli{}",
+                    std::env::consts::EXE_SUFFIX
+                ));
                 if !path.exists() {
                     panic!("golem-cli binary not found at {}", path.display());
                 }
@@ -437,7 +443,7 @@ impl TestContext {
             );
             all_args
         };
-        let working_dir = &self.working_dir.canonicalize().unwrap();
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
 
         println!(
             "{} {}",
@@ -449,7 +455,7 @@ impl TestContext {
         let mut child = Command::new(&self.golem_cli_path)
             .args(args)
             .envs(&self.env)
-            .current_dir(working_dir)
+            .current_dir(&working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -479,7 +485,7 @@ impl TestContext {
             );
             all_args
         };
-        let working_dir = self.working_dir.canonicalize().unwrap();
+        let working_dir = fs::absolute_lexical_path(&self.working_dir).unwrap();
 
         println!(
             "{} {}",

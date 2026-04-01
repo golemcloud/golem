@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
+use crate::components::docker::{ContainerHandle, get_docker_container_name, network};
 use crate::components::rdb::{
-    postgres_enable_stats, postgres_print_stats, postgres_wait_for_startup, DbInfo, PostgresInfo,
-    Rdb,
+    DbInfo, PostgresInfo, Rdb, postgres_enable_stats, postgres_print_stats,
+    postgres_wait_for_startup,
 };
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;
-use testcontainers::runners::AsyncRunner;
 use testcontainers::ImageExt;
+use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 use tracing::info;
 

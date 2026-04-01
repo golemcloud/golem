@@ -28,7 +28,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -685,7 +685,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
                 .route(
                     "/fork-test/step1/{name}/{input}",
                     get(move |args: Path<(String, String)>| async move {
-                        Json(format!("{}-{}", args.0 .0, args.0 .1))
+                        Json(format!("{}-{}", args.0.0, args.0.1))
                     }),
                 )
                 .route(
@@ -698,7 +698,7 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
                             {
                                 fork_phantom_id_tx.send(args.2.clone()).unwrap();
                             }
-                            Json(format!("{}-{}-{}", args.0 .0, args.0 .1, args.0 .2))
+                            Json(format!("{}-{}-{}", args.0.0, args.0.1, args.0.2))
                         }
                     }),
                 );

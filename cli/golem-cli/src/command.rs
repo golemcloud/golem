@@ -29,15 +29,15 @@ use crate::command::shared_args::{
 use crate::command::worker::AgentSubcommand;
 use crate::config::ProfileName;
 use crate::error::ShowClapHelpTarget;
+use crate::model::GuestLanguage;
 use crate::model::app::ComponentPresetName;
 use crate::model::cli_command_metadata::{CliCommandMetadata, CliMetadataFilter};
 use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::repl::ReplLanguage;
 use crate::model::worker::{AgentUpdateMode, RawAgentId};
-use crate::model::GuestLanguage;
 use crate::{command_name, version};
-use anyhow::{anyhow, Context as AnyhowContext};
+use anyhow::{Context as AnyhowContext, anyhow};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Args, Parser};
 use clap::{Command, CommandFactory, Subcommand};
@@ -220,45 +220,45 @@ pub struct GolemCliGlobalFlags {
 
 impl GolemCliGlobalFlags {
     pub fn with_env_overrides(mut self) -> anyhow::Result<GolemCliGlobalFlags> {
-        if self.profile.is_none() {
-            if let Ok(profile) = std::env::var("GOLEM_PROFILE") {
-                self.profile = Some(profile.into());
-            }
+        if self.profile.is_none()
+            && let Ok(profile) = std::env::var("GOLEM_PROFILE")
+        {
+            self.profile = Some(profile.into());
         }
 
-        if self.environment.is_none() {
-            if let Ok(environment) = std::env::var("GOLEM_ENVIRONMENT") {
-                self.environment = Some(
-                    EnvironmentReference::try_from(environment)
-                        .map_err(|err| anyhow!(err))
-                        .context("Failed to parse GOLEM_ENVIRONMENT environment variable")?,
-                );
-            }
+        if self.environment.is_none()
+            && let Ok(environment) = std::env::var("GOLEM_ENVIRONMENT")
+        {
+            self.environment = Some(
+                EnvironmentReference::try_from(environment)
+                    .map_err(|err| anyhow!(err))
+                    .context("Failed to parse GOLEM_ENVIRONMENT environment variable")?,
+            );
         }
 
-        if self.app_manifest_path.is_none() {
-            if let Ok(app_manifest_path) = std::env::var("GOLEM_APP_MANIFEST_PATH") {
-                self.app_manifest_path = Some(PathBuf::from(app_manifest_path));
-            }
+        if self.app_manifest_path.is_none()
+            && let Ok(app_manifest_path) = std::env::var("GOLEM_APP_MANIFEST_PATH")
+        {
+            self.app_manifest_path = Some(PathBuf::from(app_manifest_path));
         }
 
-        if !self.disable_app_manifest_discovery {
-            if let Ok(disable) = std::env::var("GOLEM_DISABLE_APP_MANIFEST_DISCOVERY") {
-                self.disable_app_manifest_discovery = disable
-                    .parse::<LenientBool>()
-                    .map(|b| b.into())
-                    .unwrap_or_default()
-            }
+        if !self.disable_app_manifest_discovery
+            && let Ok(disable) = std::env::var("GOLEM_DISABLE_APP_MANIFEST_DISCOVERY")
+        {
+            self.disable_app_manifest_discovery = disable
+                .parse::<LenientBool>()
+                .map(|b| b.into())
+                .unwrap_or_default()
         }
 
-        if self.preset.is_empty() {
-            if let Ok(preset) = std::env::var("GOLEM_PRESET") {
-                self.preset = preset
-                    .split(',')
-                    .map(|preset| preset.parse())
-                    .collect::<Result<Vec<_>, String>>()
-                    .map_err(|err| anyhow!(err))?;
-            }
+        if self.preset.is_empty()
+            && let Ok(preset) = std::env::var("GOLEM_PRESET")
+        {
+            self.preset = preset
+                .split(',')
+                .map(|preset| preset.parse())
+                .collect::<Result<Vec<_>, String>>()
+                .map_err(|err| anyhow!(err))?;
         }
 
         if let Ok(offline) = std::env::var("GOLEM_WASM_RPC_OFFLINE") {
@@ -389,7 +389,7 @@ impl GolemCliCommand {
                             return GolemCliCommandParseResult::Error {
                                 error: clap::Error::raw(ErrorKind::InvalidValue, err),
                                 fallback_command: Default::default(),
-                            }
+                            };
                         }
                     }
                 }
@@ -403,7 +403,7 @@ impl GolemCliCommand {
                             return GolemCliCommandParseResult::Error {
                                 error: clap::Error::raw(ErrorKind::InvalidValue, err),
                                 fallback_command: Default::default(),
-                            }
+                            };
                         }
                     };
 
@@ -707,11 +707,6 @@ pub enum GolemCliSubcommand {
         #[command(flatten)]
         component_name: OptionalComponentNames,
     },
-    /// Diagnose possible tooling problems
-    Diagnose {
-        #[command(flatten)]
-        component_name: OptionalComponentNames,
-    },
     /// List all the deployed agent types
     ListAgentTypes {},
 
@@ -775,9 +770,9 @@ pub enum GolemCliSubcommand {
 }
 
 pub mod shared_args {
+    use crate::model::GuestLanguage;
     use crate::model::app::AppBuildStep;
     use crate::model::worker::{AgentUpdateMode, RawAgentId};
-    use crate::model::GuestLanguage;
     use clap::Args;
     use golem_common::model::account::AccountId;
     use golem_common::model::component::ComponentName;
@@ -819,8 +814,11 @@ pub mod shared_args {
     #[derive(Debug, Args)]
     pub struct BuildArgs {
         /// Select specific build step(s)
-        #[clap(long, short)]
+        #[clap(long, short, conflicts_with = "skip_check")]
         pub step: Vec<AppBuildStep>,
+        /// Skip build-time requirement checks
+        #[clap(long, default_value = "false", conflicts_with = "step")]
+        pub skip_check: bool,
         #[command(flatten)]
         pub force_build: ForceBuildArg,
         /// Internal flag for REPL reload
@@ -962,11 +960,6 @@ pub mod component {
             #[command(flatten)]
             component_name: OptionalComponentName,
         },
-        /// Diagnose possible tooling problems
-        Diagnose {
-            #[command(flatten)]
-            component_name: OptionalComponentNames,
-        },
         /// Show component manifest properties with source trace
         ManifestTrace {
             #[command(flatten)]
@@ -1044,9 +1037,9 @@ pub mod worker {
     use chrono::{DateTime, Utc};
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
+    use golem_common::model::IdempotencyKey;
     use golem_common::model::component::{ComponentName, ComponentRevision};
     use golem_common::model::worker::WorkerAgentConfigEntry;
-    use golem_common::model::IdempotencyKey;
     use uuid::Uuid;
 
     #[derive(Debug, Subcommand)]
@@ -1606,6 +1599,12 @@ pub mod server {
         /// Clean the data directory before starting
         #[clap(long)]
         pub clean: bool,
+
+        /// Use deterministic agent filesystem directories rooted at the given
+        /// path instead of random temp directories. The directory layout is:
+        ///   <root>/<environment_id>/<component_id>/<agent_name>/
+        #[clap(long)]
+        pub agent_filesystem_root: Option<PathBuf>,
     }
 
     impl RunArgs {
@@ -1666,7 +1665,7 @@ pub fn help_target_to_command(target: ShowClapHelpTarget) -> Command {
 #[cfg(test)]
 mod test {
     use crate::command::{
-        builtin_exec_subcommands, help_target_to_subcommand_names, GolemCliCommand,
+        GolemCliCommand, builtin_exec_subcommands, help_target_to_subcommand_names,
     };
     use crate::error::ShowClapHelpTarget;
     use clap::builder::StyledStr;

@@ -61,7 +61,7 @@ use crate::services::mcp_deployment::McpDeploymentService;
 use crate::services::plan::PlanService;
 use crate::services::plugin_registration::PluginRegistrationService;
 use crate::services::registry_change_notifier::{
-    LocalRegistryChangeNotifier, PostgresRegistryChangeNotifier, RegistryChangeNotifier,
+    PostgresRegistryChangeNotifier, RegistryChangeNotifier, SqliteRegistryChangeNotifier,
 };
 use crate::services::reports::ReportsService;
 use crate::services::resource_definition::ResourceDefinitionService;
@@ -173,14 +173,16 @@ impl Services {
                 repos.registry_change_repo.clone(),
                 pg_config,
             )),
-            _ => Arc::new(LocalRegistryChangeNotifier::new(1024)),
+            _ => Arc::new(SqliteRegistryChangeNotifier::new(
+                1024,
+                repos.registry_change_repo.clone(),
+            )),
         };
 
         let account_service = Arc::new(AccountService::new(
             repos.account_repo.clone(),
             plan_service.clone(),
             default_plan_id,
-            repos.registry_change_repo.clone(),
             registry_change_notifier.clone(),
         ));
         account_service
@@ -326,7 +328,6 @@ impl Services {
         let resource_definition_service = Arc::new(ResourceDefinitionService::new(
             environment_service.clone(),
             repos.resource_definition_repo.clone(),
-            repos.registry_change_repo.clone(),
             registry_change_notifier.clone(),
         ));
 
@@ -352,7 +353,7 @@ impl Services {
 
         let deployed_mcp_service = Arc::new(DeployedMcpService::new(
             repos.deployment_repo.clone(),
-            security_scheme_service.clone(),
+            repos.security_scheme_repo.clone(),
         ));
 
         let environment_state_service = Arc::new(EnvironmentStateService::new(

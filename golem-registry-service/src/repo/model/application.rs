@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::datetime::SqlDateTime;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{Application, ApplicationId, ApplicationName};
 use golem_service_base::repo::RepoError;
+use golem_service_base::repo::SqlDateTime;
 use sqlx::FromRow;
 use uuid::Uuid;
 

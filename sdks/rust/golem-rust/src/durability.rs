@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::bindings::golem::durability::durability::{
-    begin_durable_function, current_durable_execution_state, end_durable_function,
-    observe_function_call, persist_durable_function_invocation,
-    read_persisted_durable_function_invocation, DurableExecutionState, DurableFunctionType,
-    OplogEntryVersion, OplogIndex, PersistedDurableFunctionInvocation, PersistenceLevel,
+    DurableExecutionState, DurableFunctionType, OplogEntryVersion, OplogIndex,
+    PersistedDurableFunctionInvocation, PersistenceLevel, begin_durable_function,
+    current_durable_execution_state, end_durable_function, observe_function_call,
+    persist_durable_function_invocation, read_persisted_durable_function_invocation,
 };
 use crate::value_and_type::{FromValueAndType, IntoValueAndType};
 use golem_wasm::golem_core_1_5_x::types::ValueAndType;

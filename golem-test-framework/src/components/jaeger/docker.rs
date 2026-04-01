@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::components::docker::ContainerHandle;
-use crate::components::jaeger::{wait_for_startup, Jaeger};
+use crate::components::jaeger::{Jaeger, wait_for_startup};
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;

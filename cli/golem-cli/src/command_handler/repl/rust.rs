@@ -14,12 +14,12 @@
 
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::evcxr_repl::{ReplConfig, REPL_CONFIG_FILE_NAME};
-use crate::log::{log_action, logln, set_log_output, LogIndent, Output};
+use crate::evcxr_repl::{REPL_CONFIG_FILE_NAME, ReplConfig};
+use crate::log::{LogIndent, Output, log_action, logln, set_log_output};
 use crate::model::repl::{BridgeReplArgs, ReplScriptSource};
 use crate::process::ExitStatusExt;
 use crate::sdk_overrides::sdk_overrides;
-use crate::{binary_path_to_string, fs, GOLEM_EVCXR_REPL};
+use crate::{GOLEM_EVCXR_REPL, binary_path_to_string, fs};
 use std::sync::Arc;
 use tokio::process::Command;
 

@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::agent::AgentType;
+use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::{

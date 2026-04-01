@@ -63,14 +63,14 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
     ) -> Result<bool, String>;
 
-    /// Returns all the keys matching the given pattern, in a paginated way. If there are
-    /// no more pages to scan, the returned cursor will be 0.
+    /// Returns keys in the given meta-namespace, optionally filtered by key prefix, in a
+    /// paginated way. If there are no more pages to scan, the returned cursor will be 0.
     async fn scan(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageMetaNamespace,
-        pattern: &str,
+        prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String>;
@@ -188,7 +188,7 @@ pub trait IndexedStorage: Debug + Sync {
 
 pub trait IndexedStorageLabelledApi<T: IndexedStorage + ?Sized> {
     fn with(&self, svc_name: &'static str, api_name: &'static str)
-        -> LabelledIndexedStorage<'_, T>;
+    -> LabelledIndexedStorage<'_, T>;
 
     fn with_entity(
         &self,
@@ -256,7 +256,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
     pub async fn scan(
         &self,
         namespace: IndexedStorageMetaNamespace,
-        pattern: &str,
+        prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String> {
@@ -265,7 +265,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
                 self.svc_name,
                 self.api_name,
                 namespace,
-                pattern,
+                prefix,
                 cursor,
                 count,
             )

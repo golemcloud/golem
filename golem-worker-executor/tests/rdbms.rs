@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::base_model::AgentId;
+use golem_common::base_model::agent::ParsedAgentId;
 use golem_common::model::agent::DataValue;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
@@ -24,12 +24,12 @@ use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::{Value, ValueAndType};
+use golem_worker_executor::services::rdbms::RdbmsType;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
-use golem_worker_executor::services::rdbms::RdbmsType;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, start,
 };
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;

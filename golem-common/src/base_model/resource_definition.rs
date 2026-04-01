@@ -36,6 +36,7 @@ declare_transparent_newtypes! {
 declare_structs! {
     // name and limit type are immutable after creation.
     // environment_id+name form the logical primary key for non deleted resources.
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     pub struct ResourceDefinition {
         pub id: ResourceDefinitionId,
         pub revision: ResourceDefinitionRevision,
@@ -74,6 +75,7 @@ declare_structs! {
         pub units: Option<String>,
     }
 
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     pub struct ResourceRateLimit {
         pub value: u64,
         pub period: TimePeriod,
@@ -81,16 +83,19 @@ declare_structs! {
         pub max: u64
     }
 
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     pub struct ResourceCapacityLimit {
         pub value: u64
     }
 
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     pub struct ResourceConcurrencyLimit {
         pub value: u64
     }
 }
 
 declare_unions! {
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     pub enum ResourceLimit {
         Rate(ResourceRateLimit),
         Capacity(ResourceCapacityLimit),
@@ -99,12 +104,14 @@ declare_unions! {
 }
 
 declare_enums! {
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     pub enum EnforcementAction {
         Reject,
         Throttle,
         Terminate
     }
 
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     pub enum TimePeriod {
         Second,
         Minute,

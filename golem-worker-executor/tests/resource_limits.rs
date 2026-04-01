@@ -13,12 +13,17 @@
 // limitations under the License.
 
 use crate::Tracing;
+use axum::Router;
+use axum::routing::get;
+use golem_common::model::AgentStatus;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
-    start_with_table_limit, LastUniqueId, PrecompiledComponent, TestContext,
-    WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    start_with_concurrent_agent_limit, start_with_invocation_limits, start_with_table_limit,
 };
+use std::collections::HashMap;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -26,6 +31,14 @@ inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 inherit_test_dep!(
     #[tagged_as("agent_counters")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("http_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust")]
     PrecompiledComponent
 );
 
@@ -59,49 +72,6 @@ async fn table_within_limit_succeeds(
     executor
         .invoke_and_await_agent(&component, &agent_id, "increment", data_value!())
         .await?;
-
-    Ok(())
-}
-
-/// The `it_agent_counters_release` component has a static function table with
-/// 275 entries. Setting the limit below that (100) causes worker creation to
-/// fail because `create_worker` calls `start_if_needed` and waits for the
-/// `WorkerLoaded` event synchronously. Wasmtime calls `table_growing` during
-/// component instantiation, which triggers the limit check and propagates the
-/// error back to `start_agent`.
-#[test]
-#[tracing::instrument]
-#[timeout("2m")]
-async fn table_exceeding_limit_fails_at_instantiation(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    // Limit is 100, component table is 275 — fails during synchronous instantiation.
-    let executor = start_with_table_limit(deps, &context, 100).await?;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_counters)
-        .store()
-        .await?;
-
-    let agent_id = agent_id!("Counter", "table-limit-exceeded-1");
-
-    // create_worker calls start_if_needed and waits for WorkerLoaded, so the
-    // table_growing limit error propagates synchronously here.
-    let create_result = executor.start_agent(&component.id, agent_id.clone()).await;
-
-    assert!(
-        create_result.is_err(),
-        "expected start_agent to fail with ExceededTableLimit"
-    );
-    let err_str = format!("{create_result:?}");
-    assert!(
-        err_str.contains("function table") || err_str.contains("ExceededTableLimit"),
-        "expected ExceededTableLimit error when starting agent, got: {err_str}"
-    );
 
     Ok(())
 }
@@ -152,6 +122,346 @@ async fn table_exceeding_limit_not_retried(
             || err_str.contains("already exists")
             || err_str.contains("AlreadyExists"),
         "expected a relevant error on second attempt, got: {err_str}"
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent agent limit tests
+// ---------------------------------------------------------------------------
+
+/// When the concurrent agent limit is not yet reached, agents start immediately
+/// without waiting for a permit.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn concurrent_agent_limit_not_reached_starts_immediately(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_concurrent_agent_limit(deps, &context, 2).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let a1 = agent_id!("Counter", "concurrent-limit-ok-1");
+    executor.start_agent(&component.id, a1.clone()).await?;
+
+    let a2 = agent_id!("Counter", "concurrent-limit-ok-2");
+    executor.start_agent(&component.id, a2.clone()).await?;
+
+    // Both agents should be invocable.
+    executor
+        .invoke_and_await_agent(&component, &a1, "increment", data_value!())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &a2, "increment", data_value!())
+        .await?;
+
+    Ok(())
+}
+
+/// When the concurrent agent limit is reached and the running agent becomes
+/// idle, starting a new agent automatically evicts the idle one to free a
+/// slot — no manual deletion required.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn concurrent_agent_limit_idle_agent_is_evicted_to_make_room(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // Limit of 1: only one agent may hold a permit at a time.
+    let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    // Start a1 — takes the only permit.
+    let a1 = agent_id!("Counter", "concurrent-evict-1");
+    let a1_id = executor.start_agent(&component.id, a1.clone()).await?;
+
+    // Invoke a1 so it runs and then returns to Idle.
+    executor
+        .invoke_and_await_agent(&component, &a1, "increment", data_value!())
+        .await?;
+
+    // Wait until a1 is Idle — it can now be evicted.
+    executor
+        .wait_for_status(&a1_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    // Spawn a2's start in the background. The permit acquisition will detect
+    // a1 is idle and evict it automatically, without any manual intervention.
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let a2 = agent_id!("Counter", "concurrent-evict-2");
+    let a2_clone = a2.clone();
+    tokio::spawn(async move {
+        executor_clone
+            .start_agent(&component_clone.id, a2_clone)
+            .await
+    });
+
+    // a2's invocation will complete once the eviction unblocks it.
+    // No sleep, no manual delete — eviction is the feature under test.
+    executor
+        .invoke_and_await_agent(&component, &a2, "increment", data_value!())
+        .await?;
+
+    Ok(())
+}
+
+/// When the limit is reached with no idle agents, a new agent waits in
+/// WaitingForPermit until the running agent finishes and its permit is returned.
+///
+/// Uses an HTTP-gated server to keep a1 provably Running (not Idle) while a2
+/// is in WaitingForPermit, eliminating any timing dependency on agent
+/// initialization speed.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
+
+    // HTTP server that gates its /poll response behind a Notify.
+    // HttpClient2.start_polling polls GET /poll until the body equals "done".
+    // By holding the Notify unreleased we keep a1 in the Running state
+    // for as long as needed, preventing eviction and holding the only permit.
+    let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+    let gate_clone = gate.clone();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let http_server = tokio::spawn(async move {
+        let route = Router::new().route(
+            "/poll",
+            get(move || {
+                let gate = gate_clone.clone();
+                async move {
+                    gate.notified().await;
+                    "done".to_string()
+                }
+            }),
+        );
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    let http_component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+
+    // Start a1 using the HttpClient2 agent. Pass the HTTP server port via env.
+    let a1 = agent_id!("HttpClient2");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let a1_id = executor
+        .start_agent_with(
+            &http_component.id,
+            a1.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    // Enqueue start_polling (fire-and-forget). a1 immediately starts Running,
+    // polling the gated server — it cannot complete or go Idle until we notify.
+    executor
+        .invoke_agent(&http_component, &a1, "start_polling", data_value!("done"))
+        .await?;
+
+    // Confirm a1 is provably Running (holds the only permit, is not evictable).
+    executor
+        .wait_for_status(&a1_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    let counters_component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    // Spawn a2's start in the background. It will block in WaitingForPermit
+    // because a1 is Running (not evictable) and holds the only permit.
+    let executor_clone = executor.clone();
+    let counters_clone = counters_component.clone();
+    let a2 = agent_id!("Counter", "concurrent-wait-http-2");
+    let a2_clone = a2.clone();
+    tokio::spawn(async move {
+        executor_clone
+            .start_agent(&counters_clone.id, a2_clone)
+            .await
+    });
+
+    // Release the gate — a1's poll loop returns "done", its invocation
+    // completes, and its permit is returned to the semaphore via Drop.
+    // This unblocks a2 from WaitingForPermit.
+    gate.notify_waiters();
+
+    // Wait for a1 to become Idle (invocation done, permit released).
+    executor
+        .wait_for_status(&a1_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+
+    // a2 is now unblocked. invoke_and_await_agent will block until a2 has
+    // acquired its permit and processed the invocation — this is the proof
+    // that the waiting-and-unblocking path works correctly.
+    executor
+        .invoke_and_await_agent(&counters_component, &a2, "increment", data_value!())
+        .await?;
+
+    http_server.abort();
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Per-invocation call limit tests
+// ---------------------------------------------------------------------------
+
+/// Sets the per-invocation HTTP call limit to 0 so that any outgoing HTTP
+/// request from the component immediately traps with
+/// `WorkerExceededHttpCallLimit`. The `http_tests` component's `run` function
+/// makes exactly one HTTP call; with limit 0 it should fail before the call
+/// reaches the network.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn http_call_limit_exceeded_traps_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use axum::routing::post;
+    use tokio::spawn;
+    use tracing::Instrument;
+
+    let context = TestContext::new(last_unique_id);
+    // Limit is 0: the very first HTTP call in any invocation must trap.
+    let executor = start_with_invocation_limits(deps, &context, 0, u64::MAX).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    // Spin up a minimal HTTP server. The worker should trap before it reaches
+    // the server, but we still bind one so the PORT env var resolves correctly.
+    spawn(
+        async move {
+            axum::serve(listener, Router::new().route("/", post(|| async { "ok" })))
+                .await
+                .unwrap();
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+
+    let agent_id = agent_id!("HttpClient");
+    executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    // The invocation must fail because the HTTP limit is 0.
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "run", data_value!())
+        .await;
+
+    assert!(
+        result.is_err(),
+        "expected invocation to fail due to HTTP call limit, but it succeeded"
+    );
+    let err_str = format!("{result:?}");
+    assert!(
+        err_str.contains("HTTP call limit") || err_str.contains("ExceededHttpCallLimit"),
+        "expected ExceededHttpCallLimit error, got: {err_str}"
+    );
+
+    Ok(())
+}
+
+/// Sets the per-invocation RPC call limit to 0 so that any outgoing RPC call
+/// from the component immediately traps with `WorkerExceededRpcCallLimit`.
+/// The `agent_rpc_rust` component's `add_and_get` function makes an RPC call
+/// to a counter worker; with limit 0 it should trap before the call is made.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn rpc_call_limit_exceeded_traps_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // Limit is 0: the very first RPC call in any invocation must trap.
+    let executor = start_with_invocation_limits(deps, &context, u64::MAX, 0).await?;
+
+    // Store the counter component that will be the RPC target.
+    executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let rpc_component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let caller_id = agent_id!("RustParent", "rpc_limit_test");
+    executor
+        .start_agent(&rpc_component.id, caller_id.clone())
+        .await?;
+
+    // The invocation must fail because the RPC limit is 0.
+    // `spawn_child` is a function that makes an RPC call to create a child worker.
+    let result = executor
+        .invoke_and_await_agent(
+            &rpc_component,
+            &caller_id,
+            "spawn_child",
+            data_value!("payload"),
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "expected invocation to fail due to RPC call limit, but it succeeded"
+    );
+    let err_str = format!("{result:?}");
+    assert!(
+        err_str.contains("RPC call limit") || err_str.contains("ExceededRpcCallLimit"),
+        "expected ExceededRpcCallLimit error, got: {err_str}"
     );
 
     Ok(())

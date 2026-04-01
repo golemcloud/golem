@@ -313,7 +313,7 @@ impl<K: FromValue + Eq + std::hash::Hash, V: FromValue> FromValue
                         _ => {
                             return Err(format!(
                                 "Expected Tuple of 2 in HashMap list, got {pair:?}"
-                            ))
+                            ));
                         }
                     }
                 }
@@ -341,7 +341,7 @@ impl<K: FromValue + Ord, V: FromValue> FromValue for std::collections::BTreeMap<
                         _ => {
                             return Err(format!(
                                 "Expected Tuple of 2 in BTreeMap list, got {pair:?}"
-                            ))
+                            ));
                         }
                     }
                 }
@@ -528,7 +528,7 @@ impl FromValue for crate::WitTypeNode {
                     let inner = match case_value {
                         Some(inner) => *inner,
                         None => {
-                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                            return Err(format!("Expected case_value for case_idx {}", case_idx));
                         }
                     };
                     Ok(WitTypeNode::RecordType(
@@ -539,7 +539,7 @@ impl FromValue for crate::WitTypeNode {
                     let inner = match case_value {
                         Some(inner) => *inner,
                         None => {
-                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                            return Err(format!("Expected case_value for case_idx {}", case_idx));
                         }
                     };
                     Ok(WitTypeNode::VariantType(Vec::<(
@@ -553,7 +553,7 @@ impl FromValue for crate::WitTypeNode {
                     let inner = match case_value {
                         Some(inner) => *inner,
                         None => {
-                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                            return Err(format!("Expected case_value for case_idx {}", case_idx));
                         }
                     };
                     Ok(WitTypeNode::EnumType(Vec::<String>::from_value(inner)?))
@@ -562,7 +562,7 @@ impl FromValue for crate::WitTypeNode {
                     let inner = match case_value {
                         Some(inner) => *inner,
                         None => {
-                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                            return Err(format!("Expected case_value for case_idx {}", case_idx));
                         }
                     };
                     Ok(WitTypeNode::FlagsType(Vec::<String>::from_value(inner)?))
@@ -571,7 +571,7 @@ impl FromValue for crate::WitTypeNode {
                     let inner = match case_value {
                         Some(inner) => *inner,
                         None => {
-                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                            return Err(format!("Expected case_value for case_idx {}", case_idx));
                         }
                     };
                     Ok(WitTypeNode::TupleType(Vec::<crate::NodeIndex>::from_value(
@@ -582,7 +582,7 @@ impl FromValue for crate::WitTypeNode {
                     let inner = match case_value {
                         Some(inner) => *inner,
                         None => {
-                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                            return Err(format!("Expected case_value for case_idx {}", case_idx));
                         }
                     };
                     Ok(WitTypeNode::ListType(crate::NodeIndex::from_value(inner)?))
@@ -591,7 +591,7 @@ impl FromValue for crate::WitTypeNode {
                     let inner = match case_value {
                         Some(inner) => *inner,
                         None => {
-                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                            return Err(format!("Expected case_value for case_idx {}", case_idx));
                         }
                     };
                     Ok(WitTypeNode::OptionType(crate::NodeIndex::from_value(
@@ -602,7 +602,7 @@ impl FromValue for crate::WitTypeNode {
                     let inner = match case_value {
                         Some(inner) => *inner,
                         None => {
-                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                            return Err(format!("Expected case_value for case_idx {}", case_idx));
                         }
                     };
                     match inner {
@@ -631,7 +631,7 @@ impl FromValue for crate::WitTypeNode {
                     let inner = match case_value {
                         Some(inner) => *inner,
                         None => {
-                            return Err(format!("Expected case_value for case_idx {}", case_idx))
+                            return Err(format!("Expected case_value for case_idx {}", case_idx));
                         }
                     };
                     match inner {

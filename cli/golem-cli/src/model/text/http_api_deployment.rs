@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::text::fmt::{
-    format_main_id, format_message_highlight, log_table, FieldsBuilder, MessageWithFields, TextView,
+    FieldsBuilder, MessageWithFields, TextView, format_main_id, format_message_highlight, log_table,
 };
 use cli_table::Table;
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentSecurity};

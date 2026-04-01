@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::template::AppTemplate;
 use crate::app::template::repo::TEMPLATES_DIR;
 use crate::app::template::snippet::{APP_MANIFEST_HEADER, DEP_ENV_VARS_DOC};
-use crate::app::template::AppTemplate;
 use crate::fs;
 use crate::sdk_overrides::sdk_overrides;
+use crate::versions;
 use anyhow::{anyhow, bail};
 use golem_common::base_model::application::ApplicationName;
 use golem_common::base_model::component::ComponentName;
@@ -366,6 +367,10 @@ fn transform(
                     APP_MANIFEST_HEADER.to_string(),
                 );
                 replacements.insert(
+                    "golem-manifest-version",
+                    versions::sdk::MANIFEST.to_string(),
+                );
+                replacements.insert(
                     "    # golem-app-manifest-env-doc",
                     concat!(
                         "    # Component environment variables can reference system environment variables with minijinja syntax:\n",
@@ -389,16 +394,71 @@ fn transform(
                 }
             }
             Transform::RustSdk => {
-                replacements.insert("GOLEM_RUST_VERSION_OR_PATH", sdk_overrides.golem_rust_dep());
+                replacements.insert(
+                    "GOLEM_RUST_VERSION_OR_PATH",
+                    sdk_overrides.golem_rust_dep()?,
+                );
+                replacements.insert(
+                    "GOLEM_RUST_LOG_VERSION",
+                    versions::rust_dep::LOG.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_RUST_SERDE_VERSION",
+                    versions::rust_dep::SERDE.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_RUST_SERDE_JSON_VERSION",
+                    versions::rust_dep::SERDE_JSON.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_RUST_WSTD_VERSION",
+                    versions::rust_dep::WSTD.to_string(),
+                );
             }
             Transform::TsSdk => {
                 replacements.insert(
                     "GOLEM_TS_SDK_VERSION_OR_PATH",
-                    sdk_overrides.ts_package_dep("golem-ts-sdk"),
+                    sdk_overrides.ts_package_dep("golem-ts-sdk")?,
                 );
                 replacements.insert(
                     "GOLEM_TS_TYPEGEN_VERSION_OR_PATH",
-                    sdk_overrides.ts_package_dep("golem-ts-typegen"),
+                    sdk_overrides.ts_package_dep("golem-ts-typegen")?,
+                );
+                replacements.insert(
+                    "GOLEM_TS_ROLLUP_PLUGIN_ALIAS_VERSION",
+                    versions::ts_dep::ROLLUP_PLUGIN_ALIAS.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_ROLLUP_PLUGIN_NODE_RESOLVE_VERSION",
+                    versions::ts_dep::ROLLUP_PLUGIN_NODE_RESOLVE.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_ROLLUP_PLUGIN_TYPESCRIPT_VERSION",
+                    versions::ts_dep::ROLLUP_PLUGIN_TYPESCRIPT.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_ROLLUP_PLUGIN_COMMONJS_VERSION",
+                    versions::ts_dep::ROLLUP_PLUGIN_COMMONJS.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_ROLLUP_PLUGIN_JSON_VERSION",
+                    versions::ts_dep::ROLLUP_PLUGIN_JSON.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_TYPES_NODE_VERSION",
+                    versions::ts_dep::TYPES_NODE.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_ROLLUP_VERSION",
+                    versions::ts_dep::ROLLUP.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_TSLIB_VERSION",
+                    versions::ts_dep::TSLIB.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_TS_TYPESCRIPT_VERSION",
+                    versions::ts_dep::TYPESCRIPT.to_string(),
                 );
             }
         }
@@ -420,7 +480,7 @@ fn replace_all(input: &str, replacements: &BTreeMap<&'static str, String>) -> St
         let remaining = &input[index..];
         let matched = replacements
             .iter()
-            .find(|(&key, _)| remaining.starts_with(key));
+            .find(|&(key, _)| remaining.starts_with(key));
 
         if let Some((key, value)) = matched {
             out.push_str(value);

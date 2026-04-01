@@ -10708,6 +10708,67 @@ components:
           format: uint64
       required:
       - targetRevision
+    MultipartPartData:
+      discriminator:
+        propertyName: type
+        mapping:
+          Json: '#/components/schemas/MultipartPartData_JsonSnapshotData'
+          Raw: '#/components/schemas/MultipartPartData_RawSnapshotData'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/MultipartPartData_JsonSnapshotData'
+      - $ref: '#/components/schemas/MultipartPartData_RawSnapshotData'
+    MultipartPartData_JsonSnapshotData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Json
+            type: string
+            enum:
+            - Json
+        required:
+        - type
+      - $ref: '#/components/schemas/JsonSnapshotData'
+    MultipartPartData_RawSnapshotData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Raw
+            type: string
+            enum:
+            - Raw
+        required:
+        - type
+      - $ref: '#/components/schemas/RawSnapshotData'
+    MultipartSnapshotData:
+      title: MultipartSnapshotData
+      type: object
+      properties:
+        mimeType:
+          type: string
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/MultipartSnapshotPart'
+      required:
+      - mimeType
+      - parts
+    MultipartSnapshotPart:
+      title: MultipartSnapshotPart
+      type: object
+      properties:
+        name:
+          type: string
+        contentType:
+          type: string
+        data:
+          $ref: '#/components/schemas/MultipartPartData'
+      required:
+      - name
+      - contentType
+      - data
     NameOptionTypePair:
       title: NameOptionTypePair
       type: object
@@ -11747,10 +11808,12 @@ components:
         mapping:
           Raw: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
           Json: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+          Multipart: '#/components/schemas/PublicSnapshotData_MultipartSnapshotData'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicSnapshotData_RawSnapshotData'
       - $ref: '#/components/schemas/PublicSnapshotData_JsonSnapshotData'
+      - $ref: '#/components/schemas/PublicSnapshotData_MultipartSnapshotData'
     PublicSnapshotData_JsonSnapshotData:
       allOf:
       - type: object
@@ -11763,6 +11826,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/JsonSnapshotData'
+    PublicSnapshotData_MultipartSnapshotData:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Multipart
+            type: string
+            enum:
+            - Multipart
+        required:
+        - type
+      - $ref: '#/components/schemas/MultipartSnapshotData'
     PublicSnapshotData_RawSnapshotData:
       allOf:
       - type: object
@@ -15161,6 +15236,21 @@ components:
         maxDiskSpacePerWorker:
           type: integer
           format: uint64
+        perInvocationHttpCallLimit:
+          type: integer
+          format: uint64
+        perInvocationRpcCallLimit:
+          type: integer
+          format: uint64
+        monthlyHttpCallLimit:
+          type: integer
+          format: uint64
+        monthlyRpcCallLimit:
+          type: integer
+          format: uint64
+        maxConcurrentAgentsPerExecutor:
+          type: integer
+          format: uint64
       required:
       - planId
       - name
@@ -15175,6 +15265,11 @@ components:
       - maxMemoryPerWorker
       - maxTableElementsPerWorker
       - maxDiskSpacePerWorker
+      - perInvocationHttpCallLimit
+      - perInvocationRpcCallLimit
+      - monthlyHttpCallLimit
+      - monthlyRpcCallLimit
+      - maxConcurrentAgentsPerExecutor
     PluginInstallation:
       title: PluginInstallation
       type: object

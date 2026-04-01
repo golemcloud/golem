@@ -19,17 +19,26 @@ use crate::preview2::golem::websocket::client::{
 use crate::workerctx::WorkerCtx;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite;
-use tokio_tungstenite::{connect_async, MaybeTlsStream};
+use tokio_tungstenite::{MaybeTlsStream, connect_async};
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
 
 type WsStream = tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
+struct ReaderState {
+    stream: SplitStream<WsStream>,
+    /// Populated by `Pollable::ready()` as a read-ahead buffer so that
+    /// after the guest observes readiness, `receive()`/`receive_with_timeout()`
+    /// can return without consuming an additional websocket frame.
+    pending: Option<Result<Message, Error>>,
+}
+
 pub struct WebSocketConnectionEntry {
     writer: Mutex<SplitSink<WsStream, tungstenite::Message>>,
-    reader: Mutex<SplitStream<WsStream>>,
+    reader: Mutex<ReaderState>,
     /// Held for the lifetime of the connection to limit concurrent WebSocket
     /// connections per executor. Released when the connection is dropped.
     _permit: tokio::sync::OwnedSemaphorePermit,
@@ -37,7 +46,19 @@ pub struct WebSocketConnectionEntry {
 
 #[async_trait::async_trait]
 impl wasmtime_wasi::p2::Pollable for WebSocketConnectionEntry {
-    async fn ready(&mut self) {}
+    async fn ready(&mut self) {
+        // If we already have a buffered message/error, report readiness immediately.
+        let mut reader = self.reader.lock().await;
+        if reader.pending.is_some() {
+            return;
+        }
+
+        // Read ahead until we can either:
+        // - return a user-visible websocket message (Text/Binary)
+        // - or report a websocket close/error
+        let next = read_next_user_or_close(&mut reader.stream).await;
+        reader.pending = Some(next);
+    }
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
@@ -64,7 +85,10 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 let (writer, reader) = ws_stream.split();
                 let entry = WebSocketConnectionEntry {
                     writer: Mutex::new(writer),
-                    reader: Mutex::new(reader),
+                    reader: Mutex::new(ReaderState {
+                        stream: reader,
+                        pending: None,
+                    }),
                     _permit: permit,
                 };
                 let resource = self.as_wasi_view().table().push(entry)?;
@@ -105,20 +129,13 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         let entry = view.table().get(&self_)?;
         let mut reader = entry.reader.lock().await;
 
-        loop {
-            match reader.next().await {
-                Some(Ok(msg)) => match from_tungstenite_message(msg) {
-                    Some(message) => return Ok(Ok(message)),
-                    None => continue,
-                },
-                Some(Err(e)) => return Ok(Err(to_wit_error(e))),
-                None => {
-                    return Ok(Err(Error::Closed(Some(CloseInfo {
-                        code: 1000,
-                        reason: "Connection closed".to_string(),
-                    }))));
-                }
-            }
+        if let Some(pending) = reader.pending.take() {
+            return Ok(pending);
+        }
+
+        match read_next_user_or_close(&mut reader.stream).await {
+            Ok(message) => Ok(Ok(message)),
+            Err(err) => Ok(Err(err)),
         }
     }
 
@@ -133,13 +150,26 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         let entry = view.table().get(&self_)?;
         let mut reader = entry.reader.lock().await;
 
-        let timeout = tokio::time::Duration::from_millis(timeout_ms);
+        if let Some(pending) = reader.pending.take() {
+            return Ok(match pending {
+                Ok(message) => Ok(Some(message)),
+                Err(err) => Err(err),
+            });
+        }
+
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
 
         loop {
-            match tokio::time::timeout(timeout, reader.next()).await {
-                Ok(Some(Ok(msg))) => match from_tungstenite_message(msg) {
-                    Some(message) => return Ok(Ok(Some(message))),
-                    None => continue,
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(Ok(None)); // overall timeout expired
+            }
+
+            match tokio::time::timeout(remaining, reader.stream.next()).await {
+                Ok(Some(Ok(msg))) => match to_user_message(msg) {
+                    Ok(Some(message)) => return Ok(Ok(Some(message))),
+                    Ok(None) => continue, // ignore ping/pong/frames and wait further
+                    Err(err) => return Ok(Err(err)),
                 },
                 Ok(Some(Err(e))) => return Ok(Err(to_wit_error(e))),
                 Ok(None) => {
@@ -148,7 +178,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                         reason: "Connection closed".to_string(),
                     }))));
                 }
-                Err(_) => return Ok(Ok(None)), // timeout expired
+                Err(_) => return Ok(Ok(None)), // overall timeout expired
             }
         }
     }
@@ -203,12 +233,11 @@ fn build_request(
     if let Some(headers) = headers {
         let req_headers = request.headers_mut();
         for (name, value) in headers {
-            if let (Ok(header_name), Ok(header_value)) = (
-                tungstenite::http::header::HeaderName::try_from(name.as_str()),
-                tungstenite::http::header::HeaderValue::try_from(value.as_str()),
-            ) {
-                req_headers.insert(header_name, header_value);
-            }
+            let header_name = tungstenite::http::header::HeaderName::try_from(name.as_str())
+                .map_err(|e| format!("invalid websocket header name {name:?}: {e}"))?;
+            let header_value = tungstenite::http::header::HeaderValue::try_from(value.as_str())
+                .map_err(|e| format!("invalid websocket header value for {name:?}: {e}"))?;
+            req_headers.insert(header_name, header_value);
         }
     }
 
@@ -222,13 +251,39 @@ fn to_tungstenite_message(message: Message) -> tungstenite::Message {
     }
 }
 
-fn from_tungstenite_message(msg: tungstenite::Message) -> Option<Message> {
+fn to_user_message(msg: tungstenite::Message) -> Result<Option<Message>, Error> {
     match msg {
-        tungstenite::Message::Text(text) => Some(Message::Text(text.as_str().to_owned())),
-        tungstenite::Message::Binary(data) => Some(Message::Binary(data.as_slice().to_vec())),
-        tungstenite::Message::Close(_) => None,
-        tungstenite::Message::Ping(_) | tungstenite::Message::Pong(_) => None,
-        tungstenite::Message::Frame(_) => None,
+        tungstenite::Message::Text(text) => Ok(Some(Message::Text(text.as_str().to_owned()))),
+        tungstenite::Message::Binary(data) => Ok(Some(Message::Binary(data.as_slice().to_vec()))),
+        tungstenite::Message::Close(frame) => {
+            let (code, reason) = match frame {
+                Some(frame) => (frame.code.into(), frame.reason.to_string()),
+                None => (1000u16, "Connection closed".to_string()),
+            };
+            Err(Error::Closed(Some(CloseInfo { code, reason })))
+        }
+        tungstenite::Message::Ping(_)
+        | tungstenite::Message::Pong(_)
+        | tungstenite::Message::Frame(_) => Ok(None),
+    }
+}
+
+async fn read_next_user_or_close(stream: &mut SplitStream<WsStream>) -> Result<Message, Error> {
+    loop {
+        match stream.next().await {
+            Some(Ok(msg)) => match to_user_message(msg) {
+                Ok(Some(message)) => return Ok(message),
+                Ok(None) => continue, // ignore ping/pong/frames
+                Err(err) => return Err(err),
+            },
+            Some(Err(e)) => return Err(to_wit_error(e)),
+            None => {
+                return Err(Error::Closed(Some(CloseInfo {
+                    code: 1000,
+                    reason: "Connection closed".to_string(),
+                })));
+            }
+        }
     }
 }
 

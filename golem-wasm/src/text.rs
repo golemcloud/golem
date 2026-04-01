@@ -448,11 +448,11 @@ impl WasmValue for ValueAndType {
 mod tests {
     use test_r::test;
 
-    use crate::analysis::analysed_type::{
-        bool, case, chr, f32, f64, field, flags, list, option, r#enum, record, result_err,
-        result_ok, s16, s32, s64, s8, str, tuple, u16, u32, u64, u8, unit_case, variant,
-    };
     use crate::analysis::AnalysedType;
+    use crate::analysis::analysed_type::{
+        bool, case, chr, r#enum, f32, f64, field, flags, list, option, record, result_err,
+        result_ok, s8, s16, s32, s64, str, tuple, u8, u16, u32, u64, unit_case, variant,
+    };
     use crate::text::{parse_value_and_type, print_value_and_type};
     use crate::{Value, ValueAndType};
 

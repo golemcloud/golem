@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::launch::{launch_golem_services, LaunchArgs};
+use crate::launch::{LaunchArgs, launch_golem_services};
 use anyhow::anyhow;
 use clap_verbosity_flag::Verbosity;
 use golem_cli::command::server::{RunArgs, ServerSubcommand};
@@ -55,6 +55,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     mcp_port: args.mcp_port(),
                     ports_file: args.ports_file.clone(),
                     data_dir,
+                    agent_filesystem_root: args.agent_filesystem_root.clone(),
                 })
                 .await?;
 
@@ -78,6 +79,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
             mcp_port: args.mcp_port(),
             ports_file: args.ports_file.clone(),
             data_dir: default_data_dir()?,
+            agent_filesystem_root: args.agent_filesystem_root.clone(),
         })
         .await?;
 

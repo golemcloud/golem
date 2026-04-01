@@ -18,7 +18,7 @@ use proc_macro2::Ident;
 
 use quote::quote;
 use syn::punctuated::Punctuated;
-use syn::{parse_macro_input, parse_quote, FnArg, ItemFn, Meta, PatType, ReturnType, Type};
+use syn::{FnArg, ItemFn, Meta, PatType, ReturnType, Type, parse_macro_input, parse_quote};
 
 pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args with Punctuated::<Meta, syn::Token![,]>::parse_terminated);

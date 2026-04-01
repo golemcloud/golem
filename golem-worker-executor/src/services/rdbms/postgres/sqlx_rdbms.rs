@@ -17,10 +17,10 @@ use crate::services::rdbms::postgres::types::{
     Composite, CompositeType, DbColumn, DbColumnType, DbValue, Domain, DomainType, NamedType,
     Range, RangeType,
 };
-use crate::services::rdbms::postgres::{PostgresType, POSTGRES};
+use crate::services::rdbms::postgres::{POSTGRES, PostgresType};
 use crate::services::rdbms::sqlx_common::{
-    create_db_result, BeginTransactionSupport, PoolCreator, QueryExecutor, QueryParamsBinder,
-    SqlxDbResultStream, SqlxDbTransaction, SqlxRdbms, TransactionSupport,
+    BeginTransactionSupport, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxDbResultStream,
+    SqlxDbTransaction, SqlxRdbms, TransactionSupport, create_db_result,
 };
 use crate::services::rdbms::{
     DbResult, DbResultStream, DbRow, Rdbms, RdbmsError, RdbmsTransactionStatus,

@@ -64,6 +64,16 @@ pub fn merge_guides(current: &str, new: &str) -> anyhow::Result<String> {
     Ok(merged)
 }
 
+pub fn extract_managed_guide(source: &str, key: &str) -> Option<String> {
+    extract_guide_sections(source)
+        .into_iter()
+        .find_map(|section| (section.key == key).then_some(section.content))
+}
+
+pub fn render_managed_guide(key: &str, content: &str) -> String {
+    render_guide(key, content)
+}
+
 fn guide_start_marker(key: &str) -> String {
     format!("<!-- golem-managed:guide:{key}:start -->")
 }

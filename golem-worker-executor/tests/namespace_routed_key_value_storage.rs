@@ -14,9 +14,9 @@
 
 use crate::WorkerExecutorTestDependencies;
 use golem_common::config::{DbPostgresConfig, RedisConfig};
+use golem_common::model::AgentId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::AgentId;
 use golem_common::redis::RedisPool;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor::services::golem_config::KeyValueStoragePostgresConfig;
@@ -27,7 +27,7 @@ use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageN
 use pretty_assertions::assert_eq;
 use test_r::{inherit_test_dep, test};
 use url::Url;
-use uuid::{uuid, Uuid};
+use uuid::{Uuid, uuid};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 

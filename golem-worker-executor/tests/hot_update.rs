@@ -14,16 +14,16 @@
 
 use crate::Tracing;
 use async_lock::Mutex;
-use axum::routing::post;
 use axum::Router;
+use axum::routing::post;
 use bytes::Bytes;
-use golem_common::model::component::ComponentRevision;
 use golem_common::model::AgentStatus;
+use golem_common::model::component::ComponentRevision;
 use golem_common::{agent_id, data_value, phantom_agent_id};
-use golem_test_framework::dsl::{update_counts, TestDsl};
+use golem_test_framework::dsl::{TestDsl, update_counts};
 
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
 use http::StatusCode;
 use log::info;
@@ -34,7 +34,7 @@ use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 use tokio::spawn;
 use tokio::task::JoinHandle;
-use tracing::{debug, Instrument};
+use tracing::{Instrument, debug};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -95,17 +95,17 @@ impl TestHttpServer {
                         debug!("f1: {}", body);
 
                         let mut guard = f1_blocker_clone.lock().await;
-                        if let Some(blocker) = &*guard {
-                            if blocker.value == body {
-                                let F1Blocker {
-                                    reached, resume, ..
-                                } = guard.take().unwrap();
-                                debug!("Reached f1 blocking point");
-                                reached.send(()).unwrap();
-                                debug!("Awaiting resume at f1 blocking point");
-                                resume.await.unwrap();
-                                debug!("Resuming from f1 blocking point");
-                            }
+                        if let Some(blocker) = &*guard
+                            && blocker.value == body
+                        {
+                            let F1Blocker {
+                                reached, resume, ..
+                            } = guard.take().unwrap();
+                            debug!("Reached f1 blocking point");
+                            reached.send(()).unwrap();
+                            debug!("Awaiting resume at f1 blocking point");
+                            resume.await.unwrap();
+                            debug!("Resuming from f1 blocking point");
                         }
 
                         StatusCode::OK

@@ -8,6 +8,7 @@ world golem-rust {
   import golem:agent/host@1.5.0;
 
   import golem:durability/durability@1.5.0;
+  import golem:rdbms/ignite2@1.5.0;
   import golem:rdbms/mysql@1.5.0;
   import golem:rdbms/postgres@1.5.0;
 

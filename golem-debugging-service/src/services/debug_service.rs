@@ -18,14 +18,13 @@ use crate::debug_session::PlaybackOverridesInternal;
 use crate::debug_session::{DebugSessionData, DebugSessionId, DebugSessions};
 use crate::model::params::*;
 use async_trait::async_trait;
-use gethostname::gethostname;
+use golem_common::SafeDisplay;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, AgentMetadata, OwnedAgentId};
-use golem_common::SafeDisplay;
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::component::ComponentService;
@@ -198,19 +197,14 @@ impl DebugServiceDefault {
                 )
             })?;
 
-        let host = gethostname().to_string_lossy().to_string();
-
         let port = self.all.config().grpc.port;
 
-        info!(
-            "Registering worker {} with host {} and port {}",
-            agent_id, host, port
-        );
+        info!("Registering worker {} with port {}", agent_id, port);
 
         let shard_assignment = self
             .all
             .shard_manager_service()
-            .register(host, port)
+            .register(port)
             .await
             .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?;
 
@@ -560,14 +554,12 @@ impl DebugService for DebugServiceDefault {
 
         if new_target_index >= current_oplog_index {
             return Err(DebugServiceError::validation_failed(
-                vec![
-                    format!(
-                        "Target oplog index {} (corresponding to an invocation boundary) for rewind is greater than the existing target oplog index {}",
-                        target_index,
-                        current_oplog_index
-                    )],
-                    Some(owned_agent_id.agent_id.clone()))
-                );
+                vec![format!(
+                    "Target oplog index {} (corresponding to an invocation boundary) for rewind is greater than the existing target oplog index {}",
+                    target_index, current_oplog_index
+                )],
+                Some(owned_agent_id.agent_id.clone()),
+            ));
         };
 
         self.debug_session

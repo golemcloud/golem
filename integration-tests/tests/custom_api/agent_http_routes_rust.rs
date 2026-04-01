@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::custom_api::http_test_context::{make_test_context, HttpTestContext};
+use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_test_framework::config::EnvBasedTestDependencies;
@@ -763,10 +763,12 @@ async fn cors_get_with_origin_header_invalid(agent: &HttpTestContext) -> anyhow:
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
 
-    assert!(response
-        .headers()
-        .get("access-control-allow-origin")
-        .is_none());
+    assert!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none()
+    );
 
     Ok(())
 }
@@ -799,7 +801,7 @@ async fn cors_get_wildcard_origin(agent: &HttpTestContext) -> anyhow::Result<()>
 #[test]
 #[tracing::instrument]
 async fn webhook_callback(agent: &HttpTestContext) -> anyhow::Result<()> {
-    use axum::{body::Bytes, routing::post, Router};
+    use axum::{Router, body::Bytes, routing::post};
     use reqwest::Client;
     use std::sync::Arc;
     use tokio::spawn;

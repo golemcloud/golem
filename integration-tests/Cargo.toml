@@ -1,7 +1,7 @@
 [package]
 name = "integration-tests"
 version = "0.0.0"
-edition = "2021"
+ edition = "2024"
 
 homepage = "https://golem.cloud/"
 repository = "https://github.com/golemcloud/golem"
@@ -41,7 +41,6 @@ serde_json = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
-tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }

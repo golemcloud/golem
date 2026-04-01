@@ -32,4 +32,23 @@ export default [
       '@typescript-eslint/no-misused-promises': 'error',
     },
   },
+  {
+    files: ['scripts/**/*.mjs', 'eslint.config.mjs'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+      },
+    },
+    rules: {
+      'no-unused-vars': 'warn',
+      'no-undef': 'error',
+      'no-unreachable': 'error',
+      'no-dupe-keys': 'error',
+      'no-duplicate-case': 'error',
+      eqeqeq: ['error', 'always'],
+    },
+  },
 ];

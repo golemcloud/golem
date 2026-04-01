@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::printer::{indented, NewLine};
-use crate::rust::lib_gen::{Module, ModuleDef, ModuleName};
-use crate::rust::printer::{line, rust_name, unit, RustContext};
-use crate::rust::types::{
-    ref_or_box_schema_type, ref_type_name, DataType, RustPrinter, RustResult,
-};
 use crate::Error;
 use crate::Result;
+use crate::printer::{NewLine, indented};
+use crate::rust::lib_gen::{Module, ModuleDef, ModuleName};
+use crate::rust::printer::{RustContext, line, rust_name, unit};
+use crate::rust::types::{
+    DataType, RustPrinter, RustResult, ref_or_box_schema_type, ref_type_name,
+};
 use convert_case::{Case, Casing};
 use openapiv3::{
     AnySchema, Discriminator, OpenAPI, ReferenceOr, Schema, SchemaData, SchemaKind, Type,
@@ -225,12 +225,16 @@ fn enum_case_sanity_check(property_name: &str, all_of: &[ReferenceOr<Schema>]) -
         match &discriminator_schema.schema_kind {
             SchemaKind::Type(Type::Object(obj)) => {
                 if obj.properties.len() != 1 {
-                    Err(Error::unimplemented("Exactly 1 property expected for discriminator property in enum case schema."))
+                    Err(Error::unimplemented(
+                        "Exactly 1 property expected for discriminator property in enum case schema.",
+                    ))
                 } else {
                     let (name, schema) = obj.properties.first().unwrap();
 
                     if name != property_name {
-                        Err(Error::unimplemented("Discriminator property name in case schema should be the same as in discriminator."))
+                        Err(Error::unimplemented(
+                            "Discriminator property name in case schema should be the same as in discriminator.",
+                        ))
                     } else if let Some(schema) = schema.as_item() {
                         match schema.schema_kind {
                             SchemaKind::Type(Type::String(_)) => Ok(()),

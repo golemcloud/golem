@@ -19,16 +19,17 @@ use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::{LogEvent, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    cancel_invocation_response, complete_promise_response, create_worker_response,
-    delete_worker_response, get_oplog_response, get_workers_metadata_response,
-    interrupt_worker_response, resume_worker_response, revert_worker_response,
-    search_oplog_response, update_worker_response, CancelInvocationRequest, CompletePromiseRequest,
-    ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest, ForkWorkerRequest,
-    GetAgentMetadataRequest, GetFileContentsRequest, GetFileSystemNodeRequest,
-    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
-    ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest,
+    CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest,
+    DeleteWorkerRequest, ForkWorkerRequest, GetAgentMetadataRequest, GetFileContentsRequest,
+    GetFileSystemNodeRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
+    InterruptWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest,
+    UpdateWorkerRequest, cancel_invocation_response, complete_promise_response,
+    create_worker_response, delete_worker_response, get_oplog_response,
+    get_workers_metadata_response, interrupt_worker_response, resume_worker_response,
+    revert_worker_response, search_oplog_response, update_worker_response,
 };
 use golem_common::base_model::agent::{DataValue, ParsedAgentId, UntypedDataValue};
+use golem_common::model::PromiseId;
 use golem_common::model::component::{
     AgentConfigEntry, ComponentDto, ComponentFilePath, ComponentId, ComponentName,
     ComponentRevision, InitialComponentFile, PluginInstallation, PluginInstallationAction,
@@ -39,7 +40,6 @@ use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{
     AgentMetadataDto, FlatComponentFileSystemNode, RevertWorkerTarget, WorkerAgentConfigEntry,
 };
-use golem_common::model::PromiseId;
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
 use golem_common::widen_infallible;
@@ -47,7 +47,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
-use golem_test_framework::dsl::{rename_component_if_needed, TestDsl, WorkerLogEventStream};
+use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream, rename_component_if_needed};
 use golem_test_framework::model::IFSEntry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;

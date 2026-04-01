@@ -18,9 +18,9 @@ use crate::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
     HostWasmRpc, RpcError,
 };
+use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError as InternalRpcError};
-use crate::services::HasWorker;
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
 use anyhow::Error;
 use async_trait::async_trait;
@@ -47,6 +47,7 @@ use golem_common::model::{
     AgentId, AgentInvocation, IdempotencyKey, OplogIndex, OwnedAgentId, ScheduledAction,
 };
 use golem_common::serialization::{deserialize, serialize};
+
 use golem_wasm::{
     CancellationTokenEntry, FutureInvokeResultEntry, SubscribeAny, ValueAndType, WasmRpcEntry,
 };
@@ -54,7 +55,7 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use tracing::{error, Instrument};
+use tracing::{Instrument, error};
 use wasmtime::component::Resource;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
@@ -148,6 +149,16 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 "RPC calls to the same agent are not supported"
             ));
         }
+
+        // Check the per-invocation RPC call limit before initiating the call.
+        // Only counted in live mode; replay is a no-op.
+        self.state
+            .check_and_increment_rpc_call_count()
+            .map_err(wasmtime::Error::from)?;
+
+        // Returns Err(WorkerMonthlyRpcCallBudgetExhausted) when exhausted,
+        // which maps to RetryDecision::TryStop — suspending the worker.
+        self.record_monthly_rpc_call()?;
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -267,6 +278,16 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             ));
         }
 
+        // Check the per-invocation RPC call limit before initiating the call.
+        self.state
+            .check_and_increment_rpc_call_count()
+            .map_err(wasmtime::Error::from)?;
+
+        // Record against the monthly account-level RPC call quota.
+        // Returns Err(WorkerMonthlyRpcCallBudgetExhausted) when exhausted,
+        // which maps to RetryDecision::TryStop — suspending the worker.
+        self.record_monthly_rpc_call()?;
+
         let current_idempotency_key = self
             .get_current_idempotency_key()
             .await
@@ -346,10 +367,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let config_vars = self.state.config_vars.clone();
         let own_agent_id = self.owned_agent_id().clone();
 
-        let begin_index = self
-            .begin_function(&DurableFunctionType::WriteRemote)
-            .await?;
-
         let entry = self.table().get(&this)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_agent_id = payload.remote_agent_id.clone();
@@ -360,6 +377,19 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 "RPC calls to the same agent are not supported"
             ));
         }
+
+        // Check the per-invocation RPC call limit before initiating the call.
+        self.state
+            .check_and_increment_rpc_call_count()
+            .map_err(wasmtime::Error::from)?;
+
+        // Returns Err(WorkerMonthlyRpcCallBudgetExhausted) when exhausted,
+        // which maps to RetryDecision::TryStop — suspending the worker.
+        self.record_monthly_rpc_call()?;
+
+        let begin_index = self
+            .begin_function(&DurableFunctionType::WriteRemote)
+            .await?;
 
         let current_idempotency_key = self
             .get_current_idempotency_key()

@@ -11,7 +11,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFilter, AgentMetadata, AgentStatus, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
-use tracing::{info, Instrument};
+use tracing::{Instrument, info};
 
 #[async_trait]
 pub trait RunningWorkerEnumerationService: Send + Sync {

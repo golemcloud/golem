@@ -13,13 +13,12 @@
 // limitations under the License.
 
 use crate::durable_host::rdbms::{
-    begin_db_transaction, db_connection_drop, db_connection_durable_execute,
+    FromRdbmsValue, RdbmsConnection, RdbmsDurabilityPairs, RdbmsResultStreamEntry,
+    RdbmsTransactionEntry, begin_db_transaction, db_connection_drop, db_connection_durable_execute,
     db_connection_durable_query, db_connection_durable_query_stream, db_result_stream_drop,
     db_result_stream_durable_get_columns, db_result_stream_durable_get_next, db_transaction_drop,
     db_transaction_durable_commit, db_transaction_durable_execute, db_transaction_durable_query,
     db_transaction_durable_query_stream, db_transaction_durable_rollback, open_db_connection,
-    FromRdbmsValue, RdbmsConnection, RdbmsDurabilityPairs, RdbmsResultStreamEntry,
-    RdbmsTransactionEntry,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::rdbms::postgres::{
@@ -30,8 +29,8 @@ use crate::preview2::golem::rdbms::postgres::{
     Tsbound, Tsrange, Tstzbound, Tstzrange, ValueBound, ValuesRange,
 };
 use crate::preview2::golem::rdbms::types::Timetz;
-use crate::services::rdbms::postgres::types as postgres_types;
 use crate::services::rdbms::postgres::PostgresType;
+use crate::services::rdbms::postgres::types as postgres_types;
 use crate::workerctx::WorkerCtx;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
@@ -1751,9 +1750,8 @@ fn from_db_result(
 #[cfg(test)]
 pub mod tests {
     use crate::durable_host::rdbms::postgres::{
-        from_db_column_type, from_db_value, to_db_column_type, to_db_value,
         DbColumnTypeResourceRep, DbColumnTypeWithResourceRep, DbValueResourceRep,
-        DbValueWithResourceRep,
+        DbValueWithResourceRep, from_db_column_type, from_db_value, to_db_column_type, to_db_value,
     };
     use crate::services::rdbms::postgres::types as postgres_types;
     use assert2::check;
