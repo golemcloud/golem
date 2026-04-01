@@ -100,6 +100,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
             Error::UnknownError(inner) => Ok(Self::Unknown(inner.details)),
             Error::ExceededMemoryLimit(_) => Ok(Self::ExceededMemoryLimit),
             Error::ExceededTableLimit(_) => Ok(Self::ExceededTableLimit),
+            Error::ExceededHttpCallLimit(_) => Ok(Self::ExceededHttpCallLimit),
+            Error::ExceededRpcCallLimit(_) => Ok(Self::ExceededRpcCallLimit),
             Error::NodeOutOfFilesystemStorage(_) => Ok(Self::NodeOutOfFilesystemStorage),
             Error::AgentExceededFilesystemStorageLimit(_) => {
                 Ok(Self::AgentExceededFilesystemStorageLimit)
@@ -129,6 +131,12 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
             }
             AgentError::ExceededTableLimit => {
                 Error::ExceededTableLimit(grpc_worker::ExceededTableLimit {})
+            }
+            AgentError::ExceededHttpCallLimit => {
+                Error::ExceededHttpCallLimit(grpc_worker::ExceededHttpCallLimit {})
+            }
+            AgentError::ExceededRpcCallLimit => {
+                Error::ExceededRpcCallLimit(grpc_worker::ExceededRpcCallLimit {})
             }
             AgentError::NodeOutOfFilesystemStorage => {
                 Error::NodeOutOfFilesystemStorage(grpc_worker::NodeOutOfFilesystemStorage {})

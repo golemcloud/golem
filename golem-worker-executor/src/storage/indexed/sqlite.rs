@@ -72,6 +72,21 @@ impl SqliteIndexedStorage {
             }
         }
     }
+
+    fn to_like_prefix(prefix: &str) -> String {
+        let mut result = String::with_capacity(prefix.len() + 1);
+        for ch in prefix.chars() {
+            match ch {
+                '%' | '_' | '\\' => {
+                    result.push('\\');
+                    result.push(ch);
+                }
+                _ => result.push(ch),
+            }
+        }
+        result.push('%');
+        result
+    }
 }
 
 #[async_trait]
@@ -120,17 +135,28 @@ impl IndexedStorage for SqliteIndexedStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageMetaNamespace,
-        pattern: &str,
+        prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String> {
-        let key = pattern.replace("*", "%").replace("?", "_");
-        let query =
-            sqlx::query_as("SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key LIKE ? ORDER BY key LIMIT ? OFFSET ?;")
+        let query = match prefix {
+            Some(prefix) => {
+                let key = Self::to_like_prefix(prefix);
+                sqlx::query_as(
+                    "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key LIKE ? ESCAPE '\\' ORDER BY key LIMIT ? OFFSET ?;",
+                )
                 .bind(Self::meta_namespace(namespace))
-                .bind(&key)
+                .bind(key)
                 .bind(sqlx::types::Json(count))
-                .bind(sqlx::types::Json(cursor));
+                .bind(sqlx::types::Json(cursor))
+            }
+            None => sqlx::query_as(
+                "SELECT DISTINCT key FROM index_storage WHERE namespace = ? ORDER BY key LIMIT ? OFFSET ?;",
+            )
+            .bind(Self::meta_namespace(namespace))
+            .bind(sqlx::types::Json(count))
+            .bind(sqlx::types::Json(cursor)),
+        };
 
         let keys = self
             .pool

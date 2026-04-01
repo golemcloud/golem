@@ -14,7 +14,7 @@
 
 use crate::repo::model::token::TokenRecord;
 use crate::repo::registry_change::{
-    ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, NotifyChangeEvent,
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -24,6 +24,7 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use golem_service_base::repo::{RepoError, RepoResult, ResultExt};
 use indoc::indoc;
+use sqlx::Row;
 use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
@@ -38,13 +39,7 @@ pub trait TokenRepo: Send + Sync {
 
     async fn get_by_account(&self, account_id: Uuid) -> RepoResult<Vec<TokenRecord>>;
 
-    async fn delete(&self, token_id: Uuid) -> RepoResult<()>;
-
-    async fn delete_and_record_invalidation(
-        &self,
-        token_id: Uuid,
-        account_id: Uuid,
-    ) -> RepoResult<Option<ChangeEventId>>;
+    async fn delete(&self, token_id: Uuid) -> RepoResult<Option<RequiresNotificationSignal<Uuid>>>;
 }
 
 pub struct LoggedTokenRepo<Repo: TokenRepo> {
@@ -95,20 +90,9 @@ impl<Repo: TokenRepo> TokenRepo for LoggedTokenRepo<Repo> {
             .await
     }
 
-    async fn delete(&self, token_id: Uuid) -> RepoResult<()> {
+    async fn delete(&self, token_id: Uuid) -> RepoResult<Option<RequiresNotificationSignal<Uuid>>> {
         self.repo
             .delete(token_id)
-            .instrument(Self::span_id(token_id))
-            .await
-    }
-
-    async fn delete_and_record_invalidation(
-        &self,
-        token_id: Uuid,
-        account_id: Uuid,
-    ) -> RepoResult<Option<ChangeEventId>> {
-        self.repo
-            .delete_and_record_invalidation(token_id, account_id)
             .instrument(Self::span_id(token_id))
             .await
     }
@@ -228,50 +212,36 @@ impl TokenRepo for DbTokenRepo<PostgresPool> {
             .await
     }
 
-    async fn delete(&self, token_id: Uuid) -> RepoResult<()> {
-        self.with_rw("delete")
-            .execute(
-                sqlx::query(indoc! { r#"
-                    DELETE FROM tokens WHERE token_id = $1
-                "#})
-                .bind(token_id),
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn delete_and_record_invalidation(
-        &self,
-        token_id: Uuid,
-        account_id: Uuid,
-    ) -> RepoResult<Option<ChangeEventId>> {
-        let result: Option<ChangeEventId> = self
-            .with_tx_err("delete_and_record_invalidation", |tx| {
+    async fn delete(&self, token_id: Uuid) -> RepoResult<Option<RequiresNotificationSignal<Uuid>>> {
+        let result: Option<Uuid> = self
+            .with_tx_err("delete", |tx| {
                 Box::pin(async move {
-                    let delete_result = tx
-                        .execute(
-                            sqlx::query("DELETE FROM tokens WHERE token_id = $1").bind(token_id),
+                    let deleted_row = tx
+                        .fetch_optional(
+                            sqlx::query(
+                                "DELETE FROM tokens WHERE token_id = $1 RETURNING account_id",
+                            )
+                            .bind(token_id),
                         )
                         .await?;
 
-                    if delete_result.rows_affected() == 0 {
+                    let Some(deleted_row) = deleted_row else {
                         return Ok::<_, RepoError>(None);
-                    }
+                    };
 
-                    let event = NewRegistryChangeEvent::account_tokens_invalidated(account_id);
-                    let event_id =
-                        DbRegistryChangeRepo::<PostgresPool>::insert_change_event_in_tx(tx, &event)
-                            .await?;
-                    Ok(Some(event_id))
+                    let deleted_account_id = deleted_row
+                        .try_get::<Uuid, _>("account_id")
+                        .map_err(RepoError::from)?;
+
+                    let event =
+                        NewRegistryChangeEvent::account_tokens_invalidated(deleted_account_id);
+                    DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &event)
+                        .await?;
+                    Ok(Some(deleted_account_id))
                 })
             })
             .await?;
 
-        if let Some(event_id) = result {
-            self.db_pool.notify_change_event(event_id).await;
-        }
-
-        Ok(result)
+        Ok(result.map(RequiresSignalExt::requires_notification_signal))
     }
 }

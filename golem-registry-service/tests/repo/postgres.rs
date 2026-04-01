@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use crate::repo::Deps;
+use crate::repo::{Deps, TestDb};
 use golem_common::config::DbPostgresConfig;
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
@@ -33,6 +33,7 @@ use golem_registry_service::services::registry_change_notifier::{
     PostgresRegistryChangeNotifier, RegistryChangeNotifier,
 };
 use golem_service_base::db;
+use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
 use sqlx::ConnectOptions;
@@ -207,7 +208,7 @@ async fn make_pool(config: &DbPostgresConfig) -> PostgresPool {
 async fn make_deps(pool: PostgresPool) -> Deps {
     let deps = Deps {
         account_repo: Box::new(DbAccountRepo::logged(pool.clone())),
-        account_usage_repo: Box::new(DbAccountUsageRepo::logged(pool.clone())),
+        account_usage_repo: std::sync::Arc::new(DbAccountUsageRepo::logged(pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(pool.clone())),
         plan_repo: Box::new(DbPlanRepo::logged(pool.clone())),
@@ -219,6 +220,7 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         environment_share_repo: Box::new(DbEnvironmentShareRepo::logged(pool.clone())),
         plugin_repo: Box::new(DbPluginRepo::logged(pool.clone())),
         registry_change_repo: Box::new(DbRegistryChangeRepo::new(pool.clone())),
+        test_db: TestDb::Postgres(pool.clone()),
     };
     deps.setup().await;
     deps
@@ -310,6 +312,21 @@ async fn test_http_api_deployment_stage(#[dimension(postgres_variant)] deps: &De
 #[test]
 async fn test_account_usage(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_account_usage(deps).await;
+}
+
+#[test]
+async fn test_update_http_call_counts(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_update_http_call_counts(deps).await;
+}
+
+#[test]
+async fn test_update_rpc_call_counts(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_update_rpc_call_counts(deps).await;
+}
+
+#[test]
+async fn test_update_call_counts_batch(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_update_call_counts_batch(deps).await;
 }
 
 #[test]
@@ -408,11 +425,19 @@ async fn test_pg_notify_propagates_through_notifier(db: &PostgresDb) {
 
     // Record an event via the repo — this INSERT triggers pg_notify('registry_change', ...)
     let env_id = Uuid::new_v4();
-    let event_id = repo
-        .record_change_event(&NewRegistryChangeEvent::deployment_changed(env_id, 42))
+    let event_id = db
+        .pool
+        .with_tx_err("registry_change", "record_change_event_test", |tx| {
+            Box::pin(async move {
+                DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
+                    tx,
+                    &NewRegistryChangeEvent::deployment_changed(env_id, 42, 42),
+                )
+                .await
+            })
+        })
         .await
         .unwrap();
-
     // The PgListener should pick up the NOTIFY, read the event from the DB,
     // and broadcast it through the sender.
     let received = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())

@@ -167,6 +167,10 @@ max_message_size = 52428800
 port = 8080
 request_timeout = "30s"
 
+[registry_service.invalidation_event_subscriber]
+initial_backoff = "100ms"
+max_backoff = "30s"
+
 [registry_service.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
@@ -461,6 +465,10 @@ without_time = false
 # port = 8080
 # request_timeout = "30s"
 # 
+# [registry_service.invalidation_event_subscriber]
+# initial_backoff = "100ms"
+# max_backoff = "30s"
+# 
 # [registry_service.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
@@ -702,6 +710,10 @@ without_time = false
 # max_message_size = 52428800
 # port = 8080
 # request_timeout = "30s"
+# 
+# [registry_service.invalidation_event_subscriber]
+# initial_backoff = "100ms"
+# max_backoff = "30s"
 # 
 # [registry_service.retries_on_unavailable]
 # max_attempts = 5

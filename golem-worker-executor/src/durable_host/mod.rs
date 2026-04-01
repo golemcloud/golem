@@ -125,6 +125,38 @@ use std::time::{Duration, Instant, SystemTime};
 use std::vec;
 use tempfile::TempDir;
 use tokio::sync::RwLock as TRwLock;
+
+/// A worker's filesystem root directory. Either a random OS temp directory
+/// (the default) or a deterministic path derived from the agent id.
+///
+/// In both cases the directory is removed when this value is dropped.
+enum WorkerDir {
+    /// Random temp dir created by `tempfile`. Auto-deleted on drop.
+    Temp(TempDir),
+    /// Deterministic directory. Deleted explicitly on drop.
+    Deterministic(PathBuf),
+}
+
+impl WorkerDir {
+    fn path(&self) -> &Path {
+        match self {
+            WorkerDir::Temp(td) => td.path(),
+            WorkerDir::Deterministic(p) => p,
+        }
+    }
+}
+
+impl Drop for WorkerDir {
+    fn drop(&mut self) {
+        if let WorkerDir::Deterministic(p) = self
+            && p.exists()
+        {
+            let _ = std::fs::remove_dir_all(p);
+        }
+        // WorkerDir::Temp is dropped automatically by TempDir's own Drop impl
+    }
+}
+
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, info, span, warn};
 use try_match::try_match;
@@ -153,7 +185,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub owned_agent_id: OwnedAgentId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
-    temp_dir: Arc<TempDir>,
+    worker_dir: Arc<WorkerDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
     pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
@@ -192,14 +224,33 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         websocket_connection_pool: websocket::WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
+        per_invocation_http_call_limit: u64,
+        per_invocation_rpc_call_limit: u64,
     ) -> Result<Self, WorkerExecutorError> {
-        let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
-            |e| WorkerExecutorError::runtime(format!("Failed to create temporary directory: {e}")),
-        )?);
-        debug!(
-            "Created temporary file system root at {:?}",
-            temp_dir.path()
+        let worker_dir = Arc::new(
+            if let Some(root) = &config.filesystem_storage.deterministic_root_dir {
+                let dir = root
+                    .join(owned_agent_id.environment_id.to_string())
+                    .join(owned_agent_id.agent_id.component_id.to_string())
+                    .join(owned_agent_id.agent_id.agent_name_encoded());
+                std::fs::create_dir_all(&dir).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to create deterministic directory {}: {e}",
+                        dir.display()
+                    ))
+                })?;
+                WorkerDir::Deterministic(dir)
+            } else {
+                WorkerDir::Temp(tempfile::Builder::new().prefix("golem").tempdir().map_err(
+                    |e| {
+                        WorkerExecutorError::runtime(format!(
+                            "Failed to create temporary directory: {e}",
+                        ))
+                    },
+                )?)
+            },
         );
+        debug!("Created file system root at {:?}", worker_dir.path());
 
         debug!(
             "Worker {} initialized with deleted regions {}",
@@ -221,7 +272,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let files = prepare_filesystem(
             &file_loader,
             owned_agent_id.environment_id,
-            temp_dir.path(),
+            worker_dir.path(),
             &component_metadata.files,
         )
         .await?;
@@ -272,7 +323,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
-            temp_dir.path().to_path_buf(),
+            worker_dir.path().to_path_buf(),
             stdin,
             stdout,
             stderr,
@@ -331,9 +382,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 pending_update,
                 original_phantom_id,
                 worker_config.last_snapshot_index,
+                per_invocation_http_call_limit,
+                per_invocation_rpc_call_limit,
+                resource_limits.clone(),
             )
             .await,
-            temp_dir,
+            worker_dir,
             execution_status,
             resource_limits,
         })
@@ -344,6 +398,43 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .expect("ResourceTable is shared and cannot be borrowed mutably")
             .get_mut()
             .expect("ResourceTable mutex must never fail")
+    }
+
+    /// Resets the per-invocation HTTP and RPC call counters to zero.
+    ///
+    /// Delegates to `PrivateDurableWorkerState::reset_invocation_call_counts`.
+    pub fn reset_invocation_call_counts(&mut self) {
+        self.state.reset_invocation_call_counts();
+    }
+
+    /// Records one outgoing HTTP call against the monthly account quota.
+    ///
+    /// Returns `Err(WorkerMonthlyHttpCallBudgetExhausted)` if the monthly budget
+    /// is exhausted. This trap maps to `RetryDecision::TryStop` — the worker is
+    /// suspended (same as filesystem `NodeOutOfFilesystemStorage` -> `ReacquirePermits`),
+    /// and will be resumed when the registry replenishes the budget.
+    pub fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
+        if self.state.is_live() && !self.state.resource_limit_entry.record_http_call() {
+            Err(anyhow!(
+                GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Records one outgoing RPC call against the monthly account quota.
+    ///
+    /// Returns `Err(WorkerMonthlyRpcCallBudgetExhausted)` if the monthly budget
+    /// is exhausted.
+    pub fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
+        if self.state.is_live() && !self.state.resource_limit_entry.record_rpc_call() {
+            Err(anyhow!(
+                GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     fn check_if_file_is_readonly(
@@ -606,6 +697,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } => RetryDecision::None,
             TrapType::Error {
                 error: AgentError::InternalError(_),
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::ExceededHttpCallLimit,
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::ExceededRpcCallLimit,
                 ..
             } => RetryDecision::None,
             TrapType::Error {
@@ -1617,7 +1716,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &mut current_files,
             &self.state.file_loader,
             self.owned_agent_id.environment_id,
-            self.temp_dir.path(),
+            self.worker_dir.path(),
             &new_metadata.files,
         )
         .await?;
@@ -2687,7 +2786,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
         &self,
         path: &ComponentFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
-        let root = self.temp_dir.path();
+        let root = self.worker_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
@@ -2798,7 +2897,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
         &self,
         path: &ComponentFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
-        let root = self.temp_dir.path();
+        let root = self.worker_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
@@ -3197,6 +3296,22 @@ struct PrivateDurableWorkerState {
     /// Stores the phantom ID associated with the currently replayed oplog region. Forks can change it
     current_phantom_id: Option<Uuid>,
     last_snapshot_index: Option<OplogIndex>,
+
+    /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
+    /// Reset to 0 at the start of each exported function invocation.
+    http_call_count: u64,
+    /// Per-invocation HTTP call limit from the account's Plan.
+    per_invocation_http_call_limit: u64,
+
+    /// Number of RPC calls made in the current invocation (live only, not replayed).
+    /// Reset to 0 at the start of each exported function invocation.
+    rpc_call_count: u64,
+    /// Per-invocation RPC call limit from the account's Plan.
+    per_invocation_rpc_call_limit: u64,
+
+    /// Shared per-account resource limit entry. Used to record monthly HTTP/RPC call consumption
+    /// and to check remaining budgets from the epoch callback.
+    resource_limit_entry: Arc<AtomicResourceEntry>,
 }
 
 impl PrivateDurableWorkerState {
@@ -3237,6 +3352,9 @@ impl PrivateDurableWorkerState {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
         last_snapshot_index: Option<OplogIndex>,
+        per_invocation_http_call_limit: u64,
+        per_invocation_rpc_call_limit: u64,
+        resource_limit_entry: Arc<AtomicResourceEntry>,
     ) -> Self {
         let deleted_regions = if let Some(snapshot_idx) = last_snapshot_index {
             let mut regions = deleted_regions;
@@ -3259,6 +3377,10 @@ impl PrivateDurableWorkerState {
             oplog_service,
             oplog,
             agent_id,
+            http_call_count: 0,
+            per_invocation_http_call_limit,
+            rpc_call_count: 0,
+            per_invocation_rpc_call_limit,
             promise_service,
             scheduler_service,
             worker_service,
@@ -3310,6 +3432,7 @@ impl PrivateDurableWorkerState {
             active_atomic_regions: Vec::new(),
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
+            resource_limit_entry,
         }
     }
 
@@ -3337,6 +3460,46 @@ impl PrivateDurableWorkerState {
         } else {
             self.replay_state.last_replayed_index()
         }
+    }
+
+    /// Increments the HTTP call counter for the current invocation if in live mode.
+    ///
+    /// Returns `Err` if the per-invocation HTTP call limit would be exceeded.
+    /// The check and increment are performed only during live execution; replay
+    /// mode is a no-op so that recovering workers are not penalised for calls
+    /// already made in a prior execution.
+    pub fn check_and_increment_http_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
+        if !self.is_live() {
+            return Ok(());
+        }
+        if self.per_invocation_http_call_limit != u64::MAX
+            && self.http_call_count >= self.per_invocation_http_call_limit
+        {
+            return Err(GolemSpecificWasmTrap::WorkerExceededHttpCallLimit);
+        }
+        self.http_call_count = self.http_call_count.saturating_add(1);
+        Ok(())
+    }
+
+    /// Increments the RPC call counter for the current invocation if in live mode.
+    ///
+    /// Returns `Err` if the per-invocation RPC call limit would be exceeded.
+    pub fn check_and_increment_rpc_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
+        if !self.is_live() {
+            return Ok(());
+        }
+        if self.per_invocation_rpc_call_limit != u64::MAX
+            && self.rpc_call_count >= self.per_invocation_rpc_call_limit
+        {
+            return Err(GolemSpecificWasmTrap::WorkerExceededRpcCallLimit);
+        }
+        self.rpc_call_count = self.rpc_call_count.saturating_add(1);
+        Ok(())
+    }
+
+    pub fn reset_invocation_call_counts(&mut self) {
+        self.http_call_count = 0;
+        self.rpc_call_count = 0;
     }
 
     /// Returns whether we are in live mode where we are executing new calls.

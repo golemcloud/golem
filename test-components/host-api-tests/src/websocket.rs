@@ -14,6 +14,7 @@ pub trait WebsocketTest {
     /// Receives the next message from the connection stored in agent state.
     fn receive_next_from_persisted(&self) -> String;
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String>;
+    async fn async_bidi_test(&self, url: String) -> Result<String, String>;
 
     // New polling methods
     fn poll_for_message(&self, url: String, timeout_ms: u64) -> Result<String, String>;
@@ -81,6 +82,35 @@ impl WebsocketTest for WebsocketTestImpl {
             Some(WebSocketMessage::Binary(b)) => Some(format!("{} bytes", b.len())),
             None => None,
         }
+    }
+
+    async fn async_bidi_test(&self, url: String) -> Result<String, String> {
+        let ws = WebsocketConnection::connect(&url, None)
+            .map_err(|e| format!("Failed to connect: {:?}", e))?;
+
+        let payloads = ["msg-a", "msg-b", "msg-c"];
+        let mut received = Vec::new();
+
+        for payload in payloads {
+            ws.send(&WebSocketMessage::Text(payload.to_string()))
+                .map_err(|e| format!("Send error: {:?}", e))?;
+
+            // Convert websocket pollable to an async future via wstd.
+            let pollable = ws.subscribe();
+            wstd::io::AsyncPollable::new(pollable).wait_for().await;
+
+            let msg = ws
+                .receive()
+                .map_err(|e| format!("Receive error: {:?}", e))?;
+            match msg {
+                WebSocketMessage::Text(text) => received.push(text),
+                WebSocketMessage::Binary(data) => {
+                    received.push(format!("Binary: {} bytes", data.len()))
+                }
+            }
+        }
+
+        Ok(received.join("|"))
     }
 
     fn poll_for_message(&self, url: String, timeout_ms: u64) -> Result<String, String> {

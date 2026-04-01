@@ -679,6 +679,8 @@ impl From<oplog::WorkerError> for golem_common::model::oplog::AgentError {
             oplog::WorkerError::ExceededMemoryLimit => Self::ExceededMemoryLimit,
             oplog::WorkerError::InternalError(msg) => Self::InternalError(msg),
             oplog::WorkerError::ExceededTableLimit => Self::ExceededTableLimit,
+            oplog::WorkerError::ExceededHttpCallLimit => Self::ExceededHttpCallLimit,
+            oplog::WorkerError::ExceededRpcCallLimit => Self::ExceededRpcCallLimit,
             oplog::WorkerError::NodeOutOfFilesystemStorage => Self::NodeOutOfFilesystemStorage,
             oplog::WorkerError::AgentExceededFilesystemStorageLimit => {
                 Self::AgentExceededFilesystemStorageLimit

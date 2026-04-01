@@ -82,8 +82,8 @@ impl PrimaryOplogService {
         agent_id.to_redis_key()
     }
 
-    pub fn key_pattern(component_id: &ComponentId) -> String {
-        format!("{}*", component_id.0)
+    pub fn key_prefix(component_id: &ComponentId) -> String {
+        component_id.0.to_string()
     }
 
     async fn get_last_index_from_storage(
@@ -330,7 +330,7 @@ impl OplogService for PrimaryOplogService {
             .with("oplog", "scan")
             .scan(
                 IndexedStorageMetaNamespace::Oplog,
-                &Self::key_pattern(component_id),
+                Some(&Self::key_prefix(component_id)),
                 cursor.cursor,
                 count,
             )

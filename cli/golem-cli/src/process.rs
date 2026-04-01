@@ -19,18 +19,73 @@ use async_trait::async_trait;
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 use gag::BufferRedirect;
+use std::collections::HashMap;
 use std::io::Read;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
+use std::sync::{LazyLock, Mutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use which::which as wrapped_which;
 
-#[derive(Clone, Copy)]
-enum StreamKind {
-    Stdout,
-    Stderr,
+static PROGRAM_LOOKUP_CACHE: LazyLock<Mutex<HashMap<String, Option<PathBuf>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub fn which(program: &str) -> anyhow::Result<PathBuf> {
+    let program_path = Path::new(program);
+
+    if is_explicit_program_path(program_path) {
+        return Ok(program_path.to_path_buf());
+    }
+
+    if let Some(cached) = PROGRAM_LOOKUP_CACHE
+        .lock()
+        .expect("program lookup cache lock poisoned")
+        .get(program)
+        .cloned()
+    {
+        return cached.ok_or_else(|| anyhow!("Program '{}' not found on PATH", program));
+    }
+
+    let resolved = wrapped_which(program_path).ok();
+
+    PROGRAM_LOOKUP_CACHE
+        .lock()
+        .expect("program lookup cache lock poisoned")
+        .insert(program.to_string(), resolved.clone());
+
+    resolved.ok_or_else(|| anyhow!("Program '{}' not found on PATH", program))
+}
+
+pub fn normalized_program_name(program: &str) -> String {
+    let path = Path::new(program);
+    path.file_stem()
+        .or_else(|| path.file_name())
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+fn is_explicit_program_path(path: &Path) -> bool {
+    path.is_absolute() || path.components().count() > 1
+}
+
+#[cfg(test)]
+fn clear_program_lookup_cache() {
+    PROGRAM_LOOKUP_CACHE
+        .lock()
+        .expect("program lookup cache lock poisoned")
+        .clear();
+}
+
+#[cfg(test)]
+fn program_lookup_cache_len() -> usize {
+    PROGRAM_LOOKUP_CACHE
+        .lock()
+        .expect("program lookup cache lock poisoned")
+        .len()
 }
 
 pub trait ExitStatusExt {
@@ -59,6 +114,12 @@ impl ExitStatusExt for ExitStatus {
             Err(anyhow!(PipedExitCode(self.code().unwrap_or(1) as u8)))
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum StreamKind {
+    Stdout,
+    Stderr,
 }
 
 #[async_trait]
@@ -271,4 +332,34 @@ where
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn which_uses_cache_for_identical_lookup() {
+        clear_program_lookup_cache();
+
+        #[cfg(windows)]
+        let requested_program_name = "cargo.exe";
+
+        #[cfg(not(windows))]
+        let requested_program_name = "cargo";
+
+        let first = which(requested_program_name).unwrap();
+        let cached = which(requested_program_name).unwrap();
+
+        assert_eq!(first, cached);
+        assert_eq!(program_lookup_cache_len(), 1);
+    }
+
+    #[test]
+    fn normalized_program_name_drops_extension_and_normalizes_case() {
+        assert_eq!(normalized_program_name("npm"), "npm");
+        assert_eq!(normalized_program_name("NPM.CMD"), "npm");
+        assert_eq!(normalized_program_name("C:/Tools/Npx.ExE"), "npx");
+    }
 }

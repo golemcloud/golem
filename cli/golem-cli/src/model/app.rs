@@ -1400,18 +1400,19 @@ impl InitialComponentFileSource {
         // Try to parse the URL as an absolute URL
         let url = Url::parse(url_string).or_else(|_| {
             // If that fails, try to parse it as a relative path
-            let canonical_relative_to = relative_to
-                .parent()
-                .expect("Failed to get parent")
-                .canonicalize()
-                .map_err(|_| {
+            let relative_parent = relative_to.parent().expect("Failed to get parent");
+            let absolute_relative_to =
+                fs::absolute_lexical_path(relative_parent).map_err(|_| {
                     format!(
-                        "Failed to canonicalize relative path: {}",
+                        "Failed to resolve relative path: {}",
                         relative_to.log_color_highlight()
                     )
                 })?;
 
-            let source = canonical_relative_to.join(PathBuf::from(url_string));
+            let source = fs::absolute_lexical_path_from_base_dir(
+                Path::new(url_string),
+                &absolute_relative_to,
+            );
             Url::from_file_path(&source).map_err(|_| {
                 format!(
                     "Failed to convert source ({}) to URL",
@@ -2206,7 +2207,7 @@ mod app_builder {
             component_name: ComponentName,
         ) {
             let component_dir = match fs::parent_or_err(&source)
-                .and_then(fs::canonicalize_path)
+                .and_then(fs::absolute_lexical_path)
                 .map(|path| {
                     let path = dir.as_ref().map(|dir| path.join(dir)).unwrap_or(path);
                     fs::normalize_path_lexically(&path)

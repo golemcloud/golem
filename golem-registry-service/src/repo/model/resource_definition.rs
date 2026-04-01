@@ -25,8 +25,8 @@ use golem_common::model::resource_definition::{
     ResourceDefinitionId, ResourceDefinitionRevision, ResourceLimit, ResourceName,
     ResourceRateLimit, TimePeriod,
 };
+use golem_service_base::repo::NumericU64;
 use golem_service_base::repo::RepoError;
-use golem_service_base::repo::numeric::NumericU64;
 use sqlx::FromRow;
 use uuid::Uuid;
 

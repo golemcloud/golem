@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::datetime::SqlDateTime;
 use crate::repo::model::audit::AuditFields;
 use golem_common::model::account::AccountId;
 use golem_common::model::reports::{AccountCountsReport, AccountSummaryReport};
-use golem_service_base::repo::numeric::NumericU64;
+use golem_service_base::repo::NumericU64;
+use golem_service_base::repo::SqlDateTime;
 use sqlx::FromRow;
 use std::fmt::Debug;
 use uuid::Uuid;
