@@ -260,6 +260,7 @@ impl RustBridgeGenerator {
             pub struct #client_struct_name {
                 constructor_parameters: golem_client::model::UntypedJsonDataValue,
                 phantom_id: Option<uuid::Uuid>,
+                agent_id: golem_common::model::AgentId,
             }
 
             impl std::fmt::Debug for #client_struct_name {
@@ -267,6 +268,7 @@ impl RustBridgeGenerator {
                     f.debug_struct(stringify!(#client_struct_name))
                         .field("constructor_parameters", &self.constructor_parameters)
                         .field("phantom_id", &self.phantom_id)
+                        .field("agent_id", &self.agent_id)
                         .finish()
                 }
             }
@@ -295,6 +297,21 @@ impl RustBridgeGenerator {
 
                 #with_config_methods
 
+                /// Returns the agent's identity, containing the component ID and agent name.
+                pub fn agent_id(&self) -> &golem_common::model::AgentId {
+                    &self.agent_id
+                }
+
+                /// Returns the configured worker service URL.
+                pub fn worker_service_url() -> reqwest::Url {
+                    CONFIG.get().expect("Configuration has not been set").server.url()
+                }
+
+                /// Returns the configured authentication token.
+                pub fn auth_token() -> golem_client::Security {
+                    CONFIG.get().expect("Configuration has not been set").server.token()
+                }
+
                 async fn __create(
                     constructor_parameters: golem_client::model::UntypedJsonDataValue,
                     phantom_id: Option<uuid::Uuid>,
@@ -311,7 +328,7 @@ impl RustBridgeGenerator {
                         security_token: config.server.token(),
                     };
                     let api_client = golem_client::api::AgentClientLive { context };
-                    golem_client::api::AgentClient::create_agent(
+                    let response = golem_client::api::AgentClient::create_agent(
                         &api_client,
                         &golem_client::model::CreateAgentRequest {
                             app_name: config.app_name.to_string(),
@@ -323,7 +340,7 @@ impl RustBridgeGenerator {
                         },
                     ).await?;
 
-                    Ok(Self { constructor_parameters, phantom_id })
+                    Ok(Self { constructor_parameters, phantom_id, agent_id: response.agent_id })
                 }
 
                 #(#methods)*

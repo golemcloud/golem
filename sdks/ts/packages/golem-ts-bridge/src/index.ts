@@ -156,8 +156,13 @@ export interface CreateAgentRequest {
   agentConfig?: WorkerAgentConfigEntry[];
 }
 
-export interface CreateAgentResponse {
+export interface AgentId {
+  componentId: string;
   agentId: string;
+}
+
+export interface CreateAgentResponse {
+  agentId: AgentId;
   componentRevision: number;
 }
 
