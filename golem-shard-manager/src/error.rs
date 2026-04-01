@@ -13,62 +13,12 @@
 // limitations under the License.
 
 use crate::quota::QuotaError;
+use crate::sharding::error::ShardManagerError;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_error;
 use golem_common::metrics::api::ApiErrorDetails;
-use golem_common::retriable_error::IsRetriableError;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::fmt::Formatter;
-
-#[derive(thiserror::Error, Debug)]
-pub enum ShardManagerError {
-    #[error("No source IP for pod")]
-    NoSourceIpForPod,
-    #[error("Failed to resolve address for pod")]
-    FailedAddressResolveForPod,
-    #[error("Timeout")]
-    Timeout,
-    #[error("gRPC: error status: {0}")]
-    GrpcError(#[from] tonic::Status),
-    #[error("No result")]
-    NoResult,
-    #[error("Worker execution error: {0}")]
-    WorkerExecutionError(WorkerExecutorError),
-    #[error("Persistence serialization error {0}")]
-    SerializationError(String),
-    #[error("Redis error {0}")]
-    RedisError(#[from] golem_common::redis::RedisError),
-    #[error("Postgres error {0}")]
-    PostgresError(#[from] RepoError),
-    #[error("Migration error {0}")]
-    MigrationError(#[from] anyhow::Error),
-    #[error("IO error {0}")]
-    IoError(#[from] std::io::Error),
-}
-
-impl IsRetriableError for ShardManagerError {
-    fn is_retriable(&self) -> bool {
-        match self {
-            ShardManagerError::NoSourceIpForPod => false,
-            ShardManagerError::FailedAddressResolveForPod => false,
-            ShardManagerError::Timeout => true,
-            ShardManagerError::GrpcError(status) => status.is_retriable(),
-            ShardManagerError::NoResult => true,
-            ShardManagerError::WorkerExecutionError(_) => true, // TODO: can we define which ones are retryable?
-            ShardManagerError::SerializationError(_) => false,
-            ShardManagerError::RedisError(_) => false,
-            ShardManagerError::PostgresError(_) => false,
-            ShardManagerError::MigrationError(_) => false,
-            ShardManagerError::IoError(_) => false,
-        }
-    }
-
-    fn as_loggable(&self) -> Option<String> {
-        Some(self.to_string())
-    }
-}
 
 impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
     fn from(value: ShardManagerError) -> golem::shardmanager::v1::ShardManagerError {
@@ -103,10 +53,7 @@ impl From<ShardManagerError> for golem::shardmanager::v1::ShardManagerError {
             ShardManagerError::SerializationError(details) => {
                 error(shard_manager_error::Error::Unknown, details)
             }
-            ShardManagerError::RedisError(err) => {
-                error(shard_manager_error::Error::Unknown, err.to_string())
-            }
-            ShardManagerError::PostgresError(err) => {
+            ShardManagerError::RepoError(err) => {
                 error(shard_manager_error::Error::Unknown, err.to_string())
             }
             ShardManagerError::MigrationError(err) => {
@@ -153,36 +100,6 @@ impl From<QuotaError> for golem::shardmanager::v1::QuotaError {
                 )),
             },
         }
-    }
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum HealthCheckError {
-    #[error("gRPC: error status: {0}")]
-    GrpcError(tonic::Status),
-    #[error("gRPC: transport error: {0}")]
-    GrpcTransportError(#[source] tonic::transport::Error),
-    #[error("gRPC: {0}")]
-    GrpcOther(&'static str),
-    #[error("K8s: connect error: {0}")]
-    K8sConnectError(#[source] kube::Error),
-    #[error("K8s: {0}")]
-    K8sOther(&'static str),
-}
-
-impl IsRetriableError for HealthCheckError {
-    fn is_retriable(&self) -> bool {
-        match self {
-            HealthCheckError::GrpcError(status) => status.is_retriable(),
-            HealthCheckError::GrpcTransportError(_) => true,
-            HealthCheckError::GrpcOther(_) => true,
-            HealthCheckError::K8sConnectError(_) => true,
-            HealthCheckError::K8sOther(_) => true,
-        }
-    }
-
-    fn as_loggable(&self) -> Option<String> {
-        Some(self.to_string())
     }
 }
 

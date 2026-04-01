@@ -24,7 +24,7 @@ use crate::log::{LogIndent, Output, log_action, log_skipping_up_to_date, logln, 
 use crate::model::GuestLanguage;
 use crate::model::app::BuildConfig;
 use crate::model::repl::{BridgeReplArgs, ReplMetadata, ReplScriptSource};
-use crate::process::{CommandExt, ExitStatusExt};
+use crate::process::{CommandExt, ExitStatusExt, which};
 use crate::sdk_overrides::sdk_overrides;
 use crate::{binary_path_to_string, fs};
 use golem_common::model::agent::DataSchema;
@@ -136,7 +136,7 @@ impl TypeScriptRepl {
                         &repl_ts_path,
                     )?;
 
-                    Command::new("npm")
+                    Command::new(which("npm")?)
                         .arg("install")
                         .current_dir(&args.repl_root_dir)
                         .stream_and_wait_for_status("npm")
@@ -183,7 +183,7 @@ impl TypeScriptRepl {
           "workspaces": workspaces,
           "dependencies": dependencies,
           "devDependencies": {
-            "@golem/golem-ts-repl": sdk_overrides()?.ts_package_dep("golem-ts-repl"),
+            "@golem/golem-ts-repl": sdk_overrides()?.ts_package_dep("golem-ts-repl")?,
             "tsx": "^4.7",
             "typescript": "^5.9"
           }
@@ -336,7 +336,7 @@ impl TypeScriptRepl {
     }
 
     async fn prepare_command(&self, args: &BridgeReplArgs) -> anyhow::Result<Command> {
-        let mut command = Command::new("npx");
+        let mut command = Command::new(which("npx")?);
 
         command
             .current_dir(&args.repl_root_dir)

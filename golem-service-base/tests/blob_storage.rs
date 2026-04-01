@@ -1047,3 +1047,294 @@ async fn list_dir_same_prefix(
         ]
     );
 }
+
+#[test]
+#[tracing::instrument]
+async fn delete_dir_must_not_delete_siblings(
+    #[tagged_as("sqlite")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+
+    let dir_a = Path::new("dir-a");
+    let dir_b = Path::new("dir-b");
+
+    storage
+        .put_raw(
+            "delete_dir_must_not_delete_siblings",
+            "put-a",
+            namespace.clone(),
+            &dir_a.join("file-a"),
+            &Bytes::from("data-a"),
+        )
+        .await
+        .unwrap();
+
+    storage
+        .put_raw(
+            "delete_dir_must_not_delete_siblings",
+            "put-b",
+            namespace.clone(),
+            &dir_b.join("file-b"),
+            &Bytes::from("data-b"),
+        )
+        .await
+        .unwrap();
+
+    storage
+        .delete_dir(
+            "delete_dir_must_not_delete_siblings",
+            "delete-a",
+            namespace.clone(),
+            dir_a,
+        )
+        .await
+        .unwrap();
+
+    let remaining = storage
+        .get_raw(
+            "delete_dir_must_not_delete_siblings",
+            "get-b",
+            namespace.clone(),
+            &dir_b.join("file-b"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(remaining, Some(Bytes::from("data-b").to_vec()));
+}
+
+#[test]
+#[tracing::instrument]
+async fn fs_rejects_parent_traversal(
+    #[tagged_as("fs")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+
+    let result = storage
+        .put_raw(
+            "fs_rejects_parent_traversal",
+            "put-raw",
+            namespace.clone(),
+            Path::new("../../../../escape"),
+            &Bytes::from("payload"),
+        )
+        .await;
+
+    assert!(result.is_err());
+}
+
+#[test]
+#[tracing::instrument]
+async fn reject_parent_traversal_in_put_raw(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+
+    let result = storage
+        .put_raw(
+            "reject_parent_traversal_in_put_raw",
+            "put-raw",
+            namespace.clone(),
+            Path::new("../escape"),
+            &Bytes::from("payload"),
+        )
+        .await;
+
+    assert!(result.is_err());
+}
+
+#[test]
+#[tracing::instrument]
+async fn delete_dir_escapes_like_wildcards(
+    #[tagged_as("sqlite")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+
+    let wildcard_dir = Path::new("dir%name");
+    let sibling_dir = Path::new("dirXname");
+
+    storage
+        .put_raw(
+            "delete_dir_escapes_like_wildcards",
+            "put-a",
+            namespace.clone(),
+            &wildcard_dir.join("file-a"),
+            &Bytes::from("data-a"),
+        )
+        .await
+        .unwrap();
+
+    storage
+        .put_raw(
+            "delete_dir_escapes_like_wildcards",
+            "put-b",
+            namespace.clone(),
+            &sibling_dir.join("file-b"),
+            &Bytes::from("data-b"),
+        )
+        .await
+        .unwrap();
+
+    storage
+        .delete_dir(
+            "delete_dir_escapes_like_wildcards",
+            "delete-a",
+            namespace.clone(),
+            wildcard_dir,
+        )
+        .await
+        .unwrap();
+
+    let remaining = storage
+        .get_raw(
+            "delete_dir_escapes_like_wildcards",
+            "get-b",
+            namespace.clone(),
+            &sibling_dir.join("file-b"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(remaining, Some(Bytes::from("data-b").to_vec()));
+}
+
+#[test]
+#[tracing::instrument]
+async fn s3_copy_handles_reserved_characters_in_source_key(
+    #[tagged_as("s3")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+
+    let from = Path::new("dir with spaces/source #file?.txt");
+    let to = Path::new("target/renamed.txt");
+    let payload = Bytes::from("copy-payload").to_vec();
+
+    storage
+        .put_raw(
+            "s3_copy_handles_reserved_characters_in_source_key",
+            "put-raw",
+            namespace.clone(),
+            from,
+            &payload,
+        )
+        .await
+        .unwrap();
+
+    storage
+        .copy(
+            "s3_copy_handles_reserved_characters_in_source_key",
+            "copy",
+            namespace.clone(),
+            from,
+            to,
+        )
+        .await
+        .unwrap();
+
+    let copied = storage
+        .get_raw(
+            "s3_copy_handles_reserved_characters_in_source_key",
+            "get-raw",
+            namespace.clone(),
+            to,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(copied, Some(payload));
+}
+
+#[test]
+#[tracing::instrument]
+async fn delete_dir_does_not_delete_file_with_same_path(
+    #[tagged_as("sqlite")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let file_path = Path::new("not-a-dir");
+
+    storage
+        .put_raw(
+            "delete_dir_does_not_delete_file_with_same_path",
+            "put-file",
+            namespace.clone(),
+            file_path,
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    let deleted = storage
+        .delete_dir(
+            "delete_dir_does_not_delete_file_with_same_path",
+            "delete-dir",
+            namespace.clone(),
+            file_path,
+        )
+        .await
+        .unwrap();
+
+    assert!(!deleted);
+
+    let remaining = storage
+        .get_raw(
+            "delete_dir_does_not_delete_file_with_same_path",
+            "get-file",
+            namespace.clone(),
+            file_path,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(remaining, Some(Bytes::from("payload").to_vec()));
+}
+
+#[test]
+#[tracing::instrument]
+async fn delete_dir_root_path_is_safe_noop(
+    #[tagged_as("sqlite")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let file_path = Path::new("keep-me");
+
+    storage
+        .put_raw(
+            "delete_dir_root_path_is_safe_noop",
+            "put-file",
+            namespace.clone(),
+            file_path,
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    let deleted = storage
+        .delete_dir(
+            "delete_dir_root_path_is_safe_noop",
+            "delete-root-dir",
+            namespace.clone(),
+            Path::new(""),
+        )
+        .await
+        .unwrap();
+
+    assert!(!deleted);
+
+    let remaining = storage
+        .get_raw(
+            "delete_dir_root_path_is_safe_noop",
+            "get-file",
+            namespace.clone(),
+            file_path,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(remaining, Some(Bytes::from("payload").to_vec()));
+}

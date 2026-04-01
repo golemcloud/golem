@@ -273,7 +273,7 @@ impl DeploymentContext {
                 }
             }
 
-            let security_scheme = if unique_scheme_names.len() > 1 {
+            let security_scheme_name = if unique_scheme_names.len() > 1 {
                 errors.push(
                     DeployValidationError::McpDeploymentConflictingSecuritySchemes {
                         mcp_deployment_domain: domain.clone(),
@@ -281,16 +281,14 @@ impl DeploymentContext {
                 );
                 None
             } else if let Some(scheme_name) = unique_scheme_names.into_iter().next() {
-                match security_schemes.get(scheme_name) {
-                    Some(details) => Some(details.clone()),
-                    None => {
-                        errors.push(DeployValidationError::McpDeploymentUnknownSecurityScheme {
-                            mcp_deployment_domain: domain.clone(),
-                            security_scheme: scheme_name.clone(),
-                        });
-                        None
-                    }
+                // Just validate that the security scheme exists, don't resolve it
+                if !security_schemes.contains_key(scheme_name) {
+                    errors.push(DeployValidationError::McpDeploymentUnknownSecurityScheme {
+                        mcp_deployment_domain: domain.clone(),
+                        security_scheme: scheme_name.clone(),
+                    });
                 }
+                Some(scheme_name.clone())
             } else {
                 None
             };
@@ -301,7 +299,8 @@ impl DeploymentContext {
                 deployment_revision,
                 domain: domain.clone(),
                 agent_type_implementers,
-                security_scheme,
+                security_scheme_name,
+                security_scheme: None, // Will be resolved at runtime
                 registered_agent_types: Vec::new(),
             };
             all_compiled_mcps.push(compiled_mcp);

@@ -51,6 +51,7 @@ use crate::services::oplog::{
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
 use crate::services::promise::{DefaultPromiseService, DefaultPromiseWorkerAccess, PromiseService};
+use crate::services::registry_event_subscriber::WorkerExecutorRegistryInvalidationHandler;
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
 use crate::services::shard_manager::ShardManagerService;
@@ -324,7 +325,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             let agent_types_service = worker_executor_impl.agent_types();
             let shutdown_token = shutdown.token();
             join_set.spawn(async move {
-                services::registry_event_subscriber::run_registry_event_subscriber(
+                WorkerExecutorRegistryInvalidationHandler::run(
                     registry_service,
                     environment_state_service,
                     agent_types_service,
