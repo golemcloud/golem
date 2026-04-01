@@ -3,20 +3,16 @@
 componentTemplates:
   scala:
     build:
-    - command: sbt -batch -no-colors -Dsbt.supershell=false "golemBuildComponent {{ component_name }} .golem/scala.js"
+    - command: sbt -batch -no-colors -Dsbt.supershell=false "{{ component_name | to_snake_case }}/golemBuildComponent {{ component_name }} .golem/{{ component_name | to_snake_case }}.js .generated/agent_guest.wasm"
       dir: "{{ appRootDir }}"
       sources:
       - "{{ componentDir }}/src"
       targets:
-      - .golem/scala.js
+      - ".golem/{{ component_name | to_snake_case }}.js"
     - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
-      module: .golem/scala.js
+      module: ".golem/{{ component_name | to_snake_case }}.js"
       into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
     - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
       into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
     componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
     outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
-customCommands:
-  scala-prepare:
-  - command: sbt -batch -no-colors -Dsbt.supershell=false golemPrepare
-    dir: "{{ appRootDir }}"

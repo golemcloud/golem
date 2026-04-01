@@ -303,6 +303,13 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                         Transform::ScalaSdk,
                         Transform::ApplicationName,
                     ],
+                    (false, name) if name.ends_with(".sbt") => {
+                        vec![
+                            Transform::ComponentName,
+                            Transform::ComponentDir,
+                            Transform::ScalaSdk,
+                        ]
+                    }
                     (false, _) => vec![Transform::ComponentName],
                 };
 

@@ -24,8 +24,8 @@ This directory contains the Scala SDK for building Golem components using Scala.
 
 ```shell
 sbt compile                    # Compile all projects
-sbt "++3.8.2; golemScalaCoreJS/compile"  # Compile core (Scala 3)
-sbt "++2.13.18; golemScalaCoreJS/compile" # Compile core (Scala 2)
+sbt "++3.8.2; core/compile"    # Compile core (Scala 3)
+sbt "++2.13.18; core/compile"  # Compile core (Scala 2)
 ```
 
 ## Testing

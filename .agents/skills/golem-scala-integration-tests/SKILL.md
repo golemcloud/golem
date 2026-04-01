@@ -16,7 +16,7 @@ Integration tests for the Golem Scala SDK live in `sdks/scala/integration-tests/
 
 ```bash
 cd sdks/scala
-sbt '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; golemScalaModelJVM/publishLocal; golemScalaModelJS/publishLocal; golemScalaMacros/publishLocal; golemScalaCoreJS/publishLocal'
+sbt '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal'
 ```
 
 ## Running Tests
@@ -38,13 +38,13 @@ With `sbt --client`, env vars don't propagate to the forked test JVM. Use the `s
 cd sdks/scala
 
 # All integration tests
-sbt --client '++3.8.2; set golemScalaIntegrationTests / Test / javaOptions += "-Dgolem.tsPackagesPath=<TS_PACKAGES_PATH>"; golemScalaIntegrationTests/test'
+sbt --client '++3.8.2; set integrationTests / Test / javaOptions += "-Dgolem.tsPackagesPath=<TS_PACKAGES_PATH>"; integrationTests/test'
 
 # Only HTTP endpoint tests
-sbt --client '++3.8.2; set golemScalaIntegrationTests / Test / javaOptions += "-Dgolem.tsPackagesPath=<TS_PACKAGES_PATH>"; golemScalaIntegrationTests/testOnly -- -t http-'
+sbt --client '++3.8.2; set integrationTests / Test / javaOptions += "-Dgolem.tsPackagesPath=<TS_PACKAGES_PATH>"; integrationTests/testOnly -- -t http-'
 
 # A specific test by name
-sbt --client '++3.8.2; set golemScalaIntegrationTests / Test / javaOptions += "-Dgolem.tsPackagesPath=<TS_PACKAGES_PATH>"; golemScalaIntegrationTests/testOnly -- -t sync-return'
+sbt --client '++3.8.2; set integrationTests / Test / javaOptions += "-Dgolem.tsPackagesPath=<TS_PACKAGES_PATH>"; integrationTests/testOnly -- -t sync-return'
 ```
 
 Use the sbt logging pattern (redirect to log file, check exit code).

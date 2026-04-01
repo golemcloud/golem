@@ -270,7 +270,7 @@ object GolemPlugin extends AutoPlugin {
               val formatted =
                 try formatCode(gf.content, scalafmtConfig, out.getAbsolutePath)
                 catch {
-                  case e: Exception =>
+                  case e: Throwable =>
                     log.warn(
                       s"[golem] scalafmt failed for ${gf.relativePath}: ${e.getMessage}; using unformatted output"
                     )

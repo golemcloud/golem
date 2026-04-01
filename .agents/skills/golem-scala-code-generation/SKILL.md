@@ -128,9 +128,11 @@ When adding a new generation step, implement the logic **once** in `sdks/scala/c
 
 Scans sources for `@agentImplementation` classes using scalameta's parser, then generates `RegisterAgents.scala` and per-package `__GolemAutoRegister_*.scala` files using scalameta quasiquotes.
 
+**Key behavior:** When `golemBasePackage` is set, the plugin adds a `scalaJSModuleInitializer` pointing to `RegisterAgents.main()`. The codegen generates this class **only** if `@agentImplementation` classes are found. If no implementations are found (e.g. because source directories don't include the component subdirectory), the module initializer references a non-existent class, causing a Scala.js linker error. See the "Known Issue: Multi-Component App" section in the `golem-scala-development` skill.
+
 **Files:**
 - `sdks/scala/codegen/src/main/scala/golem/codegen/autoregister/AutoRegisterCodegen.scala` — shared logic
-- `sdks/scala/sbt/src/main/scala/golem/sbt/GolemPlugin.scala` — sbt wrapper
+- `sdks/scala/sbt/src/main/scala/golem/sbt/GolemPlugin.scala` — sbt wrapper (source generator + module initializer)
 - `sdks/scala/mill/src/golem/mill/GolemAutoRegister.scala` — Mill wrapper
 
 ### 2. Scala 3 Macros (compile-time, not build-time)
