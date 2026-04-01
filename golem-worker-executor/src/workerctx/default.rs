@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::LogEventEmitBehaviour;
+use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState};
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
@@ -766,6 +767,7 @@ impl WorkerCtx for Context {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -798,6 +800,7 @@ impl WorkerCtx for Context {
             agent_webhooks_service,
             shard_service,
             http_connection_pool,
+            websocket_connection_pool,
             pending_update,
             original_phantom_id,
             account_resource_limits.per_invocation_http_call_limit(),

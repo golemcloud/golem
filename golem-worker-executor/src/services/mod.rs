@@ -41,6 +41,7 @@ pub mod worker_proxy;
 
 use self::agent_webhooks::AgentWebhooksService;
 use self::environment_state::EnvironmentStateService;
+use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
 use crate::services::worker_activator::WorkerActivator;
@@ -191,6 +192,10 @@ pub trait HasHttpConnectionPool {
     fn http_connection_pool(&self) -> Option<HttpConnectionPool>;
 }
 
+pub trait HasWebSocketConnectionPool {
+    fn websocket_connection_pool(&self) -> WebSocketConnectionPool;
+}
+
 pub trait HasLeakSentinel {
     fn leak_sentinel(&self) -> Arc<()>;
 }
@@ -228,6 +233,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasResourceLimits
     + HasShutdownToken
     + HasHttpConnectionPool
+    + HasWebSocketConnectionPool
     + HasEnvironmentStateService
     + HasExtraDeps<Ctx>
     + HasLeakSentinel
@@ -265,6 +271,7 @@ impl<
         + HasResourceLimits
         + HasShutdownToken
         + HasHttpConnectionPool
+        + HasWebSocketConnectionPool
         + HasEnvironmentStateService
         + HasExtraDeps<Ctx>
         + HasLeakSentinel
@@ -307,6 +314,7 @@ pub struct All<Ctx: WorkerCtx> {
     resource_limits: Arc<dyn resource_limits::ResourceLimits>,
     shutdown_token: CancellationToken,
     http_connection_pool: Option<HttpConnectionPool>,
+    websocket_connection_pool: WebSocketConnectionPool,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     extra_deps: Ctx::ExtraDeps,
     /// A no-op sentinel that participates in the `All` lifecycle.
@@ -347,6 +355,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             resource_limits: self.resource_limits.clone(),
             shutdown_token: self.shutdown_token.clone(),
             http_connection_pool: self.http_connection_pool.clone(),
+            websocket_connection_pool: self.websocket_connection_pool.clone(),
             environment_state_service: self.environment_state_service.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
@@ -388,6 +397,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         resource_limits: Arc<dyn resource_limits::ResourceLimits>,
         shutdown_token: CancellationToken,
         http_connection_pool: Option<HttpConnectionPool>,
+        websocket_connection_pool: WebSocketConnectionPool,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
@@ -422,6 +432,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             resource_limits,
             shutdown_token,
             http_connection_pool,
+            websocket_connection_pool,
             environment_state_service,
             extra_deps,
             leak_sentinel,
@@ -466,6 +477,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.resource_limits(),
             this.shutdown_token(),
             this.http_connection_pool(),
+            this.websocket_connection_pool(),
             this.environment_state_service(),
             this.extra_deps(),
             this.leak_sentinel(),
@@ -656,6 +668,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasShutdownToken for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasHttpConnectionPool for T {
     fn http_connection_pool(&self) -> Option<HttpConnectionPool> {
         self.all().http_connection_pool.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWebSocketConnectionPool for T {
+    fn websocket_connection_pool(&self) -> WebSocketConnectionPool {
+        self.all().websocket_connection_pool.clone()
     }
 }
 

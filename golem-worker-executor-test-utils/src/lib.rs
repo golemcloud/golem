@@ -856,6 +856,7 @@ impl WorkerCtx for TestWorkerCtx {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -900,6 +901,7 @@ impl WorkerCtx for TestWorkerCtx {
             agent_webhooks_service,
             shard_service,
             http_connection_pool,
+            websocket_connection_pool,
             pending_update,
             original_phantom_id,
             u64::MAX,
@@ -1245,6 +1247,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(
@@ -1290,6 +1293,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
             http_connection_pool.clone(),
+            websocket_connection_pool.clone(),
             extra_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -1327,6 +1331,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             http_connection_pool.clone(),
+            websocket_connection_pool.clone(),
             extra_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -1360,6 +1365,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             resource_limits,
             shutdown_token,
             http_connection_pool,
+            websocket_connection_pool,
             environment_state_service,
             extra_deps.clone(),
             leak_sentinel,
@@ -1487,6 +1493,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         _registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<golem_worker_executor::workerctx::default::Context>> {
         use golem_worker_executor::services::NoAdditionalDeps;
@@ -1527,6 +1534,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
             http_connection_pool.clone(),
+            websocket_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -1564,6 +1572,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             http_connection_pool.clone(),
+            websocket_connection_pool.clone(),
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
@@ -1598,6 +1607,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             resource_limits,
             shutdown_token,
             http_connection_pool,
+            websocket_connection_pool,
             environment_state_service,
             additional_deps,
             leak_sentinel,

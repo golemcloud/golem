@@ -45,6 +45,7 @@ pub mod scalability;
 pub mod storage_quota;
 pub mod transactions;
 pub mod wasi;
+pub mod websocket;
 
 test_r::enable!();
 
@@ -52,6 +53,7 @@ tag_suite!(api, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
 tag_suite!(http, group1);
+tag_suite!(websocket, group1);
 tag_suite!(rdbms, group1);
 tag_suite!(agent, group1);
 

@@ -90,6 +90,7 @@ sysinfo = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
+tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
@@ -118,4 +119,5 @@ rand = { workspace = true }
 redis = { workspace = true }
 serde_json = { workspace = true }
 test-r = { workspace = true }
+tokio-tungstenite = { workspace = true }
 system-interface = { workspace = true }

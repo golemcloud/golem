@@ -31,6 +31,7 @@ pub mod rdbms;
 mod replay_state;
 mod sockets;
 pub mod wasm_rpc;
+pub mod websocket;
 
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
@@ -186,6 +187,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     state: PrivateDurableWorkerState,
     worker_dir: Arc<WorkerDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
+    pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
 }
 
@@ -219,6 +221,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<HttpConnectionPool>,
+        websocket_connection_pool: websocket::WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
         per_invocation_http_call_limit: u64,
@@ -336,6 +339,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             io_ctx: Arc::new(Mutex::new(io_ctx)),
             wasi_http,
             owned_agent_id: owned_agent_id.clone(),
+            websocket_connection_pool,
             public_state: PublicDurableWorkerState {
                 promise_service: promise_service.clone(),
                 event_service,

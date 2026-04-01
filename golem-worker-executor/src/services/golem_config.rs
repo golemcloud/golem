@@ -64,6 +64,7 @@ pub struct GolemConfig {
     pub engine: EngineConfig,
     pub grpc: GrpcApiConfig,
     pub http_client: HttpClientConfig,
+    pub max_websocket_connections: usize,
     pub http_address: String,
     pub http_port: u16,
 }
@@ -196,6 +197,11 @@ impl SafeDisplay for GolemConfig {
             self.http_client.to_safe_string_indented()
         );
 
+        let _ = writeln!(
+            &mut result,
+            "max websocket connections: {}",
+            self.max_websocket_connections
+        );
         let _ = writeln!(&mut result, "HTTP address: {}", self.http_address);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
 
@@ -238,6 +244,7 @@ impl Default for GolemConfig {
             engine: EngineConfig::default(),
             grpc: GrpcApiConfig::default(),
             http_client: HttpClientConfig::default(),
+            max_websocket_connections: 100,
             http_address: "0.0.0.0".to_string(),
             http_port: 8082,
         }
