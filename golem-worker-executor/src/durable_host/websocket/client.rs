@@ -459,14 +459,15 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
         matches!(entry, WebSocketConnectionEntry::Replay)
     };
     let info = ctx.websocket_connection_info(rep);
-    let Some((url, headers, last_seen_message_index, mode)) = info else {
+    let Some(info) = info else {
         return Ok(());
     };
-    if !is_replay_entry && mode != crate::durable_host::WebSocketConnectionMode::NeedsReconnect {
+    if !is_replay_entry && info.mode != crate::durable_host::WebSocketConnectionMode::NeedsReconnect
+    {
         return Ok(());
     }
 
-    let request = build_request(&url, headers.as_deref())
+    let request = build_request(&info.url, info.headers.as_deref())
         .map_err(|e| anyhow::anyhow!("Failed to rebuild websocket request for reconnect: {e}"))?;
     let permit = ctx.websocket_connection_pool.acquire().await?;
     let (ws_stream, _) = connect_async(request)
@@ -475,7 +476,7 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
     let (writer, mut reader) = ws_stream.split();
 
     let mut skipped = 0u64;
-    while skipped < last_seen_message_index {
+    while skipped < info.last_seen_message_index {
         read_next_user_or_close(&mut reader)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to fast-forward websocket stream: {e:?}"))?;

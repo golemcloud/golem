@@ -1490,25 +1490,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    pub(crate) fn websocket_connection_info(
-        &self,
-        rep: u32,
-    ) -> Option<(
-        String,
-        Option<Vec<(String, String)>>,
-        u64,
-        WebSocketConnectionMode,
-    )> {
+    pub(crate) fn websocket_connection_info(&self, rep: u32) -> Option<WebSocketConnectionInfo> {
         self.state
             .open_websocket_connections
             .get(&rep)
-            .map(|state| {
-                (
-                    state.url.clone(),
-                    state.headers.clone(),
-                    state.last_seen_message_index,
-                    state.mode.clone(),
-                )
+            .map(|state| WebSocketConnectionInfo {
+                url: state.url.clone(),
+                headers: state.headers.clone(),
+                last_seen_message_index: state.last_seen_message_index,
+                mode: state.mode.clone(),
             })
     }
 
@@ -3095,6 +3085,14 @@ pub(crate) struct WebSocketConnectionState {
     pub url: String,
     pub headers: Option<Vec<(String, String)>>,
     /// Number of user-visible websocket messages already observed by the guest.
+    pub last_seen_message_index: u64,
+    pub mode: WebSocketConnectionMode,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WebSocketConnectionInfo {
+    pub url: String,
+    pub headers: Option<Vec<(String, String)>>,
     pub last_seen_message_index: u64,
     pub mode: WebSocketConnectionMode,
 }
