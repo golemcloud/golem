@@ -189,3 +189,9 @@ test_component!(
     "scalability_large_initial_memory_release",
     "scalability:large-initial-memory"
 );
+test_component!(
+    agent_sdk_ts,
+    "agent_sdk_ts",
+    "golem_it_agent_sdk_ts",
+    "golem-it:agent-sdk-ts"
+);
