@@ -490,9 +490,7 @@ pub struct ComponentLayerProperties {
 #[serde(rename_all = "camelCase")]
 pub struct AgentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_merge_mode: Option<VecMergeMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config: Option<Vec<AgentConfigEntry>>,
+    pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -509,13 +507,6 @@ pub struct AgentLayerProperties {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AgentConfigEntry {
-    pub path: Vec<String>,
-    pub value: serde_json::Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

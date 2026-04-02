@@ -19,6 +19,7 @@ use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_environments};
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
+use crate::model::cascade::property::json::JsonProperty;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
@@ -29,9 +30,7 @@ use crate::model::{GuestLanguage, app_raw};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
-use golem_common::model::component::{
-    AgentConfigEntry, ComponentFilePath, ComponentFilePermissions, ComponentName,
-};
+use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
 use golem_common::model::deployment::DeploymentAgentSecretDefault;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
@@ -43,6 +42,7 @@ use heck::{
 use indexmap::IndexMap;
 use itertools::Itertools;
 use serde::{Serialize, Serializer};
+use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Formatter;
 use std::fmt::{Debug, Display};
@@ -493,8 +493,7 @@ impl Application {
                         &template_apply_ctx,
                     ) {
                         let template_agent_props = app_raw::AgentLayerProperties {
-                            config_merge_mode: None,
-                            config: Some(template_layer_props.config.value().clone()),
+                            config: template_layer_props.config.value().clone(),
                             env_merge_mode: None,
                             env: Some(template_layer_props.env.value().clone()),
                             wasi_config_merge_mode: None,
@@ -1132,14 +1131,9 @@ impl Layer for ComponentLayer {
                 ),
             );
 
-            value.config.apply_layer(
-                id,
-                selection,
-                (
-                    properties.config_merge_mode.unwrap_or_default(),
-                    properties.config.value().clone(),
-                ),
-            );
+            value
+                .config
+                .apply_layer(id, selection, properties.config.value().clone());
 
             value.env.apply_layer(
                 id,
@@ -1221,8 +1215,8 @@ impl<'a> Agent<'a> {
         self.layer_properties().applied_layers.as_slice()
     }
 
-    pub fn config(&self) -> &[app_raw::AgentConfigEntry] {
-        &self.resolved.properties.config
+    pub fn config(&self) -> Option<&JsonValue> {
+        self.resolved.properties.config.as_ref()
     }
 
     pub fn env(&self) -> &BTreeMap<String, String> {
@@ -1370,7 +1364,7 @@ impl<'a> Component<'a> {
         &self.properties().wasi_config
     }
 
-    pub fn config(&self) -> &Vec<AgentConfigEntry> {
+    pub fn config(&self) -> &Option<JsonValue> {
         &self.properties().config
     }
 
@@ -1396,8 +1390,7 @@ impl<'a> Component<'a> {
 
     pub fn agent_base_properties(&self) -> app_raw::AgentLayerProperties {
         app_raw::AgentLayerProperties {
-            config_merge_mode: None,
-            config: Some(self.layer_properties().config.value().clone()),
+            config: self.layer_properties().config.value().clone(),
             env_merge_mode: None,
             env: Some(self.layer_properties().env.value().clone()),
             wasi_config_merge_mode: None,
@@ -1426,9 +1419,7 @@ pub struct ComponentLayerProperties {
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub config_merge_mode: Option<VecMergeMode>,
-    pub config: VecProperty<ComponentLayer, app_raw::AgentConfigEntry>,
+    pub config: JsonProperty<ComponentLayer>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     pub env: MapProperty<ComponentLayer, String, String>,
@@ -1453,8 +1444,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             build: value.build.into(),
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
-            config_merge_mode: value.agent_properties.config_merge_mode,
-            config: value.agent_properties.config.unwrap_or_default().into(),
+            config: value.agent_properties.config.into(),
             env_merge_mode: value.agent_properties.env_merge_mode,
             env: value.agent_properties.env.unwrap_or_default().into(),
             wasi_config_merge_mode: value.agent_properties.wasi_config_merge_mode,
@@ -1643,14 +1633,9 @@ impl Layer for AgentLayer {
         }
 
         for properties in property_layers_to_apply {
-            value.config.apply_layer(
-                id,
-                selection,
-                (
-                    properties.config_merge_mode.unwrap_or_default(),
-                    properties.config.clone().unwrap_or_default(),
-                ),
-            );
+            value
+                .config
+                .apply_layer(id, selection, properties.config.clone());
             value.env.apply_layer(
                 id,
                 selection,
@@ -1696,7 +1681,7 @@ pub struct AgentLayerProperties {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub applied_layers: Vec<(AgentLayerId, Option<String>)>,
-    config: VecProperty<AgentLayer, app_raw::AgentConfigEntry>,
+    config: JsonProperty<AgentLayer>,
     env: MapProperty<AgentLayer, String, String>,
     wasi_config: MapProperty<AgentLayer, String, String>,
     plugins: VecProperty<AgentLayer, app_raw::PluginInstallation>,
@@ -1750,7 +1735,7 @@ impl AgentLayerProperties {
 
 #[derive(Clone, Debug)]
 pub struct AgentProperties {
-    pub config: Vec<app_raw::AgentConfigEntry>,
+    pub config: Option<JsonValue>,
     pub env: BTreeMap<String, String>,
     pub wasi_config: BTreeMap<String, String>,
     pub plugins: Vec<app_raw::PluginInstallation>,
@@ -1792,7 +1777,7 @@ pub struct ComponentProperties {
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
     pub wasi_config: BTreeMap<String, String>,
-    pub config: Vec<AgentConfigEntry>,
+    pub config: Option<JsonValue>,
 }
 
 impl ComponentProperties {
@@ -1830,7 +1815,7 @@ impl ComponentProperties {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
-            config: vec![],
+            config: merged.config.value().clone(),
         };
 
         for (name, value) in [("componentWasm", &properties.component_wasm)] {
@@ -2980,6 +2965,7 @@ mod test {
     use golem_common::model::component::ComponentName;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use std::collections::BTreeMap;
     use tempfile::TempDir;
     use test_r::test;
@@ -3034,8 +3020,7 @@ mod test {
             agents:
               test-agent:
                 config:
-                  - path: ["a"]
-                    value: 1
+                  a: 1
 
             components:
               app:main:
@@ -3047,7 +3032,7 @@ mod test {
     }
 
     #[test]
-    fn test_agent_resolution_order_component_fallback_env_custom_common() {
+    fn test_agent_resolution_order() {
         let source = indoc! { r#"
             app: hello-app
 
@@ -3059,8 +3044,13 @@ mod test {
               app:main:
                 componentWasm: dummy-component.wasm
                 config:
-                  - path: ["fallback"]
-                    value: "fallback"
+                  fallback: "fallback"
+                  nested:
+                    from_component: true
+                    deep:
+                      keep: "component"
+                  replacedByScalar:
+                    should: "be replaced"
                 env:
                   KEY: fallback
                   ONLY_FALLBACK: fb
@@ -3072,19 +3062,29 @@ mod test {
                 presets:
                   app-env:local:
                     config:
-                      - path: ["env"]
-                        value: "env"
+                      env: "env"
+                      nested:
+                        from_env: true
+                      replacedByScalar:
+                        still: "object"
                     env:
                       KEY: env
                   custom:
                     config:
-                      - path: ["custom"]
-                        value: "custom"
+                      custom: "custom"
+                      nested:
+                        deep:
+                          keep: "custom"
+                          plus: "custom"
+                      replacedByScalar: "scalar"
                     wasiConfig:
                       key: custom
                 config:
-                  - path: ["common"]
-                    value: "common"
+                  common: "common"
+                  nested:
+                    from_common: true
+                    deep:
+                      keep: "common"
                 env:
                   KEY: common
                 wasiConfig:
@@ -3106,19 +3106,24 @@ mod test {
         let resolved_agents = app.resolve_agents(&mapping);
         let agent = resolved_agents.agent(&agent_type_name).unwrap();
 
-        let config_paths = agent
-            .config()
-            .iter()
-            .map(|entry| entry.path.join("."))
-            .collect::<Vec<_>>();
         assert_eq!(
-            config_paths,
-            vec![
-                "fallback".to_string(),
-                "env".to_string(),
-                "custom".to_string(),
-                "common".to_string()
-            ]
+            agent.config().cloned(),
+            Some(json!({
+                "fallback": "fallback",
+                "env": "env",
+                "custom": "custom",
+                "common": "common",
+                "nested": {
+                    "from_component": true,
+                    "from_env": true,
+                    "from_common": true,
+                    "deep": {
+                        "keep": "common",
+                        "plus": "custom"
+                    }
+                },
+                "replacedByScalar": "scalar"
+            }))
         );
 
         assert_eq!(agent.env().get("KEY").cloned(), Some("common".to_string()));
