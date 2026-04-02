@@ -1386,12 +1386,23 @@ mod tests {
         let exec = make_exec_state();
         let mut req = make_request_state();
         req.retry.body_finished = false;
+        req.output_stream_rep = Some(1);
         // Zone 1 should be disqualified
         assert_eq!(
             is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
             Err(InlineRetryIneligible::BodyNotFinished)
         );
         // Zone 2 should still be eligible
+        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone2).is_ok());
+    }
+
+    #[test]
+    fn test_no_output_stream_eligible_even_if_body_not_finished() {
+        let exec = make_exec_state();
+        let mut req = make_request_state();
+        req.retry.body_finished = false;
+        // output_stream_rep is None (no stream opened), so body_finished is irrelevant
+        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1).is_ok());
         assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone2).is_ok());
     }
 
