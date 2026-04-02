@@ -83,6 +83,7 @@ impl DebugConfig {
             component_cache: self.component_cache,
             agent_types_service: self.agent_types_service,
             environment_state_service: self.agent_deployments_service,
+            rpc_auth_cache: Default::default(),
             agent_webhooks_service: self.agent_webhooks_service,
             engine: self.engine,
             // unused

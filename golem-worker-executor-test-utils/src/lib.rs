@@ -108,6 +108,9 @@ use golem_worker_executor::services::resource_limits::{
     AtomicResourceEntry, ResourceLimits, ResourceLimitsDisabled,
 };
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
+use golem_worker_executor::services::rpc_auth::{
+    DefaultRpcEnvironmentAuthService, NoOpRpcEnvironmentAuthService,
+};
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::shard_manager::ShardManagerService;
@@ -1250,6 +1253,11 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
+        let rpc_auth_service = Arc::new(DefaultRpcEnvironmentAuthService::new(
+            component_service.clone(),
+            registry_service.clone(),
+            &golem_config.rpc_auth_cache,
+        ));
         let resource_limits = resource_limits::configured(
             &golem_config.resource_limits,
             registry_service,
@@ -1303,6 +1311,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
                 worker_proxy.clone(),
                 shard_service.clone(),
             )),
+            rpc_auth_service,
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
@@ -1544,6 +1553,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
                 worker_proxy.clone(),
                 shard_service.clone(),
             )),
+            Arc::new(NoOpRpcEnvironmentAuthService),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),

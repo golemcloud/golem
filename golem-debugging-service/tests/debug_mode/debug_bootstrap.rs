@@ -30,6 +30,7 @@ use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms;
 use golem_worker_executor::services::resource_limits;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
+use golem_worker_executor::services::rpc_auth::DefaultRpcEnvironmentAuthService;
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::shard_manager::ShardManagerService;
@@ -169,6 +170,13 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         ));
 
         let additional_deps = AdditionalDeps::new(auth_service, debug_sessions);
+
+        let rpc_auth_service = Arc::new(DefaultRpcEnvironmentAuthService::new(
+            component_service.clone(),
+            registry_service.clone(),
+            &golem_config.rpc_auth_cache,
+        ));
+
         let resource_limits = resource_limits::configured(
             &ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
             registry_service.clone(),
@@ -218,6 +226,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
                 worker_proxy.clone(),
                 shard_service.clone(),
             )),
+            rpc_auth_service,
             active_workers.clone(),
             engine.clone(),
             linker.clone(),

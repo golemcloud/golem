@@ -28,6 +28,7 @@ pub mod rdbms;
 pub mod registry_event_subscriber;
 pub mod resource_limits;
 pub mod rpc;
+pub mod rpc_auth;
 pub mod scheduler;
 pub mod shard;
 pub mod shard_manager;

@@ -29,6 +29,7 @@ use crate::services::oplog::OplogService;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
+use crate::services::rpc_auth::DefaultRpcEnvironmentAuthService;
 use crate::services::scheduler::SchedulerService;
 use crate::services::shard::ShardService;
 use crate::services::shard_manager::ShardManagerService;
@@ -161,11 +162,18 @@ impl Bootstrap<Context> for ServerBootstrap {
             leak_sentinel.clone(),
         ));
 
+        let rpc_auth_service = Arc::new(DefaultRpcEnvironmentAuthService::new(
+            component_service.clone(),
+            registry_service.clone(),
+            &golem_config.rpc_auth_cache,
+        ));
+
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
                 shard_service.clone(),
             )),
+            rpc_auth_service,
             active_workers.clone(),
             engine.clone(),
             linker.clone(),

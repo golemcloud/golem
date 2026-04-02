@@ -197,6 +197,14 @@ max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
+[rpc_auth_cache]
+cache_capacity = 1024
+cache_eviction_interval = "1m"
+
+[rpc_auth_cache.cache_ttl]
+nanos = 0
+secs = 300
+
 [scheduler]
 refresh_interval = "2s"
 
@@ -495,6 +503,14 @@ without_time = false
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
+# [rpc_auth_cache]
+# cache_capacity = 1024
+# cache_eviction_interval = "1m"
+# 
+# [rpc_auth_cache.cache_ttl]
+# nanos = 0
+# secs = 300
+# 
 # [scheduler]
 # refresh_interval = "2s"
 # 
@@ -740,6 +756,14 @@ without_time = false
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
+# 
+# [rpc_auth_cache]
+# cache_capacity = 1024
+# cache_eviction_interval = "1m"
+# 
+# [rpc_auth_cache.cache_ttl]
+# nanos = 0
+# secs = 300
 # 
 # [scheduler]
 # refresh_interval = "2s"

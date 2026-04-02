@@ -59,6 +59,7 @@ pub struct GolemConfig {
     pub component_cache: ComponentCacheConfig,
     pub agent_types_service: AgentTypesServiceConfig,
     pub environment_state_service: EnvironmentStateServiceConfig,
+    pub rpc_auth_cache: RpcAuthCacheConfig,
     pub agent_webhooks_service: AgentWebhooksServiceConfig,
     pub registry_service: GrpcRegistryServiceConfig,
     pub engine: EngineConfig,
@@ -177,6 +178,13 @@ impl SafeDisplay for GolemConfig {
             self.environment_state_service.to_safe_string_indented()
         );
 
+        let _ = writeln!(&mut result, "rpc auth cache:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.rpc_auth_cache.to_safe_string_indented()
+        );
+
         let _ = writeln!(&mut result, "agent webhooks service:");
         let _ = writeln!(
             &mut result,
@@ -233,6 +241,7 @@ impl Default for GolemConfig {
             component_cache: ComponentCacheConfig::default(),
             agent_types_service: AgentTypesServiceConfig::default(),
             environment_state_service: EnvironmentStateServiceConfig::default(),
+            rpc_auth_cache: RpcAuthCacheConfig::default(),
             agent_webhooks_service: AgentWebhooksServiceConfig::default(),
             registry_service: GrpcRegistryServiceConfig {
                 client_config: GrpcClientConfig {
@@ -1119,6 +1128,38 @@ impl Default for EnvironmentStateServiceConfig {
 }
 
 impl SafeDisplay for EnvironmentStateServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "cache_capacity: {}", self.cache_capacity);
+        let _ = writeln!(&mut result, "cache_ttl: {:?}", self.cache_ttl);
+        let _ = writeln!(
+            &mut result,
+            "cache_eviction_interval: {:?}",
+            self.cache_eviction_interval
+        );
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RpcAuthCacheConfig {
+    pub cache_capacity: usize,
+    pub cache_ttl: Duration,
+    #[serde(with = "humantime_serde")]
+    pub cache_eviction_interval: Duration,
+}
+
+impl Default for RpcAuthCacheConfig {
+    fn default() -> Self {
+        Self {
+            cache_capacity: 1024,
+            cache_ttl: Duration::from_mins(5),
+            cache_eviction_interval: Duration::from_mins(1),
+        }
+    }
+}
+
+impl SafeDisplay for RpcAuthCacheConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "cache_capacity: {}", self.cache_capacity);

@@ -48,6 +48,7 @@ use golem_worker_executor::services::oplog::OplogService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
+use golem_worker_executor::services::rpc_auth::DefaultRpcEnvironmentAuthService;
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::shard_manager::ShardManagerService;
@@ -162,6 +163,12 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
 
         let additional_deps = AdditionalDeps::new(auth_service, debug_sessions);
 
+        let rpc_auth_service = Arc::new(DefaultRpcEnvironmentAuthService::new(
+            component_service.clone(),
+            registry_service.clone(),
+            &golem_config.rpc_auth_cache,
+        ));
+
         let resource_limits = resource_limits::configured(
             &golem_config.resource_limits,
             registry_service,
@@ -214,6 +221,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
                 worker_proxy.clone(),
                 shard_service.clone(),
             )),
+            rpc_auth_service,
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
