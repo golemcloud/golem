@@ -16,6 +16,12 @@ steps:
     verify:
       deploy: true
 
+  - id: "list-agents"
+    shell:
+      command: "golem"
+      args: ["agent", "list"]
+      cwd: "invoke-test"
+
   - id: "invoke-increment"
     invoke:
       agent: 'counter-agent("test-counter")'
@@ -32,4 +38,4 @@ steps:
 
   - id: "delete-agent"
     delete_agent:
-      name: 'counter-agent("test-counter")'
+      name: 'invoke-test/local/counter-agent("test-counter")'
