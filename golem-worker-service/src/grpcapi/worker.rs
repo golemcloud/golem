@@ -18,19 +18,20 @@ use crate::service::worker::WorkerService;
 use golem_api_grpc::proto::golem::common::Empty;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
-    AgentError as GrpcAgentError, CompletePromiseRequest, CompletePromiseResponse,
-    ForkWorkerRequest, ForkWorkerResponse, InvokeAgentRequest, InvokeAgentResponse,
-    InvokeAgentSuccess, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
-    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, complete_promise_response,
+    AgentError as GrpcAgentError, CancelInvocationRequest, CancelInvocationResponse,
+    CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest, ForkWorkerResponse,
+    InvokeAgentRequest, InvokeAgentResponse, InvokeAgentSuccess, LaunchNewWorkerRequest,
+    LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ResumeWorkerRequest,
+    ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse, cancel_invocation_response, complete_promise_response,
     fork_worker_response, invoke_agent_response, launch_new_worker_response,
     resume_worker_response, revert_worker_response, update_worker_response,
 };
-use golem_common::model::AgentId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::WorkerAgentConfigEntry;
+use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::proto_agent_id_string;
 use golem_service_base::model::auth::AuthCtx;
@@ -237,6 +238,33 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
 
         Ok(Response::new(InvokeAgentResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn cancel_invocation(
+        &self,
+        request: Request<CancelInvocationRequest>,
+    ) -> Result<Response<CancelInvocationResponse>, Status> {
+        let (_, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "cancel_invocation",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+
+        let response = match self
+            .cancel_invocation_inner(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(canceled) => record.succeed(cancel_invocation_response::Result::Success(canceled)),
+            Err(error) => record.fail(
+                cancel_invocation_response::Result::Error(error.clone()),
+                &mut WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(CancelInvocationResponse {
             result: Some(response),
         }))
     }
@@ -464,5 +492,30 @@ impl WorkerGrpcApi {
             component_revision: output.component_revision.map(|r| r.get()),
             status: proto_status,
         })
+    }
+
+    async fn cancel_invocation_inner(
+        &self,
+        request: CancelInvocationRequest,
+    ) -> Result<bool, GrpcAgentError> {
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or(bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+
+        let agent_id = validate_protobuf_agent_id(request.agent_id)?;
+
+        let idempotency_key: IdempotencyKey = request
+            .idempotency_key
+            .ok_or_else(|| bad_request_error("Missing idempotency_key"))?
+            .into();
+
+        let canceled = self
+            .worker_service
+            .cancel_invocation(&agent_id, &idempotency_key, auth)
+            .await?;
+
+        Ok(canceled)
     }
 }
