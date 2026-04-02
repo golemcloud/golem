@@ -1,6 +1,7 @@
 ## Generated from default config
 http_address = "0.0.0.0"
 http_port = 8082
+max_in_function_retry_delay = "20s"
 max_websocket_connections = 100
 tracing_file_name_with_port = true
 
@@ -285,6 +286,7 @@ without_time = false
 ## Generated from example config: with redis indexed_storage, s3 blob storage, single shard manager service
 # http_address = "0.0.0.0"
 # http_port = 8082
+# max_in_function_retry_delay = "20s"
 # max_websocket_connections = 100
 # tracing_file_name_with_port = true
 # 
@@ -560,6 +562,7 @@ without_time = false
 ## Generated from example config: with in-memory key value storage, indexed storage and blob storage
 # http_address = "0.0.0.0"
 # http_port = 8082
+# max_in_function_retry_delay = "20s"
 # max_websocket_connections = 100
 # tracing_file_name_with_port = true
 # 

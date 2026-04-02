@@ -45,6 +45,8 @@ pub struct GolemConfig {
     pub blob_storage: BlobStorageConfig,
     pub limits: Limits,
     pub retry: RetryConfig,
+    #[serde(with = "humantime_serde")]
+    pub max_in_function_retry_delay: Duration,
     pub compiled_component_service: CompiledComponentServiceConfig,
     pub shard_manager_service: ShardManagerServiceConfig,
     pub oplog: OplogConfig,
@@ -104,6 +106,11 @@ impl SafeDisplay for GolemConfig {
         let _ = writeln!(&mut result, "{}", self.limits.to_safe_string_indented());
         let _ = writeln!(&mut result, "retry:");
         let _ = writeln!(&mut result, "{}", self.retry.to_safe_string_indented());
+        let _ = writeln!(
+            &mut result,
+            "max in-function retry delay: {}s",
+            self.max_in_function_retry_delay.as_secs()
+        );
         let _ = writeln!(&mut result, "compiled component service:");
         let _ = writeln!(
             &mut result,
@@ -219,6 +226,7 @@ impl Default for GolemConfig {
             blob_storage: BlobStorageConfig::default(),
             limits: Limits::default(),
             retry: RetryConfig::max_attempts_3(),
+            max_in_function_retry_delay: Duration::from_secs(20),
             compiled_component_service: CompiledComponentServiceConfig::default(),
             shard_manager_service: ShardManagerServiceConfig::default(),
             oplog: OplogConfig::default(),

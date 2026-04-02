@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::get_oplog_entry;
 use crate::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
@@ -181,7 +181,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
                 .await?;
 
-        let durability = Durability::<GolemRpcWasmRpcInvokeAndAwaitResult>::new(
+        let mut durability = Durability::<GolemRpcWasmRpcInvokeAndAwaitResult>::new(
             self,
             DurableFunctionType::WriteRemote,
         )
@@ -198,45 +198,51 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_agent_type: None,
                 remote_agent_parameters: None,
             };
-            let stack = self
-                .state
-                .invocation_context
-                .clone_as_inherited_stack(span.span_id());
+            let result = loop {
+                let stack = self
+                    .state
+                    .invocation_context
+                    .clone_as_inherited_stack(span.span_id());
 
-            let interrupt_signal = self
-                .execution_status
-                .read()
-                .unwrap()
-                .create_await_interrupt_signal();
-            let rpc = self.rpc();
-            let created_by = self.created_by();
-            let agent_id = self.agent_id().clone();
+                let interrupt_signal = self
+                    .execution_status
+                    .read()
+                    .unwrap()
+                    .create_await_interrupt_signal();
+                let rpc = self.rpc();
+                let created_by = self.created_by();
+                let agent_id = self.agent_id().clone();
 
-            let either_result = futures::future::select(
-                rpc.invoke_and_await(
-                    &remote_agent_id,
-                    Some(idempotency_key),
-                    method_name,
-                    input_untyped,
-                    created_by,
-                    &agent_id,
-                    &env,
-                    config_vars,
-                    stack,
-                ),
-                interrupt_signal,
-            )
-            .await;
-            let result = match either_result {
-                Either::Left((result, _)) => result,
-                Either::Right((interrupt_kind, _)) => {
-                    tracing::info!("Interrupted while waiting for RPC result");
-                    return Err(interrupt_kind.into());
+                let either_result = futures::future::select(
+                    rpc.invoke_and_await(
+                        &remote_agent_id,
+                        Some(idempotency_key.clone()),
+                        method_name.clone(),
+                        input_untyped.clone(),
+                        created_by,
+                        &agent_id,
+                        &env,
+                        config_vars.clone(),
+                        stack,
+                    ),
+                    interrupt_signal,
+                )
+                .await;
+                let result = match either_result {
+                    Either::Left((result, _)) => result,
+                    Either::Right((interrupt_kind, _)) => {
+                        tracing::info!("Interrupted while waiting for RPC result");
+                        return Err(interrupt_kind.into());
+                    }
+                };
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, classify_rpc_error)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
                 }
             };
-            durability
-                .try_trigger_retry(self, &result, classify_rpc_error)
-                .await?;
 
             durability
                 .persist(
@@ -311,7 +317,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
                 .await?;
 
-        let durability =
+        let mut durability =
             Durability::<GolemRpcWasmRpcInvoke>::new(self, DurableFunctionType::WriteRemote)
                 .await?;
 
@@ -326,27 +332,33 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_agent_type: None,
                 remote_agent_parameters: None,
             };
-            let stack = self
-                .state
-                .invocation_context
-                .clone_as_inherited_stack(span.span_id());
-            let result = self
-                .rpc()
-                .invoke(
-                    &remote_agent_id,
-                    Some(idempotency_key),
-                    method_name,
-                    input_untyped,
-                    self.created_by(),
-                    self.agent_id(),
-                    &env,
-                    config_vars,
-                    stack,
-                )
-                .await;
-            durability
-                .try_trigger_retry(self, &result, classify_rpc_error)
-                .await?;
+            let result = loop {
+                let stack = self
+                    .state
+                    .invocation_context
+                    .clone_as_inherited_stack(span.span_id());
+                let result = self
+                    .rpc()
+                    .invoke(
+                        &remote_agent_id,
+                        Some(idempotency_key.clone()),
+                        method_name.clone(),
+                        input_untyped.clone(),
+                        self.created_by(),
+                        self.agent_id(),
+                        &env,
+                        config_vars.clone(),
+                        stack,
+                    )
+                    .await;
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, classify_rpc_error)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
 
             let result = result.map_err(|err| err.into());
             durability
