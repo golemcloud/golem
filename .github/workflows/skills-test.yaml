@@ -260,6 +260,10 @@ jobs:
           name: results-${{ matrix.agent }}-${{ matrix.language }}
           path: /tmp/harness-run/results/
 
+      - name: Clean workspace build artifacts before upload
+        if: always()
+        run: find /tmp/harness-run/workspaces -name 'golem-temp' -type d -exec rm -rf {} + 2>/dev/null; find /tmp/harness-run/workspaces -name 'target' -type d -exec rm -rf {} + 2>/dev/null; find /tmp/harness-run/workspaces -name 'node_modules' -type d -exec rm -rf {} + 2>/dev/null; true
+
       - name: Upload Workspaces
         if: always()
         uses: actions/upload-artifact@v4
