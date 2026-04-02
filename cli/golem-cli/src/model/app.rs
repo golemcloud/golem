@@ -332,6 +332,7 @@ pub struct Application {
     components:
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
     agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
+    component_layer_store: Store<ComponentLayer>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
     http_api_deployments:
@@ -470,13 +471,60 @@ impl Application {
 
         let target_id =
             if let Some(agent) = self.agents.get(agent_type_name).map(|agent| &agent.value) {
-                // TODO: atl: add template-based inheritance for agents, mirroring component templates.
+                let component = self.component(component_name);
+                let template_apply_ctx = ComponentLayerApplyContext::new(
+                    Some(component_name.clone()),
+                    fs::path_to_str(self.app_root_dir())
+                        .ok()
+                        .map(|s| s.to_string()),
+                    fs::path_to_str(self.temp_dir()).ok().map(|s| s.to_string()),
+                    fs::path_to_str(component.component_dir())
+                        .ok()
+                        .map(|s| s.to_string()),
+                );
+
+                let mut latest_parent_id = base_component_id.clone();
+                for template_name in agent.templates.clone().into_vec() {
+                    let template_layer_id =
+                        ComponentLayerId::TemplateCustomPresets(template_name.clone());
+                    if let Ok(template_layer_props) = self.component_layer_store.value(
+                        &template_layer_id,
+                        &self.component_preset_selector,
+                        &template_apply_ctx,
+                    ) {
+                        let template_agent_props = app_raw::AgentLayerProperties {
+                            config_merge_mode: None,
+                            config: Some(template_layer_props.config.value().clone()),
+                            env_merge_mode: None,
+                            env: Some(template_layer_props.env.value().clone()),
+                            wasi_config_merge_mode: None,
+                            wasi_config: Some(template_layer_props.wasi_config.value().clone()),
+                            plugins_merge_mode: None,
+                            plugins: Some(template_layer_props.plugins.value().clone()),
+                            files_merge_mode: None,
+                            files: Some(template_layer_props.files.value().clone()),
+                        };
+
+                        let template_id =
+                            AgentLayerId::AgentTemplate(agent_type_name.clone(), template_name);
+                        let _ = agent_layer_store.add_layer(AgentLayer {
+                            id: template_id.clone(),
+                            parents: vec![latest_parent_id],
+                            properties: AgentLayerPropertiesKind::Common(Box::new(
+                                template_agent_props,
+                            )),
+                        });
+
+                        latest_parent_id = template_id;
+                    }
+                }
+
                 let partitioned = PartitionedAgentPresets::new(agent.presets.clone());
 
                 let env_id = AgentLayerId::AgentEnvironmentPresets(agent_type_name.clone());
                 let _ = agent_layer_store.add_layer(AgentLayer {
                     id: env_id.clone(),
-                    parents: vec![base_component_id.clone()],
+                    parents: vec![latest_parent_id],
                     properties: if partitioned.env_presets.is_empty() {
                         AgentLayerPropertiesKind::Empty
                     } else {
@@ -1467,9 +1515,10 @@ impl ComponentLayerProperties {
 #[serde(rename_all = "camelCase")]
 pub enum AgentLayerId {
     Component(ComponentName),
+    AgentTemplate(AgentTypeName, String),
+    AgentCommon(AgentTypeName),
     AgentEnvironmentPresets(AgentTypeName),
     AgentCustomPresets(AgentTypeName),
-    AgentCommon(AgentTypeName),
 }
 
 impl Display for AgentLayerId {
@@ -1477,6 +1526,9 @@ impl Display for AgentLayerId {
         match self {
             AgentLayerId::Component(component_name) => {
                 write!(f, "component:{component_name}")
+            }
+            AgentLayerId::AgentTemplate(agent_type_name, template_name) => {
+                write!(f, "agent:{}:template:{}", agent_type_name.0, template_name)
             }
             AgentLayerId::AgentEnvironmentPresets(agent_type_name) => {
                 write!(f, "agent:{}:environment-presets", agent_type_name.0)
@@ -2177,6 +2229,7 @@ mod app_builder {
                 all_sources: builder.all_sources,
                 components: builder.components,
                 agents: builder.agents,
+                component_layer_store: builder.component_layer_store,
                 custom_commands: builder.custom_commands,
                 clean: builder.clean,
                 http_api_deployments: builder.http_api_deployments,
