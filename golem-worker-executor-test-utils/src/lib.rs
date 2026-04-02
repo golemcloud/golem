@@ -83,6 +83,9 @@ use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
+use golem_worker_executor::services::direct_invocation_auth::{
+    DefaultDirectInvocationAuthService, NoOpDirectInvocationAuthService,
+};
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
@@ -108,9 +111,6 @@ use golem_worker_executor::services::resource_limits::{
     AtomicResourceEntry, ResourceLimits, ResourceLimitsDisabled,
 };
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
-use golem_worker_executor::services::rpc_auth::{
-    DefaultRpcEnvironmentAuthService, NoOpRpcEnvironmentAuthService,
-};
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::shard_manager::ShardManagerService;
@@ -1253,9 +1253,9 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
-        let rpc_auth_service = Arc::new(DefaultRpcEnvironmentAuthService::new(
+        let rpc_auth_service = Arc::new(DefaultDirectInvocationAuthService::new(
             registry_service.clone(),
-            &golem_config.rpc_auth_cache,
+            &golem_config.direct_invocation_auth_cache,
         ));
         let resource_limits = resource_limits::configured(
             &golem_config.resource_limits,
@@ -1552,7 +1552,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
                 worker_proxy.clone(),
                 shard_service.clone(),
             )),
-            Arc::new(NoOpRpcEnvironmentAuthService),
+            Arc::new(NoOpDirectInvocationAuthService),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),

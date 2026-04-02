@@ -20,6 +20,7 @@ use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
+use crate::services::direct_invocation_auth::DefaultDirectInvocationAuthService;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::events::Events;
 use crate::services::file_loader::FileLoader;
@@ -29,7 +30,6 @@ use crate::services::oplog::OplogService;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
-use crate::services::rpc_auth::DefaultRpcEnvironmentAuthService;
 use crate::services::scheduler::SchedulerService;
 use crate::services::shard::ShardService;
 use crate::services::shard_manager::ShardManagerService;
@@ -162,9 +162,9 @@ impl Bootstrap<Context> for ServerBootstrap {
             leak_sentinel.clone(),
         ));
 
-        let rpc_auth_service = Arc::new(DefaultRpcEnvironmentAuthService::new(
+        let direct_invocation_auth = Arc::new(DefaultDirectInvocationAuthService::new(
             registry_service.clone(),
-            &golem_config.rpc_auth_cache,
+            &golem_config.direct_invocation_auth_cache,
         ));
 
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
@@ -172,7 +172,7 @@ impl Bootstrap<Context> for ServerBootstrap {
                 worker_proxy.clone(),
                 shard_service.clone(),
             )),
-            rpc_auth_service,
+            direct_invocation_auth,
             active_workers.clone(),
             engine.clone(),
             linker.clone(),

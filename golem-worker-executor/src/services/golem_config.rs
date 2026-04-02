@@ -59,7 +59,7 @@ pub struct GolemConfig {
     pub component_cache: ComponentCacheConfig,
     pub agent_types_service: AgentTypesServiceConfig,
     pub environment_state_service: EnvironmentStateServiceConfig,
-    pub rpc_auth_cache: RpcAuthCacheConfig,
+    pub direct_invocation_auth_cache: DirectInvocationAuthCacheConfig,
     pub agent_webhooks_service: AgentWebhooksServiceConfig,
     pub registry_service: GrpcRegistryServiceConfig,
     pub engine: EngineConfig,
@@ -178,11 +178,11 @@ impl SafeDisplay for GolemConfig {
             self.environment_state_service.to_safe_string_indented()
         );
 
-        let _ = writeln!(&mut result, "rpc auth cache:");
+        let _ = writeln!(&mut result, "direct invocation auth cache:");
         let _ = writeln!(
             &mut result,
             "{}",
-            self.rpc_auth_cache.to_safe_string_indented()
+            self.direct_invocation_auth_cache.to_safe_string_indented()
         );
 
         let _ = writeln!(&mut result, "agent webhooks service:");
@@ -241,7 +241,7 @@ impl Default for GolemConfig {
             component_cache: ComponentCacheConfig::default(),
             agent_types_service: AgentTypesServiceConfig::default(),
             environment_state_service: EnvironmentStateServiceConfig::default(),
-            rpc_auth_cache: RpcAuthCacheConfig::default(),
+            direct_invocation_auth_cache: DirectInvocationAuthCacheConfig::default(),
             agent_webhooks_service: AgentWebhooksServiceConfig::default(),
             registry_service: GrpcRegistryServiceConfig {
                 client_config: GrpcClientConfig {
@@ -1142,14 +1142,14 @@ impl SafeDisplay for EnvironmentStateServiceConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RpcAuthCacheConfig {
+pub struct DirectInvocationAuthCacheConfig {
     pub cache_capacity: usize,
     pub cache_ttl: Duration,
     #[serde(with = "humantime_serde")]
     pub cache_eviction_interval: Duration,
 }
 
-impl Default for RpcAuthCacheConfig {
+impl Default for DirectInvocationAuthCacheConfig {
     fn default() -> Self {
         Self {
             cache_capacity: 1024,
@@ -1159,7 +1159,7 @@ impl Default for RpcAuthCacheConfig {
     }
 }
 
-impl SafeDisplay for RpcAuthCacheConfig {
+impl SafeDisplay for DirectInvocationAuthCacheConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "cache_capacity: {}", self.cache_capacity);

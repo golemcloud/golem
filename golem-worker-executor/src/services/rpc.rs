@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use super::agent_webhooks::AgentWebhooksService;
+use super::direct_invocation_auth::DirectInvocationAuthService;
 use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
-use super::rpc_auth::RpcEnvironmentAuthService;
 use super::{HasAgentWebhooksService, HasEnvironmentStateService};
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::services::events::Events;
@@ -377,7 +377,7 @@ fn caller_agent_principal(self_agent_id: &AgentId) -> Principal {
 
 pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     remote_rpc: Arc<RemoteInvocationRpc>,
-    rpc_auth_service: Arc<dyn RpcEnvironmentAuthService>,
+    direct_invocation_auth: Arc<dyn DirectInvocationAuthService>,
     active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -416,7 +416,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
     fn clone(&self) -> Self {
         Self {
             remote_rpc: self.remote_rpc.clone(),
-            rpc_auth_service: self.rpc_auth_service.clone(),
+            direct_invocation_auth: self.direct_invocation_auth.clone(),
             active_workers: self.active_workers.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
@@ -653,7 +653,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         remote_rpc: Arc<RemoteInvocationRpc>,
-        rpc_auth_service: Arc<dyn RpcEnvironmentAuthService>,
+        direct_invocation_auth: Arc<dyn DirectInvocationAuthService>,
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -690,7 +690,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     ) -> Self {
         Self {
             remote_rpc,
-            rpc_auth_service,
+            direct_invocation_auth,
             active_workers,
             engine,
             linker,
@@ -745,7 +745,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             debug!(target_agent_id = %owned_agent_id, "Ensuring local target worker exists");
 
-            self.rpc_auth_service
+            self.direct_invocation_auth
                 .check(
                     self_created_by,
                     owned_agent_id.environment_id,
@@ -805,7 +805,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             debug!(target_agent_id = %owned_agent_id, "Local direct agent invoke_and_await");
 
-            self.rpc_auth_service
+            self.direct_invocation_auth
                 .check(
                     self_created_by,
                     owned_agent_id.environment_id,
@@ -882,7 +882,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             debug!(target_agent_id = %owned_agent_id, "Local direct agent invoke (fire-and-forget)");
 
-            self.rpc_auth_service
+            self.direct_invocation_auth
                 .check(
                     self_created_by,
                     owned_agent_id.environment_id,

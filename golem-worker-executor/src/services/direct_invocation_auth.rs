@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::golem_config::RpcAuthCacheConfig;
+use crate::services::golem_config::DirectInvocationAuthCacheConfig;
 use crate::services::rpc::RpcError;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -32,7 +32,7 @@ use std::sync::Arc;
 ///   `AuthCtx::authorize_environment_action` check. Results are cached keyed by
 ///   `(EnvironmentId, AccountId)` with a configurable TTL.
 #[async_trait]
-pub trait RpcEnvironmentAuthService: Send + Sync {
+pub trait DirectInvocationAuthService: Send + Sync {
     /// Check whether `caller_account_id` is allowed to perform `action` on `environment_id`.
     ///
     /// Returns `Ok(())` if allowed, or `Err(RpcError::Denied { .. })` if not.
@@ -50,7 +50,7 @@ enum AuthDetailsCacheError {
     Error,
 }
 
-pub struct DefaultRpcEnvironmentAuthService {
+pub struct DefaultDirectInvocationAuthService {
     registry_service: Arc<dyn RegistryService>,
     /// Cache of the environment owner, keyed by `EnvironmentId`.
     /// Populated on first auth-details fetch; the owner never changes for a given environment.
@@ -60,8 +60,11 @@ pub struct DefaultRpcEnvironmentAuthService {
         Cache<(EnvironmentId, AccountId), (), AuthDetailsForEnvironment, AuthDetailsCacheError>,
 }
 
-impl DefaultRpcEnvironmentAuthService {
-    pub fn new(registry_service: Arc<dyn RegistryService>, config: &RpcAuthCacheConfig) -> Self {
+impl DefaultDirectInvocationAuthService {
+    pub fn new(
+        registry_service: Arc<dyn RegistryService>,
+        config: &DirectInvocationAuthCacheConfig,
+    ) -> Self {
         Self {
             registry_service,
             env_owner_cache: Cache::new(
@@ -149,7 +152,7 @@ impl DefaultRpcEnvironmentAuthService {
 }
 
 #[async_trait]
-impl RpcEnvironmentAuthService for DefaultRpcEnvironmentAuthService {
+impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
     async fn check(
         &self,
         caller_account_id: AccountId,
@@ -191,12 +194,12 @@ impl RpcEnvironmentAuthService for DefaultRpcEnvironmentAuthService {
     }
 }
 
-/// A no-op implementation of `RpcEnvironmentAuthService` that always permits all calls.
+/// A no-op implementation of `DirectInvocationAuthService` that always permits all calls.
 /// For use in test environments where authorization is not exercised.
-pub struct NoOpRpcEnvironmentAuthService;
+pub struct NoOpDirectInvocationAuthService;
 
 #[async_trait]
-impl RpcEnvironmentAuthService for NoOpRpcEnvironmentAuthService {
+impl DirectInvocationAuthService for NoOpDirectInvocationAuthService {
     async fn check(
         &self,
         _caller_account_id: AccountId,
@@ -459,8 +462,11 @@ mod tests {
         }
     }
 
-    fn make_service(registry: Arc<dyn RegistryService>) -> DefaultRpcEnvironmentAuthService {
-        DefaultRpcEnvironmentAuthService::new(registry, &RpcAuthCacheConfig::default())
+    fn make_service(registry: Arc<dyn RegistryService>) -> DefaultDirectInvocationAuthService {
+        DefaultDirectInvocationAuthService::new(
+            registry,
+            &DirectInvocationAuthCacheConfig::default(),
+        )
     }
 
     // --- Tests ---
