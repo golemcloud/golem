@@ -748,7 +748,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             self.rpc_auth_service
                 .check(
                     self_created_by,
-                    owned_agent_id.agent_id.component_id,
                     owned_agent_id.environment_id,
                     EnvironmentAction::CreateWorker,
                 )
@@ -809,7 +808,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             self.rpc_auth_service
                 .check(
                     self_created_by,
-                    owned_agent_id.agent_id.component_id,
                     owned_agent_id.environment_id,
                     EnvironmentAction::UpdateWorker,
                 )
@@ -887,7 +885,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             self.rpc_auth_service
                 .check(
                     self_created_by,
-                    owned_agent_id.agent_id.component_id,
                     owned_agent_id.environment_id,
                     EnvironmentAction::UpdateWorker,
                 )

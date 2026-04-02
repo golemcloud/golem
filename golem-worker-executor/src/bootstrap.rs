@@ -163,7 +163,6 @@ impl Bootstrap<Context> for ServerBootstrap {
         ));
 
         let rpc_auth_service = Arc::new(DefaultRpcEnvironmentAuthService::new(
-            component_service.clone(),
             registry_service.clone(),
             &golem_config.rpc_auth_cache,
         ));

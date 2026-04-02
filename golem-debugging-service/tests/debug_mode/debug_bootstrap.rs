@@ -172,7 +172,6 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         let additional_deps = AdditionalDeps::new(auth_service, debug_sessions);
 
         let rpc_auth_service = Arc::new(DefaultRpcEnvironmentAuthService::new(
-            component_service.clone(),
             registry_service.clone(),
             &golem_config.rpc_auth_cache,
         ));
