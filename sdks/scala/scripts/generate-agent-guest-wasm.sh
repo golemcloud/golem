@@ -12,7 +12,7 @@ set -euo pipefail
 # 2) runs `wasm-rquickjs generate-wrapper-crate` with a `@slot` for user JS injection.
 #    Unlike the TS SDK, we do NOT embed a separate SDK JS module here.
 #    Scala.js bundles the SDK into the user's `scala.js`, which golem-cli injects later.
-# 3) builds the component with `cargo component`
+# 3) builds the component with `cargo build --target wasm32-wasip2`
 # 4) updates embedded plugin resources (used by sbt/mill plugins).
 #
 # Prerequisites:
@@ -20,7 +20,7 @@ set -euo pipefail
 #
 # Requirements:
 # - `wasm-rquickjs` (from crate `wasm-rquickjs-cli`)
-# - Rust toolchain + `cargo-component` (installed by `cargo install cargo-component`)
+# - Rust toolchain with `wasm32-wasip2` target (`rustup target add wasm32-wasip2`)
 #
 # Usage:
 #   cd sdks/scala && ./scripts/generate-agent-guest-wasm.sh
@@ -38,7 +38,7 @@ wit_dir="$sdk_root/wit"
 gen_dir="$sdk_root/.generated"
 agent_wit_root="$gen_dir/agent-wit-root"
 wrapper_dir="$gen_dir/agent-guest-wrapper"
-out_wasm="$wrapper_dir/target/wasm32-wasip1/release/agent_guest.wasm"
+out_wasm="$wrapper_dir/target/wasm32-wasip2/release/agent_guest.wasm"
 
 echo "[agent-guest] sdk_root=$sdk_root" >&2
 
@@ -84,13 +84,13 @@ wasm-rquickjs generate-wrapper-crate \
   --js-modules "user=@slot" \
   --output "$wrapper_dir"
 
-echo "[agent-guest] Building guest runtime (cargo component build --release)..." >&2
+echo "[agent-guest] Building guest runtime (cargo build --target wasm32-wasip2 --release)..." >&2
 if [[ -f "$HOME/.cargo/env" ]]; then
   # shellcheck disable=SC1090
   . "$HOME/.cargo/env"
 fi
 
-( cd "$wrapper_dir" && env -u ARGV0 rustup run stable cargo component build --release )
+( cd "$wrapper_dir" && env -u ARGV0 rustup run stable cargo build --target wasm32-wasip2 --release --features full,golem )
 
 if [[ ! -f "$out_wasm" ]]; then
   echo "[agent-guest] ERROR: build did not produce $out_wasm" >&2
