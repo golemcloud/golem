@@ -105,6 +105,7 @@ export class Repl {
       preview: false,
       ignoreUndefined: true,
       prompt,
+      breakEvalOnSigint: true,
     });
   }
 
