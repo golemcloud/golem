@@ -835,8 +835,8 @@ pub async fn create_worker_executor_impl<
 
     let additional_deps = bootstrap.create_additional_deps(registry_service.clone());
 
-    let direct_invocation_auth_service = bootstrap
-        .create_direct_invocation_auth_service(registry_service.clone(), &golem_config);
+    let direct_invocation_auth_service =
+        bootstrap.create_direct_invocation_auth_service(registry_service.clone(), &golem_config);
     let worker_limit_service = bootstrap.create_worker_limit_service(registry_service.clone());
 
     let rdbms_service = bootstrap.create_rdbms_service(&golem_config, &additional_deps);
