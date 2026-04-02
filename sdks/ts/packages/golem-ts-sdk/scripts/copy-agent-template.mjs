@@ -9,7 +9,7 @@ const sourcePath = path.join(
   packageDir,
   'agent-template',
   'target',
-  'wasm32-wasip1',
+  'wasm32-wasip2',
   'release',
   'agent_guest.wasm',
 );
