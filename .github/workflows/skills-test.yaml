@@ -259,3 +259,11 @@ jobs:
         with:
           name: results-${{ matrix.agent }}-${{ matrix.language }}
           path: /tmp/harness-run/results/
+
+      - name: Upload Workspaces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspaces-${{ matrix.agent }}-${{ matrix.language }}
+          path: /tmp/harness-run/workspaces/
+          retention-days: 3
