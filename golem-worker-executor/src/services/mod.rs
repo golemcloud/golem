@@ -24,6 +24,7 @@ pub mod golem_config;
 pub mod key_value;
 pub mod oplog;
 pub mod promise;
+pub mod quota;
 pub mod rdbms;
 pub mod registry_event_subscriber;
 pub mod resource_limits;
@@ -86,6 +87,10 @@ pub trait HasComponentService {
 
 pub trait HasShardManagerService {
     fn shard_manager_service(&self) -> Arc<dyn shard_manager::ShardManagerService>;
+}
+
+pub trait HasQuotaService {
+    fn quota_service(&self) -> Arc<dyn quota::QuotaService>;
 }
 
 pub trait HasConfig {
@@ -227,6 +232,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasWorkerProxy
     + HasEvents
     + HasShardManagerService
+    + HasQuotaService
     + HasShardService
     + HasFileLoader
     + HasOplogProcessorPlugin
@@ -265,6 +271,7 @@ impl<
         + HasWorkerProxy
         + HasEvents
         + HasShardManagerService
+        + HasQuotaService
         + HasShardService
         + HasFileLoader
         + HasOplogProcessorPlugin
@@ -292,6 +299,7 @@ pub struct All<Ctx: WorkerCtx> {
     runtime: Handle,
     component_service: Arc<dyn component::ComponentService>,
     shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
+    quota_service: Arc<dyn quota::QuotaService>,
     worker_fork: Arc<dyn worker_fork::WorkerForkService>,
     worker_service: Arc<dyn worker::WorkerService>,
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -334,6 +342,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             runtime: self.runtime.clone(),
             component_service: self.component_service.clone(),
             shard_manager_service: self.shard_manager_service.clone(),
+            quota_service: self.quota_service.clone(),
             worker_fork: self.worker_fork.clone(),
             worker_service: self.worker_service.clone(),
             worker_enumeration_service: self.worker_enumeration_service.clone(),
@@ -374,6 +383,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         runtime: Handle,
         component_service: Arc<dyn component::ComponentService>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
+        quota_service: Arc<dyn quota::QuotaService>,
         worker_fork: Arc<dyn worker_fork::WorkerForkService>,
         worker_service: Arc<dyn worker::WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -411,6 +421,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             runtime,
             component_service,
             shard_manager_service,
+            quota_service,
             worker_fork,
             worker_service,
             worker_enumeration_service,
@@ -456,6 +467,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.runtime(),
             this.component_service(),
             this.shard_manager_service(),
+            this.quota_service(),
             this.worker_fork_service(),
             this.worker_service(),
             this.worker_enumeration_service(),
@@ -526,6 +538,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasComponentService for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasShardManagerService for T {
     fn shard_manager_service(&self) -> Arc<dyn shard_manager::ShardManagerService> {
         self.all().shard_manager_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasQuotaService for T {
+    fn quota_service(&self) -> Arc<dyn quota::QuotaService> {
+        self.all().quota_service.clone()
     }
 }
 

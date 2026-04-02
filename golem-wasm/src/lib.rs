@@ -173,6 +173,10 @@ pub trait SubscribeAny: std::any::Any {
 #[cfg(feature = "host")]
 pub struct FutureInvokeResultEntry {
     pub payload: Box<dyn SubscribeAny + Send + Sync>,
+    /// Tracks child Pollable rep indices created by `subscribe()`.
+    /// Used to delete children before the parent in `drop()`, because
+    /// JS GC does not guarantee LIFO drop order.
+    pub child_pollables: Vec<u32>,
 }
 
 #[cfg(feature = "host")]

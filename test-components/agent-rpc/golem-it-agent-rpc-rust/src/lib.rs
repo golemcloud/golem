@@ -1,5 +1,7 @@
 use golem_rust::bindings::golem::agent::host::Datetime;
+use golem_rust::golem_agentic::golem::agent::host::WasmRpc;
 use golem_rust::{agent_definition, agent_implementation, PromiseId, Schema, Uuid};
+use golem_rust::agentic::Schema as SchemaOps;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Schema)]
@@ -466,5 +468,71 @@ impl RpcBlockingCounter for RpcBlockingCounterImpl {
 
     fn await_promise(&self, promise_id: PromiseId) {
         golem_rust::blocking_await_promise(&promise_id);
+    }
+}
+
+// -- Cancel test agents --
+
+#[agent_definition]
+pub trait CancelTester {
+    fn new(name: String) -> Self;
+
+    /// Starts an async RPC call and immediately cancels it, does not call get()
+    fn test_cancel_before_await(&self, counter_name: String);
+
+    /// Starts an async RPC call, awaits its completion, then cancels (should be no-op)
+    async fn test_cancel_completed(&self, counter_name: String) -> u64;
+}
+
+struct CancelTesterImpl {
+    _name: String,
+}
+
+#[agent_implementation]
+impl CancelTester for CancelTesterImpl {
+    fn new(name: String) -> Self {
+        Self { _name: name }
+    }
+
+    fn test_cancel_before_await(&self, counter_name: String) {
+        let constructor_data = counter_name.to_data_value()
+            .expect("Failed to encode constructor");
+        let wasm_rpc = WasmRpc::new("RpcCounter", &constructor_data, None, &[]);
+
+        let input = 1u64.to_data_value()
+            .expect("Failed to encode input");
+        let future = wasm_rpc.async_invoke_and_await("inc_by", &input);
+
+        // Cancel immediately before polling/awaiting
+        future.cancel();
+        // Don't call get() - that would trigger retry logic
+        // The test verifies from outside that the counter was NOT incremented
+    }
+
+    async fn test_cancel_completed(&self, counter_name: String) -> u64 {
+        let constructor_data = counter_name.clone().to_data_value()
+            .expect("Failed to encode constructor");
+        let wasm_rpc = WasmRpc::new("RpcCounter", &constructor_data, None, &[]);
+
+        // First, call inc_by to increment the counter
+        let input = 5u64.to_data_value()
+            .expect("Failed to encode input");
+        let future = wasm_rpc.async_invoke_and_await("inc_by", &input);
+
+        // Wait for completion
+        loop {
+            let pollable = future.subscribe();
+            golem_rust::agentic::await_pollable(pollable).await;
+            if let Some(_result) = future.get() {
+                break;
+            }
+        }
+
+        // Cancel after completion - should be a no-op
+        future.cancel();
+
+        // Now get the value through the generated client to verify
+        let counter = RpcCounterClient::get(counter_name);
+        counter.get_value().await
     }
 }

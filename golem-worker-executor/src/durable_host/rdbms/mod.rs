@@ -14,7 +14,9 @@
 
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, RemoteTransactionHandler};
+use crate::durable_host::{
+    Durability, DurabilityHost, DurableWorkerCtx, InternalRetryResult, RemoteTransactionHandler,
+};
 use crate::services::rdbms::{DbResult, DbRow, RdbmsType};
 use crate::services::rdbms::{RdbmsError, RdbmsService, RdbmsTransactionStatus, RdbmsTypeService};
 use crate::workerctx::WorkerCtx;
@@ -141,14 +143,45 @@ where
     T::DbValue: FromRdbmsValue<P>,
     E: From<RdbmsError>,
 {
-    let durability =
+    let mut durability =
         Durability::<T::ConnExecute>::new(ctx, DurableFunctionType::WriteRemote).await?;
 
     let result = if durability.is_live() {
-        let (input, result) = db_connection_execute(statement, params, ctx, entry).await;
-        durability
-            .try_trigger_retry(ctx, &result, classify_rdbms_error)
-            .await?;
+        let agent_id = ctx.state.owned_agent_id.agent_id.clone();
+        let pool_key = ctx
+            .as_wasi_view()
+            .table()
+            .get::<RdbmsConnection<T>>(entry)
+            .map(|v| v.pool_key.clone());
+
+        let (input, result) = match pool_key {
+            Ok(pool_key) => match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
+                Ok(db_params) => {
+                    let result = loop {
+                        let result = ctx
+                            .state
+                            .rdbms_service
+                            .deref()
+                            .rdbms_type_service()
+                            .execute(&pool_key, &agent_id, &statement, db_params.clone())
+                            .await;
+                        match durability
+                            .try_trigger_retry_or_loop(ctx, &result, classify_rdbms_error)
+                            .await?
+                        {
+                            InternalRetryResult::Persist => break result,
+                            InternalRetryResult::RetryInternally => continue,
+                        }
+                    };
+                    (
+                        Some(RdbmsRequest::<T>::new(pool_key, statement, db_params, None)),
+                        result,
+                    )
+                }
+                Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
+            },
+            Err(error) => (None, Err(RdbmsError::other_response_failure(error))),
+        };
 
         let result = result.map_err(|e| e.into());
         durability
@@ -181,13 +214,45 @@ where
     R: FromRdbmsValue<crate::services::rdbms::DbResult<T>>,
     E: From<RdbmsError>,
 {
-    let durability = Durability::<T::ConnQuery>::new(ctx, DurableFunctionType::WriteRemote).await?;
+    let mut durability =
+        Durability::<T::ConnQuery>::new(ctx, DurableFunctionType::WriteRemote).await?;
 
     let result = if durability.is_live() {
-        let (input, result) = db_connection_query(statement, params, ctx, entry).await;
-        durability
-            .try_trigger_retry(ctx, &result, classify_rdbms_error)
-            .await?;
+        let agent_id = ctx.state.owned_agent_id.agent_id.clone();
+        let pool_key = ctx
+            .as_wasi_view()
+            .table()
+            .get::<RdbmsConnection<T>>(entry)
+            .map(|v| v.pool_key.clone());
+
+        let (input, result) = match pool_key {
+            Ok(pool_key) => match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
+                Ok(db_params) => {
+                    let result = loop {
+                        let result = ctx
+                            .state
+                            .rdbms_service
+                            .deref()
+                            .rdbms_type_service()
+                            .query(&pool_key, &agent_id, &statement, db_params.clone())
+                            .await;
+                        match durability
+                            .try_trigger_retry_or_loop(ctx, &result, classify_rdbms_error)
+                            .await?
+                        {
+                            InternalRetryResult::Persist => break result,
+                            InternalRetryResult::RetryInternally => continue,
+                        }
+                    };
+                    (
+                        Some(RdbmsRequest::<T>::new(pool_key, statement, db_params, None)),
+                        result,
+                    )
+                }
+                Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
+            },
+            Err(error) => (None, Err(RdbmsError::other_response_failure(error))),
+        };
 
         let result = result.map(|result| result.into()).map_err(|e| e.into());
         durability
@@ -973,90 +1038,6 @@ where
         RdbmsTransactionState::Closed(_) => {
             Err(RdbmsError::other_response_failure("Transaction is closed"))
         }
-    }
-}
-
-async fn db_connection_query<Ctx, T, P>(
-    statement: String,
-    params: Vec<P>,
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    entry: &Resource<RdbmsConnection<T>>,
-) -> (
-    Option<RdbmsRequest<T>>,
-    Result<crate::services::rdbms::DbResult<T>, RdbmsError>,
-)
-where
-    Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
-    dyn RdbmsService: RdbmsTypeService<T>,
-    T::DbValue: FromRdbmsValue<P>,
-{
-    let agent_id = ctx.state.owned_agent_id.agent_id.clone();
-    let pool_key = ctx
-        .as_wasi_view()
-        .table()
-        .get::<RdbmsConnection<T>>(entry)
-        .map(|v| v.pool_key.clone());
-
-    match pool_key {
-        Ok(pool_key) => match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
-            Ok(params) => {
-                let result = ctx
-                    .state
-                    .rdbms_service
-                    .deref()
-                    .rdbms_type_service()
-                    .query(&pool_key, &agent_id, &statement, params.clone())
-                    .await;
-                (
-                    Some(RdbmsRequest::<T>::new(pool_key, statement, params, None)),
-                    result,
-                )
-            }
-            Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
-        },
-        Err(error) => (None, Err(RdbmsError::other_response_failure(error))),
-    }
-}
-
-async fn db_connection_execute<Ctx, T, P>(
-    statement: String,
-    params: Vec<P>,
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    entry: &Resource<RdbmsConnection<T>>,
-) -> (Option<RdbmsRequest<T>>, Result<u64, RdbmsError>)
-where
-    Ctx: WorkerCtx,
-    T: RdbmsType + 'static,
-    dyn RdbmsService: RdbmsTypeService<T>,
-    T::DbValue: FromRdbmsValue<P>,
-{
-    let agent_id = ctx.state.owned_agent_id.agent_id.clone();
-
-    let pool_key = ctx
-        .as_wasi_view()
-        .table()
-        .get::<RdbmsConnection<T>>(entry)
-        .map(|v| v.pool_key.clone());
-
-    match pool_key {
-        Ok(pool_key) => match to_db_values::<T, P>(params, ctx.as_wasi_view().table()) {
-            Ok(params) => {
-                let result = ctx
-                    .state
-                    .rdbms_service
-                    .deref()
-                    .rdbms_type_service()
-                    .execute(&pool_key, &agent_id, &statement, params.clone())
-                    .await;
-                (
-                    Some(RdbmsRequest::<T>::new(pool_key, statement, params, None)),
-                    result,
-                )
-            }
-            Err(error) => (None, Err(RdbmsError::QueryParameterFailure(error))),
-        },
-        Err(error) => (None, Err(RdbmsError::other_response_failure(error))),
     }
 }
 

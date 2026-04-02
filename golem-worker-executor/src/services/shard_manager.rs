@@ -12,138 +12,63 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::golem_config::{ShardManagerServiceConfig, ShardManagerServiceGrpcConfig};
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::shardmanager;
-use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
-use golem_common::model::{RetryConfig, ShardAssignment, ShardId};
-use golem_common::retries::with_retries;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::grpc::client::GrpcClient;
+use golem_common::model::{ShardAssignment, ShardId};
+use golem_service_base::clients::shard_manager::ShardManagerError;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
-use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
-/// Service providing access to the shard manager service
 #[async_trait]
 pub trait ShardManagerService: Send + Sync {
-    async fn register(&self, port: u16) -> Result<ShardAssignment, WorkerExecutorError>;
+    async fn register(
+        &self,
+        port: u16,
+        pod_name: Option<String>,
+    ) -> Result<ShardAssignment, ShardManagerError>;
 }
 
-pub fn configured(config: &ShardManagerServiceConfig) -> Arc<dyn ShardManagerService> {
-    match config {
-        ShardManagerServiceConfig::Grpc(config) => {
-            tracing::info!("Using grpc shard manager");
-            Arc::new(ShardManagerServiceGrpc::new(config))
-        }
-        ShardManagerServiceConfig::SingleShard(_) => {
-            tracing::info!("Using single shard shard manager");
-            Arc::new(ShardManagerServiceSingleShard::new())
-        }
-    }
+pub struct GrpcShardManagerService {
+    client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
 }
 
-pub struct ShardManagerServiceGrpc {
-    retries: RetryConfig,
-    client: GrpcClient<ShardManagerServiceClient<OtelGrpcService<Channel>>>,
-}
-
-impl ShardManagerServiceGrpc {
-    pub fn new(config: &ShardManagerServiceGrpcConfig) -> Self {
-        let client = GrpcClient::new(
-            "shard_manager",
-            |channel| {
-                ShardManagerServiceClient::new(channel)
-                    .send_compressed(CompressionEncoding::Gzip)
-                    .accept_compressed(CompressionEncoding::Gzip)
-            },
-            config.uri(),
-            config.client_config.clone(),
-        );
-        Self {
-            retries: config.retries.clone(),
-            client,
-        }
+impl GrpcShardManagerService {
+    pub fn new(client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>) -> Self {
+        Self { client }
     }
 }
 
 #[async_trait]
-impl ShardManagerService for ShardManagerServiceGrpc {
-    async fn register(&self, port: u16) -> Result<ShardAssignment, WorkerExecutorError> {
-        let pod_name = std::env::var_os("POD_NAME").map(|s| s.to_string_lossy().to_string());
-        with_retries(
-            "shard_manager",
-            "register",
-            Some(format!("{pod_name:?}")),
-            &self.retries,
-            &port,
-            |port| {
-                let client = self.client.clone();
-                let pod_name = pod_name.clone();
-                Box::pin(async move {
-                    let response = client
-                        .call("register", move |client| {
-                            Box::pin(client.register(shardmanager::v1::RegisterRequest {
-                                port: *port as i32,
-                                pod_name: pod_name.clone(),
-                            }))
-                        })
-                        .await
-                        .map_err(|err| {
-                            WorkerExecutorError::unknown(format!(
-                                "Registering with shard manager failed with {err}"
-                            ))
-                        })?;
-                    match response.into_inner() {
-                        shardmanager::v1::RegisterResponse {
-                            result:
-                                Some(shardmanager::v1::register_response::Result::Success(
-                                    shardmanager::v1::RegisterSuccess { number_of_shards },
-                                )),
-                        } => Ok(ShardAssignment {
-                            number_of_shards: number_of_shards as usize,
-                            shard_ids: HashSet::new(),
-                        }),
-                        shardmanager::v1::RegisterResponse {
-                            result:
-                                Some(shardmanager::v1::register_response::Result::Failure(failure)),
-                        } => Err(WorkerExecutorError::unknown(format!(
-                            "Registering with shard manager failed with shard manager error {failure:?}"
-                        ))),
-                        shardmanager::v1::RegisterResponse { .. } => Err(WorkerExecutorError::unknown(
-                            "Registering with shard manager failed with unknown error",
-                        )),
-                    }
-                })
-            },
-            |_| true,
-        )
-        .await
+impl ShardManagerService for GrpcShardManagerService {
+    async fn register(
+        &self,
+        port: u16,
+        pod_name: Option<String>,
+    ) -> Result<ShardAssignment, ShardManagerError> {
+        let number_of_shards = self.client.register(port, pod_name).await?;
+        Ok(ShardAssignment {
+            number_of_shards: number_of_shards
+                .try_into()
+                .expect("Failed to convert number of shards to usize"),
+            shard_ids: HashSet::new(),
+        })
     }
 }
 
-pub struct ShardManagerServiceSingleShard {}
-
-impl Default for ShardManagerServiceSingleShard {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ShardManagerServiceSingleShard {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
+/// Single-shard implementation for local development and the debugging
+/// service.  Returns a single shard assignment without contacting a real
+/// shard manager.
+pub struct ShardManagerServiceSingleShard;
 
 #[async_trait]
 impl ShardManagerService for ShardManagerServiceSingleShard {
-    async fn register(&self, _port: u16) -> Result<ShardAssignment, WorkerExecutorError> {
-        Ok(ShardAssignment::new(
-            1,
-            HashSet::from_iter(vec![ShardId::new(0)]),
-        ))
+    async fn register(
+        &self,
+        _port: u16,
+        _pod_name: Option<String>,
+    ) -> Result<ShardAssignment, ShardManagerError> {
+        Ok(ShardAssignment {
+            number_of_shards: 1,
+            shard_ids: HashSet::from_iter(vec![ShardId::new(0)]),
+        })
     }
 }

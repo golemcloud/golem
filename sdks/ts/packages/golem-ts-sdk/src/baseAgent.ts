@@ -414,6 +414,7 @@ export class BaseAgent {
  * // to call extra functionalities such as the following.
  *
  * myAgent.foo("my-input"); // normal invocation
+ * myAgent.foo.abortable(signal, "my-input"); // abortable invocation
  * myAgent.foo.trigger("my-input"); // fire and forget
  * myAgent.foo.schedule(scheduleTime, "my-input") // schedule an invocation
  *
@@ -431,6 +432,15 @@ export type Client<T> = {
 
 export type RemoteMethod<Args extends unknown[], R> = {
   (...args: Args): Promise<R>;
+  /**
+   * Invoke the remote method with abort support. When the signal is aborted,
+   * the returned promise rejects immediately, releasing the caller from waiting.
+   *
+   * **Important:** Aborting only cancels the local wait — the remote agent may
+   * still execute the invoked method. Use this for racing multiple invocations
+   * where you need the caller to proceed after the first result.
+   */
+  abortable: (signal: AbortSignal, ...args: Args) => Promise<R>;
   trigger: (...args: Args) => void;
   schedule: (ts: Datetime, ...args: Args) => void;
 };

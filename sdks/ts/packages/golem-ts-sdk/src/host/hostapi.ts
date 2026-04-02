@@ -15,6 +15,7 @@
 import { PromiseId, getPromise, Uuid } from 'golem:api/host@1.5.0';
 import { parseUuid } from 'golem:core/types@1.5.0';
 import { AgentId } from '../agentId';
+import { awaitPollable } from '../internal/pollableUtils';
 import * as wasiEnv from 'wasi:cli/environment@0.2.3';
 
 // reexport golem host api
@@ -23,6 +24,22 @@ export * from 'golem:api/host@1.5.0';
 export async function awaitPromise(promiseId: PromiseId): Promise<Uint8Array> {
   const promise = getPromise(promiseId);
   await promise.subscribe().promise();
+  return promise.get()!;
+}
+
+/**
+ * Awaits a Golem promise with abort support. When the signal is aborted,
+ * the returned promise rejects, releasing the caller from waiting.
+ *
+ * **Note:** Aborting only cancels the local wait — the promise may still
+ * be completed on the server side.
+ */
+export async function awaitAbortablePromise(
+  promiseId: PromiseId,
+  signal: AbortSignal,
+): Promise<Uint8Array> {
+  const promise = getPromise(promiseId);
+  await awaitPollable(promise.subscribe(), signal);
   return promise.get()!;
 }
 
