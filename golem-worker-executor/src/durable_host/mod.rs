@@ -884,7 +884,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
-                        } => {
+                        } if self.state.assume_idempotence => {
                             // We need to jump to the end of the oplog
                             self.state.replay_state.switch_to_live().await;
 
@@ -904,6 +904,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             // TODO: this recomputation should not be necessary.
                             self.public_state.worker().reattach_worker_status().await;
                             Ok(begin_index)
+                        }
+                        OplogEntryLookupResult::NotFound { .. } => {
+                            // assume_idempotence is false and the operation was not completed —
+                            // we cannot safely retry a non-idempotent batched write.
+                            self.state.replay_state.switch_to_live().await;
+                            Err(WorkerExecutorError::runtime(
+                                "Non-idempotent remote write operation was not completed, cannot retry",
+                            ))
                         }
                     }
                 } else {
