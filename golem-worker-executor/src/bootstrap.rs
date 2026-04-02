@@ -173,6 +173,7 @@ impl Bootstrap<Context> for ServerBootstrap {
                 shard_service.clone(),
             )),
             direct_invocation_auth,
+            registry_service.clone(),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),

@@ -47,6 +47,7 @@ use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
 };
+use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::EnvironmentAction;
 use std::collections::{BTreeMap, HashMap};
@@ -378,6 +379,7 @@ fn caller_agent_principal(self_agent_id: &AgentId) -> Principal {
 pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     remote_rpc: Arc<RemoteInvocationRpc>,
     direct_invocation_auth: Arc<dyn DirectInvocationAuthService>,
+    registry_service: Arc<dyn RegistryService>,
     active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -417,6 +419,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
         Self {
             remote_rpc: self.remote_rpc.clone(),
             direct_invocation_auth: self.direct_invocation_auth.clone(),
+            registry_service: self.registry_service.clone(),
             active_workers: self.active_workers.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
@@ -654,6 +657,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     pub fn new(
         remote_rpc: Arc<RemoteInvocationRpc>,
         direct_invocation_auth: Arc<dyn DirectInvocationAuthService>,
+        registry_service: Arc<dyn RegistryService>,
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -691,6 +695,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         Self {
             remote_rpc,
             direct_invocation_auth,
+            registry_service,
             active_workers,
             engine,
             linker,
@@ -745,7 +750,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             debug!(target_agent_id = %owned_agent_id, "Ensuring local target worker exists");
 
-            self.direct_invocation_auth
+            let env_owner = self
+                .direct_invocation_auth
                 .check(
                     self_created_by,
                     owned_agent_id.environment_id,
@@ -768,6 +774,20 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 }),
             )
             .await?;
+
+            // Mirror the remote path: worker-service calls update_worker_limit(+1) after
+            // create regardless of whether the worker was newly created or already existed.
+            self.registry_service
+                .update_worker_limit(env_owner.into(), &owned_agent_id.agent_id, true)
+                .await
+                .map_err(|e| match e {
+                    RegistryServiceError::LimitExceeded(msg) => RpcError::Denied {
+                        details: format!("Worker limit exceeded: {msg}"),
+                    },
+                    e => RpcError::RemoteInternalError {
+                        details: format!("Failed to update worker limit: {e}"),
+                    },
+                })?;
 
             let demand = LoggingDemand::new(owned_agent_id.agent_id());
             Ok(Box::new(demand))

@@ -170,7 +170,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
 
         let resource_limits = resource_limits::configured(
             &golem_config.resource_limits,
-            registry_service,
+            registry_service.clone(),
             shutdown_token.clone(),
         );
 
@@ -221,6 +221,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
                 shard_service.clone(),
             )),
             rpc_auth_service,
+            registry_service.clone(),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),

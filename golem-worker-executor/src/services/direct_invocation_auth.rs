@@ -22,6 +22,18 @@ use golem_service_base::clients::registry::{RegistryService, RegistryServiceErro
 use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment, EnvironmentAction};
 use std::sync::Arc;
 
+/// The account that owns the environment being accessed.
+/// Returned by `DirectInvocationAuthService::check` to make it unambiguous at call sites
+/// that this is the environment owner, not the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnvironmentOwnerAccountId(pub AccountId);
+
+impl From<EnvironmentOwnerAccountId> for AccountId {
+    fn from(value: EnvironmentOwnerAccountId) -> Self {
+        value.0
+    }
+}
+
 /// Service that encapsulates environment-level authorization checks for local RPC calls.
 ///
 /// Uses a two-tier strategy:
@@ -35,13 +47,15 @@ use std::sync::Arc;
 pub trait DirectInvocationAuthService: Send + Sync {
     /// Check whether `caller_account_id` is allowed to perform `action` on `environment_id`.
     ///
-    /// Returns `Ok(())` if allowed, or `Err(RpcError::Denied { .. })` if not.
+    /// Returns `Ok(EnvironmentOwnerAccountId)` if allowed — the wrapped `AccountId` is the
+    /// environment owner, needed for downstream limit accounting.
+    /// Returns `Err(RpcError::Denied { .. })` if not allowed.
     async fn check(
         &self,
         caller_account_id: AccountId,
         environment_id: EnvironmentId,
         action: EnvironmentAction,
-    ) -> Result<(), RpcError>;
+    ) -> Result<EnvironmentOwnerAccountId, RpcError>;
 }
 
 #[derive(Clone)]
@@ -158,7 +172,7 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
         caller_account_id: AccountId,
         environment_id: EnvironmentId,
         action: EnvironmentAction,
-    ) -> Result<(), RpcError> {
+    ) -> Result<EnvironmentOwnerAccountId, RpcError> {
         // Fast path: if the caller owns the target environment, allow immediately.
         // We use account_id_owning_environment (from AuthDetailsForEnvironment) — not
         // component.account_id — because the component deployer and the env owner can differ.
@@ -170,7 +184,7 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
             })?;
 
         if caller_account_id == env_owner {
-            return Ok(());
+            return Ok(EnvironmentOwnerAccountId(env_owner));
         }
 
         // Slow path: auth details already cached by get_env_owner above; re-fetch from cache.
@@ -190,23 +204,28 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
             )
             .map_err(|e| RpcError::Denied {
                 details: e.to_string(),
-            })
+            })?;
+
+        Ok(EnvironmentOwnerAccountId(
+            auth_details.account_id_owning_environment,
+        ))
     }
 }
 
 /// A no-op implementation of `DirectInvocationAuthService` that always permits all calls.
 /// For use in test environments where authorization is not exercised.
+/// Returns `caller_account_id` as the env owner (no-op context has no real owner).
 pub struct NoOpDirectInvocationAuthService;
 
 #[async_trait]
 impl DirectInvocationAuthService for NoOpDirectInvocationAuthService {
     async fn check(
         &self,
-        _caller_account_id: AccountId,
+        caller_account_id: AccountId,
         _environment_id: EnvironmentId,
         _action: EnvironmentAction,
-    ) -> Result<(), RpcError> {
-        Ok(())
+    ) -> Result<EnvironmentOwnerAccountId, RpcError> {
+        Ok(EnvironmentOwnerAccountId(caller_account_id))
     }
 }
 
@@ -619,6 +638,46 @@ mod tests {
             call_count.load(Ordering::SeqCst),
             1,
             "registry should be called only once due to caching"
+        );
+    }
+
+    #[test]
+    async fn check_returns_env_owner_account_id() {
+        let owner = make_account_id();
+        let caller = make_account_id();
+        let env_id = make_environment_id();
+        let auth_details = make_auth_details(owner, [EnvironmentRole::Deployer]);
+        let registry = Arc::new(MockRegistryService::new(Some(auth_details)));
+        let svc = make_service(registry);
+
+        // Non-owner deployer should be allowed and the returned AccountId is the env owner.
+        let result = svc
+            .check(caller, env_id, EnvironmentAction::UpdateWorker)
+            .await;
+
+        assert_eq!(
+            result.unwrap(),
+            EnvironmentOwnerAccountId(owner),
+            "check() should return the environment owner account id"
+        );
+    }
+
+    #[test]
+    async fn check_returns_env_owner_for_owner_fast_path() {
+        let owner = make_account_id();
+        let env_id = make_environment_id();
+        let auth_details = make_auth_details(owner, []);
+        let registry = Arc::new(MockRegistryService::new(Some(auth_details)));
+        let svc = make_service(registry);
+
+        let result = svc
+            .check(owner, env_id, EnvironmentAction::UpdateWorker)
+            .await;
+
+        assert_eq!(
+            result.unwrap(),
+            EnvironmentOwnerAccountId(owner),
+            "check() fast path should also return the environment owner account id"
         );
     }
 }

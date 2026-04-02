@@ -1259,7 +1259,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         ));
         let resource_limits = resource_limits::configured(
             &golem_config.resource_limits,
-            registry_service,
+            registry_service.clone(),
             shutdown_token.clone(),
         );
         let extra_deps = AdditionalTestDeps::new();
@@ -1311,6 +1311,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
                 shard_service.clone(),
             )),
             rpc_auth_service,
+            registry_service.clone(),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
@@ -1498,7 +1499,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
-        _registry_service: Arc<dyn RegistryService>,
+        registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
@@ -1553,6 +1554,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
                 shard_service.clone(),
             )),
             Arc::new(NoOpDirectInvocationAuthService),
+            registry_service.clone(),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),

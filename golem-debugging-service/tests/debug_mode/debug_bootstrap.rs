@@ -226,6 +226,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
                 shard_service.clone(),
             )),
             rpc_auth_service,
+            registry_service.clone(),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
