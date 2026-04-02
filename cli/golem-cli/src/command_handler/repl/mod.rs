@@ -138,7 +138,9 @@ impl ReplHandler {
             fs::create_dir_all(&repl_root_bridge_sdk_dir)?;
             let repl_root_bridge_sdk_dir = fs::absolute_lexical_path(&repl_root_bridge_sdk_dir)?;
 
-            let repl_history_file_path = app_ctx.application().repl_history_file(language.into());
+            let repl_history_file_path = app_ctx
+                .application()
+                .repl_history_file(language.try_into()?);
             if !repl_history_file_path.exists() {
                 fs::write(&repl_history_file_path, "")?;
             }
@@ -221,6 +223,9 @@ impl ReplHandler {
         match language {
             GuestLanguage::Rust => RustRepl::new(self.ctx.clone()).run(args).await,
             GuestLanguage::TypeScript => TypeScriptRepl::new(self.ctx.clone()).run(args).await,
+            GuestLanguage::Scala => {
+                bail!("REPL is not yet supported for Scala")
+            }
         }
     }
 

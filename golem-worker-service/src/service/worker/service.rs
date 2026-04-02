@@ -14,7 +14,10 @@
 
 use super::WorkerResult;
 use super::{ConnectWorkerStream, WorkerClient, WorkerServiceError};
-use crate::api::agents::{AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult};
+use crate::api::agents::{
+    AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult, CreateAgentRequest,
+    CreateAgentResponse,
+};
 use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
@@ -750,6 +753,80 @@ impl WorkerService {
                 principal,
             )
             .await
+    }
+
+    /// REST/JSON path: resolves agent via registry, converts JSON parameters, then creates the agent.
+    pub async fn create_agent_rest(
+        &self,
+        request: CreateAgentRequest,
+        auth: AuthCtx,
+    ) -> WorkerResult<CreateAgentResponse> {
+        let resolved = self
+            .agent_resolution_cache
+            .resolve(
+                &request.app_name,
+                &request.env_name,
+                &request.agent_type_name,
+                None,
+                &auth,
+            )
+            .await?;
+
+        let registered_agent_type = resolved.registered_agent_type;
+        let _environment_id = resolved.environment_id;
+        let component_id = registered_agent_type.implemented_by.component_id;
+        let agent_type = &registered_agent_type.agent_type;
+
+        let constructor_parameters: DataValue = DataValue::try_from_untyped_json(
+            request.parameters,
+            agent_type.constructor.input_schema.clone(),
+        )
+        .map_err(|err| {
+            WorkerServiceError::TypeChecker(format!(
+                "Agent constructor parameters type error: {err}"
+            ))
+        })?;
+
+        let agent_id = ParsedAgentId::new(
+            request.agent_type_name.clone(),
+            constructor_parameters,
+            request.phantom_id,
+        )
+        .map_err(|err| {
+            WorkerServiceError::TypeChecker(format!("Agent ID formatting error: {err}"))
+        })?;
+
+        let agent_id = AgentId {
+            component_id,
+            agent_id: agent_id.to_string(),
+        };
+
+        let component = self
+            .component_service
+            .get_revision(
+                component_id,
+                registered_agent_type.implemented_by.component_revision,
+            )
+            .await?;
+
+        let component_revision = self
+            .create_with_component(
+                &agent_id,
+                component,
+                HashMap::new(),
+                BTreeMap::new(),
+                request.agent_config,
+                true,
+                auth,
+                None,
+                None,
+            )
+            .await?;
+
+        Ok(CreateAgentResponse {
+            agent_id,
+            component_revision,
+        })
     }
 
     /// REST/JSON path: resolves agent via registry, converts JSON parameters, then delegates.

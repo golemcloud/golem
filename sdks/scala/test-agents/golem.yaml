@@ -1,0 +1,48 @@
+manifestVersion: 1.5.0
+app: scala-examples
+
+environments:
+  local:
+    server: local
+
+includes:
+- ../scala-js-template.yaml
+
+components:
+  scala:examples:
+    templates: scala.js
+    buildMergeMode: replace
+    build:
+    - command: bash -c 'COMP_DIR="$PWD" && cd .. && sbt -batch -no-colors -Dsbt.supershell=false "++3.8.2!" "project testAgents" "golemBuildComponent scala:examples $COMP_DIR/.golem/scala.js"'
+      sources:
+      - src
+      targets:
+      - .golem/scala.js
+    - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
+      module: .golem/scala.js
+      into: .golem/agents/scala_examples.dynamic.wasm
+    - preinitializeJs: .golem/agents/scala_examples.dynamic.wasm
+      into: .golem/agents/scala_examples.preinitialized.wasm
+    componentWasm: .golem/agents/scala_examples.preinitialized.wasm
+    outputWasm: .golem/agents/scala_examples.wasm
+
+    agents:
+      ConfigAgent:
+        config:
+        - path: ["appName"]
+          value: "ManifestApp"
+        - path: ["db", "host"]
+          value: "manifest-db.example.com"
+        - path: ["db", "port"]
+          value: 5432
+
+httpApi:
+  deployments:
+    local:
+    - domain: localhost:9006
+      agents:
+        WeatherAgent: {}
+        InventoryAgent: {}
+        CatalogAgent: {}
+        WebhookDemo: {}
+        FetchAgent: {}
