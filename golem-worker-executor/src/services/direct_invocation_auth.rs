@@ -240,8 +240,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
 
-    // --- Mock RegistryService ---
-
     struct MockRegistryService {
         auth_details: Option<AuthDetailsForEnvironment>,
         call_count: Arc<AtomicUsize>,
@@ -461,8 +459,6 @@ mod tests {
         }
     }
 
-    // --- Helpers ---
-
     fn make_account_id() -> AccountId {
         AccountId::new()
     }
@@ -487,8 +483,6 @@ mod tests {
             &DirectInvocationAuthCacheConfig::default(),
         )
     }
-
-    // --- Tests ---
 
     #[test]
     async fn owner_fast_path_is_allowed() {
