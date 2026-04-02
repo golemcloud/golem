@@ -303,19 +303,33 @@ mod tests {
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_service_base::clients::registry::RegistryServiceError;
     use golem_service_base::model::component::Component;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeSet, HashMap};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
 
     struct MockRegistryService {
-        auth_details: Option<AuthDetailsForEnvironment>,
+        auth_details_by_environment: HashMap<EnvironmentId, Option<AuthDetailsForEnvironment>>,
+        default_auth_details: Option<AuthDetailsForEnvironment>,
         call_count: Arc<AtomicUsize>,
     }
 
     impl MockRegistryService {
         fn new(auth_details: Option<AuthDetailsForEnvironment>) -> Self {
             Self {
-                auth_details,
+                auth_details_by_environment: HashMap::new(),
+                default_auth_details: auth_details,
+                call_count: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn new_per_environment(
+            auth_details_by_environment: impl IntoIterator<
+                Item = (EnvironmentId, Option<AuthDetailsForEnvironment>),
+            >,
+        ) -> Self {
+            Self {
+                auth_details_by_environment: HashMap::from_iter(auth_details_by_environment),
+                default_auth_details: None,
                 call_count: Arc::new(AtomicUsize::new(0)),
             }
         }
@@ -336,13 +350,15 @@ mod tests {
 
         async fn get_auth_details_for_environment(
             &self,
-            _environment_id: EnvironmentId,
+            environment_id: EnvironmentId,
             _include_deleted: bool,
             _auth_ctx: &AuthCtx,
         ) -> Result<AuthDetailsForEnvironment, RegistryServiceError> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
-            self.auth_details
-                .clone()
+            self.auth_details_by_environment
+                .get(&environment_id)
+                .cloned()
+                .unwrap_or_else(|| self.default_auth_details.clone())
                 .ok_or_else(|| RegistryServiceError::NotFound("not found".to_string()))
         }
 
@@ -739,6 +755,139 @@ mod tests {
             result.unwrap(),
             EnvironmentOwnerAccountId(owner),
             "check() fast path should also return the environment owner account id"
+        );
+    }
+
+    #[test]
+    async fn same_caller_can_be_allowed_in_one_environment_and_denied_in_another() {
+        let caller = make_account_id();
+        let owner_env_a = make_account_id();
+        let owner_env_b = make_account_id();
+        let env_a = make_environment_id();
+        let env_b = make_environment_id();
+
+        let registry = Arc::new(MockRegistryService::new_per_environment([
+            (
+                env_a,
+                Some(make_auth_details(owner_env_a, [EnvironmentRole::Deployer])),
+            ),
+            (env_b, Some(make_auth_details(owner_env_b, []))),
+        ]));
+        let svc = make_service(registry);
+
+        let allowed = svc
+            .check(caller, env_a, EnvironmentAction::UpdateWorker)
+            .await;
+        let denied = svc
+            .check(caller, env_b, EnvironmentAction::UpdateWorker)
+            .await;
+
+        assert!(
+            allowed.is_ok(),
+            "caller should be allowed in env_a due to deployer share: {allowed:?}"
+        );
+        assert!(
+            matches!(denied, Err(RpcError::Denied { .. })),
+            "caller should be denied in env_b with no share: {denied:?}"
+        );
+    }
+
+    #[test]
+    async fn owner_fast_path_is_scoped_per_environment() {
+        let caller = make_account_id();
+        let other_owner = make_account_id();
+        let env_owned_by_caller = make_environment_id();
+        let env_owned_by_other = make_environment_id();
+
+        let registry = Arc::new(MockRegistryService::new_per_environment([
+            (env_owned_by_caller, Some(make_auth_details(caller, []))),
+            (env_owned_by_other, Some(make_auth_details(other_owner, []))),
+        ]));
+        let svc = make_service(registry);
+
+        let own_env_result = svc
+            .check(caller, env_owned_by_caller, EnvironmentAction::UpdateWorker)
+            .await;
+        let other_env_result = svc
+            .check(caller, env_owned_by_other, EnvironmentAction::UpdateWorker)
+            .await;
+
+        assert!(
+            own_env_result.is_ok(),
+            "caller should be allowed in environment they own: {own_env_result:?}"
+        );
+        assert!(
+            matches!(other_env_result, Err(RpcError::Denied { .. })),
+            "caller should not be owner-fast-pathed in other environments: {other_env_result:?}"
+        );
+    }
+
+    #[test]
+    async fn cache_is_scoped_by_environment_and_caller_pair() {
+        let caller = make_account_id();
+        let owner_env_a = make_account_id();
+        let owner_env_b = make_account_id();
+        let env_a = make_environment_id();
+        let env_b = make_environment_id();
+
+        let registry = Arc::new(MockRegistryService::new_per_environment([
+            (
+                env_a,
+                Some(make_auth_details(owner_env_a, [EnvironmentRole::Deployer])),
+            ),
+            (
+                env_b,
+                Some(make_auth_details(owner_env_b, [EnvironmentRole::Deployer])),
+            ),
+        ]));
+        let call_count = registry.call_count();
+        let svc = make_service(registry);
+
+        let _ = svc
+            .check(caller, env_a, EnvironmentAction::UpdateWorker)
+            .await;
+        let _ = svc
+            .check(caller, env_b, EnvironmentAction::UpdateWorker)
+            .await;
+        let _ = svc
+            .check(caller, env_a, EnvironmentAction::UpdateWorker)
+            .await;
+
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            2,
+            "(env, caller) cache should cause one registry call per environment for the same caller"
+        );
+    }
+
+    #[test]
+    async fn cache_is_isolated_between_callers_in_same_environment() {
+        let owner = make_account_id();
+        let caller_one = make_account_id();
+        let caller_two = make_account_id();
+        let env_id = make_environment_id();
+
+        let registry = Arc::new(MockRegistryService::new_per_environment([(
+            env_id,
+            Some(make_auth_details(owner, [EnvironmentRole::Deployer])),
+        )]));
+        let call_count = registry.call_count();
+        let svc = make_service(registry);
+
+        let _ = svc
+            .check(caller_one, env_id, EnvironmentAction::UpdateWorker)
+            .await;
+        let _ = svc
+            .check(caller_two, env_id, EnvironmentAction::UpdateWorker)
+            .await;
+        let _ = svc
+            .check(caller_one, env_id, EnvironmentAction::UpdateWorker)
+            .await;
+
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            2,
+            "cache entries should be isolated per caller for the same environment"
         );
     }
 }

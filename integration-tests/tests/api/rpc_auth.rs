@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Integration tests verifying that cross-account RPC calls produce the correct
+//! Integration tests verifying that cross-account (shared-environment) RPC calls produce the correct
 //! `RpcCallOutcome` variant (typed, not a panic or internal error).
 //!
 //! The `RpcAuthTester` agent wraps an RPC call to `RpcCounter` and returns a typed
@@ -20,6 +20,12 @@
 //! exact error case without string matching.
 //!
 //! ## Coverage note
+//!
+//! These tests currently cover same-target-environment sharing semantics (different accounts,
+//! one environment owned by the target account and optionally shared to the caller account).
+//! They do not cover source-env-A -> target-env-B RPC from a single guest invocation.
+//! This is a current technical limitation of `WasmRpc`: the constructor resolves by agent type
+//! and constructor args in the caller context and does not expose an explicit target environment id.
 //!
 //! Each test run exercises whichever executor path the shard manager assigns for the
 //! target worker — either local (same executor as the caller) or remote (different
@@ -102,7 +108,7 @@ fn assert_rpc_outcome_is_ok(result: golem_common::model::agent::DataValue) {
     }
 }
 
-/// An unauthorized caller (no environment share) invoking a worker in another account's
+/// An unauthorized caller (no environment share) invoking a worker in another account-owned
 /// environment gets `RpcCallOutcome::Denied` back from the calling WASM agent.
 ///
 /// Note: this test exercises whichever executor path the shard manager assigns — local
@@ -124,9 +130,8 @@ async fn unauthorized_cross_account_rpc_is_denied(
     let (_, owner_env) = owner.app_and_env().await?;
     let owner_component = store_rpc_component(&owner, &owner_env.id).await?;
 
-    // Caller stores the SAME component in their OWN environment so that the
-    // `RpcAuthTester` agent runs as `caller` but targets `RpcCounter` workers
-    // registered in `owner`'s environment.
+    // Caller stores the same component in their own environment. WasmRpc does not let us
+    // explicitly force a different target environment id from guest code.
     let (_, caller_env) = caller.app_and_env().await?;
     let caller_component = store_rpc_component(&caller, &caller_env.id).await?;
 
@@ -158,7 +163,7 @@ async fn unauthorized_cross_account_rpc_is_denied(
     Ok(())
 }
 
-/// An authorized caller (granted `Deployer` role) invoking a worker in another account's
+/// An authorized caller (granted `Deployer` role) invoking a worker in another account-owned
 /// environment succeeds — `RpcCallOutcome::Ok` is returned.
 #[test]
 #[tracing::instrument]
