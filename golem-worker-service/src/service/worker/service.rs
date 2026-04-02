@@ -126,7 +126,8 @@ impl WorkerService {
             )
             .await?;
 
-        self.worker_client
+        let created = self
+            .worker_client
             .create(
                 agent_id,
                 environment_variables,
@@ -141,13 +142,15 @@ impl WorkerService {
             )
             .await?;
 
-        self.limit_service
-            .update_worker_limit(
-                environment_auth_details.account_id_owning_environment,
-                agent_id,
-                true,
-            )
-            .await?;
+        if created {
+            self.limit_service
+                .update_worker_limit(
+                    environment_auth_details.account_id_owning_environment,
+                    agent_id,
+                    true,
+                )
+                .await?;
+        }
 
         Ok(component.revision)
     }

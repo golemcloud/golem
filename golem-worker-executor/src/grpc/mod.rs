@@ -212,7 +212,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn create_worker_internal(
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<bool, WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
@@ -228,7 +228,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             })?;
 
         let existing_worker = self.worker_service().get(&owned_agent_id).await;
-        if existing_worker.is_some() && !request.ignore_already_existing {
+        let created = existing_worker.is_none();
+        if !created && !request.ignore_already_existing {
             return Err(WorkerExecutorError::worker_already_exists(
                 owned_agent_id.agent_id(),
             ));
@@ -285,7 +286,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 })
                 .await
             {
-                Ok(Ok(())) => Ok(()),
+                Ok(Ok(())) => Ok(created),
                 Ok(Err(e)) => Err(e),
                 Err(RecvError::Closed) => {
                     Err(WorkerExecutorError::unknown("Events subscription closed"))
@@ -295,7 +296,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 )),
             }
         } else {
-            Ok(())
+            Ok(created)
         }
     }
 
@@ -1905,11 +1906,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .instrument(record.span.clone())
             .await
         {
-            Ok(_) => record.succeed(Ok(Response::new(
+            Ok(created) => record.succeed(Ok(Response::new(
                 golem::workerexecutor::v1::CreateWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::create_worker_response::Result::Success(
-                            golem::common::Empty {},
+                            golem::workerexecutor::v1::CreateWorkerSuccess { created },
                         ),
                     ),
                 },

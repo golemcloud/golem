@@ -769,6 +769,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await?;
 
+            // Best-effort parity with remote worker-limit behavior: only increment when the
+            // worker appears to be newly created. This pre-check can still race under concurrent
+            // first-touch create-demand calls, but it avoids unconditional overcounting.
+            let created = self.worker_service().get(owned_agent_id).await.is_none();
+
             let _worker = Worker::get_or_create_running(
                 self,
                 self_created_by,
@@ -785,11 +790,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             )
             .await?;
 
-            // Mirror the remote path: worker-service calls update_worker_limit(+1) after
-            // create regardless of whether the worker was newly created or already existed.
-            self.worker_limit_service
-                .update_worker_limit(env_owner.into(), &owned_agent_id.agent_id, true)
-                .await?;
+            if created {
+                self.worker_limit_service
+                    .update_worker_limit(env_owner.into(), &owned_agent_id.agent_id, true)
+                    .await?;
+            }
 
             let demand = LoggingDemand::new(owned_agent_id.agent_id());
             Ok(Box::new(demand))
