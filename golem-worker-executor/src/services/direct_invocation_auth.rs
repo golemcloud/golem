@@ -16,6 +16,7 @@ use crate::services::golem_config::DirectInvocationAuthCacheConfig;
 use crate::services::rpc::RpcError;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
@@ -226,6 +227,72 @@ impl DirectInvocationAuthService for NoOpDirectInvocationAuthService {
         _action: EnvironmentAction,
     ) -> Result<EnvironmentOwnerAccountId, RpcError> {
         Ok(EnvironmentOwnerAccountId(caller_account_id))
+    }
+}
+
+// ─── Worker limit accounting ─────────────────────────────────────────────────
+
+/// Narrow service for recording worker-count changes after a local `create_demand`.
+///
+/// Decouples `DirectWorkerInvocationRpc` from the full `RegistryService` trait so
+/// that executor test environments can supply a no-op without implementing million methods.
+#[async_trait]
+pub trait WorkerLimitService: Send + Sync {
+    /// Increment (+1) or decrement (-1) the worker count for `env_owner_account_id`.
+    /// Mirrors `RegistryService::update_worker_limit`.
+    async fn update_worker_limit(
+        &self,
+        env_owner_account_id: AccountId,
+        agent_id: &AgentId,
+        added: bool,
+    ) -> Result<(), RpcError>;
+}
+
+/// Production implementation that delegates to the full `RegistryService`.
+pub struct RegistryWorkerLimitService {
+    registry: Arc<dyn RegistryService>,
+}
+
+impl RegistryWorkerLimitService {
+    pub fn new(registry: Arc<dyn RegistryService>) -> Self {
+        Self { registry }
+    }
+}
+
+#[async_trait]
+impl WorkerLimitService for RegistryWorkerLimitService {
+    async fn update_worker_limit(
+        &self,
+        env_owner_account_id: AccountId,
+        agent_id: &AgentId,
+        added: bool,
+    ) -> Result<(), RpcError> {
+        self.registry
+            .update_worker_limit(env_owner_account_id, agent_id, added)
+            .await
+            .map_err(|e| match e {
+                RegistryServiceError::LimitExceeded(msg) => RpcError::Denied {
+                    details: format!("Worker limit exceeded: {msg}"),
+                },
+                e => RpcError::RemoteInternalError {
+                    details: format!("Failed to update worker limit: {e}"),
+                },
+            })
+    }
+}
+
+/// No-op implementation for test environments where limit accounting is not exercised.
+pub struct NoOpWorkerLimitService;
+
+#[async_trait]
+impl WorkerLimitService for NoOpWorkerLimitService {
+    async fn update_worker_limit(
+        &self,
+        _env_owner_account_id: AccountId,
+        _agent_id: &AgentId,
+        _added: bool,
+    ) -> Result<(), RpcError> {
+        Ok(())
     }
 }
 

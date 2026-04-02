@@ -17,7 +17,9 @@ use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
-use golem_worker_executor::services::direct_invocation_auth::DefaultDirectInvocationAuthService;
+use golem_worker_executor::services::direct_invocation_auth::{
+    DefaultDirectInvocationAuthService, RegistryWorkerLimitService,
+};
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
@@ -226,7 +228,7 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
                 shard_service.clone(),
             )),
             rpc_auth_service,
-            registry_service.clone(),
+            Arc::new(RegistryWorkerLimitService::new(registry_service.clone())),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),

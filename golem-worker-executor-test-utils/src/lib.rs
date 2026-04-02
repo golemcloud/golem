@@ -83,7 +83,9 @@ use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
-use golem_worker_executor::services::direct_invocation_auth::NoOpDirectInvocationAuthService;
+use golem_worker_executor::services::direct_invocation_auth::{
+    NoOpDirectInvocationAuthService, NoOpWorkerLimitService,
+};
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
@@ -1307,7 +1309,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
                 shard_service.clone(),
             )),
             rpc_auth_service,
-            registry_service.clone(),
+            Arc::new(NoOpWorkerLimitService),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
@@ -1495,7 +1497,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
-        registry_service: Arc<dyn RegistryService>,
+        _registry_service: Arc<dyn RegistryService>,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
@@ -1550,7 +1552,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
                 shard_service.clone(),
             )),
             Arc::new(NoOpDirectInvocationAuthService),
-            registry_service.clone(),
+            Arc::new(NoOpWorkerLimitService),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),

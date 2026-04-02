@@ -20,7 +20,9 @@ use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
-use crate::services::direct_invocation_auth::DefaultDirectInvocationAuthService;
+use crate::services::direct_invocation_auth::{
+    DefaultDirectInvocationAuthService, RegistryWorkerLimitService,
+};
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::events::Events;
 use crate::services::file_loader::FileLoader;
@@ -173,7 +175,7 @@ impl Bootstrap<Context> for ServerBootstrap {
                 shard_service.clone(),
             )),
             direct_invocation_auth,
-            registry_service.clone(),
+            Arc::new(RegistryWorkerLimitService::new(registry_service.clone())),
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
