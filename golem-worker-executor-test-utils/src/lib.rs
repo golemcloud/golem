@@ -83,9 +83,7 @@ use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
-use golem_worker_executor::services::direct_invocation_auth::{
-    DefaultDirectInvocationAuthService, NoOpDirectInvocationAuthService,
-};
+use golem_worker_executor::services::direct_invocation_auth::NoOpDirectInvocationAuthService;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
@@ -1253,10 +1251,8 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
-        let rpc_auth_service = Arc::new(DefaultDirectInvocationAuthService::new(
-            registry_service.clone(),
-            &golem_config.direct_invocation_auth_cache,
-        ));
+        // Executor tests run without a live registry-service; auth is exercised separately.
+        let rpc_auth_service = Arc::new(NoOpDirectInvocationAuthService);
         let resource_limits = resource_limits::configured(
             &golem_config.resource_limits,
             registry_service.clone(),
