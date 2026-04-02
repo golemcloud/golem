@@ -1144,6 +1144,7 @@ impl SafeDisplay for EnvironmentStateServiceConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DirectInvocationAuthCacheConfig {
     pub cache_capacity: usize,
+    #[serde(with = "humantime_serde")]
     pub cache_ttl: Duration,
     #[serde(with = "humantime_serde")]
     pub cache_eviction_interval: Duration,
