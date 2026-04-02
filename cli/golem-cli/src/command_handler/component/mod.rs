@@ -46,16 +46,16 @@ use futures_util::future::OptionFuture;
 use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
 use golem_common::cache::SimpleCache;
-use golem_common::model::agent::AgentType;
+use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
-    ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
+    AgentConfigEntry, ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff::{self, VecDiffable};
 use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -751,15 +751,84 @@ impl ComponentCommandHandler {
     pub async fn deployable_manifest_components(
         &self,
     ) -> anyhow::Result<BTreeMap<ComponentName, ComponentDeployProperties>> {
-        let component_names = {
+        let (component_names, declared_agents) = {
             let app_ctx = self.ctx.app_context_lock().await;
-            app_ctx.some_or_err()?.component_names()
+            let app = app_ctx.some_or_err()?;
+            (
+                app.component_names().into_iter().collect::<Vec<_>>(),
+                app.application()
+                    .agent_names()
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+            )
         };
 
         let mut components = BTreeMap::<ComponentName, ComponentDeployProperties>::new();
         for component_name in component_names {
             let properties = self.component_deploy_properties(&component_name).await?;
             components.insert(component_name, properties);
+        }
+
+        let mut exported_agents = HashMap::<AgentTypeName, Vec<ComponentName>>::new();
+        for (component_name, properties) in &components {
+            for agent_type in &properties.agent_types {
+                exported_agents
+                    .entry(agent_type.type_name.clone())
+                    .or_default()
+                    .push(component_name.clone());
+            }
+        }
+
+        let unknown_declared_agents: Vec<String> = declared_agents
+            .into_iter()
+            .filter(|declared_agent| !exported_agents.contains_key(declared_agent))
+            .map(|agent_name| agent_name.0)
+            .collect();
+
+        if !unknown_declared_agents.is_empty() {
+            // TODO: atl: validate against resolved ATL agent set after template/preset expansion,
+            // not only directly declared manifest agents.
+            for agent_name in &unknown_declared_agents {
+                log_error(format!(
+                    "Manifest declares agent {} but it is not exported by any component.",
+                    agent_name.log_color_highlight()
+                ));
+            }
+
+            logln("");
+            logln(
+                "Available agents by component:"
+                    .log_color_help_group()
+                    .to_string(),
+            );
+
+            for (component_name, properties) in &components {
+                let mut available_agents = properties
+                    .agent_types
+                    .iter()
+                    .map(|agent_type| agent_type.type_name.0.clone())
+                    .collect::<Vec<_>>();
+                available_agents.sort();
+
+                if available_agents.is_empty() {
+                    logln(format!(
+                        "- {}: {}",
+                        component_name.0.log_color_highlight(),
+                        "<none>".log_color_warn()
+                    ));
+                } else {
+                    logln(format!(
+                        "- {}: {}",
+                        component_name.0.log_color_highlight(),
+                        available_agents
+                            .iter()
+                            .map(|name| name.log_color_highlight())
+                            .join(", ")
+                    ));
+                }
+            }
+
+            bail!(NonSuccessfulExit);
         }
 
         Ok(components)
@@ -782,8 +851,28 @@ impl ComponentCommandHandler {
         let files = component.files().clone();
         let plugins = component.plugins().clone();
         let env = resolve_env_vars(component_name, component.env())?;
-        let config_vars = component.config_vars().clone();
-        let agent_config = component.agent_config().clone();
+        let wasi_config = component.wasi_config().clone();
+        let mut config = vec![];
+
+        // TODO: atl: source from resolved ATL agent model (templates/presets/component fallback),
+        // not directly from raw agent config values.
+        for agent_type in &agent_types {
+            if let Some(agent_properties) = app_ctx
+                .application()
+                .agent_properties(&agent_type.type_name)
+            {
+                config.extend(
+                    agent_properties
+                        .config
+                        .iter()
+                        .map(|config| AgentConfigEntry {
+                            agent: agent_type.type_name.clone(),
+                            path: config.path.clone(),
+                            value: config.value.clone(),
+                        }),
+                );
+            }
+        }
 
         Ok(ComponentDeployProperties {
             wasm_path,
@@ -791,8 +880,10 @@ impl ComponentCommandHandler {
             files,
             plugins,
             env,
-            config_vars,
-            agent_config,
+            wasi_config,
+            // TODO: atl: project full ATL agent-level state (env/config/files/plugins) once
+            // registry write model supports agent-type-level persistence.
+            config,
         })
     }
 
@@ -891,8 +982,9 @@ impl ComponentCommandHandler {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
+                // TODO: atl: rename diff model field to `wasi_config`.
                 config_vars: properties
-                    .config_vars
+                    .wasi_config
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
@@ -901,8 +993,9 @@ impl ComponentCommandHandler {
             wasm_hash: component_binary_hash.into(),
             files_by_path,
             plugins_by_grant_id,
+            // TODO: atl: rename diff model field to `ordered_config`.
             ordered_agent_config: properties
-                .agent_config
+                .config
                 .iter()
                 .map(|lac| diff::AgentConfigEntry {
                     agent: lac.agent.0.clone(),
@@ -956,8 +1049,10 @@ impl ComponentCommandHandler {
                         .map(|files| files.file_options.clone())
                         .unwrap_or_default(),
                     env: component_stager.env(),
-                    config_vars: component_stager.config_vars(),
-                    agent_config: component_stager.agent_config(),
+                    // TODO: atl: rename server-side field to `wasi_config`.
+                    config_vars: component_stager.wasi_config(),
+                    // TODO: atl: rename server-side field to `config`.
+                    agent_config: component_stager.config(),
                     agent_types,
                     plugins: component_stager.plugins(),
                 },
@@ -1051,8 +1146,10 @@ impl ComponentCommandHandler {
                     current_revision: component.revision,
                     removed_files: changed_files.removed.clone(),
                     new_file_options: changed_files.merged_file_options(),
-                    config_vars: component_stager.config_vars_if_changed(),
-                    agent_config: component_stager.agent_config_if_changed(),
+                    // TODO: atl: rename server-side field to `wasi_config`.
+                    config_vars: component_stager.wasi_config_if_changed(),
+                    // TODO: atl: rename server-side field to `config`.
+                    agent_config: component_stager.config_if_changed(),
                     env: component_stager.env_if_changed(),
                     agent_types,
                     plugin_updates: component_stager.plugins_if_changed(),

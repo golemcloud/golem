@@ -330,6 +330,7 @@ pub struct Application {
     all_sources: BTreeSet<PathBuf>,
     components:
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
+    agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
     http_api_deployments:
@@ -415,6 +416,21 @@ impl Application {
 
     pub fn has_any_component(&self) -> bool {
         !self.components.is_empty()
+    }
+
+    pub fn agent_names(&self) -> impl Iterator<Item = &AgentTypeName> {
+        self.agents.keys()
+    }
+
+    pub fn agent_properties(
+        &self,
+        agent_type_name: &AgentTypeName,
+    ) -> Option<&app_raw::AgentLayerProperties> {
+        // TODO: atl: return fully resolved agent properties (templates/presets/component fallback),
+        // not raw manifest agent properties.
+        self.agents
+            .get(agent_type_name)
+            .map(|agent| &agent.value.agent_properties)
     }
 
     pub fn contains_component(&self, component_name: &ComponentName) -> bool {
@@ -969,21 +985,12 @@ impl Layer for ComponentLayer {
                 ),
             );
 
-            value.config_vars.apply_layer(
+            value.wasi_config.apply_layer(
                 id,
                 selection,
                 (
-                    properties.config_vars_merge_mode.unwrap_or_default(),
-                    properties.config_vars.value().clone(),
-                ),
-            );
-
-            value.agents.apply_layer(
-                id,
-                selection,
-                (
-                    properties.agents_merge_mode.unwrap_or_default(),
-                    properties.agents.value().clone(),
+                    properties.wasi_config_merge_mode.unwrap_or_default(),
+                    properties.wasi_config.value().clone(),
                 ),
             );
         }
@@ -1100,12 +1107,12 @@ impl<'a> Component<'a> {
         &self.properties().env
     }
 
-    pub fn config_vars(&self) -> &BTreeMap<String, String> {
-        &self.properties().config_vars
+    pub fn wasi_config(&self) -> &BTreeMap<String, String> {
+        &self.properties().wasi_config
     }
 
-    pub fn agent_config(&self) -> &Vec<AgentConfigEntry> {
-        &self.properties().agent_config
+    pub fn config(&self) -> &Vec<AgentConfigEntry> {
+        &self.properties().config
     }
 
     pub fn files(&self) -> &Vec<InitialComponentFile> {
@@ -1155,11 +1162,8 @@ pub struct ComponentLayerProperties {
     pub env_merge_mode: Option<MapMergeMode>,
     pub env: MapProperty<ComponentLayer, String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub config_vars_merge_mode: Option<MapMergeMode>,
-    pub config_vars: MapProperty<ComponentLayer, String, String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agents_merge_mode: Option<MapMergeMode>,
-    pub agents: MapProperty<ComponentLayer, AgentTypeName, app_raw::ComponentAgentProperties>,
+    pub wasi_config_merge_mode: Option<MapMergeMode>,
+    pub wasi_config: MapProperty<ComponentLayer, String, String>,
 }
 
 impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
@@ -1178,10 +1182,8 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             plugins: value.plugins.unwrap_or_default().into(),
             env_merge_mode: value.env_merge_mode,
             env: value.env.unwrap_or_default().into(),
-            config_vars_merge_mode: value.config_vars_merge_mode,
-            config_vars: value.config_vars.unwrap_or_default().into(),
-            agents_merge_mode: value.agents_merge_mode,
-            agents: value.agents.into(),
+            wasi_config_merge_mode: value.wasi_config_merge_mode,
+            wasi_config: value.wasi_config.unwrap_or_default().into(),
         }
     }
 }
@@ -1196,7 +1198,7 @@ impl ComponentLayerProperties {
         self.files.compact_trace();
         self.plugins.compact_trace();
         self.env.compact_trace();
-        self.config_vars.compact_trace();
+        self.wasi_config.compact_trace();
     }
 
     pub fn with_compacted_traces(&self) -> Self {
@@ -1237,8 +1239,8 @@ pub struct ComponentProperties {
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
-    pub config_vars: BTreeMap<String, String>,
-    pub agent_config: Vec<AgentConfigEntry>,
+    pub wasi_config: BTreeMap<String, String>,
+    pub config: Vec<AgentConfigEntry>,
 }
 
 impl ComponentProperties {
@@ -1253,18 +1255,6 @@ impl ComponentProperties {
             InitialComponentFile::from_raw_vec(validation, source, merged.files.value().clone());
         let plugins =
             PluginInstallation::from_raw_vec(validation, source, merged.plugins.value().clone());
-
-        let mut agent_config = Vec::new();
-
-        for (agent, agent_properties) in merged.agents.value() {
-            for config in &agent_properties.config {
-                agent_config.push(AgentConfigEntry {
-                    agent: agent.clone(),
-                    path: config.path.clone(),
-                    value: config.value.clone(),
-                });
-            }
-        }
 
         let properties = Self {
             dir,
@@ -1282,13 +1272,13 @@ impl ComponentProperties {
             files,
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value()),
-            config_vars: merged
-                .config_vars
+            wasi_config: merged
+                .wasi_config
                 .value()
                 .into_iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
-            agent_config,
+            config: vec![],
         };
 
         for (name, value) in [("componentWasm", &properties.component_wasm)] {
@@ -1495,6 +1485,7 @@ mod app_builder {
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
     use colored::Colorize;
+    use golem_common::model::agent::AgentTypeName;
     use golem_common::model::agent_secret::AgentSecretPath;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
@@ -1542,6 +1533,7 @@ mod app_builder {
         CustomCommand(String),
         Template(String),
         Component(ComponentName),
+        Agent(AgentTypeName),
         Environment(EnvironmentName),
         Bridge,
     }
@@ -1555,6 +1547,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::CustomCommand(_) => "Custom command",
                 UniqueSourceCheckedEntityKey::Template(_) => "Template",
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
+                UniqueSourceCheckedEntityKey::Agent(_) => "Agent",
                 UniqueSourceCheckedEntityKey::Environment(_) => "Environment",
                 UniqueSourceCheckedEntityKey::Bridge => "Bridge",
             }
@@ -1574,6 +1567,9 @@ mod app_builder {
                 }
                 UniqueSourceCheckedEntityKey::Component(component_name) => {
                     component_name.as_str().log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::Agent(agent_name) => {
+                    agent_name.0.log_color_highlight().to_string()
                 }
                 UniqueSourceCheckedEntityKey::Environment(environment_name) => {
                     environment_name.0.log_color_highlight().to_string()
@@ -1607,6 +1603,7 @@ mod app_builder {
 
         components:
             BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
+        agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
 
         http_api_deployments: BTreeMap<
             EnvironmentName,
@@ -1679,6 +1676,7 @@ mod app_builder {
                 application_name,
                 all_sources: builder.all_sources,
                 components: builder.components,
+                agents: builder.agents,
                 custom_commands: builder.custom_commands,
                 clean: builder.clean,
                 http_api_deployments: builder.http_api_deployments,
@@ -1798,6 +1796,18 @@ mod app_builder {
                             self.component_names_to_source_and_dir
                                 .insert(component_name.clone(), (app.source.clone(), component.dir.as_ref().map(PathBuf::from)));
                             self.add_component(validation, component_name, component);
+                        }
+                    }
+
+                    for (agent_type_name, agent_properties) in app.application.agents {
+                        // TODO: atl: resolve and store effective agent properties here using
+                        // agent templates/presets and component.agent fallback layers.
+                        let unique_key = UniqueSourceCheckedEntityKey::Agent(agent_type_name.clone());
+                        if self.add_entity_source(unique_key, &app.source) {
+                            self.agents.insert(
+                                agent_type_name,
+                                WithSource::new(app.source.clone(), agent_properties),
+                            );
                         }
                     }
 
@@ -2458,6 +2468,26 @@ mod test {
         let component = app.component(&component_name);
 
         assert_eq!(component.wasm(), app_tmp_dir.path().join("a.wasm"));
+    }
+
+    #[test]
+    fn test_root_level_agents_are_accepted() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            agents:
+              test-agent:
+                config:
+                  - path: ["a"]
+                    value: 1
+
+            components:
+              main:
+                componentWasm: dummy-component.wasm
+        "# };
+
+        let result = app_raw::Application::from_yaml_str(source);
+        assert!(result.is_ok(), "{:?}", result.err());
     }
 
     fn load_app(source: &str, selector: &ComponentPresetSelector) -> (Application, TempDir) {

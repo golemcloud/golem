@@ -772,6 +772,7 @@ fn normalized_diff_deployment(
                             metadata: match component.metadata.as_value() {
                                 Some(metadata) => diff::ComponentMetadata {
                                     env: safe_env(&metadata.env),
+                                    // TODO: atl: rename diff model field to `wasi_config`.
                                     config_vars: metadata.config_vars.clone(),
                                 }
                                 .into(),

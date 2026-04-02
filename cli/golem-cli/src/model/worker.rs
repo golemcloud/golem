@@ -24,7 +24,7 @@ use colored::control::SHOULD_COLORIZE;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::worker::{UpdateRecord, WorkerAgentConfigEntry};
+use golem_common::model::worker::{UpdateRecord, WorkerAgentConfigEntry as AgentConfigEntry};
 use golem_common::model::{AgentId, AgentResourceDescription, AgentStatus, Timestamp};
 use serde_derive::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -96,7 +96,7 @@ pub struct AgentMetadataView {
     pub created_by: AccountId,
     pub environment_id: EnvironmentId,
     pub env: HashMap<String, String>,
-    pub config_vars: BTreeMap<String, String>,
+    pub wasi_config: BTreeMap<String, String>,
     pub status: AgentStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u32,
@@ -120,7 +120,7 @@ impl From<AgentMetadata> for AgentMetadataView {
             created_by: value.created_by,
             environment_id: value.environment_id,
             env: value.env,
-            config_vars: value.config_vars,
+            wasi_config: value.wasi_config,
             status: value.status,
             component_revision: value.component_revision,
             retry_count: value.retry_count,
@@ -150,8 +150,8 @@ pub struct AgentMetadata {
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub env: HashMap<String, String>,
-    pub config_vars: BTreeMap<String, String>,
-    pub agent_config: Vec<WorkerAgentConfigEntry>,
+    pub wasi_config: BTreeMap<String, String>,
+    pub config: Vec<AgentConfigEntry>,
     pub status: AgentStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u32,
@@ -175,8 +175,10 @@ impl AgentMetadata {
             created_by: value.created_by,
             environment_id: value.environment_id,
             env: value.env,
-            config_vars: value.config_vars,
-            agent_config: value.agent_config.into_iter().map(Into::into).collect(),
+            // TODO: atl: rename server-side field to `wasi_config`.
+            wasi_config: value.config_vars,
+            // TODO: atl: rename server-side field to `config`.
+            config: value.agent_config.into_iter().map(Into::into).collect(),
             status: value.status,
             component_revision: value.component_revision,
             retry_count: value.retry_count,

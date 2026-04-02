@@ -63,7 +63,7 @@ impl ComponentDiff {
         }
     }
 
-    pub fn agent_config_changed(&self) -> bool {
+    pub fn config_changed(&self) -> bool {
         match self {
             ComponentDiff::All => true,
             ComponentDiff::Diff { diff } => !diff.agent_config_changes.is_empty(),
@@ -264,25 +264,25 @@ impl<'a> ComponentStager<'a> {
         }
     }
 
-    pub fn config_vars(&self) -> BTreeMap<String, String> {
-        self.component_deploy_properties.config_vars.clone()
+    pub fn wasi_config(&self) -> BTreeMap<String, String> {
+        self.component_deploy_properties.wasi_config.clone()
     }
 
-    pub fn config_vars_if_changed(&self) -> Option<BTreeMap<String, String>> {
+    pub fn wasi_config_if_changed(&self) -> Option<BTreeMap<String, String>> {
         if self.diff.metadata_changed() {
-            Some(self.config_vars())
+            Some(self.wasi_config())
         } else {
             None
         }
     }
 
-    pub fn agent_config(&self) -> Vec<AgentConfigEntry> {
-        self.component_deploy_properties.agent_config.clone()
+    pub fn config(&self) -> Vec<AgentConfigEntry> {
+        self.component_deploy_properties.config.clone()
     }
 
-    pub fn agent_config_if_changed(&self) -> Option<Vec<AgentConfigEntry>> {
-        if self.diff.agent_config_changed() {
-            Some(self.agent_config())
+    pub fn config_if_changed(&self) -> Option<Vec<AgentConfigEntry>> {
+        if self.diff.config_changed() {
+            Some(self.config())
         } else {
             None
         }

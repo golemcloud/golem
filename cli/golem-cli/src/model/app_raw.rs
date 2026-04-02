@@ -106,6 +106,8 @@ pub struct Application {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub components: IndexMap<String, Component>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub agents: IndexMap<AgentTypeName, Agent>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
@@ -264,6 +266,26 @@ pub struct ComponentPreset {
     pub default: Option<Marker>,
     #[serde(flatten)]
     pub component_properties: ComponentLayerProperties,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Agent {
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub templates: LenientTokenList,
+    #[serde(flatten)]
+    pub agent_properties: AgentLayerProperties,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub presets: IndexMap<String, AgentPreset>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentPreset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Marker>,
+    #[serde(flatten)]
+    pub agent_properties: AgentLayerProperties,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -473,20 +495,26 @@ pub struct ComponentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_vars_merge_mode: Option<MapMergeMode>,
+    pub wasi_config_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_vars: Option<IndexMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agents_merge_mode: Option<MapMergeMode>,
-    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub agents: IndexMap<AgentTypeName, ComponentAgentProperties>,
+    pub wasi_config: Option<IndexMap<String, String>>,
+    // TODO: atl: apply this as implicit fallback for all exported agents of the component
+    // during ATL agent resolution.
+    #[serde(default, skip_serializing_if = "AgentLayerProperties::is_empty")]
+    pub agent: AgentLayerProperties,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ComponentAgentProperties {
+pub struct AgentLayerProperties {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config: Vec<AgentConfigEntry>,
+}
+
+impl AgentLayerProperties {
+    pub fn is_empty(&self) -> bool {
+        self.config.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

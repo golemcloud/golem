@@ -17,7 +17,7 @@ use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use golem_client::model::ScanCursor;
 use golem_common::model::agent_secret::AgentSecretPath;
-use golem_common::model::worker::WorkerAgentConfigEntry;
+use golem_common::model::worker::WorkerAgentConfigEntry as AgentConfigEntry;
 
 pub fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
     let pos = key_and_val.find('=').ok_or_else(|| {
@@ -32,21 +32,21 @@ pub fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
     ))
 }
 
-pub fn parse_worker_agent_config(s: &str) -> anyhow::Result<WorkerAgentConfigEntry> {
-    let (path, value) = split_worker_agent_config_path_and_value(s)?;
+pub fn parse_agent_config(s: &str) -> anyhow::Result<AgentConfigEntry> {
+    let (path, value) = split_agent_config_path_and_value(s)?;
 
     let path = parse_agent_config_path(path)?;
 
     let value: serde_json::Value = serde_json::from_str(value)?;
 
-    Ok(WorkerAgentConfigEntry { path, value })
+    Ok(AgentConfigEntry { path, value })
 }
 
 pub fn parse_agent_secret_path(input: &str) -> anyhow::Result<AgentSecretPath> {
     Ok(AgentSecretPath(parse_agent_config_path(input)?))
 }
 
-fn split_worker_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str, &str)> {
+fn split_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str, &str)> {
     let chars = input.char_indices();
     let mut in_quotes = false;
     let mut escape = false;
@@ -145,14 +145,14 @@ pub fn parse_instant(
 }
 
 #[cfg(test)]
-mod parse_worker_agent_config_tests {
-    use super::{parse_agent_config_path, parse_worker_agent_config};
-    use golem_common::model::worker::WorkerAgentConfigEntry;
+mod parse_agent_config_tests {
+    use super::{parse_agent_config, parse_agent_config_path};
+    use golem_common::model::worker::WorkerAgentConfigEntry as AgentConfigEntry;
     use serde_json::json;
     use test_r::test;
 
-    fn parse(input: &str) -> WorkerAgentConfigEntry {
-        parse_worker_agent_config(input).unwrap()
+    fn parse(input: &str) -> AgentConfigEntry {
+        parse_agent_config(input).unwrap()
     }
 
     #[test]
@@ -237,7 +237,7 @@ mod parse_worker_agent_config_tests {
 
     #[test]
     fn split_fails_without_equals() {
-        let err = parse_worker_agent_config("a.b.c").unwrap_err();
+        let err = parse_agent_config("a.b.c").unwrap_err();
         assert!(err.to_string().contains("expected unescaped '='"));
     }
 
