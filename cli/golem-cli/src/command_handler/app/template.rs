@@ -28,8 +28,11 @@ use crate::log::{
     log_finished_ok, log_skipping_up_to_date, logln,
 };
 use crate::model::GuestLanguage;
+use crate::model::text::fmt::log_text_view;
 use crate::model::text::diff::log_unified_diff_for_path;
+use crate::model::text::help::{AppNewNextStepsHint, AppNewNextStepsMode};
 use crate::validation::ValidationBuilder;
+use crate::command_name;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_common::model::application::ApplicationName;
@@ -54,6 +57,7 @@ struct NewCommandContext {
     pub application_name_candidate: String,
     pub application_path: PathBuf,
     pub existing_components: BTreeMap<ComponentName, ExistingComponent>,
+    pub existing_app_mode: bool,
 }
 
 #[derive(Debug)]
@@ -151,6 +155,16 @@ impl TemplateHandler {
 
         logln("");
         log_finished_ok("applying template(s)");
+        log_text_view(&AppNewNextStepsHint {
+            mode: if context.existing_app_mode {
+                AppNewNextStepsMode::ExistingApplication
+            } else {
+                AppNewNextStepsMode::NewApplication
+            },
+            app_dir: context.application_path.clone(),
+            needs_switch_directory: should_switch_to_app_dir_hint(&context.application_path)?,
+            binary_name: command_name(),
+        });
 
         Ok(())
     }
@@ -233,6 +247,7 @@ impl TemplateHandler {
                         application_name_candidate: app_ctx.application().application_name().0.clone(),
                         application_path: app_ctx.application().app_root_dir().to_path_buf(),
                         existing_components,
+                        existing_app_mode: true,
                     });
                 }
 
@@ -274,6 +289,7 @@ impl TemplateHandler {
             application_name_candidate,
             application_path: application_dir,
             existing_components: BTreeMap::new(),
+            existing_app_mode: false,
         })
     }
 
@@ -997,4 +1013,20 @@ fn is_non_empty_dir(path: &Path) -> anyhow::Result<bool> {
     }
 
     Ok(std::fs::read_dir(path)?.next().is_some())
+}
+
+fn should_switch_to_app_dir_hint(application_dir: &Path) -> anyhow::Result<bool> {
+    let current_dir = fs::current_dir_lexical()?;
+    let current_main_source = find_main_source_from(&current_dir);
+
+    let Some(current_main_source) = current_main_source else {
+        return Ok(true);
+    };
+
+    let current_app_root = current_main_source
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or(current_main_source);
+
+    Ok(!fs::path_eq_normalized(&current_app_root, application_dir))
 }

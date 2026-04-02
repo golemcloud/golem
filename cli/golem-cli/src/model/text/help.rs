@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
-use crate::log::{LogColorize, logln};
+use crate::log::{LogColorize, LogIndent, logln};
 use crate::model::text::fmt::{
     FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode, TextView, format_export,
     log_table,
@@ -25,6 +25,7 @@ use golem_common::model::agent::{AgentType, ParsedAgentId};
 use golem_common::model::component::ComponentName;
 use golem_wasm::analysis::AnalysedType;
 use indoc::indoc;
+use std::path::PathBuf;
 use textwrap::WordSplitter;
 
 pub struct WorkerNameHelp;
@@ -427,5 +428,58 @@ impl MessageWithFields for EnvironmentNameHelp {
 
     fn format_field_name(name: String) -> String {
         name.log_color_highlight().to_string()
+    }
+}
+
+pub enum AppNewNextStepsMode {
+    NewApplication,
+    ExistingApplication,
+}
+
+pub struct AppNewNextStepsHint {
+    pub mode: AppNewNextStepsMode,
+    pub app_dir: PathBuf,
+    pub needs_switch_directory: bool,
+    pub binary_name: String,
+}
+
+impl TextView for AppNewNextStepsHint {
+    fn log(&self) {
+        logln("");
+
+        let title = match self.mode {
+            AppNewNextStepsMode::NewApplication => "Next steps for your new application:",
+            AppNewNextStepsMode::ExistingApplication => "Next steps for your updated application:",
+        };
+
+        logln(title.log_color_help_group().to_string());
+
+        let _indent = LogIndent::new();
+
+        logln("");
+
+        if self.needs_switch_directory {
+            logln(format!(
+                "Switch to your application directory with {}",
+                format!("'cd {}'", self.app_dir.display()).log_color_highlight()
+            ));
+            logln("");
+        }
+
+        logln(format!(
+            "To build your application use {}",
+            format!("'{} build'", self.binary_name).log_color_highlight()
+        ));
+        logln("");
+        logln("To deploy them locally:");
+        logln(format!(
+            "  - start local server with {}",
+            "'golem server run'".log_color_highlight()
+        ));
+        logln(format!(
+            "  - use {} to deploy it",
+            format!("'{} deploy'", self.binary_name).log_color_highlight()
+        ));
+        logln("");
     }
 }
