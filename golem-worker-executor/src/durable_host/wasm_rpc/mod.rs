@@ -19,7 +19,6 @@ use crate::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
     HostWasmRpc, RpcError,
 };
-use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{Rpc, RpcDemand, RpcError as InternalRpcError};
 use crate::services::{HasOplog, HasWorker};
@@ -985,7 +984,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         let idempotency_key = idempotency_key.clone();
         let method_name = method_name.clone();
         let input = input.clone();
-        let created_by = created_by.clone();
+        let created_by = created_by;
         let agent_id = agent_id.clone();
         let env = env.clone();
         let config_vars = config_vars.clone();
@@ -1145,7 +1144,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         idempotency_key.clone(),
         method_name.clone(),
         method_parameters.clone(),
-        self_created_by.clone(),
+        *self_created_by,
         self_agent_id.clone(),
         env.clone(),
         config_vars.clone(),

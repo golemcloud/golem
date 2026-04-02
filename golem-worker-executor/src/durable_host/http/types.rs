@@ -621,14 +621,14 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
         // requires a sync drop. The durable function boundary and span will be
         // cleaned up when the worker is suspended/interrupted. Log so the leak
         // is observable.
-        if let Some(state) = self.state.open_http_requests.remove(&handle) {
-            if state.close_owner == HttpRequestCloseOwner::FutureTrailersDrop {
-                warn!(
-                    "FutureTrailers dropped without get() — HTTP request tracking for handle {} \
+        if let Some(state) = self.state.open_http_requests.remove(&handle)
+            && state.close_owner == HttpRequestCloseOwner::FutureTrailersDrop
+        {
+            warn!(
+                "FutureTrailers dropped without get() — HTTP request tracking for handle {} \
                      removed but durable function boundary not closed",
-                    handle
-                );
-            }
+                handle
+            );
         }
 
         HostFutureTrailers::drop(&mut self.as_wasi_http_view(), rep)
@@ -715,9 +715,9 @@ impl<Ctx: WorkerCtx> HostOutgoingBody for DurableWorkerCtx<Ctx> {
         if let Some(handle) = self.state.find_request_handle_by_outgoing_body(body_rep)
             && let Some(state) = self.state.open_http_requests.get_mut(&handle)
         {
-                state.retry.body_finished = true;
-                state.retry.has_outgoing_trailers = has_trailers;
-                state.outgoing_body_rep = None;
+            state.retry.body_finished = true;
+            state.retry.has_outgoing_trailers = has_trailers;
+            state.outgoing_body_rep = None;
         } else if let Some(request_rep) = self
             .state
             .find_pending_request_rep_by_outgoing_body(body_rep)
@@ -839,37 +839,30 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .state
                     .open_http_requests
                     .get(&handle)
-                    .map_or(false, |s| s.retry.has_background_retry);
+                    .is_some_and(|s| s.retry.has_background_retry);
 
-                if kind == HostFailureKind::Transient && !has_background_retry {
-                    if let Some(request_state) = self.state.open_http_requests.get(&handle).cloned()
-                    {
-                        if let Some(retried_response) =
-                            crate::durable_host::http::inline_retry::try_zone1_get_inline_retry(
-                                self,
-                                &request_state,
-                            )
-                            .await
-                            .map_err(wasmtime::Error::from_anyhow)?
-                        {
-                            let future_res =
-                                self.table().get_mut(
-                                    &Resource::<FutureIncomingResponse>::new_borrow(handle),
-                                )?;
-                            *future_res =
-                                wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(Ok(
-                                    Ok(retried_response),
-                                ));
+                if kind == HostFailureKind::Transient
+                    && !has_background_retry
+                    && let Some(request_state) = self.state.open_http_requests.get(&handle).cloned()
+                    && let Some(retried_response) =
+                        crate::durable_host::http::inline_retry::try_zone1_get_inline_retry(
+                            self,
+                            &request_state,
+                        )
+                        .await
+                        .map_err(wasmtime::Error::from_anyhow)?
+                {
+                    let future_res = self
+                        .table()
+                        .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
+                    *future_res = wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(Ok(
+                        Ok(retried_response),
+                    ));
 
-                            let self2 = Resource::<FutureIncomingResponse>::new_borrow(handle);
-                            response = HostFutureIncomingResponse::get(
-                                &mut self.as_wasi_http_view(),
-                                self2,
-                            )
-                            .await;
-                            classified = classify_http_response(self.table(), &response)?;
-                        }
-                    }
+                    let self2 = Resource::<FutureIncomingResponse>::new_borrow(handle);
+                    response =
+                        HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self2).await;
+                    classified = classify_http_response(self.table(), &response)?;
                 }
             }
 
@@ -884,7 +877,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .state
                     .open_http_requests
                     .get(&handle)
-                    .map_or(false, |s| s.retry.has_background_retry);
+                    .is_some_and(|s| s.retry.has_background_retry);
                 if kind == HostFailureKind::Transient && !has_background_retry {
                     self.state.current_retry_point = begin_index;
                     let failure = anyhow::Error::new(ClassifiedHostError {

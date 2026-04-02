@@ -19,13 +19,13 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
-    FailingBlobStoreService, FailingKeyValueService, FailingRpc,
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies,start_with_overrides,
+    FailingBlobStoreService, FailingKeyValueService, FailingRpc, LastUniqueId,
+    PrecompiledComponent, TestContext, TestExecutorOverrides, WorkerExecutorTestDependencies,
+    start_with_overrides,
 };
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1826,7 +1826,7 @@ async fn http_no_zone2_retry_when_body_skip_used(
     env.insert("PORT".to_string(), port.to_string());
 
     let agent_id = agent_id!("HttpClient4");
-    let worker_id = executor
+    let _worker_id = executor
         .start_agent_with(
             &component.id,
             agent_id.clone(),

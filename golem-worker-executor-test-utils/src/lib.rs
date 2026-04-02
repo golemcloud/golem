@@ -105,14 +105,12 @@ use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::{
     DbResult, DbResultStream, DbTransaction, Rdbms, RdbmsStatus, RdbmsTransactionStatus, RdbmsType,
 };
-use golem_worker_executor::services::resource_limits::ResourceLimits;
-use golem_worker_executor::services::rpc::{
-    DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc, RpcDemand, RpcError as ServiceRpcError,
-};
 use golem_worker_executor::services::resource_limits::{
     AtomicResourceEntry, ResourceLimits, ResourceLimitsDisabled,
 };
-use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc};
+use golem_worker_executor::services::rpc::{
+    DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc, RpcDemand, RpcError as ServiceRpcError,
+};
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::shard_manager::ShardManagerService;

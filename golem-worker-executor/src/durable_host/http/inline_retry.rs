@@ -26,22 +26,22 @@
 //! - **Zone 2**: Retry during response body reading — the response was partially consumed.
 //!   Requires re-sending the request and verifying the response prefix matches.
 
+use crate::durable_host::HttpRequestState;
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableExecutionState, HostFailureKind,
     InFunctionRetryHost, InFunctionRetryState,
 };
 use crate::durable_host::http::types::classify_http_error_code;
-use crate::durable_host::HttpRequestState;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::{HasOplog, HasWorker};
 use bytes::Bytes;
+use golem_common::model::RetryConfig;
 use golem_common::model::oplog::payload::HostPayloadPair;
 use golem_common::model::oplog::types::SerializableHttpMethod;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestHttpRequest, HostResponse, OplogEntry, OplogIndex,
     PersistenceLevel,
 };
-use golem_common::model::RetryConfig;
 use http::{HeaderName, HeaderValue};
 use http_body_util::BodyExt;
 use std::str::FromStr;
@@ -49,15 +49,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
 use wasmtime_wasi::OutputStream;
+use wasmtime_wasi_http::HttpConnectionPool;
 use wasmtime_wasi_http::bindings::http::types as wasi_http_types;
 use wasmtime_wasi_http::body::{
     HostIncomingBody, HostOutgoingBody, HyperOutgoingBody, StreamContext,
 };
 use wasmtime_wasi_http::types::{
-    default_send_request_with_pool, FutureIncomingResponseHandle, HostFutureIncomingResponse,
-    IncomingResponse, OutgoingRequestConfig,
+    FutureIncomingResponseHandle, HostFutureIncomingResponse, IncomingResponse,
+    OutgoingRequestConfig, default_send_request_with_pool,
 };
-use wasmtime_wasi_http::HttpConnectionPool;
 
 /// Reasons why an HTTP request is not eligible for transparent inline retry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,12 +241,11 @@ async fn reconstruct_outgoing_body_chunks_after(
                             anyhow::anyhow!("failed to download outgoing body chunk payload: {err}")
                         })?;
 
-                if let HostResponse::StreamWriteWithBytes(payload) = response_value {
-                    if let Ok(data) = &payload.result {
-                        if !data.is_empty() {
-                            chunks.push(BodyChunk::Data(Bytes::from(data.clone())));
-                        }
-                    }
+                if let HostResponse::StreamWriteWithBytes(payload) = response_value
+                    && let Ok(data) = &payload.result
+                    && !data.is_empty()
+                {
+                    chunks.push(BodyChunk::Data(Bytes::from(data.clone())));
                 }
             } else if *function_name == write_zeroes_fn_name {
                 let response_value =
@@ -257,12 +256,11 @@ async fn reconstruct_outgoing_body_chunks_after(
                             anyhow::anyhow!("failed to download outgoing body chunk payload: {err}")
                         })?;
 
-                if let HostResponse::StreamWriteZeroes(payload) = response_value {
-                    if let Ok(len) = &payload.result {
-                        if *len > 0 {
-                            chunks.push(BodyChunk::Zeroes(*len));
-                        }
-                    }
+                if let HostResponse::StreamWriteZeroes(payload) = response_value
+                    && let Ok(len) = &payload.result
+                    && *len > 0
+                {
+                    chunks.push(BodyChunk::Zeroes(*len));
                 }
             }
         }
@@ -286,10 +284,10 @@ async fn find_last_retry_error_index(
 
     let mut last_retry_error_idx = None;
     for (idx, entry) in entries {
-        if let OplogEntry::Error { retry_from, .. } = entry {
-            if retry_from == begin_index {
-                last_retry_error_idx = Some(idx);
-            }
+        if let OplogEntry::Error { retry_from, .. } = entry
+            && retry_from == begin_index
+        {
+            last_retry_error_idx = Some(idx);
         }
     }
 
@@ -320,7 +318,7 @@ pub async fn count_incoming_body_bytes(
     let blocking_read_fn_name =
         golem_common::model::oplog::host_functions::HttpTypesIncomingBodyStreamBlockingRead::HOST_FUNCTION_NAME;
 
-    for (_idx, entry) in &entries {
+    for entry in entries.values() {
         if let OplogEntry::HostCall {
             function_name,
             response,
@@ -341,10 +339,10 @@ pub async fn count_incoming_body_bytes(
                             anyhow::anyhow!("failed to download incoming body chunk payload: {err}")
                         })?;
 
-                if let HostResponse::StreamChunk(payload) = response_value {
-                    if let Ok(data) = &payload.result {
-                        total += data.len() as u64;
-                    }
+                if let HostResponse::StreamChunk(payload) = response_value
+                    && let Ok(data) = &payload.result
+                {
+                    total += data.len() as u64;
                 }
             }
         }

@@ -528,7 +528,10 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             // This is already composed from write + blocking_flush, both of which
             // are individually made durable, so no additional oplog entry needed.
             let self2 = Resource::new_borrow(self_.rep());
-            self.write(self_, contents).await?;
+            wasmtime_wasi_http::bindings::io::streams::HostOutputStream::write(
+                self, self_, contents,
+            )
+            .await?;
             self.blocking_flush(self2).await?;
             Ok(())
         }
