@@ -1042,6 +1042,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     )
 }
 
+#[allow(clippy::type_complexity)]
 fn handle_completed_rpc_result(
     entry: &mut FutureInvokeResultState,
     span_id: &SpanId,
@@ -1097,6 +1098,7 @@ fn handle_completed_rpc_result(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
     entry: &mut FutureInvokeResultState,
     rpc: Arc<dyn Rpc>,

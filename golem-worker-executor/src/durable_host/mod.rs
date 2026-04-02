@@ -3149,7 +3149,7 @@ pub(crate) struct HttpRetryEligibility {
 
 /// State associated with ongoing http requests, on top of the underlying wasi-http implementation
 #[derive(Debug, Clone)]
-struct HttpRequestState {
+pub(crate) struct HttpRequestState {
     /// Who is responsible for calling end_function and removing entries from the table
     pub close_owner: HttpRequestCloseOwner,
     /// The BeginRemoteWrite entry's index

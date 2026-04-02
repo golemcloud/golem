@@ -1084,6 +1084,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn classify_http_response(
     table: &mut wasmtime::component::ResourceTable,
     response: &Result<

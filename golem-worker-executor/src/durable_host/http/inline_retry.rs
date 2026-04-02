@@ -96,7 +96,7 @@ pub enum RetryZone {
 /// Checks whether the given HTTP request is eligible for transparent inline retry.
 ///
 /// Returns `Ok(())` if eligible, or `Err(reason)` explaining why not.
-pub fn is_http_inline_retry_eligible(
+pub(crate) fn is_http_inline_retry_eligible(
     exec_state: &DurableExecutionState,
     request_state: &HttpRequestState,
     zone: RetryZone,
@@ -622,7 +622,7 @@ async fn replay_body_chunks(
 /// `Full<Bytes>`), this creates a streaming body so the guest can continue
 /// writing additional data after the retry. Chunks are replayed lazily to
 /// avoid materializing the full body in memory.
-pub async fn rebuild_streaming_request(
+pub(crate) async fn rebuild_streaming_request(
     oplog: &Arc<dyn Oplog>,
     request_state: &HttpRequestState,
     config: OutgoingRequestConfig,
@@ -1194,7 +1194,7 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
 /// Attempts Zone 1 inline retry from FutureIncomingResponse::get() after a
 /// transient response error.
 ///
-pub async fn try_zone1_get_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
+pub(crate) async fn try_zone1_get_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     request_state: &HttpRequestState,
 ) -> Result<Option<IncomingResponse>, anyhow::Error> {
