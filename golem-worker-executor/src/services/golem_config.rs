@@ -23,6 +23,7 @@ use golem_common::model::base64::Base64;
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
+use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
@@ -48,7 +49,7 @@ pub struct GolemConfig {
     #[serde(with = "humantime_serde")]
     pub max_in_function_retry_delay: Duration,
     pub compiled_component_service: CompiledComponentServiceConfig,
-    pub shard_manager_service: ShardManagerServiceConfig,
+    pub shard_manager: GrpcShardManagerConfig,
     pub oplog: OplogConfig,
     pub suspend: SuspendConfig,
     pub active_workers: ActiveWorkersConfig,
@@ -117,11 +118,11 @@ impl SafeDisplay for GolemConfig {
             "{}",
             self.compiled_component_service.to_safe_string_indented()
         );
-        let _ = writeln!(&mut result, "shard manager service:");
+        let _ = writeln!(&mut result, "shard manager:");
         let _ = writeln!(
             &mut result,
             "{}",
-            self.shard_manager_service.to_safe_string_indented()
+            self.shard_manager.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "oplog:");
         let _ = writeln!(&mut result, "{}", self.oplog.to_safe_string_indented());
@@ -228,7 +229,7 @@ impl Default for GolemConfig {
             retry: RetryConfig::max_attempts_3(),
             max_in_function_retry_delay: Duration::from_secs(20),
             compiled_component_service: CompiledComponentServiceConfig::default(),
-            shard_manager_service: ShardManagerServiceConfig::default(),
+            shard_manager: GrpcShardManagerConfig::default(),
             oplog: OplogConfig::default(),
             suspend: SuspendConfig::default(),
             scheduler: SchedulerConfig::default(),
@@ -346,72 +347,6 @@ impl Default for GrpcApiConfig {
         }
     }
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", content = "config")]
-pub enum ShardManagerServiceConfig {
-    Grpc(Box<ShardManagerServiceGrpcConfig>),
-    SingleShard(ShardManagerServiceSingleShardConfig),
-}
-
-impl SafeDisplay for ShardManagerServiceConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        match self {
-            ShardManagerServiceConfig::Grpc(grpc) => {
-                let _ = writeln!(&mut result, "grpc:");
-                let _ = writeln!(&mut result, "{}", grpc.to_safe_string_indented());
-            }
-            ShardManagerServiceConfig::SingleShard(_) => {
-                let _ = writeln!(&mut result, "single shard");
-            }
-        }
-        result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ShardManagerServiceGrpcConfig {
-    pub host: String,
-    pub port: u16,
-    pub retries: RetryConfig,
-    #[serde(flatten)]
-    pub client_config: GrpcClientConfig,
-}
-
-impl ShardManagerServiceGrpcConfig {
-    pub fn uri(&self) -> Uri {
-        grpc_uri(&self.host, self.port, self.client_config.tls_enabled())
-    }
-}
-
-impl SafeDisplay for ShardManagerServiceGrpcConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        let _ = writeln!(&mut result, "host: {}", self.host);
-        let _ = writeln!(&mut result, "port: {}", self.port);
-
-        let _ = writeln!(&mut result, "retries:");
-        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
-
-        let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
-        result
-    }
-}
-
-impl Default for ShardManagerServiceGrpcConfig {
-    fn default() -> Self {
-        Self {
-            host: "localhost".to_string(),
-            port: 9002,
-            retries: RetryConfig::default(),
-            client_config: GrpcClientConfig::default(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ShardManagerServiceSingleShardConfig {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerServiceGrpcConfig {
@@ -1277,16 +1212,13 @@ impl HasConfigExamples<GolemConfig> for GolemConfig {
     fn examples() -> Vec<ConfigExample<GolemConfig>> {
         vec![
             (
-                "with redis indexed_storage, s3 blob storage, single shard manager service",
+                "with redis indexed_storage and s3 blob storage",
                 Self {
                     key_value_storage: KeyValueStorageConfig::InMemory(
                         KeyValueStorageInMemoryConfig {},
                     ),
                     indexed_storage: IndexedStorageConfig::Redis(RedisConfig::default()),
                     blob_storage: BlobStorageConfig::default_s3(),
-                    shard_manager_service: ShardManagerServiceConfig::SingleShard(
-                        ShardManagerServiceSingleShardConfig {},
-                    ),
                     ..Self::default()
                 },
             ),
@@ -1320,12 +1252,6 @@ impl Default for Limits {
             epoch_ticks: 1,
             max_oplog_query_pages_size: 100,
         }
-    }
-}
-
-impl Default for ShardManagerServiceConfig {
-    fn default() -> Self {
-        Self::Grpc(Box::default())
     }
 }
 

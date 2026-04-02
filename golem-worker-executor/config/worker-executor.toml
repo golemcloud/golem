@@ -201,32 +201,29 @@ multiplier = 3.0
 [scheduler]
 refresh_interval = "2s"
 
-[shard_manager_service]
-type = "Grpc"
-
-[shard_manager_service.config]
+[shard_manager]
 connect_timeout = "10s"
 host = "localhost"
 port = 9002
 
-[shard_manager_service.config.retries]
+[shard_manager.retries]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
-[shard_manager_service.config.retries_on_unavailable]
+[shard_manager.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
-[shard_manager_service.config.tls]
+[shard_manager.tls]
 type = "Disabled"
 
-[shard_manager_service.config.tls.config]
+[shard_manager.tls.config]
 
 [suspend]
 suspend_after = "10s"
@@ -283,7 +280,7 @@ span_events_full = false
 without_time = false
 
 
-## Generated from example config: with redis indexed_storage, s3 blob storage, single shard manager service
+## Generated from example config: with redis indexed_storage and s3 blob storage
 # http_address = "0.0.0.0"
 # http_port = 8082
 # max_in_function_retry_delay = "20s"
@@ -500,10 +497,29 @@ without_time = false
 # [scheduler]
 # refresh_interval = "2s"
 # 
-# [shard_manager_service]
-# type = "SingleShard"
+# [shard_manager]
+# connect_timeout = "10s"
+# host = "localhost"
+# port = 9002
 # 
-# [shard_manager_service.config]
+# [shard_manager.retries]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [shard_manager.retries_on_unavailable]
+# max_attempts = 5
+# max_delay = "2s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 2.0
+# 
+# [shard_manager.tls]
+# type = "Disabled"
+# 
+# [shard_manager.tls.config]
 # 
 # [suspend]
 # suspend_after = "10s"
@@ -747,32 +763,29 @@ without_time = false
 # [scheduler]
 # refresh_interval = "2s"
 # 
-# [shard_manager_service]
-# type = "Grpc"
-# 
-# [shard_manager_service.config]
+# [shard_manager]
 # connect_timeout = "10s"
 # host = "localhost"
 # port = 9002
 # 
-# [shard_manager_service.config.retries]
+# [shard_manager.retries]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 # 
-# [shard_manager_service.config.retries_on_unavailable]
+# [shard_manager.retries_on_unavailable]
 # max_attempts = 5
 # max_delay = "2s"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 2.0
 # 
-# [shard_manager_service.config.tls]
+# [shard_manager.tls]
 # type = "Disabled"
 # 
-# [shard_manager_service.config.tls.config]
+# [shard_manager.tls.config]
 # 
 # [suspend]
 # suspend_after = "10s"

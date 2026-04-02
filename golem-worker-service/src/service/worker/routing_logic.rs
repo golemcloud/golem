@@ -21,9 +21,10 @@ use golem_common::model::RetryConfig;
 use golem_common::model::{AgentId, Pod, ShardId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
+use golem_service_base::clients::shard_manager::ShardManagerError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
-use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableError};
+use golem_service_base::service::routing_table::HasRoutingTableService;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::future::Future;
@@ -422,7 +423,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
 #[derive(Debug, thiserror::Error)]
 pub enum CallWorkerExecutorError {
     #[error("Failed to get routing table: {0}")]
-    FailedToGetRoutingTable(RoutingTableError),
+    FailedToGetRoutingTable(ShardManagerError),
     #[error("Failed to connect to pod: {} {}", .0.code(), .0.message())]
     FailedToConnectToPod(Status),
 }
@@ -443,7 +444,7 @@ pub struct CallWorkerExecutorErrorWithContext {
 }
 
 impl CallWorkerExecutorErrorWithContext {
-    fn failed_to_get_routing_table(error: RoutingTableError) -> Self {
+    fn failed_to_get_routing_table(error: ShardManagerError) -> Self {
         CallWorkerExecutorErrorWithContext {
             error: CallWorkerExecutorError::FailedToGetRoutingTable(error),
             pod: None,

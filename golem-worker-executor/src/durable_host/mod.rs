@@ -1241,7 +1241,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn finalize_pending_snapshot_update(
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
@@ -2304,7 +2304,7 @@ pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     type ExtraDeps = Ctx::ExtraDeps;
 
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
@@ -2760,7 +2760,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
     async fn get_file_system_node(
         &self,
         path: &ComponentFilePath,

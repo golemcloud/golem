@@ -23,8 +23,7 @@ use golem_worker_executor::services::golem_config::{
     ActiveWorkersConfig, AgentTypesServiceConfig, AgentWebhooksServiceConfig, ComponentCacheConfig,
     EngineConfig, EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
     KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, RdbmsConfig, ResourceLimitsConfig,
-    SchedulerConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
-    SuspendConfig, WorkerServiceGrpcConfig,
+    SchedulerConfig, SuspendConfig, WorkerServiceGrpcConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -90,9 +89,7 @@ impl DebugConfig {
             http_client: Default::default(),
             http_address: self.http_address,
             http_port: self.http_port,
-            shard_manager_service: ShardManagerServiceConfig::SingleShard(
-                ShardManagerServiceSingleShardConfig {},
-            ),
+            shard_manager: Default::default(),
             registry_service: self.registry_service,
             max_in_function_retry_delay: std::time::Duration::from_secs(20),
             max_websocket_connections: 100,
