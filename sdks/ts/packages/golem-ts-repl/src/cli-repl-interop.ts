@@ -49,6 +49,24 @@ export class CliReplInterop {
     this.replServer = replServer;
     this.builtinCommands = Object.keys(replServer.commands);
 
+    // Wrap the built-in onSigInt listener so we can suppress the
+    // "To exit, press Ctrl+C again or Ctrl+D or type .exit" message when
+    // Ctrl-C cancels a running CLI command rather than acting as a bare keypress.
+    let suppressNextSigint = false;
+    const [builtinOnSigInt] = replServer.rawListeners('SIGINT') as [
+      ((...args: unknown[]) => void) | undefined,
+    ];
+    if (builtinOnSigInt) {
+      replServer.removeAllListeners('SIGINT');
+      replServer.on('SIGINT', function wrapper() {
+        if (suppressNextSigint) {
+          suppressNextSigint = false;
+          return;
+        }
+        builtinOnSigInt.call(replServer);
+      });
+    }
+
     const interop = this;
     for (const command of this.commands) {
       replServer.defineCommand(command.replCommand, {
@@ -58,6 +76,7 @@ export class CliReplInterop {
           // Interface from emitting 'SIGINT' events when the user presses Ctrl-C.
           // Instead we suppress concurrent eval for the duration of the command.
           const abortController = new AbortController();
+          suppressNextSigint = true;
           const onSigint = () => abortController.abort();
           replServer.once('SIGINT', onSigint);
 
@@ -67,6 +86,7 @@ export class CliReplInterop {
           try {
             await interop.runReplCliCommand(command, rawArgs, abortController.signal);
           } finally {
+            suppressNextSigint = false;
             (replServer as any).eval = savedEval;
             replServer.off('SIGINT', onSigint);
             this.displayPrompt();
@@ -188,7 +208,7 @@ export class CliReplInterop {
     });
 
     const onSigint = () => {
-      void this.stopAgentStreamByKey(key);
+      void this.stopAgentStreamByKey(key, true);
     };
     const state = createAgentStreamState(child, onSigint);
     this.agentStreams.set(key, state);
@@ -210,15 +230,17 @@ export class CliReplInterop {
     await this.stopAgentStreamByKey(key);
   }
 
-  private async stopAgentStreamByKey(key: string) {
+  private async stopAgentStreamByKey(key: string, immediate = false) {
     const state = this.agentStreams.get(key);
     if (!state) return;
-    await new Promise((resolve) => setTimeout(resolve, AGENT_STREAM_CLOSE_DELAY_MS));
-    if (this.agentStreams.get(key) !== state) return;
+    if (!immediate) {
+      await new Promise((resolve) => setTimeout(resolve, AGENT_STREAM_CLOSE_DELAY_MS));
+      if (this.agentStreams.get(key) !== state) return;
+    }
     this.agentStreams.delete(key);
     this.replServer?.off('SIGINT', state.onSigint);
     state.stop();
-    if (state.hadOutput()) {
+    if (!immediate && state.hadOutput()) {
       writeFullLineSeparator();
     }
   }
