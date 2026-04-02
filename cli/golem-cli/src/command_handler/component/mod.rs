@@ -854,24 +854,32 @@ impl ComponentCommandHandler {
         let wasi_config = component.wasi_config().clone();
         let mut config = vec![];
 
+        let mapping = agent_types
+            .iter()
+            .map(|agent_type| (agent_type.type_name.clone(), component_name.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let resolved_agents = app_ctx.application().resolve_agents(&mapping);
+
         // TODO: atl: source from resolved ATL agent model (templates/presets/component fallback),
         // not directly from raw agent config values.
         for agent_type in &agent_types {
-            if let Some(agent_properties) = app_ctx
-                .application()
-                .agent_properties(&agent_type.type_name)
-            {
-                config.extend(
-                    agent_properties
+            let Some(resolved_agent) = resolved_agents.agent(&agent_type.type_name) else {
+                continue;
+            };
+
+            config.extend(resolved_agent
                         .config
-                        .iter()
-                        .map(|config| AgentConfigEntry {
-                            agent: agent_type.type_name.clone(),
-                            path: config.path.clone(),
-                            value: config.value.clone(),
-                        }),
-                );
-            }
+                        ().iter()
+                        .cloned().map(|config|
+                AgentConfigEntry {
+                    agent: agent_type.type_name.clone(),
+                    path: config.path,
+                    value: config.value,
+                }),
+            );
+
+            // TODO: atl: project resolved agent env/wasi_config/plugins once registry supports
+            // agent-type-level state persistence.
         }
 
         Ok(ComponentDeployProperties {

@@ -22,6 +22,7 @@ use crate::model::cascade::property::Property;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::OptionalProperty;
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
+use crate::model::cascade::store::Store;
 use crate::model::repl::ReplLanguage;
 use crate::model::template::Template;
 use crate::model::{GuestLanguage, app_raw};
@@ -422,15 +423,105 @@ impl Application {
         self.agents.keys()
     }
 
-    pub fn agent_properties(
+    pub fn resolve_agents(&self, mapping: &BTreeMap<AgentTypeName, ComponentName>) -> Agents {
+        let resolved_by_type = mapping
+            .iter()
+            .map(|(agent_type_name, component_name)| {
+                let component = self.component(component_name);
+                let component_base = component.agent_base_properties();
+                let (properties, layer_properties) =
+                    self.resolve_agent(component_name, agent_type_name, component_base);
+
+                let source = self
+                    .agents
+                    .get(agent_type_name)
+                    .map(|agent| agent.source.clone())
+                    .unwrap_or_else(|| component.source().to_path_buf());
+
+                (
+                    agent_type_name.clone(),
+                    ResolvedAgent {
+                        component_name: component_name.clone(),
+                        source,
+                        properties,
+                        layer_properties,
+                    },
+                )
+            })
+            .collect();
+
+        Agents { resolved_by_type }
+    }
+
+    fn resolve_agent(
         &self,
+        component_name: &ComponentName,
         agent_type_name: &AgentTypeName,
-    ) -> Option<&app_raw::AgentLayerProperties> {
-        // TODO: atl: return fully resolved agent properties (templates/presets/component fallback),
-        // not raw manifest agent properties.
-        self.agents
-            .get(agent_type_name)
-            .map(|agent| &agent.value.agent_properties)
+        component_base: app_raw::AgentLayerProperties,
+    ) -> (AgentProperties, AgentLayerProperties) {
+        let base_component_id = AgentLayerId::Component(component_name.clone());
+        let mut agent_layer_store = Store::new();
+
+        let _ = agent_layer_store.add_layer(AgentLayer {
+            id: base_component_id.clone(),
+            parents: vec![],
+            properties: AgentLayerPropertiesKind::Common(Box::new(component_base)),
+        });
+
+        let target_id =
+            if let Some(agent) = self.agents.get(agent_type_name).map(|agent| &agent.value) {
+                // TODO: atl: add template-based inheritance for agents, mirroring component templates.
+                let partitioned = PartitionedAgentPresets::new(agent.presets.clone());
+
+                let env_id = AgentLayerId::AgentEnvironmentPresets(agent_type_name.clone());
+                let _ = agent_layer_store.add_layer(AgentLayer {
+                    id: env_id.clone(),
+                    parents: vec![base_component_id.clone()],
+                    properties: if partitioned.env_presets.is_empty() {
+                        AgentLayerPropertiesKind::Empty
+                    } else {
+                        AgentLayerPropertiesKind::Presets {
+                            presets: partitioned.env_presets,
+                            default_preset: EMPTY_STR.to_string(),
+                        }
+                    },
+                });
+
+                let custom_id = AgentLayerId::AgentCustomPresets(agent_type_name.clone());
+                let _ = agent_layer_store.add_layer(AgentLayer {
+                    id: custom_id.clone(),
+                    parents: vec![env_id],
+                    properties: match partitioned.default_custom_preset {
+                        Some(default_custom_preset) => AgentLayerPropertiesKind::Presets {
+                            presets: partitioned.custom_presets,
+                            default_preset: default_custom_preset,
+                        },
+                        None => AgentLayerPropertiesKind::Empty,
+                    },
+                });
+
+                let common_id = AgentLayerId::AgentCommon(agent_type_name.clone());
+                let _ = agent_layer_store.add_layer(AgentLayer {
+                    id: common_id.clone(),
+                    parents: vec![custom_id],
+                    properties: AgentLayerPropertiesKind::Common(Box::new(
+                        agent.agent_properties.clone(),
+                    )),
+                });
+
+                common_id
+            } else {
+                base_component_id
+            };
+
+        let resolved = AgentLayerProperties::from_store(
+            &target_id,
+            &self.component_preset_selector,
+            &agent_layer_store,
+        )
+        .unwrap_or_default();
+
+        (AgentProperties::from_resolved(&resolved), resolved)
     }
 
     pub fn contains_component(&self, component_name: &ComponentName) -> bool {
@@ -591,6 +682,41 @@ struct PartitionedComponentPresets {
     default_custom_preset: Option<String>,
 
     env_presets: IndexMap<String, ComponentLayerProperties>,
+}
+
+#[derive(Debug, Clone)]
+struct PartitionedAgentPresets {
+    custom_presets: IndexMap<String, app_raw::AgentLayerProperties>,
+    default_custom_preset: Option<String>,
+    env_presets: IndexMap<String, app_raw::AgentLayerProperties>,
+}
+
+impl PartitionedAgentPresets {
+    fn new(presets: IndexMap<String, app_raw::AgentPreset>) -> Self {
+        let mut default_custom_preset = None;
+        let mut custom_presets = IndexMap::new();
+        let mut env_presets = IndexMap::new();
+
+        for (preset_name, preset) in presets {
+            match preset_name.strip_prefix(APP_ENV_PRESET_PREFIX) {
+                Some(env_name) => {
+                    env_presets.insert(env_name.to_string(), preset.agent_properties);
+                }
+                None => {
+                    if preset.default == Some(app_raw::Marker) || default_custom_preset.is_none() {
+                        default_custom_preset = Some(preset_name.clone());
+                    }
+                    custom_presets.insert(preset_name, preset.agent_properties);
+                }
+            }
+        }
+
+        Self {
+            custom_presets,
+            default_custom_preset,
+            env_presets,
+        }
+    }
 }
 
 impl PartitionedComponentPresets {
@@ -958,21 +1084,12 @@ impl Layer for ComponentLayer {
                 ),
             );
 
-            value.files.apply_layer(
+            value.config.apply_layer(
                 id,
                 selection,
                 (
-                    properties.files_merge_mode.unwrap_or_default(),
-                    properties.files.value().clone(),
-                ),
-            );
-
-            value.plugins.apply_layer(
-                id,
-                selection,
-                (
-                    properties.plugins_merge_mode.unwrap_or_default(),
-                    properties.plugins.value().clone(),
+                    properties.config_merge_mode.unwrap_or_default(),
+                    properties.config.value().clone(),
                 ),
             );
 
@@ -993,9 +1110,103 @@ impl Layer for ComponentLayer {
                     properties.wasi_config.value().clone(),
                 ),
             );
+
+            value.plugins.apply_layer(
+                id,
+                selection,
+                (
+                    properties.plugins_merge_mode.unwrap_or_default(),
+                    properties.plugins.value().clone(),
+                ),
+            );
+
+            value.files.apply_layer(
+                id,
+                selection,
+                (
+                    properties.files_merge_mode.unwrap_or_default(),
+                    properties.files.value().clone(),
+                ),
+            );
         }
 
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedAgent {
+    component_name: ComponentName,
+    source: PathBuf,
+    properties: AgentProperties,
+    layer_properties: AgentLayerProperties,
+}
+
+#[derive(Clone, Debug)]
+pub struct Agent<'a> {
+    agent_type_name: &'a AgentTypeName,
+    resolved: &'a ResolvedAgent,
+}
+
+impl<'a> Agent<'a> {
+    pub fn name(&self) -> &AgentTypeName {
+        self.agent_type_name
+    }
+
+    pub fn component_name(&self) -> &ComponentName {
+        &self.resolved.component_name
+    }
+
+    pub fn source(&self) -> &Path {
+        &self.resolved.source
+    }
+
+    pub fn properties(&self) -> &AgentProperties {
+        &self.resolved.properties
+    }
+
+    pub fn layer_properties(&self) -> &AgentLayerProperties {
+        &self.resolved.layer_properties
+    }
+
+    pub fn applied_layers(&self) -> &[(AgentLayerId, Option<String>)] {
+        self.layer_properties().applied_layers.as_slice()
+    }
+
+    pub fn config(&self) -> &[app_raw::AgentConfigEntry] {
+        &self.resolved.properties.config
+    }
+
+    pub fn env(&self) -> &BTreeMap<String, String> {
+        &self.resolved.properties.env
+    }
+
+    pub fn wasi_config(&self) -> &BTreeMap<String, String> {
+        &self.resolved.properties.wasi_config
+    }
+
+    pub fn plugins(&self) -> &[app_raw::PluginInstallation] {
+        &self.resolved.properties.plugins
+    }
+
+    pub fn files(&self) -> &[app_raw::InitialComponentFile] {
+        &self.resolved.properties.files
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Agents {
+    resolved_by_type: BTreeMap<AgentTypeName, ResolvedAgent>,
+}
+
+impl Agents {
+    pub fn agent<'a>(&'a self, agent_type_name: &'a AgentTypeName) -> Option<Agent<'a>> {
+        self.resolved_by_type
+            .get(agent_type_name)
+            .map(|resolved| Agent {
+                agent_type_name,
+                resolved,
+            })
     }
 }
 
@@ -1134,6 +1345,21 @@ impl<'a> Component<'a> {
     pub fn clean(&self) -> &Vec<String> {
         &self.properties().clean
     }
+
+    pub fn agent_base_properties(&self) -> app_raw::AgentLayerProperties {
+        app_raw::AgentLayerProperties {
+            config_merge_mode: None,
+            config: Some(self.layer_properties().config.value().clone()),
+            env_merge_mode: None,
+            env: Some(self.layer_properties().env.value().clone()),
+            wasi_config_merge_mode: None,
+            wasi_config: Some(self.layer_properties().wasi_config.value().clone()),
+            plugins_merge_mode: None,
+            plugins: Some(self.layer_properties().plugins.value().clone()),
+            files_merge_mode: None,
+            files: Some(self.layer_properties().files.value().clone()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -1153,17 +1379,20 @@ pub struct ComponentLayerProperties {
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub files_merge_mode: Option<VecMergeMode>,
-    pub files: VecProperty<ComponentLayer, app_raw::InitialComponentFile>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub plugins_merge_mode: Option<VecMergeMode>,
-    pub plugins: VecProperty<ComponentLayer, app_raw::PluginInstallation>,
+    pub config_merge_mode: Option<VecMergeMode>,
+    pub config: VecProperty<ComponentLayer, app_raw::AgentConfigEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     pub env: MapProperty<ComponentLayer, String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasi_config_merge_mode: Option<MapMergeMode>,
     pub wasi_config: MapProperty<ComponentLayer, String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
+    pub plugins: VecProperty<ComponentLayer, app_raw::PluginInstallation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    pub files: VecProperty<ComponentLayer, app_raw::InitialComponentFile>,
 }
 
 impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
@@ -1176,14 +1405,20 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             build: value.build.into(),
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
-            files_merge_mode: value.files_merge_mode,
-            files: value.files.unwrap_or_default().into(),
-            plugins_merge_mode: value.plugins_merge_mode,
-            plugins: value.plugins.unwrap_or_default().into(),
-            env_merge_mode: value.env_merge_mode,
-            env: value.env.unwrap_or_default().into(),
-            wasi_config_merge_mode: value.wasi_config_merge_mode,
-            wasi_config: value.wasi_config.unwrap_or_default().into(),
+            config_merge_mode: value.agent_properties.config_merge_mode,
+            config: value.agent_properties.config.unwrap_or_default().into(),
+            env_merge_mode: value.agent_properties.env_merge_mode,
+            env: value.agent_properties.env.unwrap_or_default().into(),
+            wasi_config_merge_mode: value.agent_properties.wasi_config_merge_mode,
+            wasi_config: value
+                .agent_properties
+                .wasi_config
+                .unwrap_or_default()
+                .into(),
+            plugins_merge_mode: value.agent_properties.plugins_merge_mode,
+            plugins: value.agent_properties.plugins.unwrap_or_default().into(),
+            files_merge_mode: value.agent_properties.files_merge_mode,
+            files: value.agent_properties.files.unwrap_or_default().into(),
         }
     }
 }
@@ -1195,10 +1430,11 @@ impl ComponentLayerProperties {
         self.build.compact_trace();
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
-        self.files.compact_trace();
-        self.plugins.compact_trace();
+        self.config.compact_trace();
         self.env.compact_trace();
         self.wasi_config.compact_trace();
+        self.plugins.compact_trace();
+        self.files.compact_trace();
     }
 
     pub fn with_compacted_traces(&self) -> Self {
@@ -1224,6 +1460,270 @@ impl ComponentLayerProperties {
             })
             .collect::<Vec<_>>()
             .serialize(serializer)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentLayerId {
+    Component(ComponentName),
+    AgentEnvironmentPresets(AgentTypeName),
+    AgentCustomPresets(AgentTypeName),
+    AgentCommon(AgentTypeName),
+}
+
+impl Display for AgentLayerId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentLayerId::Component(component_name) => {
+                write!(f, "component:{component_name}")
+            }
+            AgentLayerId::AgentEnvironmentPresets(agent_type_name) => {
+                write!(f, "agent:{}:environment-presets", agent_type_name.0)
+            }
+            AgentLayerId::AgentCustomPresets(agent_type_name) => {
+                write!(f, "agent:{}:custom-presets", agent_type_name.0)
+            }
+            AgentLayerId::AgentCommon(agent_type_name) => {
+                write!(f, "agent:{}:common", agent_type_name.0)
+            }
+        }
+    }
+}
+
+impl AgentLayerId {
+    pub fn name(&self) -> String {
+        self.to_string()
+    }
+
+    pub fn is_environment_preset(&self) -> bool {
+        matches!(self, AgentLayerId::AgentEnvironmentPresets(_))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AgentLayer {
+    id: AgentLayerId,
+    parents: Vec<AgentLayerId>,
+    properties: AgentLayerPropertiesKind,
+}
+
+#[derive(Debug, Clone, Serialize)]
+enum AgentLayerPropertiesKind {
+    Empty,
+    Common(Box<app_raw::AgentLayerProperties>),
+    Presets {
+        presets: IndexMap<String, app_raw::AgentLayerProperties>,
+        default_preset: String,
+    },
+}
+
+impl Layer for AgentLayer {
+    type Id = AgentLayerId;
+    type Value = AgentLayerProperties;
+    type Selector = ComponentPresetSelector;
+    type AppliedSelection = String;
+    type ApplyContext = ();
+    type ApplyError = String;
+
+    fn id(&self) -> &Self::Id {
+        &self.id
+    }
+
+    fn parent_layers(&self) -> &[Self::Id] {
+        &self.parents
+    }
+
+    fn apply_onto_parent(
+        &self,
+        _ctx: &Self::ApplyContext,
+        selector: &Self::Selector,
+        value: &mut Self::Value,
+    ) -> Result<(), Self::ApplyError> {
+        let (property_layers_to_apply, selection) = match &self.properties {
+            AgentLayerPropertiesKind::Empty => (vec![], None),
+            AgentLayerPropertiesKind::Common(properties) => (vec![properties.as_ref()], None),
+            AgentLayerPropertiesKind::Presets {
+                presets,
+                default_preset,
+            } => {
+                if self.id.is_environment_preset() {
+                    (
+                        presets
+                            .get(&selector.environment.0)
+                            .into_iter()
+                            .collect::<Vec<_>>(),
+                        Some(format!("{APP_ENV_PRESET_PREFIX}{}", selector.environment.0)),
+                    )
+                } else {
+                    let selected = selector
+                        .presets
+                        .iter()
+                        .filter_map(|preset_name| {
+                            presets
+                                .get(preset_name.0.as_str())
+                                .map(|preset| (preset, preset_name.0.as_str()))
+                        })
+                        .collect::<Vec<_>>();
+
+                    if selected.is_empty() {
+                        (
+                            presets.get(default_preset).into_iter().collect::<Vec<_>>(),
+                            Some(default_preset.to_string()),
+                        )
+                    } else {
+                        (
+                            selected
+                                .iter()
+                                .map(|(preset, _)| *preset)
+                                .collect::<Vec<_>>(),
+                            Some(selected.iter().map(|(_, name)| *name).join(", ")),
+                        )
+                    }
+                }
+            }
+        };
+
+        let selection = selection.as_ref();
+        let id = self.id();
+        if !property_layers_to_apply.is_empty() {
+            value.applied_layers.push((id.clone(), selection.cloned()));
+        }
+
+        for properties in property_layers_to_apply {
+            value.config.apply_layer(
+                id,
+                selection,
+                (
+                    properties.config_merge_mode.unwrap_or_default(),
+                    properties.config.clone().unwrap_or_default(),
+                ),
+            );
+            value.env.apply_layer(
+                id,
+                selection,
+                (
+                    properties.env_merge_mode.unwrap_or_default(),
+                    properties.env.clone().unwrap_or_default(),
+                ),
+            );
+            value.wasi_config.apply_layer(
+                id,
+                selection,
+                (
+                    properties.wasi_config_merge_mode.unwrap_or_default(),
+                    properties.wasi_config.clone().unwrap_or_default(),
+                ),
+            );
+            value.plugins.apply_layer(
+                id,
+                selection,
+                (
+                    properties.plugins_merge_mode.unwrap_or_default(),
+                    properties.plugins.clone().unwrap_or_default(),
+                ),
+            );
+            value.files.apply_layer(
+                id,
+                selection,
+                (
+                    properties.files_merge_mode.unwrap_or_default(),
+                    properties.files.clone().unwrap_or_default(),
+                ),
+            );
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct AgentLayerProperties {
+    #[serde(
+        serialize_with = "AgentLayerProperties::serialize_applied_layers",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub applied_layers: Vec<(AgentLayerId, Option<String>)>,
+    config: VecProperty<AgentLayer, app_raw::AgentConfigEntry>,
+    env: MapProperty<AgentLayer, String, String>,
+    wasi_config: MapProperty<AgentLayer, String, String>,
+    plugins: VecProperty<AgentLayer, app_raw::PluginInstallation>,
+    files: VecProperty<AgentLayer, app_raw::InitialComponentFile>,
+}
+
+impl AgentLayerProperties {
+    fn from_store(
+        id: &AgentLayerId,
+        selector: &ComponentPresetSelector,
+        store: &Store<AgentLayer>,
+    ) -> Result<Self, String> {
+        store
+            .value(id, selector, &())
+            .map_err(|err| err.to_string())
+    }
+
+    pub fn compact_traces(&mut self) {
+        self.config.compact_trace();
+        self.env.compact_trace();
+        self.wasi_config.compact_trace();
+        self.plugins.compact_trace();
+        self.files.compact_trace();
+    }
+
+    pub fn with_compacted_traces(&self) -> Self {
+        let mut props = self.clone();
+        props.compact_traces();
+        props
+    }
+
+    pub fn serialize_applied_layers<S>(
+        applied_layers: &[(AgentLayerId, Option<String>)],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        applied_layers
+            .iter()
+            .map(|(id, selection)| match selection {
+                Some(selection) => {
+                    format!("{}[{}]", id.name(), selection.as_str())
+                }
+                None => id.name().to_string(),
+            })
+            .collect::<Vec<_>>()
+            .serialize(serializer)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentProperties {
+    pub config: Vec<app_raw::AgentConfigEntry>,
+    pub env: BTreeMap<String, String>,
+    pub wasi_config: BTreeMap<String, String>,
+    pub plugins: Vec<app_raw::PluginInstallation>,
+    pub files: Vec<app_raw::InitialComponentFile>,
+}
+
+impl AgentProperties {
+    fn from_resolved(layer_properties: &AgentLayerProperties) -> Self {
+        Self {
+            config: layer_properties.config.value().clone(),
+            env: layer_properties
+                .env
+                .value()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            wasi_config: layer_properties
+                .wasi_config
+                .value()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            plugins: layer_properties.plugins.value().clone(),
+            files: layer_properties.files.value().clone(),
+        }
     }
 }
 
@@ -1271,11 +1771,11 @@ impl ComponentProperties {
             clean: merged.clean.value().clone(),
             files,
             plugins,
-            env: Self::validate_and_normalize_env(validation, merged.env.value()),
+            env: Self::validate_and_normalize_env(validation, merged.env.value().iter()),
             wasi_config: merged
                 .wasi_config
                 .value()
-                .into_iter()
+                .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             config: vec![],
@@ -1801,7 +2301,7 @@ mod app_builder {
 
                     for (agent_type_name, agent_properties) in app.application.agents {
                         // TODO: atl: resolve and store effective agent properties here using
-                        // agent templates/presets and component.agent fallback layers.
+                        // agent templates/presets and flattened component fallback layers.
                         let unique_key = UniqueSourceCheckedEntityKey::Agent(agent_type_name.clone());
                         if self.add_entity_source(unique_key, &app.source) {
                             self.agents.insert(
@@ -2423,8 +2923,11 @@ mod test {
         includes_from_yaml_file,
     };
     use crate::model::app_raw;
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::component::ComponentName;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
     use tempfile::TempDir;
     use test_r::test;
 
@@ -2464,7 +2967,7 @@ mod test {
             },
         );
 
-        let component_name = "app:main".parse().unwrap();
+        let component_name: ComponentName = "app:main".parse().unwrap();
         let component = app.component(&component_name);
 
         assert_eq!(component.wasm(), app_tmp_dir.path().join("a.wasm"));
@@ -2482,12 +2985,101 @@ mod test {
                     value: 1
 
             components:
-              main:
+              app:main:
                 componentWasm: dummy-component.wasm
         "# };
 
         let result = app_raw::Application::from_yaml_str(source);
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn test_agent_resolution_order_component_fallback_env_custom_common() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            components:
+              app:main:
+                componentWasm: dummy-component.wasm
+                config:
+                  - path: ["fallback"]
+                    value: "fallback"
+                env:
+                  KEY: fallback
+                  ONLY_FALLBACK: fb
+                wasiConfig:
+                  key: fallback
+
+            agents:
+              test-agent:
+                presets:
+                  app-env:local:
+                    config:
+                      - path: ["env"]
+                        value: "env"
+                    env:
+                      KEY: env
+                  custom:
+                    config:
+                      - path: ["custom"]
+                        value: "custom"
+                    wasiConfig:
+                      key: custom
+                config:
+                  - path: ["common"]
+                    value: "common"
+                env:
+                  KEY: common
+                wasiConfig:
+                  key: common
+        "# };
+
+        let (app, _app_tmp_dir) = load_app(
+            source,
+            &ComponentPresetSelector {
+                environment: "local".parse().unwrap(),
+                presets: vec!["custom".parse().unwrap()],
+            },
+        );
+
+        let component_name: ComponentName = "app:main".parse().unwrap();
+        let agent_type_name: AgentTypeName = "test-agent".parse().unwrap();
+
+        let mapping = BTreeMap::from([(agent_type_name.clone(), component_name.clone())]);
+        let resolved_agents = app.resolve_agents(&mapping);
+        let agent = resolved_agents.agent(&agent_type_name).unwrap();
+
+        let config_paths = agent
+            .config()
+            .iter()
+            .map(|entry| entry.path.join("."))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            config_paths,
+            vec![
+                "fallback".to_string(),
+                "env".to_string(),
+                "custom".to_string(),
+                "common".to_string()
+            ]
+        );
+
+        assert_eq!(agent.env().get("KEY").cloned(), Some("common".to_string()));
+        assert_eq!(
+            agent.env().get("ONLY_FALLBACK").cloned(),
+            Some("fb".to_string())
+        );
+
+        assert_eq!(
+            agent.wasi_config().get("key").cloned(),
+            Some("common".to_string())
+        );
+
+        assert_eq!(agent.applied_layers().len(), 4);
     }
 
     fn load_app(source: &str, selector: &ComponentPresetSelector) -> (Application, TempDir) {
