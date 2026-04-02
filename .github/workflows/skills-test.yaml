@@ -195,12 +195,14 @@ jobs:
           printenv OPENAI_API_KEY | codex login --with-api-key
 
       - name: Download TS SDK packages
+        if: matrix.language == 'ts'
         uses: actions/download-artifact@v4
         with:
           name: golem-ts-sdk
           path: sdks/ts/packages/
 
       - name: Install TS SDK dependencies (restore hoisted node_modules)
+        if: matrix.language == 'ts'
         run: |
           npm install -g pnpm@10
           cd sdks/ts
@@ -208,11 +210,15 @@ jobs:
 
       - uses: cargo-bins/cargo-binstall@main
 
-      - name: Install TS SDK build prerequisites
+      - name: Install wasm-rquickjs-cli (TS builds only)
+        if: matrix.language == 'ts'
         run: |
           cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag v0.1.4
           rustup target add wasm32-wasip1
-          cargo binstall --force cargo-component@0.21.1
+
+      - name: Install cargo-component (Rust builds only)
+        if: matrix.language == 'rust'
+        run: cargo binstall --force cargo-component@0.21.1
 
       - name: Install Harness Dependencies
         run: |

@@ -38,4 +38,4 @@ steps:
 
   - id: "delete-agent"
     delete_agent:
-      name: 'invoke-test/local/counter-agent("test-counter")'
+      name: 'counter-agent("test-counter")'
