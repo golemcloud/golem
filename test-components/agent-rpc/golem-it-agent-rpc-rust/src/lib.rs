@@ -1,5 +1,4 @@
-use golem_rust::bindings::golem::agent::host::{Datetime, RpcError};
-use golem_rust::golem_agentic::golem::agent::host::WasmRpc;
+use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
 use golem_rust::{agent_definition, agent_implementation, PromiseId, Schema, Uuid};
 use golem_rust::agentic::Schema as SchemaOps;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -511,6 +510,8 @@ pub trait RpcAuthTester {
 }
 
 struct RpcAuthTesterImpl {
+    _name: String,
+}
 
 // -- Cancel test agents --
 

@@ -38,8 +38,8 @@ time_to_idle = "12h"
 
 [direct_invocation_auth_cache]
 cache_capacity = 1024
-cache_ttl = "5m"
 cache_eviction_interval = "1m"
+cache_ttl = "5m"
 
 [engine]
 enable_fs_cache = false
@@ -339,8 +339,8 @@ without_time = false
 # 
 # [direct_invocation_auth_cache]
 # cache_capacity = 1024
-# cache_ttl = "5m"
 # cache_eviction_interval = "1m"
+# cache_ttl = "5m"
 # 
 # [engine]
 # enable_fs_cache = false
@@ -624,8 +624,8 @@ without_time = false
 # 
 # [direct_invocation_auth_cache]
 # cache_capacity = 1024
-# cache_ttl = "5m"
 # cache_eviction_interval = "1m"
+# cache_ttl = "5m"
 # 
 # [engine]
 # enable_fs_cache = false
