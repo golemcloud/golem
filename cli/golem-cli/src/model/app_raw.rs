@@ -236,7 +236,7 @@ impl Application {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
@@ -247,7 +247,7 @@ pub struct ComponentTemplate {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct Component {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
@@ -260,7 +260,7 @@ pub struct Component {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ComponentPreset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Marker>,
@@ -269,7 +269,7 @@ pub struct ComponentPreset {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct Agent {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
@@ -280,7 +280,7 @@ pub struct Agent {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentPreset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Marker>,
@@ -468,7 +468,7 @@ pub struct InitialComponentFile {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ComponentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_wasm: Option<String>,
@@ -482,14 +482,17 @@ pub struct ComponentLayerProperties {
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
+    #[serde(flatten)]
+    pub agent_properties: AgentLayerProperties,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub files_merge_mode: Option<VecMergeMode>,
+    pub config_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub files: Option<Vec<InitialComponentFile>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugins_merge_mode: Option<VecMergeMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugins: Option<Vec<PluginInstallation>>,
+    pub config: Option<Vec<AgentConfigEntry>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -498,23 +501,14 @@ pub struct ComponentLayerProperties {
     pub wasi_config_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wasi_config: Option<IndexMap<String, String>>,
-    // TODO: atl: apply this as implicit fallback for all exported agents of the component
-    // during ATL agent resolution.
-    #[serde(default, skip_serializing_if = "AgentLayerProperties::is_empty")]
-    pub agent: AgentLayerProperties,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AgentLayerProperties {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub config: Vec<AgentConfigEntry>,
-}
-
-impl AgentLayerProperties {
-    pub fn is_empty(&self) -> bool {
-        self.config.is_empty()
-    }
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<PluginInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<InitialComponentFile>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
