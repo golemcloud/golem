@@ -46,7 +46,7 @@ use futures_util::future::OptionFuture;
 use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
 use golem_common::cache::SimpleCache;
-use golem_common::model::agent::{AgentType, AgentTypeName};
+use golem_common::model::agent::{AgentConfigSource, AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
     AgentConfigEntry, ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
@@ -853,6 +853,7 @@ impl ComponentCommandHandler {
         let env = resolve_env_vars(component_name, component.env())?;
         let wasi_config = component.wasi_config().clone();
         let mut config = vec![];
+        let mut unused_config_by_agent = BTreeMap::<AgentTypeName, Vec<String>>::new();
 
         let mapping = agent_types
             .iter()
@@ -867,19 +868,39 @@ impl ComponentCommandHandler {
                 continue;
             };
 
-            config.extend(resolved_agent
-                        .config
-                        ().iter()
-                        .cloned().map(|config|
-                AgentConfigEntry {
-                    agent: agent_type.type_name.clone(),
-                    path: config.path,
-                    value: config.value,
-                }),
-            );
+            config.extend(materialize_agent_config_entries(
+                agent_type,
+                resolved_agent.config(),
+            ));
+
+            let unused_paths = collect_unused_agent_config_paths(agent_type, resolved_agent.config());
+            if !unused_paths.is_empty() {
+                unused_config_by_agent.insert(agent_type.type_name.clone(), unused_paths);
+            }
 
             // TODO: atl: project resolved agent env/wasi_config/plugins once registry supports
             // agent-type-level state persistence.
+        }
+
+        if !unused_config_by_agent.is_empty() {
+            for (agent_name, unused_keys) in &unused_config_by_agent {
+                log_warn_action(
+                    "Ignoring unused config keys",
+                    format!(
+                        "for agent {}: {}",
+                        agent_name.0.log_color_highlight(),
+                        unused_keys.join(", ")
+                    ),
+                );
+            }
+
+            if !self
+                .ctx
+                .interactive_handler()
+                .confirm_ignore_unused_agent_config(&unused_config_by_agent)?
+            {
+                bail!(NonSuccessfulExit);
+            }
         }
 
         Ok(ComponentDeployProperties {
@@ -1291,4 +1312,84 @@ fn resolve_env_vars(
         validation.build(resolved_env),
         None,
     )
+}
+
+fn config_value_at_path<'a>(
+    root: &'a serde_json::Value,
+    path: &[String],
+) -> Option<&'a serde_json::Value> {
+    let mut current = root;
+    for segment in path {
+        current = match current {
+            serde_json::Value::Object(map) => map.get(segment)?,
+            _ => return None,
+        };
+    }
+    Some(current)
+}
+
+fn materialize_agent_config_entries(
+    agent_type: &AgentType,
+    config_root: Option<&serde_json::Value>,
+) -> Vec<AgentConfigEntry> {
+    let Some(config_root) = config_root else {
+        return vec![];
+    };
+
+    agent_type
+        .config
+        .iter()
+        .filter(|decl| decl.source == AgentConfigSource::Local)
+        .filter_map(|decl| {
+            config_value_at_path(config_root, &decl.path).map(|value| AgentConfigEntry {
+                agent: agent_type.type_name.clone(),
+                path: decl.path.clone(),
+                value: value.clone(),
+            })
+        })
+        .collect()
+}
+
+fn collect_config_leaf_paths(
+    value: &serde_json::Value,
+    prefix: &mut Vec<String>,
+    result: &mut Vec<Vec<String>>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, nested) in map {
+                prefix.push(key.clone());
+                collect_config_leaf_paths(nested, prefix, result);
+                prefix.pop();
+            }
+        }
+        _ => result.push(prefix.clone()),
+    }
+}
+
+fn collect_unused_agent_config_paths(
+    agent_type: &AgentType,
+    config_root: Option<&serde_json::Value>,
+) -> Vec<String> {
+    let Some(config_root) = config_root else {
+        return vec![];
+    };
+
+    let declared_paths = agent_type
+        .config
+        .iter()
+        .filter(|decl| decl.source == AgentConfigSource::Local)
+        .map(|decl| decl.path.clone())
+        .collect::<BTreeSet<_>>();
+
+    let mut leaf_paths = Vec::new();
+    collect_config_leaf_paths(config_root, &mut vec![], &mut leaf_paths);
+
+    let mut unused = leaf_paths
+        .into_iter()
+        .filter(|path| !declared_paths.contains(path))
+        .map(|path| path.join("."))
+        .collect::<Vec<_>>();
+    unused.sort();
+    unused
 }
