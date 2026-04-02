@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::validated_to_anyhow;
+use crate::app::context::{find_main_source_from, validated_to_anyhow};
 use crate::app::template::{
     AppTemplateAgent, AppTemplateCommon, AppTemplateComponent, AppTemplateName,
     MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
@@ -160,91 +160,121 @@ impl TemplateHandler {
         application_path: Option<PathBuf>,
         application_name: Option<ApplicationName>,
     ) -> anyhow::Result<NewCommandContext> {
-        let is_dot_application_path = application_path.as_deref() == Some(Path::new("."));
-
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.opt()?;
 
-        match app_ctx {
-            Some(app_ctx) => {
-                if !is_dot_application_path {
-                    logln("");
-                    log_error("Cannot create new application in existing application directory");
-                    logln("");
-                    logln(
-                        "To add new agents or component to the current application, use the 'golem new .' command!",
-                    );
-                    logln("");
-                    logln("To create a new application, switch to new directory without one!");
-                    bail!(NonSuccessfulExit);
-                }
-
-                if application_name.is_some() {
+        let application_path = match (application_path, app_ctx.as_ref()) {
+            (Some(application_path), _) => application_path,
+            (None, Some(_)) => PathBuf::from("."),
+            (None, None) => match self.ctx.interactive_handler().select_new_app_path()? {
+                Some(application_path) => application_path,
+                None => {
                     logln("");
                     log_error(
-                        "Specifying the application name is not allowed in an existing application directory",
+                        "In non-interactive mode, APPLICATION_PATH must be specified as '.' or a new directory path",
                     );
-                    logln("");
-                    logln("Use `golem new .` for adding new templates to the current application,");
-                    logln("or switch to a different directory!");
+                    bail!(HintError::ShowClapHelp(ShowClapHelpTarget::AppNew));
+                }
+            },
+        };
+
+        let application_dir = if application_path.is_absolute() {
+            fs::normalize_path_lexically(&application_path)
+        } else {
+            fs::normalize_path_lexically(&std::env::current_dir()?.join(&application_path))
+        };
+
+        if let Some(target_main_source) = find_main_source_from(&application_dir) {
+            let target_app_root = target_main_source
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| target_main_source.clone());
+
+            if fs::path_eq_normalized(&application_dir, &target_app_root) {
+                if let Some(app_ctx) = app_ctx
+                    && fs::path_eq_normalized(app_ctx.application().app_root_dir(), &target_app_root)
+                {
+                    if application_name.is_some() {
+                        logln("");
+                        log_error(
+                            "Specifying the application name is not allowed in an existing application directory",
+                        );
+                        logln("");
+                        logln("Use `golem new .` for adding new templates to the current application,");
+                        logln("or switch to a different directory!");
+                    }
+
+                    let existing_components = app_ctx
+                        .component_names()
+                        .into_iter()
+                        .map(|component_name| {
+                            let component = app_ctx.application().component(&component_name);
+                            let existing_component = ExistingComponent {
+                                language: component.guess_language().ok_or_else(|| {
+                                    anyhow!(
+                                        "Failed to determine language for component {}",
+                                        component_name
+                                    )
+                                })?,
+                                dir: component
+                                    .dir()
+                                    .unwrap_or_else(|| Path::new(","))
+                                    .to_path_buf(),
+                                component_dir: component.component_dir().to_path_buf(),
+                                manifest_source_dir: fs::parent_or_err(component.source())?
+                                    .to_path_buf(),
+                            };
+
+                            Ok::<_, anyhow::Error>((component_name, existing_component))
+                        })
+                        .collect::<Result<BTreeMap<_, _>, _>>()?;
+
+                    return Ok(NewCommandContext {
+                        application_name_candidate: app_ctx.application().application_name().0.clone(),
+                        application_path: app_ctx.application().app_root_dir().to_path_buf(),
+                        existing_components,
+                    });
                 }
 
-                let existing_components = app_ctx
-                    .component_names()
-                    .into_iter()
-                    .map(|component_name| {
-                        let component = app_ctx.application().component(&component_name);
-                        let existing_component = ExistingComponent {
-                            language: component.guess_language().ok_or_else(|| {
-                                anyhow!(
-                                    "Failed to determine language for component {}",
-                                    component_name
-                                )
-                            })?,
-                            dir: component
-                                .dir()
-                                .unwrap_or_else(|| Path::new(","))
-                                .to_path_buf(),
-                            component_dir: component.component_dir().to_path_buf(),
-                            manifest_source_dir: fs::parent_or_err(component.source())?
-                                .to_path_buf(),
-                        };
-
-                        Ok::<_, anyhow::Error>((component_name, existing_component))
-                    })
-                    .collect::<Result<BTreeMap<_, _>, _>>()?;
-
-                Ok(NewCommandContext {
-                    application_name_candidate: app_ctx.application().application_name().0.clone(),
-                    application_path: app_ctx.application().app_root_dir().to_path_buf(),
-                    existing_components,
-                })
+                logln("");
+                log_error(format!(
+                    "Target directory is already an existing application: {}",
+                    target_app_root.log_color_error_highlight()
+                ));
+                logln("");
+                logln("Switch to that directory and run `golem new .` to add templates there.");
+                bail!(NonSuccessfulExit);
             }
-            None => {
-                let application_path = application_path
-                    .as_deref()
-                    .unwrap_or_else(|| Path::new("."));
-                let application_dir = {
-                    if application_path.is_absolute() {
-                        fs::normalize_path_lexically(application_path)
-                    } else {
-                        fs::normalize_path_lexically(
-                            &std::env::current_dir()?.join(application_path),
-                        )
-                    }
-                };
-                let application_name_candidate = match application_name {
-                    Some(application_name) => application_name.0,
-                    None => fs::file_name_to_str(&application_dir)?.to_string(),
-                };
 
-                Ok(NewCommandContext {
-                    application_name_candidate,
-                    application_path: application_dir,
-                    existing_components: BTreeMap::new(),
-                })
-            }
+            logln("");
+            log_error(format!(
+                "Cannot create a new application inside an existing application directory: {}",
+                target_app_root.log_color_error_highlight()
+            ));
+            logln("");
+            logln("Please choose a target directory that is not nested under another application.");
+            bail!(NonSuccessfulExit);
         }
+
+        if is_non_empty_dir(&application_dir)?
+            && !self
+                .ctx
+                .interactive_handler()
+            .confirm_new_app_in_non_empty_dir(&application_dir)?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
+        let application_name_candidate = match application_name {
+            Some(application_name) => application_name.0,
+            None => fs::file_name_to_str(&application_dir)?.to_string(),
+        };
+
+        Ok(NewCommandContext {
+            application_name_candidate,
+            application_path: application_dir,
+            existing_components: BTreeMap::new(),
+        })
     }
 
     fn resolve_new_command_selections(
@@ -959,4 +989,12 @@ impl TemplateHandler {
 
         Ok(())
     }
+}
+
+fn is_non_empty_dir(path: &Path) -> anyhow::Result<bool> {
+    if !path.exists() || !path.is_dir() {
+        return Ok(false);
+    }
+
+    Ok(std::fs::read_dir(path)?.next().is_some())
 }

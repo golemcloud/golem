@@ -783,7 +783,12 @@ fn collect_sources_and_switch_to_app_root(
 }
 
 fn find_main_source() -> Option<PathBuf> {
-    let mut current_dir = std::env::current_dir().expect("Failed to get current dir");
+    let current_dir = std::env::current_dir().expect("Failed to get current dir");
+    find_main_source_from(&current_dir)
+}
+
+pub(crate) fn find_main_source_from(start_dir: &Path) -> Option<PathBuf> {
+    let mut current_dir = start_dir.to_path_buf();
     let mut last_source: Option<PathBuf> = None;
 
     loop {
