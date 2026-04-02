@@ -24,18 +24,18 @@ steps:
 
   - id: "invoke-increment"
     invoke:
-      agent: 'counter-agent("test-counter")'
+      agent: 'CounterAgent("test-counter")'
       function: 'invoke-test:rust-main/counter-agent.{increment}'
     expect:
       stdout_contains: "1"
 
   - id: "invoke-increment-again"
     invoke:
-      agent: 'counter-agent("test-counter")'
+      agent: 'CounterAgent("test-counter")'
       function: 'invoke-test:rust-main/counter-agent.{increment}'
     expect:
       stdout_contains: "2"
 
   - id: "delete-agent"
     delete_agent:
-      name: 'counter-agent("test-counter")'
+      name: 'CounterAgent("test-counter")'
