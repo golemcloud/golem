@@ -244,7 +244,7 @@ pub struct WorkerExecutorWorkerClient {
     //       (with retryable errors) does not end the retry loop,
     //       rather it emits a warn log and resets the retry state.
     worker_executor_retries: RetryConfig,
-    routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
+    routing_table_service: Arc<RoutingTableService>,
 }
 
 impl WorkerExecutorWorkerClient {
@@ -253,7 +253,7 @@ impl WorkerExecutorWorkerClient {
             WorkerExecutorClient<OtelGrpcService<Channel>>,
         >,
         worker_executor_retries: RetryConfig,
-        routing_table_service: Arc<dyn RoutingTableService>,
+        routing_table_service: Arc<RoutingTableService>,
     ) -> Self {
         Self {
             worker_executor_clients,
@@ -380,7 +380,7 @@ impl WorkerExecutorWorkerClient {
 }
 
 impl HasRoutingTableService for WorkerExecutorWorkerClient {
-    fn routing_table_service(&self) -> &Arc<dyn RoutingTableService + Send + Sync> {
+    fn routing_table_service(&self) -> &Arc<RoutingTableService> {
         &self.routing_table_service
     }
 }

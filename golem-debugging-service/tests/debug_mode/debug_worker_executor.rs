@@ -4,6 +4,7 @@ use axum_jrpc::{Id, JsonRpcAnswer, JsonRpcRequest, JsonRpcResponse};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use golem_common::model::auth::TokenSecret;
+use golem_debugging_service::RunDetails;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,12 +20,12 @@ pub type DebugWrite = SplitSink<DebugServiceClient, Message>;
 pub type DebugRead = SplitStream<DebugServiceClient>;
 
 // A client to interact with debug worker executor
-#[derive(Debug)]
 pub struct DebugWorkerExecutorClient {
     write_msg: DebugWrite,
     read_msg: DebugRead,
     read_messages: Vec<UntypedJrpcMessage>,
     join_set: Option<JoinSet<anyhow::Result<()>>>,
+    run_details: Option<RunDetails>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -146,6 +147,7 @@ impl DebugWorkerExecutorClient {
             read_msg: read,
             read_messages: Vec::new(),
             join_set: None,
+            run_details: None,
         })
     }
 
@@ -161,7 +163,12 @@ impl DebugWorkerExecutorClient {
         self.read_messages.clone()
     }
 
-    pub fn set_worker_executor_join_set(&mut self, join_set: JoinSet<anyhow::Result<()>>) {
+    pub fn set_worker_executor_join_set_and_run_details(
+        &mut self,
+        join_set: JoinSet<anyhow::Result<()>>,
+        run_details: RunDetails,
+    ) {
         let _ = self.join_set.insert(join_set);
+        let _ = self.run_details.insert(run_details);
     }
 }

@@ -27,6 +27,7 @@ import {
   TypedAgentConfigValue,
 } from 'golem:agent/common@1.5.0';
 import { RemoteMethod } from '../baseAgent';
+import { awaitPollable, throwIfAborted } from './pollableUtils';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 import { AgentMethodRegistry } from './registry/agentMethodRegistry';
@@ -365,33 +366,55 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
     const agentIdString = this.agentId.value;
     const wasmRpc = this.wasmRpc;
 
-    async function invokeAndAwait(...fnArgs: any[]) {
+    async function invokeAndAwaitInternal(fnArgs: any[], signal?: AbortSignal) {
+      throwIfAborted(signal);
+
       const inputDataValue = serializeArgs(methodInfo.params, fnArgs);
 
       const rpcResultFuture = wasmRpc.asyncInvokeAndAwait(methodInfo.name, inputDataValue);
 
-      const rpcResultPollable = rpcResultFuture.subscribe();
+      const onAbort = signal
+        ? () => {
+            try {
+              rpcResultFuture.cancel();
+            } catch {
+              // best-effort: ignore cancellation failures
+            }
+          }
+        : undefined;
 
-      await rpcResultPollable.promise();
-
-      const rpcResult = rpcResultFuture.get();
-
-      if (!rpcResult) {
-        throw new Error(
-          `RPC to remote agent failed. Failed to invoke ${methodInfo.name} in agent ${agentIdString}`,
-        );
+      if (signal && onAbort) {
+        signal.addEventListener('abort', onAbort, { once: true });
       }
 
-      const resultDataValue =
-        rpcResult.tag === 'err'
-          ? (() => {
-              throw new Error(
-                'Remote agent returned error result: ' + JSON.stringify(rpcResult.val),
-              );
-            })()
-          : rpcResult.val;
+      try {
+        const rpcResultPollable = rpcResultFuture.subscribe();
 
-      return deserializeRpcResult(resultDataValue, methodInfo.returnType);
+        await awaitPollable(rpcResultPollable, signal);
+
+        const rpcResult = rpcResultFuture.get();
+
+        if (!rpcResult) {
+          throw new Error(
+            `RPC to remote agent failed. Failed to invoke ${methodInfo.name} in agent ${agentIdString}`,
+          );
+        }
+
+        const resultDataValue =
+          rpcResult.tag === 'err'
+            ? (() => {
+                throw new Error(
+                  'Remote agent returned error result: ' + JSON.stringify(rpcResult.val),
+                );
+              })()
+            : rpcResult.val;
+
+        return deserializeRpcResult(resultDataValue, methodInfo.returnType);
+      } finally {
+        if (signal && onAbort) {
+          signal.removeEventListener('abort', onAbort);
+        }
+      }
     }
 
     function invokeFireAndForget(...fnArgs: any[]) {
@@ -404,8 +427,10 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
       wasmRpc.scheduleInvocation(ts, methodInfo.name, inputDataValue);
     }
 
-    const methodFn: any = (...args: any[]) => invokeAndAwait(...args);
+    const methodFn: any = (...args: any[]) => invokeAndAwaitInternal(args);
 
+    methodFn.abortable = (signal: AbortSignal, ...args: any[]) =>
+      invokeAndAwaitInternal(args, signal);
     methodFn.trigger = (...args: any[]) => invokeFireAndForget(...args);
     methodFn.schedule = (ts: Datetime, ...args: any[]) => invokeSchedule(ts, ...args);
 

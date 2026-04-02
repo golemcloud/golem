@@ -5574,6 +5574,7 @@ dependencies = [
  "test-r",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite 0.25.0",
  "tracing",
  "tracing-opentelemetry",
  "uuid",
@@ -12373,7 +12374,7 @@ dependencies = [
 [[package]]
 name = "wasm-rquickjs"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rquickjs.git?tag=v0.1.5#6b5c9458db2aa4661b87d9e4f68c2b8fd9e4a000"
+source = "git+https://github.com/golemcloud/wasm-rquickjs.git?tag=v0.1.6#f3cbf13d730d93e62c53237d365702b11e949c5c"
 dependencies = [
  "anyhow",
  "camino",

@@ -34,6 +34,7 @@ service WorkerService {
   rpc RevertWorker(RevertWorkerRequest) returns (RevertWorkerResponse);
   rpc CompletePromise (CompletePromiseRequest) returns (CompletePromiseResponse);
   rpc InvokeAgent (InvokeAgentRequest) returns (InvokeAgentResponse);
+  rpc CancelInvocation (CancelInvocationRequest) returns (CancelInvocationResponse);
 }
 
 message LaunchNewWorkerRequest {
@@ -157,4 +158,17 @@ message InvokeAgentSuccess {
   optional uint64 fuel_consumed = 2;
   optional uint64 component_revision = 3;
   optional golem.worker.InvocationStatus status = 4;
+}
+
+message CancelInvocationRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.worker.IdempotencyKey idempotency_key = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
+}
+
+message CancelInvocationResponse {
+  oneof result {
+    bool success = 1;
+    AgentError error = 2;
+  }
 }
