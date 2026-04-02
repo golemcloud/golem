@@ -166,3 +166,57 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
         })
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::{MapMergeMode, MapProperty};
+    use crate::model::cascade::property::test_support::TestLayer;
+    use crate::model::cascade::property::Property;
+    use indexmap::IndexMap;
+    use test_r::test;
+
+    #[test]
+    fn compact_trace_removes_empty_remove() {
+        let mut prop: MapProperty<TestLayer, String, i32> = IndexMap::new().into();
+        let id = "layer-a".to_string();
+
+        prop.apply_layer(
+            &id,
+            None,
+            (
+                MapMergeMode::Remove,
+                IndexMap::from_iter([(String::from("x"), 1)]),
+            ),
+        );
+
+        assert_eq!(prop.trace().len(), 1);
+        prop.compact_trace();
+        assert_eq!(prop.trace().len(), 0);
+    }
+
+    #[test]
+    fn upsert_then_remove_updates_map() {
+        let mut prop: MapProperty<TestLayer, String, i32> = IndexMap::new().into();
+        let id = "layer-a".to_string();
+
+        prop.apply_layer(
+            &id,
+            None,
+            (
+                MapMergeMode::Upsert,
+                IndexMap::from_iter([(String::from("x"), 1), (String::from("y"), 2)]),
+            ),
+        );
+        prop.apply_layer(
+            &id,
+            None,
+            (
+                MapMergeMode::Remove,
+                IndexMap::from_iter([(String::from("x"), 0)]),
+            ),
+        );
+
+        assert_eq!(prop.value().get("x"), None);
+        assert_eq!(prop.value().get("y"), Some(&2));
+    }
+}

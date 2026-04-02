@@ -14,6 +14,7 @@
 
 use crate::model::cascade::layer::Layer;
 
+pub mod json;
 pub mod map;
 pub mod optional;
 pub mod vec;
@@ -34,4 +35,40 @@ pub trait Property<L: Layer> {
     );
 
     fn compact_trace(&mut self);
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use crate::model::cascade::layer::Layer;
+
+    #[derive(Debug, Clone, serde::Serialize)]
+    pub struct TestLayer {
+        pub id: String,
+    }
+
+    impl Layer for TestLayer {
+        type Id = String;
+        type Value = ();
+        type Selector = ();
+        type AppliedSelection = String;
+        type ApplyContext = ();
+        type ApplyError = ();
+
+        fn id(&self) -> &Self::Id {
+            &self.id
+        }
+
+        fn parent_layers(&self) -> &[Self::Id] {
+            &[]
+        }
+
+        fn apply_onto_parent(
+            &self,
+            _ctx: &Self::ApplyContext,
+            _selector: &Self::Selector,
+            _value: &mut Self::Value,
+        ) -> Result<(), Self::ApplyError> {
+            Ok(())
+        }
+    }
 }
