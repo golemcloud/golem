@@ -829,7 +829,7 @@ mod tests {
     use super::*;
     use chrono::Duration as ChronoDuration;
     use golem_common::model::resource_definition::{ResourceLimit, ResourceRateLimit, TimePeriod};
-    use golem_common::model::{Pod, RoutingTable, ShardAssignment};
+    use golem_common::model::{Pod, RoutingTable};
     use golem_service_base::clients::shard_manager::ShardManagerError;
     use pretty_assertions::assert_eq;
     use pretty_assertions::assert_matches;
@@ -991,7 +991,7 @@ mod tests {
             &self,
             _port: u16,
             _pod_name: Option<String>,
-        ) -> Result<ShardAssignment, ShardManagerError> {
+        ) -> Result<u32, ShardManagerError> {
             unimplemented!()
         }
 
