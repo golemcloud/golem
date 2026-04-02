@@ -44,6 +44,10 @@ impl From<EnvironmentOwnerAccountId> for AccountId {
 /// - Slow path: fetch `AuthDetailsForEnvironment` from registry-service and run the standard
 ///   `AuthCtx::authorize_environment_action` check. Results are cached keyed by
 ///   `(EnvironmentId, AccountId)` with a configurable TTL.
+///
+/// The decision model is intentionally environment-scoped: `check` takes
+/// `(caller_account_id, environment_id, action)` only. Target agent metadata such as
+/// `created_by` is intentionally not part of the authorization input.
 #[async_trait]
 pub trait DirectInvocationAuthService: Send + Sync {
     /// Check whether `caller_account_id` is allowed to perform `action` on `environment_id`.
@@ -176,7 +180,7 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
     ) -> Result<EnvironmentOwnerAccountId, RpcError> {
         // Fast path: if the caller owns the target environment, allow immediately.
         // We use account_id_owning_environment (from AuthDetailsForEnvironment) — not
-        // component.account_id — because the component deployer and the env owner can differ.
+        // component/account/agent creator metadata — because deployer and env owner can differ.
         let env_owner = self
             .get_env_owner(environment_id, caller_account_id)
             .await?
@@ -567,8 +571,11 @@ mod tests {
         )
     }
 
+    // The tested auth surface is intentionally `(caller_account_id, target_environment_id, action)`.
+    // Target worker metadata (for example `created_by`) is not part of this service API.
+
     #[test]
-    async fn owner_fast_path_is_allowed() {
+    async fn environment_owner_is_allowed_for_update_worker_even_without_share_roles() {
         let owner = make_account_id();
         let env_id = make_environment_id();
         // Registry returns auth_details with owner == caller — fast path triggers after first fetch.
@@ -591,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    async fn owner_fast_path_skips_registry_on_second_call() {
+    async fn environment_owner_second_check_uses_cached_owner_without_extra_registry_call() {
         let owner = make_account_id();
         let env_id = make_environment_id();
         let auth_details = make_auth_details(owner, []);
@@ -617,7 +624,7 @@ mod tests {
     }
 
     #[test]
-    async fn non_owner_with_deployer_role_is_allowed_for_update_worker() {
+    async fn shared_grantee_with_deployer_role_is_allowed_for_update_worker() {
         let owner = make_account_id();
         let caller = make_account_id();
         let env_id = make_environment_id();
@@ -636,7 +643,7 @@ mod tests {
     }
 
     #[test]
-    async fn non_owner_with_no_shares_is_denied() {
+    async fn non_environment_owner_without_share_is_denied() {
         let caller = make_account_id();
         let env_id = make_environment_id();
         // Registry returns NotFound — no auth details, no shares
@@ -654,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    async fn non_owner_with_viewer_role_is_denied_for_update_worker() {
+    async fn shared_grantee_with_viewer_role_is_denied_for_update_worker() {
         let owner = make_account_id();
         let caller = make_account_id();
         let env_id = make_environment_id();
@@ -740,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    async fn check_returns_env_owner_for_owner_fast_path() {
+    async fn check_returns_environment_owner_account_for_environment_owner_caller() {
         let owner = make_account_id();
         let env_id = make_environment_id();
         let auth_details = make_auth_details(owner, []);
@@ -759,7 +766,7 @@ mod tests {
     }
 
     #[test]
-    async fn same_caller_can_be_allowed_in_one_environment_and_denied_in_another() {
+    async fn same_caller_can_be_allowed_in_target_env_a_and_denied_in_target_env_b() {
         let caller = make_account_id();
         let owner_env_a = make_account_id();
         let owner_env_b = make_account_id();

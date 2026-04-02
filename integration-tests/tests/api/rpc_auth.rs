@@ -23,6 +23,7 @@
 //!
 //! These tests currently cover same-target-environment sharing semantics (different accounts,
 //! one environment owned by the target account and optionally shared to the caller account).
+//! Auth decisions in this flow are caller-account + target-environment + action based.
 //! They do not cover source-env-A -> target-env-B RPC from a single guest invocation.
 //! This is a current technical limitation of `WasmRpc`: the constructor resolves by agent type
 //! and constructor args in the caller context and does not expose an explicit target environment id.
@@ -165,6 +166,11 @@ async fn unauthorized_cross_account_rpc_is_denied(
 
 /// An authorized caller (granted `Deployer` role) invoking a worker in another account-owned
 /// environment succeeds — `RpcCallOutcome::Ok` is returned.
+///
+/// The two targets are created by different accounts in the same environment:
+/// - environment owner account
+/// - shared grantee account (caller)
+///
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -189,10 +195,24 @@ async fn authorized_cross_account_rpc_via_share_succeeds(
         )
         .await?;
 
-    let counter_name = "auth-test-allowed-counter";
-    let counter_agent_id = agent_id!("RpcCounter", counter_name);
+    let env_owner_created_counter_name = "auth-test-allowed-counter-env-owner";
+    let env_owner_created_counter_agent_id =
+        agent_id!("RpcCounter", env_owner_created_counter_name);
     owner
-        .start_agent(&owner_component.id, counter_agent_id.clone())
+        .start_agent(
+            &owner_component.id,
+            env_owner_created_counter_agent_id.clone(),
+        )
+        .await?;
+
+    let shared_grantee_created_counter_name = "auth-test-allowed-counter-shared-grantee";
+    let shared_grantee_created_counter_agent_id =
+        agent_id!("RpcCounter", shared_grantee_created_counter_name);
+    caller
+        .start_agent(
+            &owner_component.id,
+            shared_grantee_created_counter_agent_id.clone(),
+        )
         .await?;
 
     let tester_agent_id = agent_id!("RpcAuthTester", "tester-allowed");
@@ -200,16 +220,26 @@ async fn authorized_cross_account_rpc_via_share_succeeds(
         .start_agent(&caller_component.id, tester_agent_id.clone())
         .await?;
 
-    let result = caller
+    let env_owner_created_target_result = caller
         .invoke_and_await_agent(
             &caller_component,
             &tester_agent_id,
             "try_call_counter",
-            data_value!(counter_name.to_string()),
+            data_value!(env_owner_created_counter_name.to_string()),
         )
         .await?;
 
-    assert_rpc_outcome_is_ok(result);
+    let shared_grantee_created_target_result = caller
+        .invoke_and_await_agent(
+            &caller_component,
+            &tester_agent_id,
+            "try_call_counter",
+            data_value!(shared_grantee_created_counter_name.to_string()),
+        )
+        .await?;
+
+    assert_rpc_outcome_is_ok(env_owner_created_target_result);
+    assert_rpc_outcome_is_ok(shared_grantee_created_target_result);
 
     Ok(())
 }
