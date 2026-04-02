@@ -1,0 +1,35 @@
+name: "golem-agent-invoke-rust"
+settings:
+  timeout_per_subprompt: 300
+  golem_server:
+    custom_request_port: 9006
+skip_if:
+  language: "ts"
+steps:
+  - id: "create-project"
+    prompt: "Create a new Golem application called invoke-test with Rust."
+    expectedSkills:
+      - "golem-new-project"
+    allowedExtraSkills:
+      - "golem-db-app-ts"
+      - "golem-db-app-rust"
+    verify:
+      deploy: true
+
+  - id: "invoke-increment"
+    invoke:
+      agent: 'counter-agent("test-counter")'
+      function: 'invoke-test:rust-main/counter-agent.{increment}'
+    expect:
+      stdout_contains: "1"
+
+  - id: "invoke-increment-again"
+    invoke:
+      agent: 'counter-agent("test-counter")'
+      function: 'invoke-test:rust-main/counter-agent.{increment}'
+    expect:
+      stdout_contains: "2"
+
+  - id: "delete-agent"
+    delete_agent:
+      name: 'counter-agent("test-counter")'
