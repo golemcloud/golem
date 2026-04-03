@@ -21,6 +21,7 @@ use crate::services::oplog::{
     CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, downcast_oplog,
 };
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -44,7 +45,11 @@ use tracing::{Instrument, Level, Span, debug, error, info, span, warn};
 #[async_trait]
 pub trait OplogArchiveService: Debug + Send + Sync {
     /// Opens an oplog archive for writing
-    async fn open(&self, owned_agent_id: &OwnedAgentId) -> Arc<dyn OplogArchive + Send + Sync>;
+    async fn open(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        account_id: &AccountId,
+    ) -> Arc<dyn OplogArchive + Send + Sync>;
 
     /// Deletes the oplog archive for a worker completely
     async fn delete(&self, owned_agent_id: &OwnedAgentId);
@@ -221,6 +226,8 @@ impl OplogConstructor for CreateOplogConstructor {
             None => self.service.get_last_index(&self.owned_agent_id).await,
         };
 
+        let account_id = self.initial_worker_metadata.created_by;
+
         match agent_mode {
             AgentMode::Durable => {
                 let primary = if let Some(initial_entry) = self.initial_entry {
@@ -244,7 +251,14 @@ impl OplogConstructor for CreateOplogConstructor {
                         )
                         .await
                 };
-                MultiLayerOplog::new(self.owned_agent_id, primary, self.service, close).await
+                MultiLayerOplog::new(
+                    self.owned_agent_id,
+                    &account_id,
+                    primary,
+                    self.service,
+                    close,
+                )
+                .await
             }
             AgentMode::Ephemeral => {
                 let primary = self
@@ -259,7 +273,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     .await;
 
                 let target_layer = self.service.lower.last();
-                let target = target_layer.open(&self.owned_agent_id).await;
+                let target = target_layer.open(&self.owned_agent_id, &account_id).await;
 
                 if let Some(initial_entry) = self.initial_entry {
                     target
@@ -524,6 +538,7 @@ impl MultiLayerOplog {
     #[allow(clippy::new_ret_no_self)]
     pub async fn new(
         owned_agent_id: OwnedAgentId,
+        account_id: &AccountId,
         primary: Arc<dyn Oplog>,
         multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
@@ -537,7 +552,7 @@ impl MultiLayerOplog {
                 lower.push(Arc::new(
                     WrappedOplogArchive::new(
                         i,
-                        layer.open(&owned_agent_id).await,
+                        layer.open(&owned_agent_id, account_id).await,
                         tx.clone(),
                         multi_layer_oplog_service.entry_count_limit,
                     )
@@ -545,7 +560,7 @@ impl MultiLayerOplog {
                 ));
             } else {
                 // Not wrapping the last layer
-                lower.push(layer.open(&owned_agent_id).await);
+                lower.push(layer.open(&owned_agent_id, account_id).await);
             }
         }
         let lower = NEVec::try_from_vec(lower).expect("At least one lower layer is required");

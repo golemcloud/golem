@@ -18,8 +18,8 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
 use golem_worker_executor::metrics::storage::{
-    STORAGE_TYPE_KV, STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_OBJECTS_DELETED_TOTAL,
-    STORAGE_OBJECTS_WRITTEN_TOTAL,
+    STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_OBJECTS_DELETED_TOTAL, STORAGE_OBJECTS_WRITTEN_TOTAL,
+    STORAGE_TYPE_KV,
 };
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
@@ -866,7 +866,11 @@ async fn kv_set_increments_storage_bytes_and_objects_written_metrics(
             &component,
             &agent_id,
             "set",
-            data_value!(bucket.clone(), "k1", vec![104u8, 101u8, 108u8, 108u8, 111u8]),
+            data_value!(
+                bucket.clone(),
+                "k1",
+                vec![104u8, 101u8, 108u8, 108u8, 111u8]
+            ),
         )
         .await?;
 
@@ -876,7 +880,11 @@ async fn kv_set_increments_storage_bytes_and_objects_written_metrics(
             &component,
             &agent_id,
             "set",
-            data_value!(bucket.clone(), "k2", vec![119u8, 111u8, 114u8, 108u8, 100u8, 33u8]),
+            data_value!(
+                bucket.clone(),
+                "k2",
+                vec![119u8, 111u8, 114u8, 108u8, 100u8, 33u8]
+            ),
         )
         .await?;
 

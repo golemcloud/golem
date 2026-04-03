@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::storage::{
+    STORAGE_TYPE_OPLOG_ARCHIVE, record_storage_bytes_written, record_storage_objects_written,
+};
 use crate::services::oplog::PrimaryOplogService;
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::storage::indexed::{
@@ -21,6 +24,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
 use evicting_cache_map::EvictingCacheMap;
+use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -56,9 +60,15 @@ impl CompressedOplogArchiveService {
 
 #[async_trait]
 impl OplogArchiveService for CompressedOplogArchiveService {
-    async fn open(&self, owned_agent_id: &OwnedAgentId) -> Arc<dyn OplogArchive + Send + Sync> {
+    async fn open(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        account_id: &AccountId,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
         Arc::new(CompressedOplogArchive::new(
             owned_agent_id.agent_id(),
+            owned_agent_id.environment_id(),
+            *account_id,
             self.indexed_storage.clone(),
             self.level,
         ))
@@ -80,7 +90,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        let archive = self.open(owned_agent_id).await;
+        let archive = self.open(owned_agent_id, &AccountId::SYSTEM).await;
         archive.read(idx, n).await
     }
 
@@ -147,6 +157,8 @@ impl OplogArchiveService for CompressedOplogArchiveService {
 #[derive(Debug)]
 pub struct CompressedOplogArchive {
     agent_id: AgentId,
+    environment_id: EnvironmentId,
+    account_id: AccountId,
     key: String,
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     #[allow(clippy::type_complexity)]
@@ -164,12 +176,16 @@ pub struct CompressedOplogArchive {
 impl CompressedOplogArchive {
     pub fn new(
         agent_id: AgentId,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         level: usize,
     ) -> Self {
         let key = CompressedOplogArchiveService::compressed_oplog_key(&agent_id);
         Self {
             agent_id,
+            environment_id,
+            account_id,
             key,
             indexed_storage,
             cache: RwLock::new(EvictingCacheMap::new()),
@@ -290,8 +306,12 @@ impl OplogArchive for CompressedOplogArchive {
             return;
         }
 
+        let entry_count = chunk.len() as u64;
         let agent_id = &self.agent_id;
+        let account_id = self.account_id.to_string();
+        let environment_id = self.environment_id.to_string();
         let mut cache = self.cache.write().await;
+        let mut total_bytes: u64 = 0;
 
         for (idx, entry) in &chunk {
             cache.insert(*idx, entry.clone());
@@ -305,6 +325,8 @@ impl OplogArchive for CompressedOplogArchive {
 
             let compressed_chunk = CompressedOplogChunk::compress(entries)
                 .unwrap_or_else(|err| panic!("failed to compress oplog chunk: {err}"));
+
+            total_bytes += compressed_chunk.compressed_data.len() as u64;
 
             self.indexed_storage
                 .with_entity("compressed_oplog", "append", "compressed_entry")
@@ -321,6 +343,19 @@ impl OplogArchive for CompressedOplogArchive {
                     )
                 });
         }
+
+        record_storage_bytes_written(
+            STORAGE_TYPE_OPLOG_ARCHIVE,
+            &account_id,
+            &environment_id,
+            total_bytes,
+        );
+        record_storage_objects_written(
+            STORAGE_TYPE_OPLOG_ARCHIVE,
+            &account_id,
+            &environment_id,
+            entry_count,
+        );
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {

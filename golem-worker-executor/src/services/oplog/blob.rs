@@ -12,12 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::storage::{
+    STORAGE_TYPE_OPLOG_ARCHIVE, record_storage_bytes_written, record_storage_objects_deleted,
+    record_storage_objects_written,
+};
 use crate::services::oplog::multilayer::OplogArchive;
 use crate::services::oplog::{CompressedOplogChunk, OplogArchiveService};
 use anyhow::anyhow;
 use async_lock::RwLockUpgradableReadGuard;
 use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
+use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
@@ -53,10 +58,15 @@ impl BlobOplogArchiveService {
 
 #[async_trait]
 impl OplogArchiveService for BlobOplogArchiveService {
-    async fn open(&self, owned_agent_id: &OwnedAgentId) -> Arc<dyn OplogArchive + Send + Sync> {
+    async fn open(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        account_id: &AccountId,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
         Arc::new(
             BlobOplogArchive::new(
                 owned_agent_id.clone(),
+                *account_id,
                 self.blob_storage.clone(),
                 self.level,
             )
@@ -91,7 +101,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        let archive = self.open(owned_agent_id).await;
+        let archive = self.open(owned_agent_id, &AccountId::SYSTEM).await;
         archive.read(idx, n).await
     }
 
@@ -203,6 +213,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
 #[derive(Debug)]
 struct BlobOplogArchive {
     owned_agent_id: OwnedAgentId,
+    account_id: AccountId,
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     level: usize,
     entries: Arc<RwLock<BTreeMap<OplogIndex, PathBuf>>>,
@@ -221,6 +232,7 @@ struct BlobOplogArchive {
 impl BlobOplogArchive {
     pub async fn new(
         owned_agent_id: OwnedAgentId,
+        account_id: AccountId,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         level: usize,
     ) -> Self {
@@ -234,6 +246,7 @@ impl BlobOplogArchive {
 
         BlobOplogArchive {
             owned_agent_id,
+            account_id,
             blob_storage,
             level,
             created,
@@ -453,6 +466,10 @@ impl OplogArchive for BlobOplogArchive {
             return;
         }
 
+        let entry_count = chunk.len() as u64;
+        let account_id = self.account_id.to_string();
+        let environment_id = self.owned_agent_id.environment_id().to_string();
+
         for sub_chunk in chunk.chunks(BlobOplogArchiveService::MAX_CHUNK_SIZE) {
             let last = sub_chunk.last().unwrap();
             let oplog_index = last.0;
@@ -463,6 +480,8 @@ impl OplogArchive for BlobOplogArchive {
 
             let compressed_chunk = CompressedOplogChunk::compress(entries)
                 .unwrap_or_else(|err| panic!("failed to compress oplog chunk: {err}"));
+
+            let chunk_bytes = compressed_chunk.compressed_data.len() as u64;
 
             let mut entries_map = self.entries.write().await;
 
@@ -485,8 +504,22 @@ impl OplogArchive for BlobOplogArchive {
                     )
                 });
 
+            record_storage_bytes_written(
+                STORAGE_TYPE_OPLOG_ARCHIVE,
+                &account_id,
+                &environment_id,
+                chunk_bytes,
+            );
+
             entries_map.insert(oplog_index, path);
         }
+
+        record_storage_objects_written(
+            STORAGE_TYPE_OPLOG_ARCHIVE,
+            &account_id,
+            &environment_id,
+            entry_count,
+        );
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -559,6 +592,15 @@ impl OplogArchive for BlobOplogArchive {
                 });
                 *created = false;
             }
+        }
+
+        if drop_count > 0 {
+            record_storage_objects_deleted(
+                STORAGE_TYPE_OPLOG_ARCHIVE,
+                &self.account_id.to_string(),
+                &self.owned_agent_id.environment_id().to_string(),
+                drop_count as u64,
+            );
         }
 
         drop_count as u64
