@@ -83,13 +83,13 @@ impl SpawnedWorkerExecutorCluster {
         otlp: bool,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
-        let mut worker_executors_joins = Vec::new();
+        let mut worker_executors = Vec::new();
 
         for i in 0..size {
             let http_port = base_http_port + i as u16;
             let grpc_port = base_grpc_port + i as u16;
 
-            let worker_executor_join = tokio::spawn(
+            worker_executors.push(
                 Self::make_worker_executor(
                     executable.to_path_buf(),
                     working_directory.to_path_buf(),
@@ -104,16 +104,9 @@ impl SpawnedWorkerExecutorCluster {
                     registry_service.clone(),
                     otlp,
                 )
-                .in_current_span(),
+                .in_current_span()
+                .await,
             );
-
-            worker_executors_joins.push(worker_executor_join);
-        }
-
-        let mut worker_executors = Vec::new();
-
-        for join in worker_executors_joins {
-            worker_executors.push(join.await.expect("Failed to join"));
         }
 
         info!("Waiting for shard manager to see all executors");

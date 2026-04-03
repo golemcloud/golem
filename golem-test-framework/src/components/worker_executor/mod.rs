@@ -104,7 +104,7 @@ async fn env_vars(
         .with_optional_otlp("worker_executor", otlp)
         .build();
 
-    let db_env = rdb.info().env("golem_worker", false);
+    let db_env = rdb.info().env("golem_worker_executor", false);
     let db_type = db_env
         .get("GOLEM__DB__TYPE")
         .map(String::as_str)
@@ -123,9 +123,14 @@ async fn env_vars(
             );
             for (key, value) in &db_env {
                 if let Some(rest) = key.strip_prefix("GOLEM__DB__CONFIG__") {
+                    let indexed_value = if rest == "SCHEMA" {
+                        format!("{value}_indexed")
+                    } else {
+                        value.clone()
+                    };
                     env.insert(
                         format!("GOLEM__INDEXED_STORAGE__CONFIG__{rest}"),
-                        value.clone(),
+                        indexed_value,
                     );
                 }
             }
