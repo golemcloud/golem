@@ -1573,7 +1573,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             WebSocketConnectionState {
                 url,
                 headers,
-                last_seen_message_index: 0,
                 mode: WebSocketConnectionMode::Live,
             },
         );
@@ -1583,12 +1582,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.open_websocket_connections.remove(&rep);
     }
 
-    pub(crate) fn mark_websocket_message_observed(&mut self, rep: u32) {
-        if let Some(state) = self.state.open_websocket_connections.get_mut(&rep) {
-            state.last_seen_message_index += 1;
-        }
-    }
-
     pub(crate) fn websocket_connection_info(&self, rep: u32) -> Option<WebSocketConnectionInfo> {
         self.state
             .open_websocket_connections
@@ -1596,7 +1589,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|state| WebSocketConnectionInfo {
                 url: state.url.clone(),
                 headers: state.headers.clone(),
-                last_seen_message_index: state.last_seen_message_index,
                 mode: state.mode.clone(),
             })
     }
@@ -3183,8 +3175,6 @@ pub(crate) enum WebSocketConnectionMode {
 pub(crate) struct WebSocketConnectionState {
     pub url: String,
     pub headers: Option<Vec<(String, String)>>,
-    /// Number of user-visible websocket messages already observed by the guest.
-    pub last_seen_message_index: u64,
     pub mode: WebSocketConnectionMode,
 }
 
@@ -3192,7 +3182,6 @@ pub(crate) struct WebSocketConnectionState {
 pub(crate) struct WebSocketConnectionInfo {
     pub url: String,
     pub headers: Option<Vec<(String, String)>>,
-    pub last_seen_message_index: u64,
     pub mode: WebSocketConnectionMode,
 }
 

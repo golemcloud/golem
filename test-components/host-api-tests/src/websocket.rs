@@ -1,4 +1,6 @@
-use golem_rust::{WebSocketMessage, WebsocketConnection, agent_definition, agent_implementation};
+use golem_rust::{
+    PromiseId, WebSocketMessage, WebsocketConnection, agent_definition, agent_implementation,
+};
 use std::cell::RefCell;
 use wasi::io::poll;
 
@@ -18,6 +20,8 @@ pub trait WebsocketTest {
     fn receive_next_from_persisted(&self) -> String;
     /// Activates the agent without touching the persisted websocket.
     fn noop(&self) -> String;
+    fn create_promise(&self) -> PromiseId;
+    fn replay_reconnect_roundtrip(&self, url: String, barrier: PromiseId) -> Result<String, String>;
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String>;
     async fn async_bidi_test(&self, url: String) -> Result<String, String>;
 
@@ -100,6 +104,45 @@ impl WebsocketTest for WebsocketTestImpl {
 
     fn noop(&self) -> String {
         "ok".to_string()
+    }
+
+    fn create_promise(&self) -> PromiseId {
+        golem_rust::create_promise()
+    }
+
+    fn replay_reconnect_roundtrip(&self, url: String, barrier: PromiseId) -> Result<String, String> {
+        let ws = WebsocketConnection::connect(&url, None)
+            .map_err(|e| format!("Failed to connect: {:?}", e))?;
+        let mut received = Vec::new();
+
+        for payload in ["msg-1", "msg-2"] {
+            ws.send(&WebSocketMessage::Text(payload.to_string()))
+                .map_err(|e| format!("Send error: {:?}", e))?;
+            let message = ws.receive().map_err(|e| format!("Receive error: {:?}", e))?;
+            match message {
+                WebSocketMessage::Text(text) => received.push(text),
+                WebSocketMessage::Binary(data) => {
+                    received.push(format!("Binary: {} bytes", data.len()))
+                }
+            }
+        }
+
+        // Suspending on a promise gives the recovery test a deterministic crash boundary.
+        let _ = golem_rust::blocking_await_promise(&barrier);
+
+        for payload in ["msg-3", "msg-4"] {
+            ws.send(&WebSocketMessage::Text(payload.to_string()))
+                .map_err(|e| format!("Send error: {:?}", e))?;
+            let message = ws.receive().map_err(|e| format!("Receive error: {:?}", e))?;
+            match message {
+                WebSocketMessage::Text(text) => received.push(text),
+                WebSocketMessage::Binary(data) => {
+                    received.push(format!("Binary: {} bytes", data.len()))
+                }
+            }
+        }
+
+        Ok(received.join("|"))
     }
 
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String> {
