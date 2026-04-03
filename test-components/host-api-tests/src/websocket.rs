@@ -18,10 +18,17 @@ pub trait WebsocketTest {
     fn connect_subscribe_and_receive_first(&self, url: String) -> String;
     /// Receives the next message from the connection stored in agent state.
     fn receive_next_from_persisted(&self) -> String;
+    /// Like `receive_next_from_persisted`, but returns websocket errors to the caller.
+    fn receive_next_from_persisted_result(&self) -> Result<String, String>;
+    /// Closes the persisted websocket and returns any close error to the caller.
+    fn close_persisted_result(&self) -> Result<(), String>;
+    /// Subscribes to the persisted websocket and reports whether poll observed it as ready.
+    fn subscribe_to_persisted(&self) -> bool;
     /// Activates the agent without touching the persisted websocket.
     fn noop(&self) -> String;
     fn create_promise(&self) -> PromiseId;
-    fn replay_reconnect_roundtrip(&self, url: String, barrier: PromiseId) -> Result<String, String>;
+    fn replay_reconnect_roundtrip(&self, url: String, barrier: PromiseId)
+    -> Result<String, String>;
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String>;
     async fn async_bidi_test(&self, url: String) -> Result<String, String>;
 
@@ -102,6 +109,39 @@ impl WebsocketTest for WebsocketTestImpl {
         }
     }
 
+    fn receive_next_from_persisted_result(&self) -> Result<String, String> {
+        let mut ws_ref = self.persisted_ws.borrow_mut();
+        let ws = ws_ref
+            .as_mut()
+            .expect("persisted websocket was not initialized");
+        match ws
+            .receive()
+            .map_err(|e| format!("Receive error: {:?}", e))?
+        {
+            WebSocketMessage::Text(t) => Ok(t),
+            WebSocketMessage::Binary(b) => Ok(format!("{} bytes", b.len())),
+        }
+    }
+
+    fn close_persisted_result(&self) -> Result<(), String> {
+        let mut ws_ref = self.persisted_ws.borrow_mut();
+        let ws = ws_ref
+            .as_mut()
+            .expect("persisted websocket was not initialized");
+        ws.close(None, None)
+            .map_err(|e| format!("Close error: {:?}", e))
+    }
+
+    fn subscribe_to_persisted(&self) -> bool {
+        let mut ws_ref = self.persisted_ws.borrow_mut();
+        let ws = ws_ref
+            .as_mut()
+            .expect("persisted websocket was not initialized");
+        let pollable = ws.subscribe();
+        let ready = poll::poll(&[&pollable]);
+        ready.contains(&0)
+    }
+
     fn noop(&self) -> String {
         "ok".to_string()
     }
@@ -110,7 +150,11 @@ impl WebsocketTest for WebsocketTestImpl {
         golem_rust::create_promise()
     }
 
-    fn replay_reconnect_roundtrip(&self, url: String, barrier: PromiseId) -> Result<String, String> {
+    fn replay_reconnect_roundtrip(
+        &self,
+        url: String,
+        barrier: PromiseId,
+    ) -> Result<String, String> {
         let ws = WebsocketConnection::connect(&url, None)
             .map_err(|e| format!("Failed to connect: {:?}", e))?;
         let mut received = Vec::new();
@@ -118,7 +162,9 @@ impl WebsocketTest for WebsocketTestImpl {
         for payload in ["msg-1", "msg-2"] {
             ws.send(&WebSocketMessage::Text(payload.to_string()))
                 .map_err(|e| format!("Send error: {:?}", e))?;
-            let message = ws.receive().map_err(|e| format!("Receive error: {:?}", e))?;
+            let message = ws
+                .receive()
+                .map_err(|e| format!("Receive error: {:?}", e))?;
             match message {
                 WebSocketMessage::Text(text) => received.push(text),
                 WebSocketMessage::Binary(data) => {
@@ -133,7 +179,9 @@ impl WebsocketTest for WebsocketTestImpl {
         for payload in ["msg-3", "msg-4"] {
             ws.send(&WebSocketMessage::Text(payload.to_string()))
                 .map_err(|e| format!("Send error: {:?}", e))?;
-            let message = ws.receive().map_err(|e| format!("Receive error: {:?}", e))?;
+            let message = ws
+                .receive()
+                .map_err(|e| format!("Receive error: {:?}", e))?;
             match message {
                 WebSocketMessage::Text(text) => received.push(text),
                 WebSocketMessage::Binary(data) => {

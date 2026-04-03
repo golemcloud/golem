@@ -156,10 +156,32 @@ impl Drop for LiveWebSocketConnection {
     }
 }
 
+/// Public only because `WebSocketConnectionEntry` is stored in the resource table.
+#[derive(Clone)]
+pub enum TerminalWebSocketError {
+    ConnectionFailure(String),
+    Closed(Option<SerializableWebsocketCloseInfo>),
+}
+
+impl TerminalWebSocketError {
+    fn to_error(&self) -> Error {
+        match self {
+            Self::ConnectionFailure(reason) => Error::ConnectionFailure(reason.clone()),
+            Self::Closed(close_info) => {
+                Error::Closed(close_info.as_ref().map(|close_info| CloseInfo {
+                    code: close_info.code,
+                    reason: close_info.reason.clone(),
+                }))
+            }
+        }
+    }
+}
+
 pub enum WebSocketConnectionEntry {
     /// Boxed so `Replay` stays small (`clippy::large_enum_variant`).
     Live(Box<LiveWebSocketConnection>),
     Replay,
+    Terminal(TerminalWebSocketError),
 }
 
 #[async_trait::async_trait]
@@ -167,7 +189,7 @@ impl wasmtime_wasi::p2::Pollable for WebSocketConnectionEntry {
     async fn ready(&mut self) {
         match self {
             WebSocketConnectionEntry::Live(live) => live.wait_until_ready().await,
-            WebSocketConnectionEntry::Replay => {}
+            WebSocketConnectionEntry::Replay | WebSocketConnectionEntry::Terminal(_) => {}
         }
     }
 }
@@ -267,7 +289,15 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         };
 
         if durability.is_live() {
-            ensure_websocket_connection_live(self, &self_).await?;
+            if let Err(error) = ensure_websocket_connection_live(self, &self_).await? {
+                let resp = HostResponseWebsocketSendResponse {
+                    result: Err(error_to_serializable(&error)),
+                };
+                durability
+                    .persist_raw(self, req.into(), resp.into())
+                    .await?;
+                return Ok(Err(error));
+            }
             let mut view = self.as_wasi_view();
             let entry = view.table().get(&self_)?;
             let tungstenite_msg = to_tungstenite_message(message);
@@ -282,6 +312,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 WebSocketConnectionEntry::Replay => {
                     unreachable!("live send path must not use Replay connection entry")
                 }
+                WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
             };
             let ser_result = match &live_result {
                 Ok(()) => Ok(()),
@@ -297,7 +328,13 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             let resp: HostResponseWebsocketSendResponse = durability.replay(self).await?;
             match resp.result {
                 Ok(()) => Ok(Ok(())),
-                Err(e) => Ok(Err(serializable_error_to_error(e))),
+                Err(e) => {
+                    let error = serializable_error_to_error(e);
+                    if let Some(terminal_error) = terminal_websocket_error(&error) {
+                        mark_websocket_terminal(self, &self_, terminal_error)?;
+                    }
+                    Ok(Err(error))
+                }
             }
         }
     }
@@ -317,7 +354,15 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         let req = HostRequestWebsocketReceive {};
 
         if durability.is_live() {
-            ensure_websocket_connection_live(self, &self_).await?;
+            if let Err(error) = ensure_websocket_connection_live(self, &self_).await? {
+                let resp = HostResponseWebsocketReceiveResponse {
+                    result: Err(error_to_serializable(&error)),
+                };
+                durability
+                    .persist_raw(self, req.into(), resp.into())
+                    .await?;
+                return Ok(Err(error));
+            }
             let live_result = {
                 let mut view = self.as_wasi_view();
                 let entry = view.table().get(&self_)?;
@@ -326,6 +371,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     WebSocketConnectionEntry::Replay => {
                         unreachable!("live receive path must not use Replay connection entry")
                     }
+                    WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
                 }
             };
             let ser_result = match &live_result {
@@ -336,7 +382,13 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             durability
                 .persist_raw(self, req.into(), resp.into())
                 .await?;
-            if live_result.is_ok() {
+            if let Some(terminal_error) = live_result
+                .as_ref()
+                .err()
+                .and_then(terminal_websocket_error)
+            {
+                mark_websocket_terminal(self, &self_, terminal_error)?;
+            } else if live_result.is_ok() {
                 let mut view = self.as_wasi_view();
                 let entry = view.table().get(&self_)?;
                 if let WebSocketConnectionEntry::Live(live) = entry {
@@ -349,7 +401,13 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             let resp: HostResponseWebsocketReceiveResponse = durability.replay(self).await?;
             match resp.result {
                 Ok(m) => Ok(Ok(serializable_message_to_message(m))),
-                Err(e) => Ok(Err(serializable_error_to_error(e))),
+                Err(e) => {
+                    let error = serializable_error_to_error(e);
+                    if let Some(terminal_error) = terminal_websocket_error(&error) {
+                        mark_websocket_terminal(self, &self_, terminal_error)?;
+                    }
+                    Ok(Err(error))
+                }
             }
         }
     }
@@ -370,7 +428,15 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         let req = HostRequestWebsocketReceiveWithTimeout { timeout_ms };
 
         if durability.is_live() {
-            ensure_websocket_connection_live(self, &self_).await?;
+            if let Err(error) = ensure_websocket_connection_live(self, &self_).await? {
+                let resp = HostResponseWebsocketReceiveWithTimeoutResponse {
+                    result: Err(error_to_serializable(&error)),
+                };
+                durability
+                    .persist_raw(self, req.into(), resp.into())
+                    .await?;
+                return Ok(Err(error));
+            }
             let live_result = {
                 let mut view = self.as_wasi_view();
                 let entry = view.table().get(&self_)?;
@@ -383,6 +449,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                             "live receive_with_timeout path must not use Replay connection entry"
                         )
                     }
+                    WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
                 }
             };
             let ser_result = match &live_result {
@@ -394,7 +461,13 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             durability
                 .persist_raw(self, req.into(), resp.into())
                 .await?;
-            if let Ok(Some(_)) = &live_result {
+            if let Some(terminal_error) = live_result
+                .as_ref()
+                .err()
+                .and_then(terminal_websocket_error)
+            {
+                mark_websocket_terminal(self, &self_, terminal_error)?;
+            } else if let Ok(Some(_)) = &live_result {
                 let mut view = self.as_wasi_view();
                 let entry = view.table().get(&self_)?;
                 if let WebSocketConnectionEntry::Live(live) = entry {
@@ -409,7 +482,13 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             match resp.result {
                 Ok(Some(m)) => Ok(Ok(Some(serializable_message_to_message(m)))),
                 Ok(None) => Ok(Ok(None)),
-                Err(e) => Ok(Err(serializable_error_to_error(e))),
+                Err(e) => {
+                    let error = serializable_error_to_error(e);
+                    if let Some(terminal_error) = terminal_websocket_error(&error) {
+                        mark_websocket_terminal(self, &self_, terminal_error)?;
+                    }
+                    Ok(Err(error))
+                }
             }
         }
     }
@@ -432,11 +511,24 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             code,
             reason: reason.clone(),
         };
-
-        let rep_id = self_.rep();
+        let terminal_close_error =
+            TerminalWebSocketError::Closed(Some(SerializableWebsocketCloseInfo {
+                code: code.unwrap_or(1000),
+                reason: reason
+                    .clone()
+                    .unwrap_or_else(|| "Connection closed".to_string()),
+            }));
 
         if durability.is_live() {
-            ensure_websocket_connection_live(self, &self_).await?;
+            if let Err(error) = ensure_websocket_connection_live(self, &self_).await? {
+                let resp = HostResponseWebsocketCloseResponse {
+                    result: Err(error_to_serializable(&error)),
+                };
+                durability
+                    .persist_raw(self, req.into(), resp.into())
+                    .await?;
+                return Ok(Err(error));
+            }
             let mut view = self.as_wasi_view();
             let entry = view.table().get(&self_)?;
             let live_result = match entry {
@@ -459,6 +551,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 WebSocketConnectionEntry::Replay => {
                     unreachable!("live close path must not use Replay connection entry")
                 }
+                WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
             };
             let ser_result = match &live_result {
                 Ok(()) => Ok(()),
@@ -469,7 +562,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 .persist_raw(self, req.into(), resp.into())
                 .await?;
             if live_result.is_ok() {
-                self.unregister_open_websocket(rep_id);
+                mark_websocket_terminal(self, &self_, terminal_close_error.clone())?;
             }
             Ok(live_result)
         } else {
@@ -477,10 +570,16 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             let resp: HostResponseWebsocketCloseResponse = durability.replay(self).await?;
             match resp.result {
                 Ok(()) => {
-                    self.unregister_open_websocket(rep_id);
+                    mark_websocket_terminal(self, &self_, terminal_close_error)?;
                     Ok(Ok(()))
                 }
-                Err(e) => Ok(Err(serializable_error_to_error(e))),
+                Err(e) => {
+                    let error = serializable_error_to_error(e);
+                    if let Some(terminal_error) = terminal_websocket_error(&error) {
+                        mark_websocket_terminal(self, &self_, terminal_error)?;
+                    }
+                    Ok(Err(error))
+                }
             }
         }
     }
@@ -492,7 +591,6 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem:websocket/client", "subscribe");
         if self.state.is_live() {
             self.process_pending_replay_events().await?;
-            ensure_websocket_connection_live(self, &self_).await?;
         }
         Ok(wasmtime_wasi::subscribe(self.table(), self_, None)?)
     }
@@ -508,28 +606,63 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
 async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     resource: &Resource<WebSocketConnectionEntry>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Result<(), Error>> {
     let rep = resource.rep();
     let is_replay_entry = {
         let mut view = ctx.as_wasi_view();
         let entry = view.table().get(resource)?;
-        matches!(entry, WebSocketConnectionEntry::Replay)
+        match entry {
+            WebSocketConnectionEntry::Replay => true,
+            WebSocketConnectionEntry::Live(_) => false,
+            WebSocketConnectionEntry::Terminal(error) => return Ok(Err(error.to_error())),
+        }
     };
     let info = ctx.websocket_connection_info(rep);
     let Some(info) = info else {
-        return Ok(());
+        if is_replay_entry {
+            let error = connection_closed_error("Connection closed");
+            mark_websocket_terminal(
+                ctx,
+                resource,
+                terminal_websocket_error(&error).expect("closed websocket errors must be terminal"),
+            )?;
+            return Ok(Err(error));
+        }
+
+        return Ok(Ok(()));
     };
     if !is_replay_entry && info.mode != crate::durable_host::WebSocketConnectionMode::NeedsReconnect
     {
-        return Ok(());
+        return Ok(Ok(()));
     }
 
-    let request = build_request(&info.url, info.headers.as_deref())
-        .map_err(|e| anyhow::anyhow!("Failed to rebuild websocket request for reconnect: {e}"))?;
+    let request = match build_request(&info.url, info.headers.as_deref()) {
+        Ok(request) => request,
+        Err(err) => {
+            let error = Error::ConnectionFailure(err);
+            mark_websocket_terminal(
+                ctx,
+                resource,
+                terminal_websocket_error(&error)
+                    .expect("connection failures must be terminal websocket errors"),
+            )?;
+            return Ok(Err(error));
+        }
+    };
     let permit = ctx.websocket_connection_pool.acquire().await?;
-    let (ws_stream, _) = connect_async(request)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to reconnect websocket: {e}"))?;
+    let (ws_stream, _) = match connect_async(request).await {
+        Ok(result) => result,
+        Err(err) => {
+            let error = Error::ConnectionFailure(err.to_string());
+            mark_websocket_terminal(
+                ctx,
+                resource,
+                terminal_websocket_error(&error)
+                    .expect("connection failures must be terminal websocket errors"),
+            )?;
+            return Ok(Err(error));
+        }
+    };
     let (writer, reader) = ws_stream.split();
 
     let new_entry = WebSocketConnectionEntry::Live(Box::new(LiveWebSocketConnection::new(
@@ -541,6 +674,18 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
         *entry = new_entry;
     }
     ctx.mark_websocket_reconnected(rep);
+    Ok(Ok(()))
+}
+
+fn mark_websocket_terminal<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    resource: &Resource<WebSocketConnectionEntry>,
+    error: TerminalWebSocketError,
+) -> anyhow::Result<()> {
+    ctx.unregister_open_websocket(resource.rep());
+    let mut view = ctx.as_wasi_view();
+    let entry = view.table().get_mut(resource)?;
+    *entry = WebSocketConnectionEntry::Terminal(error);
     Ok(())
 }
 
@@ -652,6 +797,21 @@ fn connection_closed_error(reason: impl Into<String>) -> Error {
         code: 1000,
         reason: reason.into(),
     }))
+}
+
+fn terminal_websocket_error(error: &Error) -> Option<TerminalWebSocketError> {
+    match error {
+        Error::ConnectionFailure(reason) => {
+            Some(TerminalWebSocketError::ConnectionFailure(reason.clone()))
+        }
+        Error::Closed(close_info) => Some(TerminalWebSocketError::Closed(close_info.as_ref().map(
+            |close_info| SerializableWebsocketCloseInfo {
+                code: close_info.code,
+                reason: close_info.reason.clone(),
+            },
+        ))),
+        _ => None,
+    }
 }
 
 fn to_wit_error(e: tungstenite::error::Error) -> Error {

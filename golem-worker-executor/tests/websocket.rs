@@ -29,9 +29,8 @@ use golem_worker_executor_test_utils::{
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
-    Mutex,
 };
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
@@ -322,10 +321,8 @@ async fn websocket_reconnect_replays_completed_steps_and_continues_live(
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    let params = replay_reconnect_roundtrip_params(
-        format!("ws://localhost:{ws_port}"),
-        &promise_id_value,
-    );
+    let params =
+        replay_reconnect_roundtrip_params(format!("ws://localhost:{ws_port}"), &promise_id_value);
     let idempotency_key = IdempotencyKey::fresh();
 
     executor
@@ -425,6 +422,146 @@ async fn websocket_reconnect_replays_completed_steps_and_continues_live(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn websocket_reconnect_failure_returns_guest_error(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let ws_port = listener.local_addr().unwrap().port();
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let transcript = Arc::new(Mutex::new(Vec::<ServerEvent>::new()));
+    let accepted_connections_for_server = Arc::clone(&accepted_connections);
+    let transcript_for_server = Arc::clone(&transcript);
+
+    let ws_server = spawn(
+        async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let connection = accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+                let transcript_for_connection = Arc::clone(&transcript_for_server);
+                spawn(
+                    async move {
+                        let ws_stream = tokio_tungstenite::accept_async(stream)
+                            .await
+                            .expect("WS handshake failed");
+                        let (mut write, mut read) = StreamExt::split(ws_stream);
+                        while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
+                            if msg.is_close() {
+                                break;
+                            }
+                            if msg.is_text() {
+                                let payload = msg
+                                    .to_text()
+                                    .expect("text message should decode")
+                                    .to_string();
+                                transcript_for_connection.lock().unwrap().push(ServerEvent {
+                                    connection,
+                                    payload,
+                                });
+                            }
+                            if msg.is_text() || msg.is_binary() {
+                                SinkExt::send(&mut write, msg).await.ok();
+                            }
+                        }
+                    }
+                    .in_current_span(),
+                );
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
+
+    let agent_id = agent_id!("WebsocketTest", "ws-reconnect-failure");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env_vars,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let promise_id_value = executor
+        .invoke_and_await_agent(&component, &agent_id, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    let params =
+        replay_reconnect_roundtrip_params(format!("ws://localhost:{ws_port}"), &promise_id_value);
+    let idempotency_key = IdempotencyKey::fresh();
+
+    executor
+        .invoke_agent_with_key(
+            &component,
+            &agent_id,
+            &idempotency_key,
+            "replay_reconnect_roundtrip",
+            params.clone(),
+        )
+        .await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .await?;
+    wait_for_server_state(&accepted_connections, &transcript, 1, 2).await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    ws_server.abort();
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+
+    let oplog_idx = extract_oplog_idx_from_promise_id(&promise_id_value);
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx,
+            },
+            vec![1],
+        )
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &idempotency_key,
+            "replay_reconnect_roundtrip",
+            params,
+        )
+        .await?;
+    let error = get_result_error_string(result);
+    assert!(
+        error.contains("ConnectionFailure"),
+        "expected reconnect failure to reach the guest, got {error}"
+    );
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn websocket_subscribe_does_not_reconnect_during_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -498,16 +635,21 @@ async fn websocket_subscribe_does_not_reconnect_during_replay(
 
     let executor = start(deps, &context).await?;
     let activation_result = executor
-        .invoke_and_await_agent(&component, &agent_id, "noop", data_value!())
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "subscribe_to_persisted",
+            data_value!(),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;
-    assert_eq!(activation_result, Value::String("ok".to_string()));
+    assert_eq!(activation_result, Value::Bool(true));
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(
         accepted_connections.load(Ordering::SeqCst),
         1,
-        "replay-time subscribe must not reconnect before replay finishes"
+        "subscribe on a replayed websocket must not reconnect before the first durable websocket operation"
     );
 
     let next = executor
@@ -522,6 +664,272 @@ async fn websocket_subscribe_does_not_reconnect_during_replay(
         .ok_or_else(|| anyhow!("expected return value"))?;
     assert_eq!(next, Value::String("msg-0".to_string()));
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    ws_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn websocket_closed_connection_stays_terminal_after_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let ws_port = listener.local_addr().unwrap().port();
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let accepted_connections_for_server = Arc::clone(&accepted_connections);
+
+    let ws_server = spawn(
+        async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+                spawn(
+                    async move {
+                        let ws_stream = tokio_tungstenite::accept_async(stream)
+                            .await
+                            .expect("WS handshake failed");
+                        let (mut write, _read) = StreamExt::split(ws_stream);
+                        SinkExt::send(
+                            &mut write,
+                            tokio_tungstenite::tungstenite::Message::text("msg-0"),
+                        )
+                        .await
+                        .ok();
+                        SinkExt::send(
+                            &mut write,
+                            tokio_tungstenite::tungstenite::Message::Close(None),
+                        )
+                        .await
+                        .ok();
+                    }
+                    .in_current_span(),
+                );
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
+
+    let agent_id = agent_id!("WebsocketTest", "ws-terminal-close-replay");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env_vars,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let first = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "connect_and_receive_first",
+            data_value!(format!("ws://localhost:{ws_port}")),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    assert_eq!(first, Value::String("msg-0".to_string()));
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
+
+    let closed_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "receive_next_from_persisted_result",
+            data_value!(),
+        )
+        .await?;
+    let closed_error = get_result_error_string(closed_result);
+    assert!(
+        closed_error.contains("Closed"),
+        "expected persisted socket to report closure, got {closed_error}"
+    );
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let replayed_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "receive_next_from_persisted_result",
+            data_value!(),
+        )
+        .await?;
+    let replayed_error = get_result_error_string(replayed_result);
+    assert!(
+        replayed_error.contains("Closed"),
+        "expected replayed terminal socket to stay closed, got {replayed_error}"
+    );
+    assert_eq!(
+        accepted_connections.load(Ordering::SeqCst),
+        1,
+        "terminal websocket should not reconnect after replay"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    ws_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn websocket_successful_close_terminalizes_handle_and_prevents_reconnect(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let ws_port = listener.local_addr().unwrap().port();
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let accepted_connections_for_server = Arc::clone(&accepted_connections);
+
+    let ws_server = spawn(
+        async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+                spawn(
+                    async move {
+                        let ws_stream = tokio_tungstenite::accept_async(stream)
+                            .await
+                            .expect("WS handshake failed");
+                        let (mut write, mut read) = StreamExt::split(ws_stream);
+                        SinkExt::send(
+                            &mut write,
+                            tokio_tungstenite::tungstenite::Message::text("msg-0"),
+                        )
+                        .await
+                        .ok();
+
+                        while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
+                            if msg.is_close() {
+                                break;
+                            }
+                        }
+                    }
+                    .in_current_span(),
+                );
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
+
+    let agent_id = agent_id!("WebsocketTest", "ws-close-terminal-replay");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env_vars,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let first = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "connect_and_receive_first",
+            data_value!(format!("ws://localhost:{ws_port}")),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    assert_eq!(first, Value::String("msg-0".to_string()));
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
+
+    let close_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "close_persisted_result",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    assert_eq!(close_result, Value::Result(Ok(None)));
+
+    let closed_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "receive_next_from_persisted_result",
+            data_value!(),
+        )
+        .await?;
+    let closed_error = get_result_error_string(closed_result);
+    assert!(
+        closed_error.contains("Closed"),
+        "expected closed handle to become terminal immediately, got {closed_error}"
+    );
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let replayed_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "receive_next_from_persisted_result",
+            data_value!(),
+        )
+        .await?;
+    let replayed_error = get_result_error_string(replayed_result);
+    assert!(
+        replayed_error.contains("Closed"),
+        "expected successfully closed websocket to remain terminal after replay, got {replayed_error}"
+    );
+    assert_eq!(
+        accepted_connections.load(Ordering::SeqCst),
+        1,
+        "successfully closed websocket should not reconnect after replay"
+    );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
@@ -554,6 +962,20 @@ fn extract_oplog_idx_from_promise_id(promise_id_value: &Value) -> OplogIndex {
     };
 
     OplogIndex::from_u64(oplog_idx)
+}
+
+fn get_result_error_string(result: DataValue) -> String {
+    let return_value = result
+        .into_return_value()
+        .expect("expected a single return value");
+
+    match return_value {
+        Value::Result(Err(Some(err_value))) => match *err_value {
+            Value::String(s) => s,
+            other => panic!("expected error String, got {other:?}"),
+        },
+        other => panic!("expected Result(Err(...)), got {other:?}"),
+    }
 }
 
 async fn wait_for_server_state(
