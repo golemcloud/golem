@@ -23,6 +23,10 @@ use golem_worker_executor_test_utils::{
 };
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
@@ -314,6 +318,113 @@ async fn websocket_reconnect_after_replay_continues_stream(
         .ok_or_else(|| anyhow!("expected return value"))?;
     // Must be msg-1 (not msg-0): proves replay+reconnect resumed stream position.
     assert_eq!(next, Value::String("msg-1".to_string()));
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    ws_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn websocket_subscribe_does_not_reconnect_during_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let ws_port = listener.local_addr().unwrap().port();
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let accepted_connections_for_server = Arc::clone(&accepted_connections);
+
+    let ws_server = spawn(
+        async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                accepted_connections_for_server.fetch_add(1, Ordering::SeqCst);
+                let ws_stream = tokio_tungstenite::accept_async(stream)
+                    .await
+                    .expect("WS handshake failed");
+                let (mut write, _read) = StreamExt::split(ws_stream);
+                for i in 0..5u32 {
+                    let msg = tokio_tungstenite::tungstenite::Message::text(format!("msg-{i}"));
+                    if SinkExt::send(&mut write, msg).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
+
+    let agent_id = agent_id!("WebsocketTest", "ws-subscribe-replay-guard");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env_vars,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let first = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "connect_subscribe_and_receive_first",
+            data_value!(format!("ws://localhost:{ws_port}")),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    assert_eq!(first, Value::String("msg-0".to_string()));
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let activation_result = executor
+        .invoke_and_await_agent(&component, &agent_id, "noop", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    assert_eq!(activation_result, Value::String("ok".to_string()));
+    assert_eq!(
+        accepted_connections.load(Ordering::SeqCst),
+        1,
+        "replay-time subscribe must not reconnect before replay finishes"
+    );
+
+    let next = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "receive_next_from_persisted",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    assert_eq!(next, Value::String("msg-1".to_string()));
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);

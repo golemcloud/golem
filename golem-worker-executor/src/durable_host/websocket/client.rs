@@ -498,7 +498,9 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
         self_: Resource<WebSocketConnectionEntry>,
     ) -> anyhow::Result<Resource<wasmtime_wasi::p2::bindings::io::poll::Pollable>> {
         self.observe_function_call("golem:websocket/client", "subscribe");
-        ensure_websocket_connection_live(self, &self_).await?;
+        if self.state.is_live() {
+            ensure_websocket_connection_live(self, &self_).await?;
+        }
         Ok(wasmtime_wasi::subscribe(self.table(), self_, None)?)
     }
 

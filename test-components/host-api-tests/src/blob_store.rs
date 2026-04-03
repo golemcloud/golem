@@ -1,5 +1,5 @@
-use golem_rust::{agent_definition, agent_implementation};
 use golem_rust::bindings::wasi::blobstore::blobstore;
+use golem_rust::{agent_definition, agent_implementation};
 
 #[agent_definition]
 pub trait BlobStore {

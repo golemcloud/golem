@@ -1,6 +1,8 @@
-use golem_rust::{agent_definition, agent_implementation};
-use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, OutgoingValue, delete, exists, get, set};
+use golem_rust::bindings::wasi::keyvalue::eventual::{
+    Bucket, OutgoingValue, delete, exists, get, set,
+};
 use golem_rust::bindings::wasi::keyvalue::eventual_batch::{delete_many, get_many, keys, set_many};
+use golem_rust::{agent_definition, agent_implementation};
 
 #[agent_definition]
 pub trait KeyValue {
@@ -77,7 +79,7 @@ impl KeyValue for KeyValueImpl {
                 for maybe_value in maybe_values {
                     match maybe_value {
                         Some(value) => result.push(value),
-                        None => return None
+                        None => return None,
                     }
                 }
                 Some(result)
@@ -92,7 +94,9 @@ impl KeyValue for KeyValueImpl {
     fn set(&self, bucket: String, key: String, value: Vec<u8>) {
         let bucket = Bucket::open_bucket(&bucket).unwrap();
         let outgoing_value = OutgoingValue::new_outgoing_value();
-        outgoing_value.outgoing_value_write_body_sync(&value).unwrap();
+        outgoing_value
+            .outgoing_value_write_body_sync(&value)
+            .unwrap();
         set(&bucket, &key, &outgoing_value).unwrap()
     }
 
@@ -101,10 +105,15 @@ impl KeyValue for KeyValueImpl {
         let mut outgoing_values = Vec::new();
         for (key, value) in key_values {
             let outgoing_value = OutgoingValue::new_outgoing_value();
-            outgoing_value.outgoing_value_write_body_sync(&value).unwrap();
+            outgoing_value
+                .outgoing_value_write_body_sync(&value)
+                .unwrap();
             outgoing_values.push((key, outgoing_value));
         }
-        let outgoing_values_refs: Vec<_> = outgoing_values.iter().map(|(k, v)| (k.clone(), v)).collect();
+        let outgoing_values_refs: Vec<_> = outgoing_values
+            .iter()
+            .map(|(k, v)| (k.clone(), v))
+            .collect();
         set_many(&bucket, outgoing_values_refs.as_slice()).unwrap()
     }
 }

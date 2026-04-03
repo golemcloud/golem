@@ -11,8 +11,13 @@ pub trait WebsocketTest {
     fn echo_and_record(&self, url: String, msg: String) -> String;
     /// Connects once, stores the connection in agent state and receives one message.
     fn connect_and_receive_first(&self, url: String) -> String;
+    /// Like `connect_and_receive_first`, but performs a poll subscription first so replay
+    /// exercises the websocket `subscribe()` path before consuming the persisted receive result.
+    fn connect_subscribe_and_receive_first(&self, url: String) -> String;
     /// Receives the next message from the connection stored in agent state.
     fn receive_next_from_persisted(&self) -> String;
+    /// Activates the agent without touching the persisted websocket.
+    fn noop(&self) -> String;
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String>;
     async fn async_bidi_test(&self, url: String) -> Result<String, String>;
 
@@ -68,6 +73,20 @@ impl WebsocketTest for WebsocketTestImpl {
         first
     }
 
+    fn connect_subscribe_and_receive_first(&self, url: String) -> String {
+        let ws = WebsocketConnection::connect(&url, None).expect("connect failed");
+        let pollable = ws.subscribe();
+        let ready = poll::poll(&[&pollable]);
+        assert!(ready.contains(&0), "websocket pollable was not ready");
+
+        let first = match ws.receive().expect("receive failed") {
+            WebSocketMessage::Text(t) => t,
+            WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
+        };
+        *self.persisted_ws.borrow_mut() = Some(ws);
+        first
+    }
+
     fn receive_next_from_persisted(&self) -> String {
         let mut ws_ref = self.persisted_ws.borrow_mut();
         let ws = ws_ref
@@ -77,6 +96,10 @@ impl WebsocketTest for WebsocketTestImpl {
             WebSocketMessage::Text(t) => t,
             WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
         }
+    }
+
+    fn noop(&self) -> String {
+        "ok".to_string()
     }
 
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String> {
