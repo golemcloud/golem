@@ -333,3 +333,202 @@ pub mod resources {
         FUEL_RETURN_TOTAL.inc_by(amount as f64);
     }
 }
+
+pub mod storage {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    pub const STORAGE_TYPE_BLOB_STORE: &str = "blob_store";
+    pub const STORAGE_TYPE_KV: &str = "kv";
+    pub const STORAGE_TYPE_OPLOG: &str = "oplog";
+    pub const STORAGE_TYPE_OPLOG_ARCHIVE: &str = "oplog_archive";
+    pub const STORAGE_TYPE_COMPONENT: &str = "component";
+    pub const STORAGE_TYPE_FILESYSTEM: &str = "filesystem";
+    pub const STORAGE_TYPE_COMPILATION_CACHE: &str = "compilation_cache";
+
+    lazy_static! {
+        pub static ref STORAGE_BYTES_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
+            "golem_storage_bytes_written_total",
+            "Total bytes written to storage, by storage type, account and environment",
+            &["storage_type", "account_id", "environment_id"]
+        )
+        .unwrap();
+        pub static ref STORAGE_BYTES_DELETED_TOTAL: CounterVec = register_counter_vec!(
+            "golem_storage_bytes_deleted_total",
+            "Total bytes deleted from storage, by storage type, account and environment",
+            &["storage_type", "account_id", "environment_id"]
+        )
+        .unwrap();
+        pub static ref STORAGE_OBJECTS_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
+            "golem_storage_objects_written_total",
+            "Total objects written to storage, by storage type, account and environment",
+            &["storage_type", "account_id", "environment_id"]
+        )
+        .unwrap();
+        pub static ref STORAGE_OBJECTS_DELETED_TOTAL: CounterVec = register_counter_vec!(
+            "golem_storage_objects_deleted_total",
+            "Total objects deleted from storage, by storage type, account and environment",
+            &["storage_type", "account_id", "environment_id"]
+        )
+        .unwrap();
+    }
+
+    pub fn record_storage_bytes_written(
+        storage_type: &str,
+        account_id: &str,
+        environment_id: &str,
+        bytes: u64,
+    ) {
+        STORAGE_BYTES_WRITTEN_TOTAL
+            .with_label_values(&[storage_type, account_id, environment_id])
+            .inc_by(bytes as f64);
+    }
+
+    pub fn record_storage_objects_written(
+        storage_type: &str,
+        account_id: &str,
+        environment_id: &str,
+        count: u64,
+    ) {
+        STORAGE_OBJECTS_WRITTEN_TOTAL
+            .with_label_values(&[storage_type, account_id, environment_id])
+            .inc_by(count as f64);
+    }
+
+    pub fn record_storage_bytes_deleted(
+        storage_type: &str,
+        account_id: &str,
+        environment_id: &str,
+        bytes: u64,
+    ) {
+        STORAGE_BYTES_DELETED_TOTAL
+            .with_label_values(&[storage_type, account_id, environment_id])
+            .inc_by(bytes as f64);
+    }
+
+    pub fn record_storage_objects_deleted(
+        storage_type: &str,
+        account_id: &str,
+        environment_id: &str,
+        count: u64,
+    ) {
+        STORAGE_OBJECTS_DELETED_TOTAL
+            .with_label_values(&[storage_type, account_id, environment_id])
+            .inc_by(count as f64);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use test_r::test;
+
+        test_r::enable!();
+
+        fn bytes_written(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
+            STORAGE_BYTES_WRITTEN_TOTAL
+                .with_label_values(&[storage_type, account_id, environment_id])
+                .get()
+        }
+
+        fn bytes_deleted(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
+            STORAGE_BYTES_DELETED_TOTAL
+                .with_label_values(&[storage_type, account_id, environment_id])
+                .get()
+        }
+
+        fn objects_written(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
+            STORAGE_OBJECTS_WRITTEN_TOTAL
+                .with_label_values(&[storage_type, account_id, environment_id])
+                .get()
+        }
+
+        fn objects_deleted(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
+            STORAGE_OBJECTS_DELETED_TOTAL
+                .with_label_values(&[storage_type, account_id, environment_id])
+                .get()
+        }
+
+        #[test]
+        fn record_bytes_written_increments_bytes_counter() {
+            let acct = "acct-bw-1";
+            let env = "env-bw-1";
+            let before = bytes_written(STORAGE_TYPE_BLOB_STORE, acct, env);
+
+            record_storage_bytes_written(STORAGE_TYPE_BLOB_STORE, acct, env, 512);
+
+            assert_eq!(
+                bytes_written(STORAGE_TYPE_BLOB_STORE, acct, env),
+                before + 512.0
+            );
+        }
+
+        #[test]
+        fn record_objects_written_increments_objects_counter() {
+            let acct = "acct-ow-1";
+            let env = "env-ow-1";
+            let before = objects_written(STORAGE_TYPE_BLOB_STORE, acct, env);
+
+            record_storage_objects_written(STORAGE_TYPE_BLOB_STORE, acct, env, 3);
+
+            assert_eq!(
+                objects_written(STORAGE_TYPE_BLOB_STORE, acct, env),
+                before + 3.0
+            );
+        }
+
+        #[test]
+        fn record_bytes_deleted_increments_bytes_counter() {
+            let acct = "acct-bd-1";
+            let env = "env-bd-1";
+            let before = bytes_deleted(STORAGE_TYPE_BLOB_STORE, acct, env);
+
+            record_storage_bytes_deleted(STORAGE_TYPE_BLOB_STORE, acct, env, 256);
+
+            assert_eq!(
+                bytes_deleted(STORAGE_TYPE_BLOB_STORE, acct, env),
+                before + 256.0
+            );
+        }
+
+        #[test]
+        fn record_objects_deleted_increments_objects_counter() {
+            let acct = "acct-od-1";
+            let env = "env-od-1";
+            let before = objects_deleted(STORAGE_TYPE_BLOB_STORE, acct, env);
+
+            record_storage_objects_deleted(STORAGE_TYPE_BLOB_STORE, acct, env, 2);
+
+            assert_eq!(
+                objects_deleted(STORAGE_TYPE_BLOB_STORE, acct, env),
+                before + 2.0
+            );
+        }
+
+        #[test]
+        fn different_label_combinations_are_independent() {
+            let acct_a = "acct-ind-a";
+            let acct_b = "acct-ind-b";
+            let env = "env-ind-1";
+
+            record_storage_bytes_written(STORAGE_TYPE_BLOB_STORE, acct_a, env, 100);
+
+            // acct_b should be unaffected
+            assert_eq!(bytes_written(STORAGE_TYPE_BLOB_STORE, acct_b, env), 0.0);
+            // different storage type with same account/env should be independent
+            assert_eq!(bytes_written(STORAGE_TYPE_KV, acct_a, env), 0.0);
+        }
+
+        #[test]
+        fn multiple_calls_accumulate() {
+            let acct = "acct-acc-1";
+            let env = "env-acc-1";
+            let before = bytes_written(STORAGE_TYPE_OPLOG, acct, env);
+
+            record_storage_bytes_written(STORAGE_TYPE_OPLOG, acct, env, 100);
+            record_storage_bytes_written(STORAGE_TYPE_OPLOG, acct, env, 200);
+            record_storage_bytes_written(STORAGE_TYPE_OPLOG, acct, env, 50);
+
+            assert_eq!(bytes_written(STORAGE_TYPE_OPLOG, acct, env), before + 350.0);
+        }
+    }
+}
