@@ -17,6 +17,10 @@ use anyhow::anyhow;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
+use golem_worker_executor::metrics::storage::{
+    STORAGE_TYPE_KV, STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_OBJECTS_DELETED_TOTAL,
+    STORAGE_OBJECTS_WRITTEN_TOTAL,
+};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
@@ -824,6 +828,129 @@ async fn batch_get_keys_returns_multiple_keys(
             Value::String("key2".to_string()),
             Value::String("key3".to_string()),
         ])
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn kv_set_increments_storage_bytes_and_objects_written_metrics(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("KeyValue", "kv-metrics-set-1");
+    let bucket = format!("{}-kv-metrics-set-bucket", component.id);
+    let account_id = context.account_id.to_string();
+    let environment_id = context.default_environment_id.to_string();
+
+    let bytes_before = STORAGE_BYTES_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_KV, &account_id, &environment_id])
+        .get();
+    let objects_before = STORAGE_OBJECTS_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_KV, &account_id, &environment_id])
+        .get();
+
+    // set "hello" (5 bytes)
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "set",
+            data_value!(bucket.clone(), "k1", vec![104u8, 101u8, 108u8, 108u8, 111u8]),
+        )
+        .await?;
+
+    // set "world!" (6 bytes)
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "set",
+            data_value!(bucket.clone(), "k2", vec![119u8, 111u8, 114u8, 108u8, 100u8, 33u8]),
+        )
+        .await?;
+
+    drop(executor);
+
+    assert_eq!(
+        STORAGE_BYTES_WRITTEN_TOTAL
+            .with_label_values(&[STORAGE_TYPE_KV, &account_id, &environment_id])
+            .get(),
+        bytes_before + 11.0,
+        "bytes_written should increase by 5 + 6 = 11"
+    );
+    assert_eq!(
+        STORAGE_OBJECTS_WRITTEN_TOTAL
+            .with_label_values(&[STORAGE_TYPE_KV, &account_id, &environment_id])
+            .get(),
+        objects_before + 2.0,
+        "objects_written should increase by 2"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn kv_delete_increments_storage_objects_deleted_metric(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("KeyValue", "kv-metrics-delete-1");
+    let bucket = format!("{}-kv-metrics-delete-bucket", component.id);
+    let account_id = context.account_id.to_string();
+    let environment_id = context.default_environment_id.to_string();
+
+    // write a key first
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "set",
+            data_value!(bucket.clone(), "to-delete", vec![1u8, 2u8, 3u8]),
+        )
+        .await?;
+
+    let objects_deleted_before = STORAGE_OBJECTS_DELETED_TOTAL
+        .with_label_values(&[STORAGE_TYPE_KV, &account_id, &environment_id])
+        .get();
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "delete",
+            data_value!(bucket.clone(), "to-delete"),
+        )
+        .await?;
+
+    drop(executor);
+
+    assert_eq!(
+        STORAGE_OBJECTS_DELETED_TOTAL
+            .with_label_values(&[STORAGE_TYPE_KV, &account_id, &environment_id])
+            .get(),
+        objects_deleted_before + 1.0,
+        "objects_deleted should increase by 1 after delete"
     );
 
     Ok(())
