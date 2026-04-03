@@ -20,6 +20,8 @@ on:
 jobs:
   debug-signing:
     runs-on: macos-latest
+    env:
+      HAS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
     steps:
       - name: System Info
         run: |
@@ -56,7 +58,7 @@ jobs:
           ls -la ./target/${{ inputs.rust_target }}/release/hello-sign-test
 
       - name: Import Code Signing Certificate
-        if: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
+        if: env.HAS_CERTIFICATE == 'true'
         env:
           CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -101,7 +103,7 @@ jobs:
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
 
       - name: Code Sign Binary
-        if: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
+        if: env.HAS_CERTIFICATE == 'true'
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
@@ -129,7 +131,7 @@ jobs:
           codesign --display --verbose=4 "$BINARY_PATH"
 
       - name: Create Notarization Archive
-        if: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
+        if: env.HAS_CERTIFICATE == 'true'
         run: |
           BINARY_PATH=/tmp/hello-sign-test/target/${{ inputs.rust_target }}/release/hello-sign-test
           ZIP_PATH=/tmp/hello-sign-test/target/${{ inputs.rust_target }}/release/hello-sign-test.zip
@@ -138,7 +140,7 @@ jobs:
           zip -j "$ZIP_PATH" "$BINARY_PATH"
 
       - name: Submit for Notarization
-        if: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' }}
+        if: env.HAS_CERTIFICATE == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -154,7 +156,7 @@ jobs:
             --wait false
 
       - name: Cleanup Keychain
-        if: ${{ always() && secrets.APPLE_CERTIFICATE_BASE64 != '' }}
+        if: always()
         run: |
           KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
           security delete-keychain "$KEYCHAIN_PATH" || true
