@@ -148,12 +148,11 @@ jobs:
         run: |
           ZIP_PATH=/tmp/hello-sign-test/target/${{ inputs.rust_target }}/release/hello-sign-test.zip
 
-          # Submit for notarization (async)
+          # Submit for notarization (no --wait, so it returns immediately)
           xcrun notarytool submit "$ZIP_PATH" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --wait false
+            --password "$APPLE_APP_PASSWORD"
 
       - name: Cleanup Keychain
         if: always()
