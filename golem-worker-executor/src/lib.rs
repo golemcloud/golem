@@ -236,6 +236,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms))
     }
 
+    fn wrap_rpc(
+        &self,
+        rpc: Arc<dyn crate::services::rpc::Rpc>,
+    ) -> Arc<dyn crate::services::rpc::Rpc> {
+        rpc
+    }
+
     async fn create_services(
         &self,
         active_workers: Arc<ActiveWorkers<Ctx>>,
@@ -348,6 +355,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
+        let rpc = self.wrap_rpc(rpc);
 
         Ok(All::new(
             active_workers,

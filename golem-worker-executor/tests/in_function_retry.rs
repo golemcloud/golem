@@ -1025,7 +1025,7 @@ async fn http_output_stream_inline_retry_on_body_write_failure(
 
 #[test]
 #[tracing::instrument]
-async fn http_post_not_retried_inline_when_idempotence_disabled(
+async fn http_post_fails_permanently_when_idempotence_disabled(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
@@ -1060,7 +1060,7 @@ async fn http_post_not_retried_inline_when_idempotence_disabled(
     env.insert("PORT".to_string(), port.to_string());
 
     let agent_id = agent_id!("HttpClient4");
-    let worker_id = executor
+    let _worker_id = executor
         .start_agent_with(
             &component.id,
             agent_id.clone(),
@@ -1072,25 +1072,21 @@ async fn http_post_not_retried_inline_when_idempotence_disabled(
 
     // post_non_idempotent sets assume_idempotence=false and uses POST.
     // POST is not idempotent, so inline retry should NOT happen.
-    // It should still eventually succeed via trap+replay.
+    // Trap+replay also cannot recover because the non-idempotent remote write
+    // was not completed — replay detects this and fails permanently with
+    // "Non-idempotent remote write operation was not completed, cannot retry".
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "post_non_idempotent", data_value!())
-        .await?;
-
-    let result_value = result.into_return_value().expect("Expected a return value");
+        .await;
 
     assert!(
-        matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
-        "Expected a successful 200 response, got: {result_value:?}"
+        result.is_err(),
+        "Expected the invocation to fail permanently, but it succeeded: {result:?}"
     );
-
-    // Verify NO in-function retry error entries in oplog
-    let retry_count =
-        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
-    assert_eq!(
-        retry_count, 0,
-        "Expected 0 in-function retry error entries (POST should not be retried inline \
-         when assume_idempotence=false)"
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("cannot retry"),
+        "Expected error about non-idempotent write not being retryable, got: {err_msg}"
     );
 
     Ok(())

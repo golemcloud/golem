@@ -1380,6 +1380,14 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             additional_deps.clone(),
         ))
     }
+
+    fn wrap_rpc(&self, rpc: Arc<dyn Rpc>) -> Arc<dyn Rpc> {
+        if let Some(wrap) = &self.overrides.wrap_rpc {
+            wrap(rpc)
+        } else {
+            rpc
+        }
+    }
 }
 
 // -------------------------------------------------------------------------
