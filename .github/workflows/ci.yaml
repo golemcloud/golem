@@ -389,7 +389,7 @@ jobs:
         run: sbt -batch "++3.8.2; integrationTests/test"
         timeout-minutes: 20
 
-  wasm-rpc-stub:
+  golem-wasm-guest:
     runs-on: blacksmith
     env:
       CARGO_BUILD_JOBS: 10
@@ -400,13 +400,10 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           rust-targets: 'wasm32-wasip2'
-          install-cargo-binstall: 'true'
-      - name: Install cargo-component
-        run: cargo binstall --force cargo-component@0.21.1
       - name: Prepare WIT dependencies
         run: cargo make wit
-      - name: Build wasm-rpc in stub mode
-        run: cargo component build -p golem-wasm --no-default-features --features stub
+      - name: Build golem-wasm in guest mode
+        run: cargo build --target wasm32-wasip2 -p golem-wasm --no-default-features --features guest
 
   golem-client:
     runs-on: blacksmith
@@ -818,7 +815,7 @@ jobs:
     needs:
       - check-clippy-and-format
       - unit-tests-and-checks
-      - wasm-rpc-stub
+      - golem-wasm-guest
       - worker-tests
       - it
     if: "startsWith(github.ref, 'refs/tags/v')"
