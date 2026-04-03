@@ -14,7 +14,7 @@
 
 use wasmtime::component::Resource;
 
-use crate::durable_host::durability::HostFailureKind;
+use crate::durable_host::durability::{HostFailureKind, InternalRetryResult};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::SocketsIpNameLookupResolveAddresses;
@@ -65,25 +65,32 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         network: Resource<Network>,
         name: String,
     ) -> Result<Resource<ResolveAddressStream>, SocketError> {
-        let durability = Durability::<SocketsIpNameLookupResolveAddresses>::new(
+        let mut durability = Durability::<SocketsIpNameLookupResolveAddresses>::new(
             self,
             DurableFunctionType::ReadRemote,
         )
         .await?;
 
         let result = if durability.is_live() {
-            let result = resolve_and_drain_addresses(self, network, name.clone()).await;
-            durability
-                .try_trigger_retry(self, &result, |err| match err.downcast_ref() {
-                    Some(
-                        ErrorCode::NameUnresolvable
-                        | ErrorCode::PermanentResolverFailure
-                        | ErrorCode::AccessDenied,
-                    ) => HostFailureKind::Permanent,
-                    _ => HostFailureKind::Transient,
-                })
-                .await
-                .map_err(|e| SocketError::trap(wasmtime::Error::from_anyhow(e)))?;
+            let result = loop {
+                let network_borrow = Resource::new_borrow(network.rep());
+                let result = resolve_and_drain_addresses(self, network_borrow, name.clone()).await;
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, |err| match err.downcast_ref() {
+                        Some(
+                            ErrorCode::NameUnresolvable
+                            | ErrorCode::PermanentResolverFailure
+                            | ErrorCode::AccessDenied,
+                        ) => HostFailureKind::Permanent,
+                        _ => HostFailureKind::Transient,
+                    })
+                    .await
+                    .map_err(|e| SocketError::trap(wasmtime::Error::from_anyhow(e)))?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
 
             let serializable_result = match result {
                 Ok(addresses) => Ok(SerializableIpAddresses::from(addresses)),

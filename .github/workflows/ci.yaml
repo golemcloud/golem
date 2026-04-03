@@ -19,7 +19,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "v0.1.5"
+  WASM_RQUICKJS_VERSION: "v0.2.0"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 
@@ -207,9 +207,6 @@ jobs:
           redis-version: latest
           auto-start: false
 
-      - name: Install cargo-component
-        if: startsWith(matrix.group.name, 'cli-integration-tests')
-        run: cargo binstall --force cargo-component@0.21.1
       - name: Install wasm-tools
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         run: cargo binstall --force --locked wasm-tools@1.227.1
@@ -315,6 +312,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
+          rust-targets: 'wasm32-wasip2'
           install-cargo-binstall: 'true'
 
       - name: Setup Java
@@ -338,8 +336,6 @@ jobs:
         with:
           version: latest
 
-      - name: Install cargo-component
-        run: cargo binstall --force cargo-component@0.21.1
       - name: Install wasm-rquickjs
         run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
 
@@ -449,16 +445,13 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
-          rust-targets: 'wasm32-wasip1'
+          rust-targets: 'wasm32-wasip2'
           install-cargo-binstall: 'true'
 
       - name: Install WASI SDK
         run: |
           curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
           sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
-
-      - name: Install cargo-component
-        run: cargo binstall --force cargo-component@0.21.1
 
       - name: Install wasm-rquickjs
         run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
@@ -518,14 +511,11 @@ jobs:
         with:
           version: latest
       - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip1 wasm32-wasip2
-      - uses: cargo-bins/cargo-binstall@main
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip2
       - name: Install WASI SDK
         run: |
           curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
           sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
-      - name: Install cargo-component
-        run: cargo binstall --force cargo-component@0.21.1
       - name: Install wasm-rquickjs
         run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
 

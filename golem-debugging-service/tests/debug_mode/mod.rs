@@ -5,19 +5,18 @@ pub mod dsl;
 use crate::debug_mode::debug_bootstrap::TestDebuggingServerBootStrap;
 use crate::debug_mode::debug_worker_executor::DebugWorkerExecutorClient;
 use golem_common::config::RedisConfig;
+use golem_debugging_service::bootstrap_and_run_debug_worker_executor;
 use golem_debugging_service::config::DebugConfig;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
 };
-use golem_worker_executor::Bootstrap;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, IndexedStorageConfig,
     IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig,
 };
 use golem_worker_executor_test_utils::TestWorkerExecutor;
 use prometheus::Registry;
-
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::debug;
@@ -44,6 +43,7 @@ pub async fn start_debug_worker_executor(
         engine: EngineConfig {
             enable_fs_cache: true,
         },
+        cors_origin_regex: ".*".to_string(),
         ..Default::default()
     };
 
@@ -71,7 +71,7 @@ pub async fn start_debug_worker_executor(
 
         match debug_worker_executor_result {
             Ok(mut client) => {
-                client.set_worker_executor_join_set(join_set);
+                client.set_worker_executor_join_set_and_run_details(join_set, run_details);
                 break Ok(client);
             }
             Err(e) => {
@@ -91,14 +91,16 @@ async fn run_debug_worker_executor(
     runtime: Handle,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     regular_executor_context: TestWorkerExecutor,
-) -> Result<golem_worker_executor::RunDetails, anyhow::Error> {
-    let run_details = TestDebuggingServerBootStrap::new(regular_executor_context)
-        .run(
-            golem_config.into_golem_config(),
-            prometheus_registry,
-            runtime,
-            join_set,
-        )
-        .await?;
+) -> Result<golem_debugging_service::RunDetails, anyhow::Error> {
+    let cors_origin_regex = golem_config.cors_origin_regex.clone();
+    let run_details = bootstrap_and_run_debug_worker_executor(
+        &TestDebuggingServerBootStrap::new(regular_executor_context),
+        golem_config.into_golem_config(),
+        &cors_origin_regex,
+        prometheus_registry,
+        runtime,
+        join_set,
+    )
+    .await?;
     Ok(run_details)
 }

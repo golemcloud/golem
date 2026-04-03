@@ -12,5 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod registry;
-pub mod shard_manager;
+import type { Pollable } from 'wasi:io/poll@0.2.3';
+
+export function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+
+  if (signal.reason !== undefined) {
+    throw signal.reason;
+  }
+
+  const err = new Error('The operation was aborted.');
+  err.name = 'AbortError';
+  throw err;
+}
+
+export async function awaitPollable(pollable: Pollable, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    await pollable.promise();
+    return;
+  }
+
+  throwIfAborted(signal);
+  await pollable.abortablePromise(signal);
+}

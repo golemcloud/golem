@@ -204,7 +204,7 @@ impl DebugServiceDefault {
         let shard_assignment = self
             .all
             .shard_manager_service()
-            .register(port)
+            .register(port, None)
             .await
             .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?;
 
