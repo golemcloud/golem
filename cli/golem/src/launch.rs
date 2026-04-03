@@ -27,6 +27,7 @@ use golem_registry_service::config::{
     BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig, PrecreatedAccount,
     PrecreatedPlan, RegistryServiceConfig,
 };
+use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::config::LocalFileSystemBlobStorageConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
@@ -40,7 +41,7 @@ use golem_worker_executor::services::golem_config::{
     FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
     IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceLimitsGrpcConfig,
-    ShardManagerServiceConfig, ShardManagerServiceGrpcConfig, WorkerServiceGrpcConfig,
+    WorkerServiceGrpcConfig,
 };
 use golem_worker_service::WorkerService;
 use golem_worker_service::config::{
@@ -362,13 +363,11 @@ fn worker_executor_config(
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
         ),
-        shard_manager_service: ShardManagerServiceConfig::Grpc(Box::new(
-            ShardManagerServiceGrpcConfig {
-                host: args.host_for_service_connect(),
-                port: shard_manager_run_details.grpc_port,
-                ..ShardManagerServiceGrpcConfig::default()
-            },
-        )),
+        shard_manager: GrpcShardManagerConfig {
+            host: args.host_for_service_connect(),
+            port: shard_manager_run_details.grpc_port,
+            ..GrpcShardManagerConfig::default()
+        },
         registry_service: golem_service_base::clients::registry::GrpcRegistryServiceConfig {
             host: args.host_for_service_connect(),
             port: registry_service_run_details.grpc_port,
@@ -432,11 +431,12 @@ fn worker_service_config(
                 },
             },
         ),
-        routing_table: RoutingTableConfig {
+        shard_manager: GrpcShardManagerConfig {
             host: args.host_for_service_connect(),
             port: shard_manager_run_details.grpc_port,
-            ..RoutingTableConfig::default()
+            ..GrpcShardManagerConfig::default()
         },
+        routing_table: RoutingTableConfig::default(),
         registry_service: golem_service_base::clients::registry::GrpcRegistryServiceConfig {
             host: args.host_for_service_connect(),
             port: registry_service_run_details.grpc_port,

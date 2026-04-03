@@ -84,6 +84,11 @@ declare module 'golem:agent/host@1.5.0' {
      * Poll for the invocation. If the invocation has not completed yet, returns `none`.
      */
     get(): Result<DataValue, RpcError> | undefined;
+    /**
+     * Best-effort attempt to cancel the remote invocation by idempotency key.
+     * If the invocation has already started or completed, this is a no-op.
+     */
+    cancel(): void;
   }
   export class CancellationToken {
     /**

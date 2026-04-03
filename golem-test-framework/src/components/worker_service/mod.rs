@@ -117,9 +117,9 @@ async fn env_vars(
             registry_service.grpc_port().to_string(),
         )
         .with_str("GOLEM__ENVIRONMENT", "local")
-        .with("GOLEM__ROUTING_TABLE__HOST", shard_manager.grpc_host())
+        .with("GOLEM__SHARD_MANAGER__HOST", shard_manager.grpc_host())
         .with(
-            "GOLEM__ROUTING_TABLE__PORT",
+            "GOLEM__SHARD_MANAGER__PORT",
             shard_manager.grpc_port().to_string(),
         )
         .with(
