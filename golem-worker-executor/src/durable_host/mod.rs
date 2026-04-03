@@ -36,6 +36,9 @@ pub mod websocket;
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
+use crate::metrics::storage::{
+    STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
+};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
@@ -598,6 +601,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ))
             .await;
         self.state.current_filesystem_storage_usage += new_bytes;
+        let account_id = self.created_by().to_string();
+        let environment_id = self.state.owned_agent_id.environment_id().to_string();
+        record_storage_bytes_written(
+            STORAGE_TYPE_FILESYSTEM,
+            &account_id,
+            &environment_id,
+            new_bytes,
+        );
         Ok(())
     }
 
@@ -623,6 +634,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .release_filesystem_storage_space(freed_bytes)
             .await;
         self.state.current_filesystem_storage_usage -= freed_bytes;
+        let account_id = self.created_by().to_string();
+        let environment_id = self.state.owned_agent_id.environment_id().to_string();
+        record_storage_bytes_deleted(
+            STORAGE_TYPE_FILESYSTEM,
+            &account_id,
+            &environment_id,
+            freed_bytes,
+        );
     }
 
     /// Check the per-agent storage quota and acquire permits from the

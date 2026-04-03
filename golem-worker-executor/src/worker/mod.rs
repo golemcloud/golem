@@ -24,7 +24,9 @@ use self::status::{
     calculate_last_known_status_for_existing_worker, update_status_with_new_entries,
 };
 use crate::durable_host::recover_stderr_logs;
+use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
+use crate::services::active_workers::FILESYSTEM_STORAGE_PERMIT_SIZE_KB;
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
@@ -883,12 +885,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // Dropping an OwnedSemaphorePermit returns its permits to the
             // semaphore automatically — no separate add_permits needed.
             let n = permits_to_release as usize;
-            let to_drop = if permit.num_permits() >= n {
-                permit.split(n)
-            } else {
-                // Defensive: releasing more than we hold — drop all.
-                permit.split(permit.num_permits())
-            };
+            let actual_n = n.min(permit.num_permits());
+            let to_drop = permit.split(actual_n);
+            let released_bytes = actual_n as u64 * FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024;
+            record_filesystem_pool_released(released_bytes);
             drop(to_drop); // returns permits to the semaphore
         }
     }
@@ -2293,6 +2293,17 @@ struct RunningWorker {
     _concurrent_agent_permit: OwnedSemaphorePermit,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
+}
+
+impl Drop for RunningWorker {
+    fn drop(&mut self) {
+        if let Some(ref permit) = self.filesystem_storage_permit {
+            let bytes = permit.num_permits() as u64 * FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024;
+            if bytes > 0 {
+                record_filesystem_pool_released(bytes);
+            }
+        }
+    }
 }
 
 impl RunningWorker {

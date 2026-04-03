@@ -20,6 +20,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 use std::path::Path;
 use std::sync::Weak;
 use std::sync::atomic::AtomicU64;
@@ -29,6 +30,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::OwnedSemaphorePermit;
 use tracing::debug;
 
+use crate::metrics::storage::record_filesystem_pool_released;
 use crate::services::active_workers::FilesystemStorageSemaphore;
 
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
@@ -274,7 +276,13 @@ impl FileLoader {
                         // we successfully downloaded the file and set it to read-only, set the cache entry to the file
                         *prelocked_entry = Ok(InitializedCacheEntry {
                             path: path.clone(),
-                            _filesystem_storage_permit: filesystem_storage_permit,
+                            filesystem_storage_permit_bytes: if filesystem_storage_permit.is_some()
+                            {
+                                file_size
+                            } else {
+                                0
+                            },
+                            filesystem_storage_permit: ManuallyDrop::new(filesystem_storage_permit),
                         });
                     }
                     Err(e) => {
@@ -355,18 +363,56 @@ struct InitializedCacheEntry {
     path: PathBuf,
     /// Storage semaphore permit held for the lifetime of this cache entry.
     /// Acquired on cache miss (first download); `None` when no semaphore is
-    /// configured. Dropped automatically when the last `FileUseToken` holding
-    /// this entry is released, returning the permits to the executor pool.
-    _filesystem_storage_permit: Option<OwnedSemaphorePermit>,
+    /// configured. Only returned to the executor pool if the file is
+    /// successfully deleted — if deletion fails the disk space is still
+    /// occupied so the permits must remain consumed.
+    filesystem_storage_permit: ManuallyDrop<Option<OwnedSemaphorePermit>>,
+    /// Byte count corresponding to `filesystem_storage_permit`, for metrics.
+    filesystem_storage_permit_bytes: u64,
+}
+
+impl InitializedCacheEntry {
+    #[cfg(test)]
+    fn new_for_test(
+        path: PathBuf,
+        permit: Option<OwnedSemaphorePermit>,
+        permit_bytes: u64,
+    ) -> Self {
+        Self {
+            path,
+            filesystem_storage_permit: ManuallyDrop::new(permit),
+            filesystem_storage_permit_bytes: permit_bytes,
+        }
+    }
 }
 
 impl Drop for InitializedCacheEntry {
     fn drop(&mut self) {
         debug!("Removing file {}", self.path.display());
-        if let Err(e) = std::fs::remove_file(&self.path) {
-            tracing::error!("Failed to remove file {}: {}", self.path.display(), e);
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => {
+                // File deleted successfully — disk space is freed, return permits to the pool.
+                // SAFETY: we are in Drop, this value will not be used again.
+                let permit = unsafe { ManuallyDrop::take(&mut self.filesystem_storage_permit) };
+                if permit.is_some() && self.filesystem_storage_permit_bytes > 0 {
+                    record_filesystem_pool_released(self.filesystem_storage_permit_bytes);
+                }
+                drop(permit);
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to remove file {}: {} — keeping storage permits consumed",
+                    self.path.display(),
+                    e
+                );
+                // Do NOT return the permit to the semaphore — disk space is
+                // still occupied. Take the permit out of ManuallyDrop and
+                // forget it so its Drop impl (which returns permits) never runs.
+                // SAFETY: we are in Drop, this value will not be used again.
+                let permit = unsafe { ManuallyDrop::take(&mut self.filesystem_storage_permit) };
+                std::mem::forget(permit);
+            }
         }
-        // _filesystem_storage_permit is dropped here, returning permits to the semaphore.
     }
 }
 
@@ -521,6 +567,41 @@ mod tests {
             semaphore.available_bytes(),
             pool_bytes as u64,
             "all tokens dropped — full pool must be restored"
+        );
+    }
+
+    /// When file deletion fails on drop (e.g. the file was already removed by
+    /// an external process), the semaphore permits must NOT be returned to the
+    /// pool — from the executor's perspective the disk space may still be
+    /// occupied and returning permits could allow over-committing disk.
+    ///
+    /// We test this directly via `InitializedCacheEntry::new_for_test` with a
+    /// path that does not exist, so `remove_file` always returns `NotFound`.
+    #[test]
+    async fn ro_permits_not_released_when_file_deletion_fails() {
+        let pool_bytes = 4 * 1024;
+        let semaphore = Arc::new(FilesystemStorageSemaphore::new(
+            pool_bytes,
+            Duration::from_millis(1),
+        ));
+
+        // Acquire 1 KB of permits so we can observe whether they are returned.
+        let permit = semaphore.try_acquire(1024).await;
+        assert!(permit.is_some(), "should acquire from fresh pool");
+        let after_acquire = semaphore.available_bytes();
+        assert_eq!(after_acquire, 3 * 1024);
+
+        // Build an entry whose path does not exist — remove_file will fail.
+        let nonexistent = std::path::PathBuf::from("/tmp/golem-test-nonexistent-file-12345.wasm");
+        let entry = InitializedCacheEntry::new_for_test(nonexistent, permit, 1024);
+
+        // Drop the entry — remove_file fails, permits must NOT be returned.
+        drop(entry);
+
+        assert_eq!(
+            semaphore.available_bytes(),
+            after_acquire,
+            "permits must NOT be returned when file deletion fails"
         );
     }
 

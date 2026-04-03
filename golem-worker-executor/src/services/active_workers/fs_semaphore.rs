@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::storage::{record_filesystem_pool_acquired, record_filesystem_pool_total};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
@@ -32,6 +33,7 @@ pub struct FilesystemStorageSemaphore {
 impl FilesystemStorageSemaphore {
     pub(crate) fn new(pool_bytes: usize, acquire_retry_delay: Duration) -> Self {
         let permits = filesystem_storage_pool_bytes_to_permits(pool_bytes);
+        record_filesystem_pool_total(pool_bytes as u64);
         Self {
             semaphore: Arc::new(Semaphore::new(permits)),
             priority_lock: Arc::new(Mutex::new(())),
@@ -80,6 +82,7 @@ impl FilesystemStorageSemaphore {
                         self.semaphore.available_permits(),
                         permit.num_permits()
                     );
+                    record_filesystem_pool_acquired(storage_bytes);
                     break permit;
                 }
                 Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
@@ -118,6 +121,7 @@ impl FilesystemStorageSemaphore {
                         storage_bytes,
                         self.semaphore.available_permits()
                     );
+                    record_filesystem_pool_acquired(storage_bytes);
                     break Some(permit);
                 }
                 Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
