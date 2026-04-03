@@ -120,9 +120,7 @@ impl OidcHandler {
             .store_authenticated_session(&session_id, session)
             .await?;
 
-        let is_https = scheme
-            .redirect_url
-            .starts_with("https://");
+        let is_https = scheme.redirect_url.starts_with("https://");
 
         let cookie = Cookie::build((GOLEM_SESSION_ID_COOKIE_NAME, session_id.0.to_string()))
             .path("/")
