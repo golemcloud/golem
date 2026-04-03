@@ -1,4 +1,4 @@
-use golem_rust::{agent_definition, agent_implementation, WebSocketMessage, WebsocketConnection};
+use golem_rust::{WebSocketMessage, WebsocketConnection, agent_definition, agent_implementation};
 use std::cell::RefCell;
 use wasi::io::poll;
 
@@ -16,8 +16,13 @@ pub trait WebsocketTest {
     fn receive_with_timeout_test(&self, url: String, timeout_ms: u64) -> Option<String>;
     async fn async_bidi_test(&self, url: String) -> Result<String, String>;
 
-    // New polling methods
     fn poll_for_message(&self, url: String, timeout_ms: u64) -> Result<String, String>;
+    fn poll_until_message_after_timeouts(
+        &self,
+        url: String,
+        timeout_ms: u64,
+        max_timeouts: u32,
+    ) -> Result<String, String>;
 }
 
 pub struct WebsocketTestImpl {
@@ -114,31 +119,56 @@ impl WebsocketTest for WebsocketTestImpl {
     }
 
     fn poll_for_message(&self, url: String, timeout_ms: u64) -> Result<String, String> {
-        // Connect to the WebSocket
         let ws = WebsocketConnection::connect(&url, None)
             .map_err(|e| format!("Failed to connect: {:?}", e))?;
-
-        // Get a pollable for the WebSocket connection
         let pollable = ws.subscribe();
-
-        // Create a monotonic clock for timeout
-        let clock = wasi::clocks::monotonic_clock::subscribe_duration(timeout_ms * 1_000_000); // Convert ms to ns
-
-        // Poll for either data or timeout
+        let clock = wasi::clocks::monotonic_clock::subscribe_duration(timeout_ms * 1_000_000);
         let ready_list = poll::poll(&[&pollable, &clock]);
 
         if ready_list.contains(&0) {
-            // WebSocket is ready, try to receive
             match ws.receive() {
                 Ok(WebSocketMessage::Text(text)) => Ok(text),
                 Ok(WebSocketMessage::Binary(data)) => Ok(format!("Binary: {} bytes", data.len())),
                 Err(e) => Err(format!("Receive error: {:?}", e)),
             }
         } else if ready_list.contains(&1) {
-            // Timeout occurred
             Err("Timeout waiting for message".to_string())
         } else {
             Err("Unexpected poll result".to_string())
         }
+    }
+
+    fn poll_until_message_after_timeouts(
+        &self,
+        url: String,
+        timeout_ms: u64,
+        max_timeouts: u32,
+    ) -> Result<String, String> {
+        let ws = WebsocketConnection::connect(&url, None)
+            .map_err(|e| format!("Failed to connect: {:?}", e))?;
+
+        for _ in 0..max_timeouts {
+            let pollable = ws.subscribe();
+            let clock = wasi::clocks::monotonic_clock::subscribe_duration(timeout_ms * 1_000_000);
+            let ready_list = poll::poll(&[&pollable, &clock]);
+
+            if ready_list.contains(&0) {
+                return match ws.receive() {
+                    Ok(WebSocketMessage::Text(text)) => Ok(text),
+                    Ok(WebSocketMessage::Binary(data)) => {
+                        Ok(format!("Binary: {} bytes", data.len()))
+                    }
+                    Err(e) => Err(format!("Receive error: {:?}", e)),
+                };
+            }
+
+            if !ready_list.contains(&1) {
+                return Err("Unexpected poll result".to_string());
+            }
+        }
+
+        Err(format!(
+            "Timed out after {max_timeouts} polling attempts without receiving a message"
+        ))
     }
 }

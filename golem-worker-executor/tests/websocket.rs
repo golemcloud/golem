@@ -23,6 +23,7 @@ use golem_worker_executor_test_utils::{
 };
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::spawn;
 use tracing::Instrument;
@@ -448,6 +449,80 @@ async fn websocket_polling_test(
             &agent_id,
             "poll_for_message",
             data_value!(format!("ws://localhost:{ws_port}"), 1000u64),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(
+        result,
+        Value::Result(Ok(Some(Box::new(Value::String(message.to_string())))))
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    ws_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn websocket_polling_survives_repeated_timeouts(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let ws_port = listener.local_addr().unwrap().port();
+    let message = "delayed polling message";
+
+    let ws_server = spawn(
+        async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let ws_stream = tokio_tungstenite::accept_async(stream)
+                    .await
+                    .expect("WS handshake failed");
+                let (mut write, _read) = StreamExt::split(ws_stream);
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                let msg = tokio_tungstenite::tungstenite::Message::text(message);
+                SinkExt::send(&mut write, msg).await.ok();
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
+
+    let agent_id = agent_id!("WebsocketTest", "websocket-polling-timeout-race-test");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env_vars,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "poll_until_message_after_timeouts",
+            data_value!(format!("ws://localhost:{ws_port}"), 10u64, 30u32),
         )
         .await?
         .into_return_value()
