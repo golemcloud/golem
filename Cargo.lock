@@ -5571,6 +5571,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sqlx",
  "test-r",
  "tokio",
  "tokio-stream",

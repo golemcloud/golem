@@ -515,7 +515,7 @@ fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
     }
 }
 
-fn sqlite_storage_config(
+pub fn sqlite_storage_config(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) -> DbSqliteConfig {
