@@ -126,16 +126,14 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
 
             let connect_fut = connect_async(request);
             pin_mut!(connect_fut);
-            let connect_result =
-                match futures::future::select(connect_fut, interrupt_signal).await {
-                    Either::Left((result, _)) => result,
-                    Either::Right((interrupt_kind, _)) => {
-                        tracing::info!(
-                            "Interrupted while waiting for WebSocket connect"
-                        );
-                        return Err(interrupt_kind.into());
-                    }
-                };
+            let connect_result = match futures::future::select(connect_fut, interrupt_signal).await
+            {
+                Either::Left((result, _)) => result,
+                Either::Right((interrupt_kind, _)) => {
+                    tracing::info!("Interrupted while waiting for WebSocket connect");
+                    return Err(interrupt_kind.into());
+                }
+            };
 
             match connect_result {
                 Ok((ws_stream, _response)) => {
@@ -218,9 +216,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                         Either::Left((Ok(()), _)) => Ok(()),
                         Either::Left((Err(e), _)) => Err(Error::SendFailure(e.to_string())),
                         Either::Right((interrupt_kind, _)) => {
-                            tracing::info!(
-                                "Interrupted while waiting for WebSocket send"
-                            );
+                            tracing::info!("Interrupted while waiting for WebSocket send");
                             return Err(interrupt_kind.into());
                         }
                     }
@@ -282,9 +278,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                         match futures::future::select(recv_fut, interrupt_signal).await {
                             Either::Left((result, _)) => result,
                             Either::Right((interrupt_kind, _)) => {
-                                tracing::info!(
-                                    "Interrupted while waiting for WebSocket receive"
-                                );
+                                tracing::info!("Interrupted while waiting for WebSocket receive");
                                 return Err(interrupt_kind.into());
                             }
                         }
@@ -358,11 +352,13 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                             match futures::future::select(next_frame, interrupt_signal.as_mut())
                                 .await
                             {
-                                Either::Left((Ok(Some(Ok(msg))), _)) => match to_user_message(msg) {
-                                    Ok(Some(message)) => break Ok(Some(message)),
-                                    Ok(None) => continue,
-                                    Err(err) => break Err(err),
-                                },
+                                Either::Left((Ok(Some(Ok(msg))), _)) => {
+                                    match to_user_message(msg) {
+                                        Ok(Some(message)) => break Ok(Some(message)),
+                                        Ok(None) => continue,
+                                        Err(err) => break Err(err),
+                                    }
+                                }
                                 Either::Left((Ok(Some(Err(e))), _)) => break Err(to_wit_error(e)),
                                 Either::Left((Ok(None), _)) => {
                                     break Err(Error::Closed(Some(CloseInfo {
@@ -446,16 +442,13 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                         reason: reason.unwrap_or_default().into(),
                     };
                     let mut writer = live.writer.lock().await;
-                    let close_fut =
-                        writer.send(tungstenite::Message::Close(Some(close_frame)));
+                    let close_fut = writer.send(tungstenite::Message::Close(Some(close_frame)));
                     pin_mut!(close_fut);
                     match futures::future::select(close_fut, interrupt_signal).await {
                         Either::Left((Ok(()), _)) => Ok(()),
                         Either::Left((Err(e), _)) => Err(Error::SendFailure(e.to_string())),
                         Either::Right((interrupt_kind, _)) => {
-                            tracing::info!(
-                                "Interrupted while waiting for WebSocket close"
-                            );
+                            tracing::info!("Interrupted while waiting for WebSocket close");
                             return Err(interrupt_kind.into());
                         }
                     }
