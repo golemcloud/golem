@@ -67,7 +67,6 @@ mod tests {
     pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
         let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
             number_of_shards_override: Some(16),
-            db_type: golem_test_framework::config::DbType::Sqlite,
             ..EnvBasedTestDependenciesConfig::new()
         })
         .await

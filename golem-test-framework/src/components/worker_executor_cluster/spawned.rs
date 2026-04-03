@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::redis::Redis;
+use crate::components::rdb::Rdb;
 use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::WorkerExecutor;
@@ -39,7 +39,7 @@ impl SpawnedWorkerExecutorCluster {
         working_directory: PathBuf,
         http_port: u16,
         grpc_port: u16,
-        redis: Arc<dyn Redis>,
+        rdb: Arc<dyn Rdb>,
         shard_manager: Arc<dyn ShardManager>,
         worker_service: Arc<dyn WorkerService>,
         verbosity: Level,
@@ -54,7 +54,7 @@ impl SpawnedWorkerExecutorCluster {
                 &working_directory,
                 http_port,
                 grpc_port,
-                redis,
+                rdb,
                 shard_manager,
                 worker_service,
                 verbosity,
@@ -73,7 +73,7 @@ impl SpawnedWorkerExecutorCluster {
         base_grpc_port: u16,
         executable: &Path,
         working_directory: &Path,
-        redis: Arc<dyn Redis>,
+        rdb: Arc<dyn Rdb>,
         shard_manager: Arc<dyn ShardManager>,
         worker_service: Arc<dyn WorkerService>,
         verbosity: Level,
@@ -95,7 +95,7 @@ impl SpawnedWorkerExecutorCluster {
                     working_directory.to_path_buf(),
                     http_port,
                     grpc_port,
-                    redis.clone(),
+                    rdb.clone(),
                     shard_manager.clone(),
                     worker_service.clone(),
                     verbosity,

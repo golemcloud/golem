@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::redis::Redis;
+use super::rdb::{DbInfo, Rdb};
 use super::registry_service::RegistryService;
 use super::shard_manager::ShardManager;
 use super::worker_service::WorkerService;
@@ -54,29 +54,18 @@ async fn env_vars(
     grpc_port: u16,
     shard_manager: &Arc<dyn ShardManager>,
     worker_service: &Arc<dyn WorkerService>,
-    redis: &Arc<dyn Redis>,
+    rdb: &Arc<dyn Rdb>,
     registry_service: &Arc<dyn RegistryService>,
     verbosity: Level,
     otlp: bool,
 ) -> HashMap<String, String> {
-    EnvVarBuilder::golem_service(verbosity)
+    let mut env = EnvVarBuilder::golem_service(verbosity)
         .with_str("ENVIRONMENT", "local")
         .with_str("WASMTIME_BACKTRACE_DETAILS", "1")
-        .with_str("GOLEM__KEY_VALUE_STORAGE__TYPE", "Redis")
-        .with_str("GOLEM__INDEXED_STORAGE__TYPE", "KVStoreRedis")
         .with_str(
             "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
             "/tmp/ittest-local-object-store/golem",
         )
-        .with_str(
-            "GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST",
-            &redis.private_host(),
-        )
-        .with_str(
-            "GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT",
-            &redis.private_port().to_string(),
-        )
-        .with_str("GOLEM__KEY_VALUE_STORAGE__CONFIG__PREFIX", redis.prefix())
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
         .with_str(
             "GOLEM__PUBLIC_WORKER_API__HOST",
@@ -113,5 +102,54 @@ async fn env_vars(
         .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with_optional_otlp("worker_executor", otlp)
-        .build()
+        .build();
+
+    let db_env = rdb.info().env("golem_worker", false);
+    let db_type = db_env
+        .get("GOLEM__DB__TYPE")
+        .map(String::as_str)
+        .expect("worker executor storage requires GOLEM__DB__TYPE");
+
+    env.insert(
+        "GOLEM__KEY_VALUE_STORAGE__TYPE".to_string(),
+        db_type.to_string(),
+    );
+
+    match rdb.info() {
+        DbInfo::Postgres(_) => {
+            env.insert(
+                "GOLEM__INDEXED_STORAGE__TYPE".to_string(),
+                "Postgres".to_string(),
+            );
+            for (key, value) in &db_env {
+                if let Some(rest) = key.strip_prefix("GOLEM__DB__CONFIG__") {
+                    env.insert(
+                        format!("GOLEM__INDEXED_STORAGE__CONFIG__{rest}"),
+                        value.clone(),
+                    );
+                }
+            }
+        }
+        DbInfo::Sqlite(_) => {
+            env.insert(
+                "GOLEM__INDEXED_STORAGE__TYPE".to_string(),
+                "KVStoreSqlite".to_string(),
+            );
+        }
+        DbInfo::Mysql(_) => {
+            panic!("Mysql-backed worker executor storage is not supported in the test framework");
+        }
+    }
+
+    for (key, value) in db_env {
+        if key == "GOLEM__DB__TYPE" {
+            continue;
+        }
+
+        if let Some(rest) = key.strip_prefix("GOLEM__DB__") {
+            env.insert(format!("GOLEM__KEY_VALUE_STORAGE__{rest}"), value);
+        }
+    }
+
+    env
 }
