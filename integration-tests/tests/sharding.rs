@@ -574,10 +574,9 @@ mod tests {
                     ];
 
                     for file in sqlite_files {
-                        let _ = tokio::fs::remove_file(
-                            self.temp_directory().join("sqlite").join(file),
-                        )
-                        .await;
+                        let _ =
+                            tokio::fs::remove_file(self.temp_directory().join("sqlite").join(file))
+                                .await;
                     }
                 }
                 DbInfo::Postgres(pg) => {
@@ -588,14 +587,12 @@ mod tests {
                         .execute(&pool)
                         .await
                         .expect("Failed to clean shard_manager_state");
-                    let _ =
-                        sqlx::query("DELETE FROM golem_shard_manager.quota_leases")
-                            .execute(&pool)
-                            .await;
-                    let _ =
-                        sqlx::query("DELETE FROM golem_shard_manager.quota_resources")
-                            .execute(&pool)
-                            .await;
+                    let _ = sqlx::query("DELETE FROM golem_shard_manager.quota_leases")
+                        .execute(&pool)
+                        .await;
+                    let _ = sqlx::query("DELETE FROM golem_shard_manager.quota_resources")
+                        .execute(&pool)
+                        .await;
                     pool.close().await;
                 }
                 DbInfo::Mysql(_) => {
