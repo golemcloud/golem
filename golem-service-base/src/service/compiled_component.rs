@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use crate::error::worker_executor::WorkerExecutorError;
+use crate::metrics::storage::{
+    STORAGE_TYPE_COMPILATION_CACHE, record_storage_bytes_written, record_storage_objects_written,
+};
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
@@ -177,7 +180,9 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         let bytes = component
             .serialize()
             .expect("Could not serialize component");
-        self.blob_storage
+        let byte_count = bytes.len() as u64;
+        let result = self
+            .blob_storage
             .put_raw(
                 "compiled_component",
                 "put",
@@ -192,7 +197,13 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                     component_revision,
                     format!("Could not store compiled component: {err}"),
                 )
-            })
+            });
+        if result.is_ok() {
+            let env_str = environment_id.to_string();
+            record_storage_bytes_written(STORAGE_TYPE_COMPILATION_CACHE, "", &env_str, byte_count);
+            record_storage_objects_written(STORAGE_TYPE_COMPILATION_CACHE, "", &env_str, 1);
+        }
+        result
     }
 }
 

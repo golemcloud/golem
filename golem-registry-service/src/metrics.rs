@@ -29,33 +29,14 @@ pub fn register_all() -> Registry {
 }
 
 pub mod storage {
-    use lazy_static::lazy_static;
-    use prometheus::*;
+    // Re-export shared storage metrics from golem-service-base.
+    pub use golem_service_base::metrics::storage::*;
 
     pub const STORAGE_TYPE_COMPONENT: &str = "component";
 
-    lazy_static! {
-        pub static ref STORAGE_BYTES_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
-            "golem_storage_bytes_written_total",
-            "Total bytes written to storage, by storage type, account and environment",
-            &["storage_type", "account_id", "environment_id"]
-        )
-        .unwrap();
-        pub static ref STORAGE_OBJECTS_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
-            "golem_storage_objects_written_total",
-            "Total objects written to storage, by storage type, account and environment",
-            &["storage_type", "account_id", "environment_id"]
-        )
-        .unwrap();
-    }
-
     pub fn record_component_uploaded(account_id: &str, environment_id: &str, bytes: u64) {
-        STORAGE_BYTES_WRITTEN_TOTAL
-            .with_label_values(&[STORAGE_TYPE_COMPONENT, account_id, environment_id])
-            .inc_by(bytes as f64);
-        STORAGE_OBJECTS_WRITTEN_TOTAL
-            .with_label_values(&[STORAGE_TYPE_COMPONENT, account_id, environment_id])
-            .inc();
+        record_storage_bytes_written(STORAGE_TYPE_COMPONENT, account_id, environment_id, bytes);
+        record_storage_objects_written(STORAGE_TYPE_COMPONENT, account_id, environment_id, 1);
     }
 
     #[cfg(test)]

@@ -335,16 +335,18 @@ pub mod resources {
 }
 
 pub mod storage {
-    use lazy_static::lazy_static;
-    use prometheus::*;
+    // Re-export shared storage metrics from golem-service-base so all services
+    // can use the same metric definitions (same Prometheus global registry).
+    pub use golem_service_base::metrics::storage::*;
 
     pub const STORAGE_TYPE_BLOB_STORE: &str = "blob_store";
     pub const STORAGE_TYPE_KV: &str = "kv";
     pub const STORAGE_TYPE_OPLOG: &str = "oplog";
     pub const STORAGE_TYPE_OPLOG_ARCHIVE: &str = "oplog_archive";
-    pub const STORAGE_TYPE_COMPONENT: &str = "component";
     pub const STORAGE_TYPE_FILESYSTEM: &str = "filesystem";
-    pub const STORAGE_TYPE_COMPILATION_CACHE: &str = "compilation_cache";
+
+    use lazy_static::lazy_static;
+    use prometheus::*;
 
     /// Returns the executor identity label: POD_NAME env var, falling back to HOSTNAME, then "unknown".
     /// Resolved once on first call and cached for the lifetime of the process.
@@ -370,30 +372,6 @@ pub mod storage {
             &["executor_id"]
         )
         .unwrap();
-        pub static ref STORAGE_BYTES_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
-            "golem_storage_bytes_written_total",
-            "Total bytes written to storage, by storage type, account and environment",
-            &["storage_type", "account_id", "environment_id"]
-        )
-        .unwrap();
-        pub static ref STORAGE_BYTES_DELETED_TOTAL: CounterVec = register_counter_vec!(
-            "golem_storage_bytes_deleted_total",
-            "Total bytes deleted from storage, by storage type, account and environment",
-            &["storage_type", "account_id", "environment_id"]
-        )
-        .unwrap();
-        pub static ref STORAGE_OBJECTS_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
-            "golem_storage_objects_written_total",
-            "Total objects written to storage, by storage type, account and environment",
-            &["storage_type", "account_id", "environment_id"]
-        )
-        .unwrap();
-        pub static ref STORAGE_OBJECTS_DELETED_TOTAL: CounterVec = register_counter_vec!(
-            "golem_storage_objects_deleted_total",
-            "Total objects deleted from storage, by storage type, account and environment",
-            &["storage_type", "account_id", "environment_id"]
-        )
-        .unwrap();
     }
 
     pub fn record_filesystem_pool_total(bytes: u64) {
@@ -412,50 +390,6 @@ pub mod storage {
         STORAGE_FILESYSTEM_POOL_USED_BYTES
             .with_label_values(&[executor_id()])
             .sub(bytes as f64);
-    }
-
-    pub fn record_storage_bytes_written(
-        storage_type: &str,
-        account_id: &str,
-        environment_id: &str,
-        bytes: u64,
-    ) {
-        STORAGE_BYTES_WRITTEN_TOTAL
-            .with_label_values(&[storage_type, account_id, environment_id])
-            .inc_by(bytes as f64);
-    }
-
-    pub fn record_storage_objects_written(
-        storage_type: &str,
-        account_id: &str,
-        environment_id: &str,
-        count: u64,
-    ) {
-        STORAGE_OBJECTS_WRITTEN_TOTAL
-            .with_label_values(&[storage_type, account_id, environment_id])
-            .inc_by(count as f64);
-    }
-
-    pub fn record_storage_bytes_deleted(
-        storage_type: &str,
-        account_id: &str,
-        environment_id: &str,
-        bytes: u64,
-    ) {
-        STORAGE_BYTES_DELETED_TOTAL
-            .with_label_values(&[storage_type, account_id, environment_id])
-            .inc_by(bytes as f64);
-    }
-
-    pub fn record_storage_objects_deleted(
-        storage_type: &str,
-        account_id: &str,
-        environment_id: &str,
-        count: u64,
-    ) {
-        STORAGE_OBJECTS_DELETED_TOTAL
-            .with_label_values(&[storage_type, account_id, environment_id])
-            .inc_by(count as f64);
     }
 
     #[cfg(test)]
