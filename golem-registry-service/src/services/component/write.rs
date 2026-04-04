@@ -274,6 +274,7 @@ impl ComponentWriteService {
                 .ensure_updated_component_within_limits(
                     environment.owner_account_id,
                     u64::try_from(new_wasm.len()).unwrap(),
+                    component.component_size,
                 )
                 .await?;
 
