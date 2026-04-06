@@ -46,8 +46,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use unicode_segmentation::UnicodeSegmentation;
 
-const EVCXR_TOKIO_DEPENDENCY: &str =
-    "tokio = { version = \"=1.50.0\", features = [\"macros\", \"rt-multi-thread\", \"sync\", \"io-std\", \"net\", \"tracing\", \"process\"] }";
+const EVCXR_TOKIO_DEPENDENCY: &str = "tokio = { version = \"=1.50.0\", features = [\"macros\", \"rt-multi-thread\", \"sync\", \"io-std\", \"net\", \"tracing\", \"process\"] }";
 
 pub struct Repl {
     config: ReplResolvedConfig,
