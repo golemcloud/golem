@@ -216,17 +216,12 @@ jobs:
 
       - name: Setup Node
         if: startsWith(matrix.group.name, 'cli-integration-tests')
-        uses: actions/setup-node@v4
+        uses: ./.github/actions/setup-js-wasm-tools
         with:
-          node-version: "lts/*"
-
-      - uses: pnpm/action-setup@v2
-        if: startsWith(matrix.group.name, 'cli-integration-tests')
-        with:
-          version: latest
-      - name: Install wasm-rquickjs
-        if: startsWith(matrix.group.name, 'cli-integration-tests')
-        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          install-wasi-sdk: ${{ matrix.group.name == 'cli-integration-tests-group2' }}
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
 
       - name: Setup Java
         if: startsWith(matrix.group.name, 'cli-integration-tests')
@@ -238,12 +233,6 @@ jobs:
       - name: Setup SBT
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         uses: sbt/setup-sbt@v1
-
-      - name: Install WASI SDK
-        if: matrix.group.name == 'cli-integration-tests-group2'
-        run: |
-          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
-          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
 
       - name: Sync WIT dependencies
         if: matrix.group.name == 'cli-integration-tests-group2'
@@ -327,22 +316,11 @@ jobs:
       - name: Cache scala dependencies
         uses: coursier/cache-action@v8
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup-js-wasm-tools
         with:
-          node-version: "lts/*"
-
-      - uses: pnpm/action-setup@v2
-        with:
-          version: latest
-
-      - name: Install wasm-rquickjs
-        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
-
-      - name: Install WASI SDK
-        run: |
-          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
-          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
       - name: Sync WIT dependencies
         run: cargo make wit
@@ -448,13 +426,11 @@ jobs:
           rust-targets: 'wasm32-wasip2'
           install-cargo-binstall: 'true'
 
-      - name: Install WASI SDK
-        run: |
-          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
-          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
-
-      - name: Install wasm-rquickjs
-        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
+      - uses: ./.github/actions/setup-wasm-component-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
       - name: Sync WIT dependencies
         run: cargo make wit
@@ -504,20 +480,19 @@ jobs:
     runs-on: blacksmith
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
         with:
-          node-version: "lts/*"
-      - uses: pnpm/action-setup@v2
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
         with:
-          version: latest
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip2
-      - name: Install WASI SDK
-        run: |
-          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
-          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
-      - name: Install wasm-rquickjs
-        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip2'
+          install-cargo-make: 'false'
+
+      - uses: ./.github/actions/setup-js-wasm-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
       - name: Install dependencies
         working-directory: sdks/ts
@@ -633,32 +608,18 @@ jobs:
           key: golem-ts-sdk-${{ github.run_id }}
           fail-on-cache-miss: true
 
-      - name: Setup Node
+      - name: Setup JS and WASM build tools
         if: matrix.chunk.needs-node
-        uses: actions/setup-node@v4
+        uses: ./.github/actions/setup-js-wasm-tools
         with:
-          node-version: "lts/*"
-
-      - name: Setup pnpm
-        if: matrix.chunk.needs-node
-        uses: pnpm/action-setup@v2
-        with:
-          version: latest
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
       - name: Install TS SDK dependencies
         if: matrix.chunk.needs-node
         working-directory: sdks/ts
         run: pnpm install --frozen-lockfile
-
-      - name: Install WASI SDK
-        if: matrix.chunk.needs-node
-        run: |
-          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
-          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
-
-      - name: Install wasm-rquickjs
-        if: matrix.chunk.needs-node
-        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
 
       - name: Remove any pre-existing WASMs
         run: find test-components -maxdepth 1 -name '*.wasm' -delete
