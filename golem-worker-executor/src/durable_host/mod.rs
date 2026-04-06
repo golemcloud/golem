@@ -3138,7 +3138,8 @@ pub(crate) struct HttpRetryEligibility {
     /// would become stale after resource replacement.
     pub output_stream_subscribed: bool,
     /// Set to true when skip()/blocking_skip() is called on the response body.
-    /// When true, Zone 2 inline retry is disabled because we cannot verify
+    /// When true, resuming-response-body inline retry is disabled because we
+    /// cannot verify
     /// the skipped bytes against the retry response.
     pub had_body_skip: bool,
     /// Set to true when OutgoingBody::finish() is called with Some(trailers).
@@ -3146,7 +3147,8 @@ pub(crate) struct HttpRetryEligibility {
     /// in the oplog and cannot be reconstructed.
     pub has_outgoing_trailers: bool,
     /// Set to true when OutgoingBody::finish() is called.
-    /// Zone 1 retry requires the body to be fully finished before retrying.
+    /// Awaiting-response retry requires the body to be fully finished before
+    /// retrying.
     pub body_finished: bool,
     /// Set to true when outgoing body stream writes are replayed from oplog
     /// (rather than executed live). When true, the actual body pipe does NOT
@@ -3171,8 +3173,9 @@ pub(crate) struct HttpRequestState {
     /// tracking back to the body (enabling finish() to then transfer to FutureTrailers).
     pub body_handle: Option<u32>,
     /// The original response status observed by the guest before body consumption.
-    /// Zone 2 only swaps the body stream, so inline retry must not resume from a
-    /// retried response that changes the status code visible via IncomingResponse.
+    /// Response-body resumption only swaps the body stream, so inline retry must
+    /// not resume from a retried response that changes the status code visible via
+    /// IncomingResponse.
     pub response_status: Option<u16>,
     /// The outgoing body resource handle associated with this request, set when
     /// outgoing_handler::handle() resolves the pending body mapping.

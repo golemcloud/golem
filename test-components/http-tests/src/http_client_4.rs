@@ -17,7 +17,7 @@ pub trait HttpClient4 {
     async fn post_large_body(&self) -> String;
 
     /// Sends a GET request and reads the response body in small fixed-size chunks.
-    /// Used for Zone 2 retry testing.
+    /// Used for response-body resumption retry testing.
     async fn get_and_read_body_chunked(&self) -> String;
 
     /// Sends a POST with a body composed of: 4 bytes "HEAD", then 1024 zero bytes

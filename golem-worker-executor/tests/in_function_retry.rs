@@ -1293,7 +1293,8 @@ async fn start_partial_response_http_server(
                             let _ = stream.write_all(response.as_bytes()).await;
                         }
                     } else {
-                        // Full body response (for Zone 2 matching-status skip path)
+                        // Full body response (for response-body resumption
+                        // matching-status skip path)
                         let resume_reason = match resume_status {
                             200 => "OK",
                             201 => "Created",
@@ -1468,7 +1469,7 @@ async fn start_write_zeroes_validation_server(fail_count: usize) -> (u16, Arc<At
 
 #[test]
 #[tracing::instrument]
-async fn http_zone2_inline_retry_on_body_read_failure(
+async fn http_resuming_response_body_inline_retry_on_body_read_failure(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
@@ -1515,8 +1516,8 @@ async fn http_zone2_inline_retry_on_body_read_failure(
         )
         .await?;
 
-    // get_and_read_body_chunked reads in 256-byte chunks, triggering Zone 2 on the
-    // partial response drop.
+    // get_and_read_body_chunked reads in 256-byte chunks, triggering
+    // response-body resumption on the partial response drop.
     let result = executor
         .invoke_and_await_agent(
             &component,
@@ -1544,15 +1545,16 @@ async fn http_zone2_inline_retry_on_body_read_failure(
     let range_requests = range_counter.load(Ordering::SeqCst);
     assert!(
         range_requests > 0,
-        "Expected at least 1 range request from Zone 2 retry, got {range_requests}"
+        "Expected at least 1 range request from response-body resumption retry, got {range_requests}"
     );
 
-    // Verify oplog contains in-function retry error entries for Zone 2
+    // Verify oplog contains in-function retry error entries for
+    // response-body resumption.
     let retry_count =
         count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
     assert!(
         retry_count > 0,
-        "Expected at least 1 in-function retry error entry in oplog for Zone 2, got {retry_count}"
+        "Expected at least 1 in-function retry error entry in oplog for response-body resumption, got {retry_count}"
     );
 
     Ok(())
@@ -1560,7 +1562,7 @@ async fn http_zone2_inline_retry_on_body_read_failure(
 
 #[test]
 #[tracing::instrument]
-async fn http_zone2_inline_retry_accepts_matching_non_partial_success_status(
+async fn http_resuming_response_body_inline_retry_accepts_matching_non_partial_success_status(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
@@ -1632,14 +1634,14 @@ async fn http_zone2_inline_retry_accepts_matching_non_partial_success_status(
     let range_requests = range_counter.load(Ordering::SeqCst);
     assert!(
         range_requests > 0,
-        "Expected at least 1 range request from Zone 2 retry, got {range_requests}"
+        "Expected at least 1 range request from response-body resumption retry, got {range_requests}"
     );
 
     let retry_count =
         count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
     assert!(
         retry_count > 0,
-        "Expected at least 1 in-function retry error entry in oplog for Zone 2, got {retry_count}"
+        "Expected at least 1 in-function retry error entry in oplog for response-body resumption, got {retry_count}"
     );
 
     Ok(())
@@ -1888,7 +1890,7 @@ async fn http_no_retry_when_trailers_present(
 
 #[test]
 #[tracing::instrument]
-async fn http_no_zone2_retry_when_body_skip_used(
+async fn http_no_resuming_response_body_retry_when_body_skip_used(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
@@ -1914,7 +1916,8 @@ async fn http_no_zone2_retry_when_body_skip_used(
 
     // Server sends 2048-byte body. First connection sends 1024 bytes then drops.
     // The guest reads first 256, skips 256, then tries to read more — which will fail.
-    // Zone 2 should be disqualified because blocking_skip was used.
+    // Response-body resumption should be disqualified because blocking_skip was
+    // used.
     let (port, connection_counter, range_counter) =
         start_partial_response_http_server(1, 1024, 2048, 200, 200, true).await;
 
@@ -1937,14 +1940,15 @@ async fn http_no_zone2_retry_when_body_skip_used(
         .await?;
 
     // get_with_body_skip reads 256 bytes, skips 256, then reads remaining.
-    // The skip sets had_body_skip=true, disqualifying Zone 2 retry.
+    // The skip sets had_body_skip=true, disqualifying response-body resumption.
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "get_with_body_skip", data_value!())
         .await?;
 
     let result_value = result.into_return_value().expect("Expected a return value");
 
-    // Should eventually succeed (via trap+replay, not Zone 2 inline retry)
+    // Should eventually succeed (via trap+replay, not response-body-resumption
+    // inline retry)
     assert!(
         matches!(&result_value, Value::String(s) if s.starts_with("200 ")),
         "Expected eventual success, got: {result_value:?}"
@@ -1957,12 +1961,12 @@ async fn http_no_zone2_retry_when_body_skip_used(
         "Expected at least 2 connections (1 partial + 1 replay), got {total_connections}"
     );
 
-    // Zone 2 retry should be disqualified by had_body_skip, so the recovery
-    // request must not use a Range header.
+    // Response-body resumption should be disqualified by had_body_skip, so the
+    // recovery request must not use a Range header.
     let range_requests = range_counter.load(Ordering::SeqCst);
     assert_eq!(
         range_requests, 0,
-        "Expected 0 range requests (body skip must disqualify Zone 2 retry), got {range_requests}"
+        "Expected 0 range requests (body skip must disqualify response-body resumption), got {range_requests}"
     );
 
     Ok(())

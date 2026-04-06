@@ -19,12 +19,14 @@
 //! metadata and re-sends it in-place — without trapping, without creating a new WASM
 //! instance, and without replaying the oplog.
 //!
-//! # Zones
+//! # Phases
 //!
-//! - **Zone 1**: Retry at `FutureIncomingResponse::get()` — the response hasn't arrived yet,
-//!   or arrived with an error. The outgoing body is fully finished.
-//! - **Zone 2**: Retry during response body reading — the response was partially consumed.
-//!   Requires re-sending the request and verifying the response prefix matches.
+//! - **Awaiting Response**: Retry at `FutureIncomingResponse::get()` — the response
+//!   hasn't arrived yet, or arrived with an error. The outgoing body is fully
+//!   finished.
+//! - **Resuming Response Body**: Retry during response body reading — the response
+//!   was partially consumed. Requires re-sending the request and verifying the
+//!   response prefix matches.
 
 use crate::durable_host::HttpRequestState;
 use crate::durable_host::durability::{
@@ -72,25 +74,25 @@ pub enum InlineRetryIneligible {
     UnreconstructableBody,
     /// The outgoing body included trailers, which are not persisted.
     HasOutgoingTrailers,
-    /// The outgoing body is not yet finished (Zone 1 only).
+    /// The outgoing body is not yet finished (awaiting-response phase only).
     BodyNotFinished,
     /// The request method is not idempotent and assume_idempotence is false.
     NotIdempotent,
-    /// The response body used skip/blocking_skip (Zone 2 only).
+    /// The response body used skip/blocking_skip (response-body resumption only).
     HadBodySkip,
     /// The output stream had subscribe() called, so pollable may be stale after replacement.
     OutputStreamSubscribed,
 }
 
-/// Which retry zone is being attempted.
+/// Which inline retry phase is being attempted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RetryZone {
+pub enum InlineRetryPhase {
     /// Retry at FutureIncomingResponse::get() — response not yet consumed.
-    Zone1,
+    AwaitingResponse,
     /// Retry during response body reading — partial body already consumed.
-    Zone2,
+    ResumingResponseBody,
     /// Retry during outgoing body stream writing — body is still being written.
-    OutputStreamWrite,
+    WritingRequestBody,
 }
 
 /// Checks whether the given HTTP request is eligible for transparent inline retry.
@@ -99,7 +101,7 @@ pub enum RetryZone {
 pub(crate) fn is_http_inline_retry_eligible(
     exec_state: &DurableExecutionState,
     request_state: &HttpRequestState,
-    zone: RetryZone,
+    zone: InlineRetryPhase,
 ) -> Result<(), InlineRetryIneligible> {
     if !exec_state.is_live {
         return Err(InlineRetryIneligible::NotLive);
@@ -124,7 +126,7 @@ pub(crate) fn is_http_inline_retry_eligible(
     // HostOutputStream::subscribe, so the flag won't be spuriously set by
     // blocking write operations. If the guest did call subscribe(), the Pollable
     // it holds would go stale after we swap the OutputStream resource, so we
-    // must reject retry in all zones including OutputStreamWrite.
+    // must reject retry in all phases including WritingRequestBody.
     if request_state.retry.output_stream_subscribed {
         return Err(InlineRetryIneligible::OutputStreamSubscribed);
     }
@@ -133,17 +135,17 @@ pub(crate) fn is_http_inline_retry_eligible(
         return Err(InlineRetryIneligible::HasOutgoingTrailers);
     }
 
-    if zone == RetryZone::Zone1
+    if zone == InlineRetryPhase::AwaitingResponse
         && request_state.output_stream_rep.is_some()
         && !request_state.retry.body_finished
     {
         return Err(InlineRetryIneligible::BodyNotFinished);
     }
 
-    // OutputStreamWrite zone does not require body_finished — the body is still
+    // WritingRequestBody does not require body_finished — the body is still
     // being written, which is the whole point of this retry path.
 
-    if zone == RetryZone::Zone2 && request_state.retry.had_body_skip {
+    if zone == InlineRetryPhase::ResumingResponseBody && request_state.retry.had_body_skip {
         return Err(InlineRetryIneligible::HadBodySkip);
     }
 
@@ -295,7 +297,8 @@ async fn find_last_retry_error_index(
 }
 
 /// Counts the total number of incoming body bytes successfully delivered to
-/// the guest, as recorded in the oplog. Used by Zone 2 to determine how many
+/// the guest, as recorded in the oplog. Used during response-body resumption to
+/// determine how many
 /// bytes to skip or verify without materializing the full body.
 pub async fn count_incoming_body_bytes(
     oplog: &Arc<dyn Oplog>,
@@ -358,7 +361,7 @@ pub async fn count_incoming_body_bytes(
 /// and body content. Headers are `Vec<(String, Vec<u8>)>` preserving
 /// duplicates and byte-level fidelity.
 ///
-/// For Zone 2 resumption, `extra_headers` can include a `Range` header.
+/// For response-body resumption, `extra_headers` can include a `Range` header.
 pub fn reconstruct_http_request(
     request: &HostRequestHttpRequest,
     body: HyperOutgoingBody,
@@ -381,7 +384,7 @@ pub fn reconstruct_http_request(
         builder = builder.header(header_name, header_value);
     }
 
-    // Add any extra headers (e.g., Range for Zone 2)
+    // Add any extra headers (e.g., Range for response-body resumption)
     for (name, value) in extra_headers {
         let header_name = HeaderName::from_str(name)
             .map_err(|e| anyhow::anyhow!("invalid extra header name '{name}': {e}"))?;
@@ -520,7 +523,7 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
                                         retry_count = retry_state.retry_count(),
                                         ?delay,
                                         ?error_code,
-                                        "Zone 2 inline retry: transient send error, retrying"
+                                        "Resuming response body inline retry: transient send error, retrying"
                                     );
                                 }
                                 futures::future::Either::Right((interrupt_kind, _)) => {
@@ -846,10 +849,14 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
         None => return Ok(false),
     };
 
-    // 2. Check eligibility — use OutputStreamWrite zone (body is still being written)
+    // 2. Check eligibility — use WritingRequestBody (body is still being written)
     let exec_state = ctx.durable_execution_state();
-    if is_http_inline_retry_eligible(&exec_state, &request_state, RetryZone::OutputStreamWrite)
-        .is_err()
+    if is_http_inline_retry_eligible(
+        &exec_state,
+        &request_state,
+        InlineRetryPhase::WritingRequestBody,
+    )
+    .is_err()
     {
         return Ok(false);
     }
@@ -937,10 +944,10 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     Ok(true)
 }
 
-/// Attempts Zone 2 inline retry for a response body stream read failure.
+/// Attempts response-body resumption inline retry for a response body stream read failure.
 ///
 /// When reading response body bytes fails with a transient error, this function:
-/// 1. Checks Zone 2 eligibility (no prior skip, etc.)
+/// 1. Checks response-body resumption eligibility (no prior skip, etc.)
 /// 2. Calculates bytes already delivered to the guest from oplog
 /// 3. Reconstructs the outgoing request with a Range header
 /// 4. Sends the request and handles 206, 416, or a full-body response that
@@ -950,7 +957,7 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
 /// Returns `Ok(true)` if retry succeeded (stream swapped, caller should re-attempt read),
 /// `Ok(false)` if retry is not eligible or conditions not met,
 /// `Err` with a StreamError if content mismatch detected.
-pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
+pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     stream_handle: u32,
 ) -> Result<bool, anyhow::Error> {
@@ -965,15 +972,22 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
         None => return Ok(false),
     };
 
-    // Zone 2 requires a tracked IncomingBody handle to properly swap body+stream
+    // Response-body resumption requires a tracked IncomingBody handle to properly
+    // swap body+stream.
     let body_handle = match request_state.body_handle {
         Some(h) => h,
         None => return Ok(false),
     };
 
-    // 2. Check Zone 2 eligibility
+    // 2. Check response-body resumption eligibility
     let exec_state = ctx.durable_execution_state();
-    if is_http_inline_retry_eligible(&exec_state, &request_state, RetryZone::Zone2).is_err() {
+    if is_http_inline_retry_eligible(
+        &exec_state,
+        &request_state,
+        InlineRetryPhase::ResumingResponseBody,
+    )
+    .is_err()
+    {
         return Ok(false);
     }
 
@@ -985,8 +999,9 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     let body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index).await?;
 
     // 5. Build the request, adding a Range header if bytes were already consumed.
-    //    If the original request already has a Range header, Zone 2 is not supported
-    //    because composing Range headers correctly is complex.
+    //    If the original request already has a Range header, response-body
+    //    resumption is not supported because composing Range headers correctly is
+    //    complex.
     let has_range = request_state
         .request
         .headers
@@ -996,11 +1011,15 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
         return Ok(false);
     }
 
-    // Record and budget this Zone 2 transition as an in-function retry attempt
+    // Record and budget this response-body resumption as an in-function retry
+    // attempt
     // so oplog/error accounting reflects that we recovered from a transient read
     // failure by reconstructing and resuming the request.
     let mut retry_state = InFunctionRetryState::new();
-    match retry_state.decide_retry(ctx, "http-zone2-read").await {
+    match retry_state
+        .decide_retry(ctx, "http-resume-response-body-read")
+        .await
+    {
         AsyncRetryDecision::RetryAfterDelay(delay) => {
             let interrupt = ctx.create_interrupt_signal();
             let sleep = tokio::time::sleep(delay);
@@ -1029,7 +1048,7 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
         &request_state,
         &body_chunks,
         &extra_headers,
-        Some("http-zone2-send"),
+        Some("http-resume-response-body-send"),
     )
     .await?
     {
@@ -1078,7 +1097,7 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                     tracing::debug!(
                         stream_handle = stream_handle,
                         consumed_len = consumed_len,
-                        "Zone 2 inline retry: 206 Partial Content, body+stream swapped"
+                        "Resuming response body inline retry: 206 Partial Content, body+stream swapped"
                     );
                     Ok(true)
                 }
@@ -1088,7 +1107,7 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                         stream_handle = stream_handle,
                         content_range = ?content_range,
                         consumed_len = consumed_len,
-                        "Zone 2 inline retry: 206 Content-Range mismatch, falling back"
+                        "Resuming response body inline retry: 206 Content-Range mismatch, falling back"
                     );
                     Ok(false)
                 }
@@ -1115,7 +1134,7 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
             tracing::debug!(
                 stream_handle = stream_handle,
                 status = status,
-                "Zone 2 inline retry: matching full response (no bytes consumed), body+stream swapped"
+                "Resuming response body inline retry: matching full response (no bytes consumed), body+stream swapped"
             );
             Ok(true)
         }
@@ -1173,7 +1192,7 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 stream_handle = stream_handle,
                 status = status,
                 consumed_len = consumed_len,
-                "Zone 2 inline retry: matching full response with prefix skip, body+stream swapped"
+                "Resuming response body inline retry: matching full response with prefix skip, body+stream swapped"
             );
             Ok(true)
         }
@@ -1189,27 +1208,33 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 stream_handle = stream_handle,
                 status = status,
                 original_status = original_status,
-                "Zone 2 inline retry: retried status mismatch or unsupported status, falling back"
+                "Resuming response body inline retry: retried status mismatch or unsupported status, falling back"
             );
             Ok(false)
         }
     }
 }
 
-/// Attempts Zone 1 inline retry from FutureIncomingResponse::get() after a
-/// transient response error.
+/// Attempts awaiting-response inline retry from `FutureIncomingResponse::get()`
+/// after a transient response error.
 ///
-pub(crate) async fn try_zone1_get_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
+pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     request_state: &HttpRequestState,
 ) -> Result<Option<IncomingResponse>, anyhow::Error> {
     let exec_state = ctx.durable_execution_state();
     let mut eligibility_state = request_state.clone();
-    // Zone1 get()-time resend does not swap output stream resources, so an
+    // AwaitingResponse get()-time resend does not swap output stream resources, so an
     // output-stream subscribe() pollable cannot go stale here.
     eligibility_state.retry.output_stream_subscribed = false;
 
-    if is_http_inline_retry_eligible(&exec_state, &eligibility_state, RetryZone::Zone1).is_err() {
+    if is_http_inline_retry_eligible(
+        &exec_state,
+        &eligibility_state,
+        InlineRetryPhase::AwaitingResponse,
+    )
+    .is_err()
+    {
         return Ok(None);
     }
 
@@ -1328,8 +1353,13 @@ mod tests {
     fn test_eligible_baseline() {
         let exec = make_exec_state();
         let req = make_request_state();
-        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1).is_ok());
-        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone2).is_ok());
+        assert!(
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse).is_ok()
+        );
+        assert!(
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1338,7 +1368,7 @@ mod tests {
         let mut req = make_request_state();
         req.retry.has_unreconstructable_body = true;
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
             Err(InlineRetryIneligible::UnreconstructableBody)
         );
     }
@@ -1349,15 +1379,15 @@ mod tests {
         let mut req = make_request_state();
         req.retry.output_stream_subscribed = true;
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
             Err(InlineRetryIneligible::OutputStreamSubscribed)
         );
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone2),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody),
             Err(InlineRetryIneligible::OutputStreamSubscribed)
         );
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, RetryZone::OutputStreamWrite),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::WritingRequestBody),
             Err(InlineRetryIneligible::OutputStreamSubscribed)
         );
     }
@@ -1368,38 +1398,43 @@ mod tests {
         let mut req = make_request_state();
         req.retry.has_outgoing_trailers = true;
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
             Err(InlineRetryIneligible::HasOutgoingTrailers)
         );
     }
 
     #[test]
-    fn test_had_body_skip_disqualifies_zone2_only() {
+    fn test_had_body_skip_disqualifies_resuming_response_body_only() {
         let exec = make_exec_state();
         let mut req = make_request_state();
         req.retry.had_body_skip = true;
-        // Zone 1 should still be eligible
-        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1).is_ok());
-        // Zone 2 should be disqualified
+        // AwaitingResponse should still be eligible
+        assert!(
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse).is_ok()
+        );
+        // ResumingResponseBody should be disqualified
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone2),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody),
             Err(InlineRetryIneligible::HadBodySkip)
         );
     }
 
     #[test]
-    fn test_body_not_finished_disqualifies_zone1_only() {
+    fn test_body_not_finished_disqualifies_awaiting_response_only() {
         let exec = make_exec_state();
         let mut req = make_request_state();
         req.retry.body_finished = false;
         req.output_stream_rep = Some(1);
-        // Zone 1 should be disqualified
+        // AwaitingResponse should be disqualified
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
             Err(InlineRetryIneligible::BodyNotFinished)
         );
-        // Zone 2 should still be eligible
-        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone2).is_ok());
+        // ResumingResponseBody should still be eligible
+        assert!(
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1408,8 +1443,13 @@ mod tests {
         let mut req = make_request_state();
         req.retry.body_finished = false;
         // output_stream_rep is None (no stream opened), so body_finished is irrelevant
-        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1).is_ok());
-        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone2).is_ok());
+        assert!(
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse).is_ok()
+        );
+        assert!(
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::ResumingResponseBody)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1419,7 +1459,7 @@ mod tests {
         let mut req = make_request_state();
         req.request.method = SerializableHttpMethod::Post;
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
             Err(InlineRetryIneligible::NotIdempotent)
         );
     }
@@ -1429,7 +1469,9 @@ mod tests {
         let mut exec = make_exec_state();
         exec.assume_idempotence = false;
         let req = make_request_state(); // GET is idempotent
-        assert!(is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1).is_ok());
+        assert!(
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse).is_ok()
+        );
     }
 
     #[test]
@@ -1438,7 +1480,7 @@ mod tests {
         exec.is_live = false;
         let req = make_request_state();
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
             Err(InlineRetryIneligible::NotLive)
         );
     }
@@ -1449,7 +1491,7 @@ mod tests {
         exec.persistence_level = PersistenceLevel::PersistNothing;
         let req = make_request_state();
         assert_eq!(
-            is_http_inline_retry_eligible(&exec, &req, RetryZone::Zone1),
+            is_http_inline_retry_eligible(&exec, &req, InlineRetryPhase::AwaitingResponse),
             Err(InlineRetryIneligible::PersistNothing)
         );
     }

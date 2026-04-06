@@ -845,7 +845,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     && !has_background_retry
                     && let Some(request_state) = self.state.open_http_requests.get(&handle).cloned()
                     && let Some(retried_response) =
-                        crate::durable_host::http::inline_retry::try_zone1_get_inline_retry(
+                        crate::durable_host::http::inline_retry::try_awaiting_response_inline_retry(
                             self,
                             &request_state,
                         )

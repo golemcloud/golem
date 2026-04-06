@@ -68,9 +68,10 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 let request = get_http_stream_request(self, handle)?;
                 let first_try = HostInputStream::read(self.table(), self_, len).await;
 
-                // Attempt Zone 2 inline retry if the read failed with a transient error
+                // Attempt response-body resumption inline retry if the read
+                // failed with a transient error.
                 let read_result = if is_transient_stream_error(&first_try) {
-                    match crate::durable_host::http::inline_retry::try_zone2_inline_retry(
+                    match crate::durable_host::http::inline_retry::try_resuming_response_body_inline_retry(
                         self, handle,
                     )
                     .await
@@ -82,7 +83,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                         }
                         Ok(false) => first_try,
                         Err(e) => {
-                            // Zone 2 hard failure (content mismatch, 416, etc.)
+                            // Response-body resumption hard failure (content
+                            // mismatch, 416, etc.)
                             return Err(StreamError::LastOperationFailed(
                                 wasmtime::Error::from_anyhow(e),
                             ));
@@ -138,9 +140,10 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 let request = get_http_stream_request(self, handle)?;
                 let first_try = HostInputStream::blocking_read(self.table(), self_, len).await;
 
-                // Attempt Zone 2 inline retry if the read failed with a transient error
+                // Attempt response-body resumption inline retry if the read
+                // failed with a transient error.
                 let read_result = if is_transient_stream_error(&first_try) {
-                    match crate::durable_host::http::inline_retry::try_zone2_inline_retry(
+                    match crate::durable_host::http::inline_retry::try_resuming_response_body_inline_retry(
                         self, handle,
                     )
                     .await
@@ -152,7 +155,8 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                         }
                         Ok(false) => first_try,
                         Err(e) => {
-                            // Zone 2 hard failure (content mismatch, 416, etc.)
+                            // Response-body resumption hard failure (content
+                            // mismatch, 416, etc.)
                             return Err(StreamError::LastOperationFailed(
                                 wasmtime::Error::from_anyhow(e),
                             ));
