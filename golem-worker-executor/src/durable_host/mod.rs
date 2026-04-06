@@ -1592,14 +1592,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         url: String,
         headers: Option<Vec<(String, String)>>,
     ) {
-        self.state.open_websocket_connections.insert(
-            rep,
-            WebSocketConnectionState {
-                url,
-                headers,
-                mode: WebSocketConnectionMode::Live,
-            },
-        );
+        self.state
+            .open_websocket_connections
+            .insert(rep, WebSocketConnectionState { url, headers });
     }
 
     pub(crate) fn unregister_open_websocket(&mut self, rep: u32) {
@@ -1613,20 +1608,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|state| WebSocketConnectionInfo {
                 url: state.url.clone(),
                 headers: state.headers.clone(),
-                mode: state.mode.clone(),
             })
-    }
-
-    pub(crate) fn mark_websocket_reconnected(&mut self, rep: u32) {
-        if let Some(state) = self.state.open_websocket_connections.get_mut(&rep) {
-            state.mode = WebSocketConnectionMode::Live;
-        }
-    }
-
-    pub(crate) fn mark_open_websockets_for_reconnect(&mut self) {
-        for state in self.state.open_websocket_connections.values_mut() {
-            state.mode = WebSocketConnectionMode::NeedsReconnect;
-        }
     }
 
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
@@ -1647,8 +1629,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
-                    self.mark_open_websockets_for_reconnect();
-
                     let pending_update = self.state.pending_update.lock().await.take();
 
                     let pending_update = if let Some(pending_update) = pending_update {
@@ -3202,24 +3182,16 @@ pub(crate) struct PendingFilesystemReservation {
     pub reserved_growth: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum WebSocketConnectionMode {
-    Live,
-    NeedsReconnect,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct WebSocketConnectionState {
     pub url: String,
     pub headers: Option<Vec<(String, String)>>,
-    pub mode: WebSocketConnectionMode,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct WebSocketConnectionInfo {
     pub url: String,
     pub headers: Option<Vec<(String, String)>>,
-    pub mode: WebSocketConnectionMode,
 }
 
 struct PrivateDurableWorkerState {

@@ -68,12 +68,12 @@ impl TerminalWebSocketError {
     fn to_error(&self) -> Error {
         match self {
             Self::ConnectionFailure(reason) => Error::ConnectionFailure(reason.clone()),
-            Self::Closed(close_info) => Error::Closed(close_info.as_ref().map(|close_info| {
-                CloseInfo {
+            Self::Closed(close_info) => {
+                Error::Closed(close_info.as_ref().map(|close_info| CloseInfo {
                     code: close_info.code,
                     reason: close_info.reason.clone(),
-                }
-            })),
+                }))
+            }
         }
     }
 }
@@ -457,7 +457,9 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     }
                 }
                 WebSocketConnectionEntry::Replay => {
-                    unreachable!("live receive_with_timeout path must not use Replay connection entry")
+                    unreachable!(
+                        "live receive_with_timeout path must not use Replay connection entry"
+                    )
                 }
                 WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
             };
@@ -577,6 +579,12 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 .await?;
             if live_result.is_ok() {
                 mark_websocket_terminal(self, &self_, terminal_close_error.clone())?;
+            } else if let Some(terminal_error) = live_result
+                .as_ref()
+                .err()
+                .and_then(terminal_websocket_error)
+            {
+                mark_websocket_terminal(self, &self_, terminal_error)?;
             }
             Ok(live_result)
         } else {
@@ -633,21 +641,14 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
     };
 
     let Some(info) = ctx.websocket_connection_info(rep) else {
-        if is_replay_entry {
-            let error = connection_closed_error("Connection closed");
-            mark_websocket_terminal(
-                ctx,
-                resource,
-                terminal_websocket_error(&error).expect("closed websocket errors must be terminal"),
-            )?;
-            return Ok(Err(error));
-        }
-
+        debug_assert!(
+            !is_replay_entry,
+            "Replay entry must have connection info registered via connect()"
+        );
         return Ok(Ok(()));
     };
 
-    if !is_replay_entry && info.mode != crate::durable_host::WebSocketConnectionMode::NeedsReconnect
-    {
+    if !is_replay_entry {
         return Ok(Ok(()));
     }
 
@@ -712,7 +713,6 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
         *entry = new_entry;
     }
 
-    ctx.mark_websocket_reconnected(rep);
     Ok(Ok(()))
 }
 
@@ -791,13 +791,6 @@ async fn read_next_user_or_close(stream: &mut SplitStream<WsStream>) -> Result<M
             }
         }
     }
-}
-
-fn connection_closed_error(reason: impl Into<String>) -> Error {
-    Error::Closed(Some(CloseInfo {
-        code: 1000,
-        reason: reason.into(),
-    }))
 }
 
 fn terminal_websocket_error(error: &Error) -> Option<TerminalWebSocketError> {
