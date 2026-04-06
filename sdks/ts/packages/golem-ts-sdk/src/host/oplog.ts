@@ -296,7 +296,9 @@ export class SearchOplog {
   getNext(): [OplogIndex, PublicOplogEntry][] | undefined {
     const raw = this.inner.getNext();
     return raw
-      ? raw.map(([idx, entry]) => [idx, wrapPublicOplogEntry(entry)] as [OplogIndex, PublicOplogEntry])
+      ? raw.map(
+          ([idx, entry]) => [idx, wrapPublicOplogEntry(entry)] as [OplogIndex, PublicOplogEntry],
+        )
       : undefined;
   }
 }
