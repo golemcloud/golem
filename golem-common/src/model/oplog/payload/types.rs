@@ -1282,6 +1282,31 @@ pub enum SerializableRpcError {
     RemoteInternalError { details: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct SerializableWebsocketCloseInfo {
+    pub code: u16,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub enum SerializableWebsocketMessage {
+    Text(String),
+    Binary(Vec<u8>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub enum SerializableWebsocketError {
+    ConnectionFailure(String),
+    SendFailure(String),
+    ReceiveFailure(String),
+    ProtocolError(String),
+    Closed(Option<SerializableWebsocketCloseInfo>),
+    Other(String),
+}
+
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
 #[wit_transparent]

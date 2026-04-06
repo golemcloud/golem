@@ -22,7 +22,7 @@ use crate::model::component::ComponentRevision;
 use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
-    SerializableSocketError,
+    SerializableSocketError, SerializableWebsocketError, SerializableWebsocketMessage,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -184,6 +184,21 @@ oplog_payload! {
         SocketsResolveName {
             name: String
         },
+        WebsocketConnect {
+            url: String,
+            headers: Option<Vec<(String, String)>>,
+        },
+        WebsocketSend {
+            message: SerializableWebsocketMessage,
+        },
+        WebsocketReceive {},
+        WebsocketReceiveWithTimeout {
+            timeout_ms: u64,
+        },
+        WebsocketClose {
+            code: Option<u16>,
+            reason: Option<String>,
+        },
     }
 }
 
@@ -328,6 +343,21 @@ oplog_payload! {
         SocketsResolveName {
             result: Result<SerializableIpAddresses, SerializableSocketError>
         },
+        WebsocketConnectResponse {
+            result: Result<(), SerializableWebsocketError>,
+        },
+        WebsocketSendResponse {
+            result: Result<(), SerializableWebsocketError>,
+        },
+        WebsocketReceiveResponse {
+            result: Result<SerializableWebsocketMessage, SerializableWebsocketError>,
+        },
+        WebsocketReceiveWithTimeoutResponse {
+            result: Result<Option<SerializableWebsocketMessage>, SerializableWebsocketError>,
+        },
+        WebsocketCloseResponse {
+            result: Result<(), SerializableWebsocketError>,
+        },
         StreamCheckWrite {
             result: Result<u64, SerializableStreamError>
         },
@@ -453,7 +483,12 @@ pub mod host_functions {
         (GolemApiRevertWorker => "golem::api", "revert_worker", GolemApiRevertAgent, GolemApiUnit),
         (GolemApiResolveComponentId => "golem::api", "resolve_component_id", GolemApiComponentSlug, GolemApiComponentId),
         (GolemApiResolveAgentIdStrict => "golem::api", "resolve_agent_id_strict", GolemApiComponentSlugAndAgentName, GolemApiAgentId),
-        (GolemApiFork => "golem::api", "fork", NoInput, GolemApiFork)
+        (GolemApiFork => "golem::api", "fork", NoInput, GolemApiFork),
+        (WebsocketClientConnect => "golem:websocket/client", "connect", WebsocketConnect, WebsocketConnectResponse),
+        (WebsocketClientSend => "golem:websocket/client", "send", WebsocketSend, WebsocketSendResponse),
+        (WebsocketClientReceive => "golem:websocket/client", "receive", WebsocketReceive, WebsocketReceiveResponse),
+        (WebsocketClientReceiveWithTimeout => "golem:websocket/client", "receive-with-timeout", WebsocketReceiveWithTimeout, WebsocketReceiveWithTimeoutResponse),
+        (WebsocketClientClose => "golem:websocket/client", "close", WebsocketClose, WebsocketCloseResponse)
     }
 }
 
