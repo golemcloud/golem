@@ -103,7 +103,11 @@ pub fn get_principal() -> Option<Principal> {
     state.initialized_principal.borrow().clone()
 }
 
-pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: ExtendedAgentType) {
+pub fn register_agent_type(agent_type_name: AgentTypeName, mut agent_type: ExtendedAgentType) {
+    let mut indices: Vec<usize> = (0..agent_type.methods.len()).collect();
+    indices.sort_by(|&a, &b| agent_type.methods[a].name.cmp(&agent_type.methods[b].name));
+    agent_type.sorted_method_indices = indices;
+
     get_state()
         .agent_types
         .borrow_mut()
@@ -222,6 +226,19 @@ pub fn get_method_parameter_types(
     let agent_types = state.agent_types.borrow();
     let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
     let method = agent_type.methods.iter().find(|m| m.name == method_name)?;
+
+    Some(extract_all_parameter_schemas(&method.input_schema))
+}
+
+pub fn get_method_parameter_types_by_index(
+    agent_type_name: &AgentTypeName,
+    sorted_method_index: usize,
+) -> Option<Vec<EnrichedElementSchema>> {
+    let state = get_state();
+    let agent_types = state.agent_types.borrow();
+    let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
+    let orig_idx = *agent_type.sorted_method_indices.get(sorted_method_index)?;
+    let method = agent_type.methods.get(orig_idx)?;
 
     Some(extract_all_parameter_schemas(&method.input_schema))
 }
