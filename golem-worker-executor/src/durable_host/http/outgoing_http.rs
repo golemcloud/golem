@@ -277,6 +277,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         request,
                         span_id: span.span_id().clone(),
                         body_handle: None,
+                        response_status: None,
                         outgoing_body_rep,
                         output_stream_rep,
                         use_tls,

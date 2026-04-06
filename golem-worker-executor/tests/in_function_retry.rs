@@ -1171,15 +1171,18 @@ async fn http_get_retried_inline_even_when_idempotence_disabled(
 }
 
 /// Starts a TCP server that sends partial responses, then supports Range-based resume.
-/// First `fail_count` connections: sends HTTP 200 headers + `prefix_len` bytes then drops.
-/// Subsequent connections: if Range header present, responds 206 with remaining bytes;
-/// otherwise responds 200 with the full body.
+/// First `fail_count` connections: sends `initial_status` headers + `prefix_len` bytes then drops.
+/// Subsequent connections: if `resume_supports_range` is true and a Range header is present,
+/// responds 206 with remaining bytes; otherwise responds with `resume_status` and the full body.
 /// The body is `body_size` bytes of sequential values (i % 256).
 /// Returns `(port, connection_counter)`.
 async fn start_partial_response_http_server(
     fail_count: usize,
     prefix_len: usize,
     body_size: usize,
+    initial_status: u16,
+    resume_status: u16,
+    resume_supports_range: bool,
 ) -> (u16, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -1219,8 +1222,15 @@ async fn start_partial_response_http_server(
                     }
 
                     // Send headers + partial body, then drop
+                    let initial_reason = match initial_status {
+                        200 => "OK",
+                        201 => "Created",
+                        _ => panic!("unsupported initial status: {initial_status}"),
+                    };
                     let headers = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        initial_status,
+                        initial_reason,
                         body_size,
                     );
                     let _ = stream.write_all(headers.as_bytes()).await;
@@ -1264,7 +1274,7 @@ async fn start_partial_response_http_server(
                         range_counter_clone.fetch_add(1, Ordering::SeqCst);
                     }
 
-                    if let Some(start) = range_start {
+                    if resume_supports_range && let Some(start) = range_start {
                         if start <= body_size {
                             // 206 Partial Content
                             let remaining = &full_body[start..];
@@ -1283,9 +1293,16 @@ async fn start_partial_response_http_server(
                             let _ = stream.write_all(response.as_bytes()).await;
                         }
                     } else {
-                        // 200 OK with full body (for Zone 2 200+skip path)
+                        // Full body response (for Zone 2 matching-status skip path)
+                        let resume_reason = match resume_status {
+                            200 => "OK",
+                            201 => "Created",
+                            _ => panic!("unsupported resume status: {resume_status}"),
+                        };
                         let response = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            resume_status,
+                            resume_reason,
                             body_size,
                         );
                         let _ = stream.write_all(response.as_bytes()).await;
@@ -1478,7 +1495,7 @@ async fn http_zone2_inline_retry_on_body_read_failure(
     // Server sends 1024-byte body. First connection sends 256 bytes then drops.
     // Second connection checks for Range header and responds with 206 + remaining bytes.
     let (port, connection_counter, range_counter) =
-        start_partial_response_http_server(1, 256, 1024).await;
+        start_partial_response_http_server(1, 256, 1024, 200, 200, true).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -1531,6 +1548,93 @@ async fn http_zone2_inline_retry_on_body_read_failure(
     );
 
     // Verify oplog contains in-function retry error entries for Zone 2
+    let retry_count =
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    assert!(
+        retry_count > 0,
+        "Expected at least 1 in-function retry error entry in oplog for Zone 2, got {retry_count}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_zone2_inline_retry_accepts_matching_non_partial_success_status(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 5,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_secs(1);
+        })),
+        ..Default::default()
+    };
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+
+    // Server sends a 201 response body, drops mid-stream, then ignores the retry Range
+    // header and resends the full body with the same 201 status.
+    let (port, connection_counter, range_counter) =
+        start_partial_response_http_server(1, 256, 1024, 201, 201, false).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_read_body_chunked",
+            data_value!(),
+        )
+        .await?;
+
+    let result_value = result.into_return_value().expect("Expected a return value");
+
+    assert!(
+        matches!(&result_value, Value::String(s) if s.starts_with("201 ")),
+        "Expected a successful 201 response, got: {result_value:?}"
+    );
+
+    let total_connections = connection_counter.load(Ordering::SeqCst);
+    assert_eq!(
+        total_connections, 2,
+        "Expected 2 total connections (1 partial + 1 resumed)"
+    );
+
+    let range_requests = range_counter.load(Ordering::SeqCst);
+    assert!(
+        range_requests > 0,
+        "Expected at least 1 range request from Zone 2 retry, got {range_requests}"
+    );
+
     let retry_count =
         count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
     assert!(
@@ -1812,7 +1916,7 @@ async fn http_no_zone2_retry_when_body_skip_used(
     // The guest reads first 256, skips 256, then tries to read more — which will fail.
     // Zone 2 should be disqualified because blocking_skip was used.
     let (port, connection_counter, range_counter) =
-        start_partial_response_http_server(1, 1024, 2048).await;
+        start_partial_response_http_server(1, 1024, 2048, 200, 200, true).await;
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)

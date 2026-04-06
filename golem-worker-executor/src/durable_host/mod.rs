@@ -3170,6 +3170,10 @@ pub(crate) struct HttpRequestState {
     /// this records the IncomingBody handle so that on stream close we can transfer
     /// tracking back to the body (enabling finish() to then transfer to FutureTrailers).
     pub body_handle: Option<u32>,
+    /// The original response status observed by the guest before body consumption.
+    /// Zone 2 only swaps the body stream, so inline retry must not resume from a
+    /// retried response that changes the status code visible via IncomingResponse.
+    pub response_status: Option<u16>,
     /// The outgoing body resource handle associated with this request, set when
     /// outgoing_handler::handle() resolves the pending body mapping.
     pub outgoing_body_rep: Option<u32>,

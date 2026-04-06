@@ -943,7 +943,8 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
 /// 1. Checks Zone 2 eligibility (no prior skip, etc.)
 /// 2. Calculates bytes already delivered to the guest from oplog
 /// 3. Reconstructs the outgoing request with a Range header
-/// 4. Sends the request and handles 206/200/416 responses
+/// 4. Sends the request and handles 206, 416, or a full-body response that
+///    preserves the original status code seen by the guest
 /// 5. Swaps the InputStream to the new response's body stream
 ///
 /// Returns `Ok(true)` if retry succeeded (stream swapped, caller should re-attempt read),
@@ -1037,6 +1038,7 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     };
 
     let status = response.resp.status().as_u16();
+    let original_status = request_state.response_status;
     let between_bytes_timeout = response.between_bytes_timeout;
 
     // 7. Handle response status
@@ -1092,7 +1094,7 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 }
             }
         }
-        200 if consumed_len == 0 => {
+        _ if original_status == Some(status) && consumed_len == 0 => {
             // Full response with nothing consumed yet — swap body+stream directly
             let (_parts, body) = response.resp.into_parts();
             let new_body = HostIncomingBody::new(body, between_bytes_timeout, usize::MAX);
@@ -1112,11 +1114,12 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
 
             tracing::debug!(
                 stream_handle = stream_handle,
-                "Zone 2 inline retry: 200 OK (no bytes consumed), body+stream swapped"
+                status = status,
+                "Zone 2 inline retry: matching full response (no bytes consumed), body+stream swapped"
             );
             Ok(true)
         }
-        200 => {
+        _ if original_status == Some(status) => {
             // Full response — skip consumed_len bytes then swap.
             // We only count bytes (no content verification) because materializing
             // the previously consumed data would require the same OOM-prone
@@ -1168,8 +1171,9 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
 
             tracing::debug!(
                 stream_handle = stream_handle,
+                status = status,
                 consumed_len = consumed_len,
-                "Zone 2 inline retry: 200 OK with prefix skip, body+stream swapped"
+                "Zone 2 inline retry: matching full response with prefix skip, body+stream swapped"
             );
             Ok(true)
         }
@@ -1180,11 +1184,12 @@ pub async fn try_zone2_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
             ))
         }
         _ => {
-            // Unexpected status — don't retry
+            // Unexpected or status-changing response — don't retry
             tracing::debug!(
                 stream_handle = stream_handle,
                 status = status,
-                "Zone 2 inline retry: unexpected status code, falling back"
+                original_status = original_status,
+                "Zone 2 inline retry: retried status mismatch or unsupported status, falling back"
             );
             Ok(false)
         }
@@ -1305,6 +1310,7 @@ mod tests {
             },
             span_id: SpanId::generate(),
             body_handle: None,
+            response_status: Some(200),
             outgoing_body_rep: None,
             output_stream_rep: None,
             use_tls: false,

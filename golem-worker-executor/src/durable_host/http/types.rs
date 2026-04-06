@@ -891,6 +891,12 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             }
 
             let is_pending = matches!(serializable_response, SerializableHttpResponse::Pending);
+            if let Some(state) = self.state.open_http_requests.get_mut(&handle) {
+                state.response_status = match &serializable_response {
+                    SerializableHttpResponse::HeadersReceived(headers) => Some(headers.status),
+                    _ => None,
+                };
+            }
             persist_http_response(self, request, &serializable_response, begin_index).await;
 
             if !is_pending && let Ok(Some(Ok(Ok(resource)))) = &response {
@@ -933,6 +939,10 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             match serialized_response {
                 SerializableHttpResponse::Pending => Ok(None),
                 SerializableHttpResponse::HeadersReceived(serializable_response_headers) => {
+                    if let Some(state) = self.state.open_http_requests.get_mut(&handle) {
+                        state.response_status = Some(serializable_response_headers.status);
+                    }
+
                     let incoming_response: wasmtime_wasi_http::types::HostIncomingResponse =
                         serializable_response_headers
                             .try_into()
