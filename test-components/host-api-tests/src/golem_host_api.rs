@@ -1,16 +1,14 @@
 use golem_rust::bindings::golem::api::host::{
+    AgentAnyFilter, AgentMetadata, ComponentId as HostComponentId, GetAgents, UpdateMode,
     get_agent_metadata, get_oplog_index, get_self_metadata, resolve_agent_id,
     resolve_agent_id_strict, resolve_component_id, set_oplog_index, update_agent,
-    AgentAnyFilter, AgentMetadata, ComponentId as HostComponentId, GetAgents, UpdateMode,
 };
 use golem_rust::{
-    agent_definition, agent_implementation, generate_idempotency_key, golem_operation, Schema,
-    atomically, get_promise, fork, oplog_commit,
-    fallible_transaction, infallible_transaction,
-    use_retry_policy, RetryPolicy, use_idempotence_mode, use_persistence_level,
-    with_persistence_level, PersistenceLevel,
-    Checkpoint, CheckpointResultExt,
-    ForkResult, PromiseId, Transaction, Uuid,
+    Checkpoint, CheckpointResultExt, ForkResult, PersistenceLevel, PromiseId, RetryPolicy, Schema,
+    Transaction, Uuid, agent_definition, agent_implementation, atomically, fallible_transaction,
+    fork, generate_idempotency_key, get_promise, golem_operation, infallible_transaction,
+    oplog_commit, use_idempotence_mode, use_persistence_level, use_retry_policy,
+    with_persistence_level,
 };
 use golem_wasi_http::{Client, Response};
 use serde::{Deserialize, Serialize};
@@ -43,10 +41,23 @@ pub trait GolemHostApi {
 
     fn checkpoint_test(&self) -> u64;
     fn jump(&self) -> u64;
-    fn get_workers(&self, component_id: HostComponentId, filter: Option<AgentAnyFilter>, precise: bool) -> Vec<AgentMetadata>;
+    fn get_workers(
+        &self,
+        component_id: HostComponentId,
+        filter: Option<AgentAnyFilter>,
+        precise: bool,
+    ) -> Vec<AgentMetadata>;
     fn get_self_uri(&self) -> AgentMetadata;
-    fn get_worker_metadata(&self, agent_id: golem_rust::golem_wasm::AgentId) -> Option<AgentMetadata>;
-    fn update_worker(&self, agent_id: golem_rust::golem_wasm::AgentId, component_revision: u64, update_mode: UpdateMode);
+    fn get_worker_metadata(
+        &self,
+        agent_id: golem_rust::golem_wasm::AgentId,
+    ) -> Option<AgentMetadata>;
+    fn update_worker(
+        &self,
+        agent_id: golem_rust::golem_wasm::AgentId,
+        component_revision: u64,
+        update_mode: UpdateMode,
+    );
     fn generate_idempotency_keys(&self) -> (Uuid, Uuid);
 }
 
@@ -303,7 +314,10 @@ impl GolemHostApi for GolemHostApiImpl {
         get_self_metadata()
     }
 
-    fn get_worker_metadata(&self, agent_id: golem_rust::golem_wasm::AgentId) -> Option<AgentMetadata> {
+    fn get_worker_metadata(
+        &self,
+        agent_id: golem_rust::golem_wasm::AgentId,
+    ) -> Option<AgentMetadata> {
         get_agent_metadata(&agent_id)
     }
 
@@ -373,9 +387,7 @@ fn remote_side_effect(message: &str) {
     println!("Received {status}");
 }
 
-fn send_remote_side_effect_raw(
-    message: &str,
-) -> wasi::http::types::FutureIncomingResponse {
+fn send_remote_side_effect_raw(message: &str) -> wasi::http::types::FutureIncomingResponse {
     let port = std::env::var("PORT").unwrap_or("9999".to_string());
 
     let headers = wasi::http::types::Fields::new();
@@ -400,9 +412,7 @@ fn send_remote_side_effect_raw(
     let options = wasi::http::types::RequestOptions::new();
     options.set_connect_timeout(Some(5000000000)).unwrap();
     options.set_first_byte_timeout(Some(5000000000)).unwrap();
-    options
-        .set_between_bytes_timeout(Some(5000000000))
-        .unwrap();
+    options.set_between_bytes_timeout(Some(5000000000)).unwrap();
 
     wasi::http::outgoing_handler::handle(request, Some(options)).unwrap()
 }
@@ -432,9 +442,7 @@ fn get_incoming_response_raw(
     }
 }
 
-fn read_response_body_raw(
-    incoming_response: &wasi::http::types::IncomingResponse,
-) -> Vec<u8> {
+fn read_response_body_raw(incoming_response: &wasi::http::types::IncomingResponse) -> Vec<u8> {
     let response_body = incoming_response.consume().unwrap();
     let response_body_stream = response_body.stream().unwrap();
     let mut body = Vec::new();
