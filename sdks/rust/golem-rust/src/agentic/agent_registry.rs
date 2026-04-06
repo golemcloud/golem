@@ -204,6 +204,16 @@ pub fn get_method_parameter_type(
     extract_parameter_schema(&method.input_schema, parameter_index)
 }
 
+pub fn get_constructor_parameter_types(
+    agent_type_name: &AgentTypeName,
+) -> Option<Vec<EnrichedElementSchema>> {
+    let state = get_state();
+    let agent_types = state.agent_types.borrow();
+    let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
+
+    Some(extract_all_parameter_schemas(&agent_type.constructor.input_schema))
+}
+
 pub fn get_method_parameter_types(
     agent_type_name: &AgentTypeName,
     method_name: &str,
