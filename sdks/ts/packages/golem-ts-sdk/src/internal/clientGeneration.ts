@@ -14,7 +14,8 @@
 
 import { ClassMetadata, Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as WitValue from './mapping/values/WitValue';
-import { makeAgentId, Uuid, WasmRpc, Datetime } from 'golem:agent/host@1.5.0';
+import { makeAgentId, WasmRpc, Datetime } from 'golem:agent/host@1.5.0';
+import { Uuid } from '../uuid';
 import { AgentClassName } from '../agentClassName';
 import * as WitType from './mapping/types/WitType';
 import * as Either from '../newTypes/either';
@@ -37,8 +38,8 @@ import {
 } from './mapping/values/serializer';
 import { TypeInfoInternal } from './typeInfoInternal';
 import { deserializeDataValue, serializeToDataValue } from './mapping/values/dataValue';
-import { randomUuid, ValueAndType } from '../host/hostapi';
-import { AgentId } from '../agentId';
+import { ValueAndType } from '../host/hostapi';
+import { ParsedAgentId } from '../agentId';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   agentClassName: AgentClassName,
@@ -107,7 +108,7 @@ export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>
   return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
-    const finalPhantomId = randomUuid();
+    const finalPhantomId = Uuid.generate();
     const constructedId = shared.constructWasmRpcParams(args, configIncludedInArgs, finalPhantomId);
 
     return new Proxy(instance, new WasmRpcProxyHandler(shared, constructedId));
@@ -302,12 +303,12 @@ class WasmRpcProxyHandlerShared {
 
 class WasmRpcProxyHandler implements ProxyHandler<any> {
   private readonly shared: WasmRpcProxyHandlerShared;
-  private readonly agentId: AgentId;
+  private readonly agentId: ParsedAgentId;
   private readonly wasmRpc: WasmRpc;
 
   private readonly methodProxyCache = new Map<string, RemoteMethod<any[], any>>();
 
-  private readonly getIdMethod: () => AgentId = () => this.agentId;
+  private readonly getIdMethod: () => ParsedAgentId = () => this.agentId;
   private readonly phantomIdMethod: () => Uuid | undefined = () => {
     const [, , phantomId] = this.agentId.parsed();
     return phantomId;
@@ -316,7 +317,7 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
 
   constructor(shared: WasmRpcProxyHandlerShared, rpcParams: WasmRpcParams) {
     this.shared = shared;
-    this.agentId = new AgentId(rpcParams.agentIdString);
+    this.agentId = new ParsedAgentId(rpcParams.agentIdString);
 
     this.wasmRpc = new WasmRpc(
       rpcParams.agentTypeName,
