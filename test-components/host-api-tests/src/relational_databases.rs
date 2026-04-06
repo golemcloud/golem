@@ -5,7 +5,7 @@ use golem_rust::bindings::golem::rdbms::postgres::{
     DbColumnType as PostgresDbColumnType, DbConnection as PostgresDbConnection,
     DbRow as PostgresDbRow, DbValue as PostgresDbValue, LazyDbValue as PostgresLazyDbValue,
 };
-use golem_rust::{agent_definition, agent_implementation, Schema};
+use golem_rust::{Schema, agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Schema, Serialize, Deserialize)]
@@ -236,9 +236,7 @@ impl RelationalDatabases for RelationalDatabasesImpl {
             end
         );
 
-        let transaction = connection
-            .begin_transaction()
-            .map_err(|e| e.to_string())?;
+        let transaction = connection.begin_transaction().map_err(|e| e.to_string())?;
         let mut results: Vec<String> = Vec::with_capacity(statements.len());
 
         for statement in statements.into_iter() {
@@ -396,9 +394,7 @@ impl RelationalDatabases for RelationalDatabasesImpl {
             end
         );
 
-        let transaction = connection
-            .begin_transaction()
-            .map_err(|e| e.to_string())?;
+        let transaction = connection.begin_transaction().map_err(|e| e.to_string())?;
         let mut results: Vec<String> = Vec::with_capacity(statements.len());
 
         for statement in statements.into_iter() {

@@ -1586,24 +1586,29 @@ enum SnapshotRecoveryResult {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    pub(crate) fn register_open_websocket(&mut self, rep: u32) {
-        self.state.open_websocket_connections.insert(rep);
+    pub(crate) fn register_open_websocket(
+        &mut self,
+        rep: u32,
+        url: String,
+        headers: Option<Vec<(String, String)>>,
+    ) {
+        self.state
+            .open_websocket_connections
+            .insert(rep, WebSocketConnectionState { url, headers });
     }
 
     pub(crate) fn unregister_open_websocket(&mut self, rep: u32) {
         self.state.open_websocket_connections.remove(&rep);
     }
 
-    pub(crate) fn validate_no_open_websocket_after_replay(
-        &self,
-    ) -> Result<(), WorkerExecutorError> {
-        if !self.state.open_websocket_connections.is_empty() {
-            Err(WorkerExecutorError::runtime(
-                "WebSocket connection was still open when replay ended; close or drop the connection before the replay boundary.",
-            ))
-        } else {
-            Ok(())
-        }
+    pub(crate) fn websocket_connection_info(&self, rep: u32) -> Option<WebSocketConnectionInfo> {
+        self.state
+            .open_websocket_connections
+            .get(&rep)
+            .map(|state| WebSocketConnectionInfo {
+                url: state.url.clone(),
+                headers: state.headers.clone(),
+            })
     }
 
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
@@ -1624,14 +1629,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
-
-                    // Phase 1 WebSocket durability rule:
-                    // If replay reached the boundary with any WebSocket connections that were
-                    // opened (according to the oplog) but not closed/dropped, we don't yet
-                    // support resuming from that state. Fail fast instead of continuing with
-                    // a half-open logical connection.
-                    self.validate_no_open_websocket_after_replay()?;
-
                     let pending_update = self.state.pending_update.lock().await.take();
 
                     let pending_update = if let Some(pending_update) = pending_update {
@@ -3185,6 +3182,18 @@ pub(crate) struct PendingFilesystemReservation {
     pub reserved_growth: u64,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct WebSocketConnectionState {
+    pub url: String,
+    pub headers: Option<Vec<(String, String)>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WebSocketConnectionInfo {
+    pub url: String,
+    pub headers: Option<Vec<(String, String)>>,
+}
+
 struct PrivateDurableWorkerState {
     // IMPORTANT: commits to the oplog must go via self.public_state.worker().commit_oplog_and_update_state
     oplog_service: Arc<dyn OplogService>,
@@ -3217,8 +3226,8 @@ struct PrivateDurableWorkerState {
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
     open_http_requests: HashMap<u32, HttpRequestState>,
 
-    /// WebSocket connection resource reps that are still open (not yet closed/dropped).
-    open_websocket_connections: HashSet<u32>,
+    /// WebSocket connection state indexed by websocket resource rep.
+    open_websocket_connections: HashMap<u32, WebSocketConnectionState>,
 
     /// Maps outgoing request rep → outgoing body rep, set during outgoing_request::body()
     /// before outgoing_handler::handle() is called and the HttpRequestState is created.
@@ -3392,7 +3401,7 @@ impl PrivateDurableWorkerState {
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
-            open_websocket_connections: HashSet::new(),
+            open_websocket_connections: HashMap::new(),
             pending_http_outgoing_request_body: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
             snapshotting_mode: None,
