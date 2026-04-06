@@ -296,6 +296,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::worker::AgentCreationRequest",
             ),
             (
+                "WorkerAgentConfigEntry",
+                "golem_common::model::worker::WorkerAgentConfigEntry",
+            ),
+            (
                 "AgentMetadataDto",
                 "golem_common::model::worker::AgentMetadataDto",
             ),

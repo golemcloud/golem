@@ -14,7 +14,7 @@
 
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurableWorkerCtx, HostFailureKind, InternalRetryResult};
 use crate::preview2::wasi::keyvalue::eventual_batch::{
     Bucket, Error, Host, IncomingValue, Key, OutgoingValue,
 };
@@ -44,7 +44,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability =
+        let mut durability =
             Durability::<KeyvalueEventualBatchGetMany>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
         let result = if durability.is_live() {
@@ -52,13 +52,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 bucket: bucket.clone(),
                 keys: keys.clone(),
             };
-            let result = self
-                .state
-                .key_value_service
-                .get_many(environment_id, bucket, keys)
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            let result = loop {
+                let result = self
+                    .state
+                    .key_value_service
+                    .get_many(environment_id, bucket.clone(), keys.clone())
+                    .await
+                    .map_err(|err| err.to_string());
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
             durability
                 .persist(self, input, HostResponseKVGetMany { result })
                 .await
@@ -104,17 +112,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability =
+        let mut durability =
             Durability::<KeyvalueEventualBatchGetKeys>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
         let result = if durability.is_live() {
-            let result = self
-                .state
-                .key_value_service
-                .get_keys(environment_id, bucket.clone())
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            let result = loop {
+                let result = self
+                    .state
+                    .key_value_service
+                    .get_keys(environment_id, bucket.clone())
+                    .await
+                    .map_err(|err| err.to_string());
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
             durability
                 .persist(
                     self,
@@ -162,7 +178,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             })
             .collect::<Result<Vec<(String, Vec<u8>)>, ResourceTableError>>()?;
 
-        let durability =
+        let mut durability =
             Durability::<KeyvalueEventualBatchSetMany>::new(self, DurableFunctionType::WriteRemote)
                 .await?;
 
@@ -174,13 +190,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .map(|(k, v)| (k.clone(), v.len()))
                     .collect(),
             };
-            let result = self
-                .state
-                .key_value_service
-                .set_many(environment_id, bucket, key_values)
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            let result = loop {
+                let result = self
+                    .state
+                    .key_value_service
+                    .set_many(environment_id, bucket.clone(), key_values.clone())
+                    .await
+                    .map_err(|err| err.to_string());
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
             durability
                 .persist(self, input, HostResponseKVUnit { result })
                 .await
@@ -210,7 +234,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .name
             .clone();
 
-        let durability = Durability::<KeyvalueEventualBatchDeleteMany>::new(
+        let mut durability = Durability::<KeyvalueEventualBatchDeleteMany>::new(
             self,
             DurableFunctionType::WriteRemote,
         )
@@ -221,13 +245,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 bucket: bucket.clone(),
                 keys: keys.clone(),
             };
-            let result = self
-                .state
-                .key_value_service
-                .delete_many(project_id, bucket, keys)
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            let result = loop {
+                let result = self
+                    .state
+                    .key_value_service
+                    .delete_many(project_id, bucket.clone(), keys.clone())
+                    .await
+                    .map_err(|err| err.to_string());
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
             durability
                 .persist(self, input, HostResponseKVUnit { result })
                 .await

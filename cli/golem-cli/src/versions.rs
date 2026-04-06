@@ -15,6 +15,7 @@
 pub mod sdk {
     pub const RUST: &str = "2.0.0-dev.2";
     pub const TS: &str = "0.1.0-dev.1";
+    pub const SCALA: &str = "0.0.0-SNAPSHOT";
     pub const MANIFEST: &str = "1.5.0";
 
     #[macro_export]
@@ -52,6 +53,12 @@ pub mod rust_dep {
     pub const SERDE: &str = "1";
     pub const SERDE_JSON: &str = "1";
     pub const WSTD: &str = "=0.6.5";
+}
+
+pub mod scala_dep {
+    pub const SCALA_VERSION: &str = "3.8.2";
+    pub const SCALAJS_PLUGIN_VERSION: &str = "1.20.2";
+    pub const SBT_VERSION: &str = "1.12.0";
 }
 
 pub mod ai {

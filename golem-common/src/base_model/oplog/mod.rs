@@ -161,10 +161,14 @@ oplog_entry! {
             /// or batched remote writes, this should point to the start of the region.
             /// When counting the number of retries for a specific error, the error entries are grouped by this index.
             retry_from: OplogIndex,
+            /// Whether the error occurred inside an active atomic region that has already performed side effects.
+            /// This affects retry decisions for deterministic traps.
+            inside_atomic_region: bool,
         }
         public {
             error: String,
             retry_from: OplogIndex,
+            inside_atomic_region: bool,
         }
     },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior

@@ -31,6 +31,7 @@ pub mod fuel;
 pub mod hot_update;
 pub mod http;
 pub mod ignite_service;
+pub mod in_function_retry;
 pub mod indexed_storage;
 pub mod key_value_storage;
 pub mod keyvalue;
@@ -52,6 +53,7 @@ test_r::enable!();
 tag_suite!(api, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
+tag_suite!(in_function_retry, group1);
 tag_suite!(http, group1);
 tag_suite!(websocket, group1);
 tag_suite!(rdbms, group1);
@@ -188,4 +190,10 @@ test_component!(
     "large_initial_memory",
     "scalability_large_initial_memory_release",
     "scalability:large-initial-memory"
+);
+test_component!(
+    agent_sdk_ts,
+    "agent_sdk_ts",
+    "golem_it_agent_sdk_ts",
+    "golem-it:agent-sdk-ts"
 );

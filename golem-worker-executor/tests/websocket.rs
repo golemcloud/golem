@@ -44,6 +44,10 @@ inherit_test_dep!(
     #[tagged_as("host_api_tests")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("agent_sdk_ts")]
+    PrecompiledComponent
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ServerEvent {
@@ -1301,6 +1305,191 @@ async fn websocket_async_bidirectional_test(
             "msg-a|msg-b|msg-c".to_string()
         )))))
     );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    ws_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn websocket_async_bidirectional_test_oplog_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let ws_port = listener.local_addr().unwrap().port();
+
+    // Keep accepting connections so the second invocation after restart can run live.
+    let ws_server = spawn(
+        async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+
+                let ws_stream = tokio_tungstenite::accept_async(stream)
+                    .await
+                    .expect("WS handshake failed");
+                let (mut write, mut read) = StreamExt::split(ws_stream);
+                while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
+                    if msg.is_close() {
+                        break;
+                    }
+                    if msg.is_text() || msg.is_binary() {
+                        SinkExt::send(&mut write, msg).await.ok();
+                    }
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
+
+    let agent_id = agent_id!("WebsocketTest", "websocket-async-bidi-oplog-replay");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env_vars,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let first_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "async_bidi_test",
+            data_value!(format!("ws://localhost:{ws_port}")),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(
+        first_result,
+        Value::Result(Ok(Some(Box::new(Value::String(
+            "msg-a|msg-b|msg-c".to_string()
+        )))))
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+
+    let second_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "async_bidi_test",
+            data_value!(format!("ws://localhost:{ws_port}")),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(
+        second_result,
+        Value::Result(Ok(Some(Box::new(Value::String(
+            "msg-a|msg-b|msg-c".to_string()
+        )))))
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    ws_server.abort();
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn websocket_echo_ts(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_ts")] agent_sdk_ts: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let ws_port = listener.local_addr().unwrap().port();
+
+    let ws_server = spawn(
+        async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let ws_stream = tokio_tungstenite::accept_async(stream)
+                    .await
+                    .expect("WS handshake failed");
+                let (mut write, mut read) = StreamExt::split(ws_stream);
+                while let Some(Ok(msg)) = StreamExt::next(&mut read).await {
+                    if msg.is_close() {
+                        break;
+                    }
+                    if msg.is_text() || msg.is_binary() {
+                        SinkExt::send(&mut write, msg).await.ok();
+                    }
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_ts)
+        .store()
+        .await?;
+
+    let mut env_vars = HashMap::new();
+    env_vars.insert("WS_PORT".to_string(), ws_port.to_string());
+
+    let agent_id = agent_id!("WebSocketTest", "ws-echo-test");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env_vars,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "echo",
+            data_value!(format!("ws://localhost:{ws_port}"), "hello websocket"),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    assert_eq!(result, Value::String("hello websocket".to_string()));
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 

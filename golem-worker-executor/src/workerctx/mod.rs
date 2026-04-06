@@ -14,6 +14,7 @@
 
 pub mod default;
 
+use crate::durable_host::DurableWorkerCtxView;
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::services::active_workers::ActiveWorkers;
@@ -78,6 +79,7 @@ pub trait WorkerCtx:
     + UpdateManagement
     + FileSystemReading
     + InvocationContextManagement
+    + DurableWorkerCtxView<Self>
     + Send
     + Sync
     + Sized

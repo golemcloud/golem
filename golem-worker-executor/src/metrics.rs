@@ -228,11 +228,23 @@ pub mod wasm {
         .unwrap();
     }
 
+    lazy_static! {
+        static ref IN_FUNCTION_RETRY_TOTAL: Counter = register_counter!(
+            "in_function_retry_total",
+            "Number of in-function retries (retries inside host function without oplog replay)"
+        )
+        .unwrap();
+    }
+
     pub fn record_host_function_call(iface: &str, name: &str) {
         debug!("golem {iface}::{name} called");
         HOST_FUNCTION_CALL_TOTAL
             .with_label_values(&[iface, name])
             .inc();
+    }
+
+    pub fn record_in_function_retry() {
+        IN_FUNCTION_RETRY_TOTAL.inc();
     }
 
     pub fn record_resume_worker(duration: Duration) {

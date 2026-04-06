@@ -1,0 +1,16 @@
+manifestVersion: 1.5.0
+componentTemplates:
+  scala.js:
+    build:
+    - command: sbt -batch -no-colors -Dsbt.supershell=false "golemBuildComponent {{ component_name }} .golem/scala.js"
+      sources:
+      - src
+      targets:
+      - .golem/scala.js
+    - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
+      module: .golem/scala.js
+      into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+    - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+      into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+    componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
+    outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"

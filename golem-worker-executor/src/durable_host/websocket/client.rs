@@ -17,8 +17,9 @@ use crate::preview2::golem::websocket::client::{
     CloseInfo, Error, Host, HostWebsocketConnection, Message,
 };
 use crate::workerctx::WorkerCtx;
+use futures::future::Either;
 use futures::stream::{SplitSink, SplitStream};
-use futures::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, pin_mut};
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::payload::types::{
     SerializableWebsocketCloseInfo, SerializableWebsocketError, SerializableWebsocketMessage,
@@ -30,13 +31,8 @@ use golem_common::model::oplog::{
     HostResponseWebsocketReceiveResponse, HostResponseWebsocketReceiveWithTimeoutResponse,
     HostResponseWebsocketSendResponse,
 };
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{
-    Mutex, Notify, Semaphore,
-    mpsc::{self, error::TryRecvError},
-};
-use tokio::task::JoinHandle;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::{MaybeTlsStream, connect_async};
 use wasmtime::component::Resource;
@@ -45,7 +41,7 @@ use wasmtime_wasi::IoView;
 type WsStream = tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 struct ReaderState {
-    receiver: mpsc::Receiver<Result<Message, Error>>,
+    stream: SplitStream<WsStream>,
     /// Populated by `Pollable::ready()` as a read-ahead buffer so that
     /// after the guest observes readiness, `receive()`/`receive_with_timeout()`
     /// can return without consuming an additional websocket frame.
@@ -57,106 +53,11 @@ struct ReaderState {
 pub struct LiveWebSocketConnection {
     writer: Mutex<SplitSink<WsStream, tungstenite::Message>>,
     reader: Mutex<ReaderState>,
-    reader_capacity: Arc<Semaphore>,
-    reader_ready: Arc<Notify>,
-    reader_task: JoinHandle<()>,
     /// Held for the lifetime of the connection to limit concurrent WebSocket
     /// connections per executor. Released when the connection is dropped.
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
 
-impl LiveWebSocketConnection {
-    fn new(
-        writer: SplitSink<WsStream, tungstenite::Message>,
-        reader_stream: SplitStream<WsStream>,
-        permit: tokio::sync::OwnedSemaphorePermit,
-    ) -> Self {
-        let (sender, receiver) = mpsc::channel(1);
-        let reader_capacity = Arc::new(Semaphore::new(1));
-        let reader_ready = Arc::new(Notify::new());
-        let reader_task = spawn_reader_task(
-            reader_stream,
-            sender,
-            Arc::clone(&reader_capacity),
-            Arc::clone(&reader_ready),
-        );
-
-        Self {
-            writer: Mutex::new(writer),
-            reader: Mutex::new(ReaderState {
-                receiver,
-                pending: None,
-            }),
-            reader_capacity,
-            reader_ready,
-            reader_task,
-            _permit: permit,
-        }
-    }
-
-    async fn wait_until_ready(&self) {
-        loop {
-            let notified = self.reader_ready.notified();
-            {
-                let mut reader = self.reader.lock().await;
-                if reader.pending.is_some() {
-                    return;
-                }
-
-                match reader.receiver.try_recv() {
-                    Ok(next) => {
-                        reader.pending = Some(next);
-                        return;
-                    }
-                    Err(TryRecvError::Disconnected) => {
-                        reader.pending = Some(Err(connection_closed_error("Connection closed")));
-                        return;
-                    }
-                    Err(TryRecvError::Empty) => {}
-                }
-            }
-            notified.await;
-        }
-    }
-
-    async fn receive_next(&self) -> Result<Message, Error> {
-        let mut reader = self.reader.lock().await;
-        if let Some(pending) = reader.pending.take() {
-            return pending;
-        }
-
-        recv_from_reader(&mut reader).await
-    }
-
-    async fn receive_next_with_timeout(&self, timeout_ms: u64) -> Result<Option<Message>, Error> {
-        let mut reader = self.reader.lock().await;
-        if let Some(pending) = reader.pending.take() {
-            return pending.map(Some);
-        }
-
-        match tokio::time::timeout(
-            Duration::from_millis(timeout_ms),
-            recv_from_reader(&mut reader),
-        )
-        .await
-        {
-            Ok(result) => result.map(Some),
-            Err(_) => Ok(None),
-        }
-    }
-
-    fn allow_next_read(&self) {
-        self.reader_capacity.add_permits(1);
-    }
-}
-
-impl Drop for LiveWebSocketConnection {
-    fn drop(&mut self) {
-        self.reader_task.abort();
-    }
-}
-
-/// Public only because `WebSocketConnectionEntry` is stored in the resource table.
 #[derive(Clone)]
 pub enum TerminalWebSocketError {
     ConnectionFailure(String),
@@ -167,12 +68,12 @@ impl TerminalWebSocketError {
     fn to_error(&self) -> Error {
         match self {
             Self::ConnectionFailure(reason) => Error::ConnectionFailure(reason.clone()),
-            Self::Closed(close_info) => {
-                Error::Closed(close_info.as_ref().map(|close_info| CloseInfo {
+            Self::Closed(close_info) => Error::Closed(close_info.as_ref().map(|close_info| {
+                CloseInfo {
                     code: close_info.code,
                     reason: close_info.reason.clone(),
-                }))
-            }
+                }
+            })),
         }
     }
 }
@@ -188,7 +89,14 @@ pub enum WebSocketConnectionEntry {
 impl wasmtime_wasi::p2::Pollable for WebSocketConnectionEntry {
     async fn ready(&mut self) {
         match self {
-            WebSocketConnectionEntry::Live(live) => live.wait_until_ready().await,
+            WebSocketConnectionEntry::Live(live) => {
+                let mut reader = live.reader.lock().await;
+                if reader.pending.is_some() {
+                    return;
+                }
+                let next = read_next_user_or_close(&mut reader.stream).await;
+                reader.pending = Some(next);
+            }
             WebSocketConnectionEntry::Replay | WebSocketConnectionEntry::Terminal(_) => {}
         }
     }
@@ -231,12 +139,34 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
 
             let permit = self.websocket_connection_pool.acquire().await?;
 
-            match connect_async(request).await {
+            let interrupt_signal = self
+                .execution_status
+                .read()
+                .unwrap()
+                .create_await_interrupt_signal();
+
+            let connect_fut = connect_async(request);
+            pin_mut!(connect_fut);
+            let connect_result = match futures::future::select(connect_fut, interrupt_signal).await
+            {
+                Either::Left((result, _)) => result,
+                Either::Right((interrupt_kind, _)) => {
+                    tracing::info!("Interrupted while waiting for WebSocket connect");
+                    return Err(interrupt_kind.into());
+                }
+            };
+
+            match connect_result {
                 Ok((ws_stream, _response)) => {
                     let (writer, reader) = ws_stream.split();
-                    let entry = WebSocketConnectionEntry::Live(Box::new(
-                        LiveWebSocketConnection::new(writer, reader, permit),
-                    ));
+                    let entry = WebSocketConnectionEntry::Live(Box::new(LiveWebSocketConnection {
+                        writer: Mutex::new(writer),
+                        reader: Mutex::new(ReaderState {
+                            stream: reader,
+                            pending: None,
+                        }),
+                        _permit: permit,
+                    }));
                     let resource = self.as_wasi_view().table().push(entry)?;
                     self.register_open_websocket(resource.rep(), url.clone(), headers.clone());
                     let resp = HostResponseWebsocketConnectResponse { result: Ok(()) };
@@ -298,15 +228,28 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     .await?;
                 return Ok(Err(error));
             }
+
+            let interrupt_signal = self
+                .execution_status
+                .read()
+                .unwrap()
+                .create_await_interrupt_signal();
+
             let mut view = self.as_wasi_view();
             let entry = view.table().get(&self_)?;
             let tungstenite_msg = to_tungstenite_message(message);
             let live_result = match entry {
                 WebSocketConnectionEntry::Live(live) => {
                     let mut writer = live.writer.lock().await;
-                    match writer.send(tungstenite_msg).await {
-                        Ok(()) => Ok(()),
-                        Err(e) => Err(Error::SendFailure(e.to_string())),
+                    let send_fut = writer.send(tungstenite_msg);
+                    pin_mut!(send_fut);
+                    match futures::future::select(send_fut, interrupt_signal).await {
+                        Either::Left((Ok(()), _)) => Ok(()),
+                        Either::Left((Err(e), _)) => Err(Error::SendFailure(e.to_string())),
+                        Either::Right((interrupt_kind, _)) => {
+                            tracing::info!("Interrupted while waiting for WebSocket send");
+                            return Err(interrupt_kind.into());
+                        }
                     }
                 }
                 WebSocketConnectionEntry::Replay => {
@@ -322,6 +265,13 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             durability
                 .persist_raw(self, req.into(), resp.into())
                 .await?;
+            if let Some(terminal_error) = live_result
+                .as_ref()
+                .err()
+                .and_then(terminal_websocket_error)
+            {
+                mark_websocket_terminal(self, &self_, terminal_error)?;
+            }
             Ok(live_result)
         } else {
             let _ = self.as_wasi_view().table().get(&self_)?;
@@ -363,16 +313,36 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     .await?;
                 return Ok(Err(error));
             }
-            let live_result = {
-                let mut view = self.as_wasi_view();
-                let entry = view.table().get(&self_)?;
-                match entry {
-                    WebSocketConnectionEntry::Live(live) => live.receive_next().await,
-                    WebSocketConnectionEntry::Replay => {
-                        unreachable!("live receive path must not use Replay connection entry")
+
+            let interrupt_signal = self
+                .execution_status
+                .read()
+                .unwrap()
+                .create_await_interrupt_signal();
+
+            let mut view = self.as_wasi_view();
+            let entry = view.table().get(&self_)?;
+            let live_result = match entry {
+                WebSocketConnectionEntry::Live(live) => {
+                    let mut reader = live.reader.lock().await;
+                    if let Some(pending) = reader.pending.take() {
+                        pending
+                    } else {
+                        let recv_fut = read_next_user_or_close(&mut reader.stream);
+                        pin_mut!(recv_fut);
+                        match futures::future::select(recv_fut, interrupt_signal).await {
+                            Either::Left((result, _)) => result,
+                            Either::Right((interrupt_kind, _)) => {
+                                tracing::info!("Interrupted while waiting for WebSocket receive");
+                                return Err(interrupt_kind.into());
+                            }
+                        }
                     }
-                    WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
                 }
+                WebSocketConnectionEntry::Replay => {
+                    unreachable!("live receive path must not use Replay connection entry")
+                }
+                WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
             };
             let ser_result = match &live_result {
                 Ok(m) => Ok(message_to_serializable(m)),
@@ -388,12 +358,6 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 .and_then(terminal_websocket_error)
             {
                 mark_websocket_terminal(self, &self_, terminal_error)?;
-            } else if live_result.is_ok() {
-                let mut view = self.as_wasi_view();
-                let entry = view.table().get(&self_)?;
-                if let WebSocketConnectionEntry::Live(live) = entry {
-                    live.allow_next_read();
-                }
             }
             Ok(live_result)
         } else {
@@ -437,20 +401,65 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     .await?;
                 return Ok(Err(error));
             }
-            let live_result = {
-                let mut view = self.as_wasi_view();
-                let entry = view.table().get(&self_)?;
-                match entry {
-                    WebSocketConnectionEntry::Live(live) => {
-                        live.receive_next_with_timeout(timeout_ms).await
+
+            let interrupt_signal = self
+                .execution_status
+                .read()
+                .unwrap()
+                .create_await_interrupt_signal();
+
+            let mut view = self.as_wasi_view();
+            let entry = view.table().get(&self_)?;
+            let live_result: Result<Option<Message>, Error> = match entry {
+                WebSocketConnectionEntry::Live(live) => {
+                    let mut reader = live.reader.lock().await;
+                    if let Some(pending) = reader.pending.take() {
+                        match pending {
+                            Ok(message) => Ok(Some(message)),
+                            Err(err) => Err(err),
+                        }
+                    } else {
+                        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+                        pin_mut!(interrupt_signal);
+                        loop {
+                            let remaining = deadline.saturating_duration_since(Instant::now());
+                            if remaining.is_zero() {
+                                break Ok(None);
+                            }
+                            let next_frame = tokio::time::timeout(remaining, reader.stream.next());
+                            pin_mut!(next_frame);
+                            match futures::future::select(next_frame, interrupt_signal.as_mut())
+                                .await
+                            {
+                                Either::Left((Ok(Some(Ok(msg))), _)) => {
+                                    match to_user_message(msg) {
+                                        Ok(Some(message)) => break Ok(Some(message)),
+                                        Ok(None) => continue,
+                                        Err(err) => break Err(err),
+                                    }
+                                }
+                                Either::Left((Ok(Some(Err(e))), _)) => break Err(to_wit_error(e)),
+                                Either::Left((Ok(None), _)) => {
+                                    break Err(Error::Closed(Some(CloseInfo {
+                                        code: 1000,
+                                        reason: "Connection closed".to_string(),
+                                    })));
+                                }
+                                Either::Left((Err(_), _)) => break Ok(None),
+                                Either::Right((interrupt_kind, _)) => {
+                                    tracing::info!(
+                                        "Interrupted while waiting for WebSocket receive with timeout"
+                                    );
+                                    return Err(interrupt_kind.into());
+                                }
+                            }
+                        }
                     }
-                    WebSocketConnectionEntry::Replay => {
-                        unreachable!(
-                            "live receive_with_timeout path must not use Replay connection entry"
-                        )
-                    }
-                    WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
                 }
+                WebSocketConnectionEntry::Replay => {
+                    unreachable!("live receive_with_timeout path must not use Replay connection entry")
+                }
+                WebSocketConnectionEntry::Terminal(error) => Err(error.to_error()),
             };
             let ser_result = match &live_result {
                 Ok(Some(m)) => Ok(Some(message_to_serializable(m))),
@@ -467,12 +476,6 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                 .and_then(terminal_websocket_error)
             {
                 mark_websocket_terminal(self, &self_, terminal_error)?;
-            } else if let Ok(Some(_)) = &live_result {
-                let mut view = self.as_wasi_view();
-                let entry = view.table().get(&self_)?;
-                if let WebSocketConnectionEntry::Live(live) = entry {
-                    live.allow_next_read();
-                }
             }
             Ok(live_result)
         } else {
@@ -511,6 +514,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             code,
             reason: reason.clone(),
         };
+
         let terminal_close_error =
             TerminalWebSocketError::Closed(Some(SerializableWebsocketCloseInfo {
                 code: code.unwrap_or(1000),
@@ -529,6 +533,13 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                     .await?;
                 return Ok(Err(error));
             }
+
+            let interrupt_signal = self
+                .execution_status
+                .read()
+                .unwrap()
+                .create_await_interrupt_signal();
+
             let mut view = self.as_wasi_view();
             let entry = view.table().get(&self_)?;
             let live_result = match entry {
@@ -540,12 +551,15 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
                         reason: reason.unwrap_or_default().into(),
                     };
                     let mut writer = live.writer.lock().await;
-                    match writer
-                        .send(tungstenite::Message::Close(Some(close_frame)))
-                        .await
-                    {
-                        Ok(()) => Ok(()),
-                        Err(e) => Err(Error::SendFailure(e.to_string())),
+                    let close_fut = writer.send(tungstenite::Message::Close(Some(close_frame)));
+                    pin_mut!(close_fut);
+                    match futures::future::select(close_fut, interrupt_signal).await {
+                        Either::Left((Ok(()), _)) => Ok(()),
+                        Either::Left((Err(e), _)) => Err(Error::SendFailure(e.to_string())),
+                        Either::Right((interrupt_kind, _)) => {
+                            tracing::info!("Interrupted while waiting for WebSocket close");
+                            return Err(interrupt_kind.into());
+                        }
                     }
                 }
                 WebSocketConnectionEntry::Replay => {
@@ -617,8 +631,8 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
             WebSocketConnectionEntry::Terminal(error) => return Ok(Err(error.to_error())),
         }
     };
-    let info = ctx.websocket_connection_info(rep);
-    let Some(info) = info else {
+
+    let Some(info) = ctx.websocket_connection_info(rep) else {
         if is_replay_entry {
             let error = connection_closed_error("Connection closed");
             mark_websocket_terminal(
@@ -631,6 +645,7 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
 
         return Ok(Ok(()));
     };
+
     if !is_replay_entry && info.mode != crate::durable_host::WebSocketConnectionMode::NeedsReconnect
     {
         return Ok(Ok(()));
@@ -649,8 +664,25 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
             return Ok(Err(error));
         }
     };
+
     let permit = ctx.websocket_connection_pool.acquire().await?;
-    let (ws_stream, _) = match connect_async(request).await {
+    let interrupt_signal = ctx
+        .execution_status
+        .read()
+        .unwrap()
+        .create_await_interrupt_signal();
+
+    let connect_fut = connect_async(request);
+    pin_mut!(connect_fut);
+    let connect_result = match futures::future::select(connect_fut, interrupt_signal).await {
+        Either::Left((result, _)) => result,
+        Either::Right((interrupt_kind, _)) => {
+            tracing::info!("Interrupted while waiting for WebSocket reconnect");
+            return Err(interrupt_kind.into());
+        }
+    };
+
+    let (ws_stream, _) = match connect_result {
         Ok(result) => result,
         Err(err) => {
             let error = Error::ConnectionFailure(err.to_string());
@@ -663,16 +695,23 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
             return Ok(Err(error));
         }
     };
-    let (writer, reader) = ws_stream.split();
 
-    let new_entry = WebSocketConnectionEntry::Live(Box::new(LiveWebSocketConnection::new(
-        writer, reader, permit,
-    )));
+    let (writer, reader) = ws_stream.split();
+    let new_entry = WebSocketConnectionEntry::Live(Box::new(LiveWebSocketConnection {
+        writer: Mutex::new(writer),
+        reader: Mutex::new(ReaderState {
+            stream: reader,
+            pending: None,
+        }),
+        _permit: permit,
+    }));
+
     {
         let mut view = ctx.as_wasi_view();
         let entry = view.table().get_mut(resource)?;
         *entry = new_entry;
     }
+
     ctx.mark_websocket_reconnected(rep);
     Ok(Ok(()))
 }
@@ -751,44 +790,6 @@ async fn read_next_user_or_close(stream: &mut SplitStream<WsStream>) -> Result<M
                 })));
             }
         }
-    }
-}
-
-fn spawn_reader_task(
-    mut stream: SplitStream<WsStream>,
-    sender: mpsc::Sender<Result<Message, Error>>,
-    reader_capacity: Arc<Semaphore>,
-    reader_ready: Arc<Notify>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            let Ok(permit) = reader_capacity.acquire().await else {
-                break;
-            };
-            permit.forget();
-
-            let next = read_next_user_or_close(&mut stream).await;
-            let terminal = next.is_err();
-
-            if sender.send(next).await.is_err() {
-                break;
-            }
-
-            reader_ready.notify_waiters();
-
-            if terminal {
-                break;
-            }
-        }
-
-        reader_ready.notify_waiters();
-    })
-}
-
-async fn recv_from_reader(reader: &mut ReaderState) -> Result<Message, Error> {
-    match reader.receiver.recv().await {
-        Some(result) => result,
-        None => Err(connection_closed_error("Connection closed")),
     }
 }
 

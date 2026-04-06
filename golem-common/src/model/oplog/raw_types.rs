@@ -344,7 +344,6 @@ pub enum DurableFunctionType {
 
 /// Describes the error that occurred in the worker
 #[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
 #[wit(name = "worker-error", owner = "golem:api@1.5.0/oplog")]
 pub enum AgentError {
     Unknown(String),
@@ -354,6 +353,9 @@ pub enum AgentError {
     // The worker tried to grow its memory beyond the limits of the plan
     ExceededMemoryLimit,
     InternalError(String),
+    DeterministicTrap(String),
+    TransientError(String),
+    PermanentError(String),
     // The worker tried to grow its function table beyond the limits of the plan
     ExceededTableLimit,
     // The worker exceeded the per-invocation HTTP call limit from the plan
@@ -375,6 +377,9 @@ impl AgentError {
             Self::OutOfMemory => "Out of memory",
             Self::ExceededMemoryLimit => "Exceeded plan memory limit",
             Self::InternalError(message) => message,
+            Self::DeterministicTrap(message) => message,
+            Self::TransientError(message) => message,
+            Self::PermanentError(message) => message,
             Self::ExceededTableLimit => "Exceeded plan function table limit",
             Self::ExceededHttpCallLimit => "Exceeded per-invocation HTTP call limit",
             Self::ExceededRpcCallLimit => "Exceeded per-invocation RPC call limit",

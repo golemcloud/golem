@@ -457,13 +457,6 @@ pub struct ShardAssignment {
 }
 
 impl ShardAssignment {
-    pub fn new(number_of_shards: usize, shard_ids: HashSet<ShardId>) -> Self {
-        Self {
-            number_of_shards,
-            shard_ids,
-        }
-    }
-
     pub fn assign_shards(&mut self, shard_ids: &HashSet<ShardId>) {
         for shard_id in shard_ids {
             self.shard_ids.insert(*shard_id);
