@@ -215,7 +215,9 @@ pub fn get_constructor_parameter_types(
     let agent_types = state.agent_types.borrow();
     let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
 
-    Some(extract_all_parameter_schemas(&agent_type.constructor.input_schema))
+    Some(extract_all_parameter_schemas(
+        &agent_type.constructor.input_schema,
+    ))
 }
 
 pub fn get_method_parameter_types(
