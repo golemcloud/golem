@@ -59,7 +59,7 @@ export function handleUnion(
   return analysedType;
 }
 
-export function handleUnionInternal(
+function handleUnionInternal(
   ctx: UnionCtx,
   mapper: TypeMapper,
   cacheKey: string | undefined,

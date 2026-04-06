@@ -46,6 +46,9 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use unicode_segmentation::UnicodeSegmentation;
 
+const EVCXR_TOKIO_DEPENDENCY: &str =
+    "tokio = { version = \"=1.50.0\", features = [\"macros\", \"rt-multi-thread\", \"sync\", \"io-std\", \"net\", \"tracing\", \"process\"] }";
+
 pub struct Repl {
     config: ReplResolvedConfig,
     command_context: Rc<RefCell<CommandContext>>,
@@ -141,9 +144,11 @@ impl Repl {
         let mut prelude = String::new();
         let mut configure_calls = String::new();
 
-        dependencies.push_str(
-            "tokio = { version = \"1.44\", features = [\"macros\", \"rt-multi-thread\", \"sync\", \"io-std\", \"net\", \"tracing\", \"process\"] }\n",
-        );
+        // Evcxr resolves dependencies in a standalone manifest outside the workspace
+        // lockfile, so pin Tokio here to the known-good version for deterministic REPL
+        // bootstrap. This is intentionally independent from the workspace Tokio dependency.
+        dependencies.push_str(EVCXR_TOKIO_DEPENDENCY);
+        dependencies.push('\n');
         dependencies.push_str(&format!(
             "golem-client = {{ {} }}\n",
             config.base_config.golem_client_dependency
