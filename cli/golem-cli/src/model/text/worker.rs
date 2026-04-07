@@ -26,7 +26,10 @@ use base64::prelude::BASE64_STANDARD;
 use chrono::DateTime;
 use cli_table::{Table, format::Justify};
 use colored::Colorize;
-use golem_common::model::Timestamp;
+use comfy_table::{
+    Cell, CellAlignment, Color as ComfyColor, ColumnConstraint, ContentArrangement,
+    Table as ComfyTable,
+};
 use golem_common::model::agent::{
     BinaryReference, ComponentModelElementValue, DataValue, ElementValue, TextReference,
     UnstructuredBinaryElementValue, UnstructuredTextElementValue,
@@ -37,11 +40,13 @@ use golem_common::model::oplog::{
     PublicSnapshotData, PublicUpdateDescription, StringAttributeValue,
 };
 use golem_common::model::worker::UpdateRecord;
+use golem_common::model::{AgentStatus, Timestamp};
 use golem_wasm::{ValueAndType, print_value_and_type};
 use indoc::indoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
+use terminal_size::terminal_size;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerCreateView {
@@ -259,6 +264,102 @@ impl TextView for AgentsMetadataResponseView {
                 cursor.log_color_highlight()
             ));
         }
+    }
+}
+
+impl AgentsMetadataResponseView {
+    fn status_color(status: &AgentStatus, colorize: bool) -> ComfyColor {
+        if colorize {
+            match status {
+                AgentStatus::Running => ComfyColor::Green,
+                AgentStatus::Idle => ComfyColor::Cyan,
+                AgentStatus::Suspended => ComfyColor::Yellow,
+                AgentStatus::Interrupted => ComfyColor::Red,
+                AgentStatus::Retrying => ComfyColor::Yellow,
+                AgentStatus::Failed => ComfyColor::Red,
+                AgentStatus::Exited => ComfyColor::White,
+            }
+        } else {
+            ComfyColor::Reset
+        }
+    }
+
+    fn format_table_wide(agents: &[AgentMetadataView], term_width: u16, colorize: bool) -> String {
+        use comfy_table::presets::{ASCII_FULL_CONDENSED, UTF8_FULL_CONDENSED};
+
+        let preset = if colorize {
+            UTF8_FULL_CONDENSED
+        } else {
+            ASCII_FULL_CONDENSED
+        };
+
+        let mut table = ComfyTable::new();
+        table
+            .load_preset(preset)
+            .set_content_arrangement(ContentArrangement::DynamicFullWidth)
+            .set_width(term_width)
+            .set_header(vec![
+                "Component name",
+                "Agent name",
+                "Revision",
+                "Status",
+                "Pending",
+                "Created at",
+            ]);
+
+        // Pin fixed-width columns so component_name (0) and agent_name (1) absorb surplus width
+        for col_idx in 2..=5usize {
+            table
+                .column_mut(col_idx)
+                .unwrap()
+                .set_constraint(ColumnConstraint::ContentWidth);
+        }
+
+        for agent in agents {
+            table.add_row(vec![
+                Cell::new(agent.component_name.to_string()),
+                Cell::new(agent.agent_name.0.clone()),
+                Cell::new(agent.component_revision.to_string()).set_alignment(CellAlignment::Right),
+                Cell::new(agent.status.to_string())
+                    .set_alignment(CellAlignment::Right)
+                    .fg(Self::status_color(&agent.status, colorize)),
+                Cell::new(agent.pending_invocation_count.to_string())
+                    .set_alignment(CellAlignment::Right),
+                Cell::new(agent.created_at.to_string()),
+            ]);
+        }
+
+        table.to_string()
+    }
+}
+
+impl TruncatableTextView for AgentsMetadataResponseView {
+    fn render_truncated(&self, max_lines: usize, colorize: bool) -> String {
+        let cursor_lines = if self.cursors.is_empty() {
+            0
+        } else {
+            1 + self.cursors.len()
+        };
+        let available_for_table = max_lines.saturating_sub(cursor_lines);
+
+        let term_width = terminal_size().map(|(w, _)| w.0).unwrap_or(120);
+        let table_str = Self::format_table_wide(&self.agents, term_width, colorize);
+
+        let mut out = truncate_rendered(table_str, available_for_table, "agents");
+
+        if !self.cursors.is_empty() {
+            out.push('\n');
+            for (component_name, cursor) in &self.cursors {
+                out.push('\n');
+                out.push_str(&format!(
+                    "Cursor for more results for component {}: {}",
+                    component_name.log_color_highlight(),
+                    cursor.log_color_highlight()
+                ));
+            }
+        }
+
+        out
     }
 }
 

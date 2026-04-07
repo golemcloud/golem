@@ -44,11 +44,13 @@ bytes = { workspace = true }
 camino = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
+comfy-table = { workspace = true }
 clap-verbosity-flag = { workspace = true }
 clap_complete = { workspace = true }
 cli-table = { workspace = true }
 colored = { workspace = true }
 crossbeam-channel = { workspace = true }
+crossterm = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
 dotenvy = { workspace = true }

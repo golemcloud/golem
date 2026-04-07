@@ -34,6 +34,28 @@ pub trait TextView {
     fn log(&self);
 }
 
+pub trait TruncatableTextView: TextView {
+    fn render_truncated(&self, max_lines: usize, colorize: bool) -> String;
+}
+
+/// Truncates a pre-rendered string to `max_lines` terminal lines.
+/// If truncated, appends a notice: `... N more {more_label} (resize terminal to see all)`.
+pub fn truncate_rendered(rendered: String, max_lines: usize, more_label: &str) -> String {
+    let lines: Vec<&str> = rendered.lines().collect();
+    if lines.len() <= max_lines {
+        rendered
+    } else {
+        let shown = max_lines.saturating_sub(1);
+        let mut out = lines[..shown].join("\n");
+        out.push('\n');
+        out.push_str(&format!(
+            "... {} more {more_label} (resize terminal to see all)",
+            lines.len() - shown
+        ));
+        out
+    }
+}
+
 pub enum MessageWithFieldsIndentMode {
     None,
     IdentFields,

@@ -15,8 +15,12 @@
 use crate::context::Context;
 use crate::log::logln;
 use crate::model::format::Format;
-use crate::model::text::fmt::{DecoratedIndent, TextView, to_colored_json, to_colored_yaml};
+use crate::model::text::fmt::{
+    DecoratedIndent, TextView, TruncatableTextView, to_colored_json, to_colored_yaml,
+    truncate_rendered,
+};
 use serde::Serialize;
+use std::io::Write;
 use std::sync::Arc;
 
 pub struct LogHandler {
@@ -89,6 +93,49 @@ impl LogHandler {
                 view.log();
             }
         }
+    }
+
+    pub fn render_view_truncated<View: TruncatableTextView + Serialize>(
+        &self,
+        view: &View,
+        max_lines: usize,
+    ) -> String {
+        match self.ctx.format() {
+            Format::Text => view.render_truncated(max_lines, self.ctx.should_colorize()),
+            _ => {
+                let rendered = match self.ctx.format() {
+                    Format::Json => serde_json::to_string(view).unwrap(),
+                    Format::PrettyJson => {
+                        if self.ctx.should_colorize() {
+                            to_colored_json(view).unwrap()
+                        } else {
+                            serde_json::to_string_pretty(view).unwrap()
+                        }
+                    }
+                    Format::Yaml => format!("---\n{}", serde_yaml::to_string(view).unwrap()),
+                    Format::PrettyYaml => {
+                        if self.ctx.should_colorize() {
+                            format!("---\n{}", to_colored_yaml(view).unwrap())
+                        } else {
+                            format!("---\n{}", serde_yaml::to_string(view).unwrap())
+                        }
+                    }
+                    Format::Text => unreachable!(),
+                };
+                truncate_rendered(rendered, max_lines, "lines")
+            }
+        }
+    }
+
+    pub fn log_view_truncated<View: TruncatableTextView + Serialize>(
+        &self,
+        view: &View,
+        max_lines: usize,
+    ) {
+        let output = self.render_view_truncated(view, max_lines);
+        let mut stdout = std::io::stdout();
+        write!(stdout, "{output}\n").unwrap();
+        stdout.flush().unwrap();
     }
 
     pub fn decorated_indent_primary(&self) -> DecoratedIndent {
