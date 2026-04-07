@@ -430,6 +430,7 @@ impl ComponentExtRevisionRecord {
 pub struct ComponentFileRecord {
     pub component_id: Uuid,
     pub revision_id: i64,
+    pub agent_type_name: String,
     pub file_path: String,
     #[sqlx(flatten)]
     pub audit: RevisionAuditFields,
@@ -439,6 +440,10 @@ pub struct ComponentFileRecord {
 }
 
 impl ComponentFileRecord {
+    // TODO: atl: Remove this default once component file writes are fully agent-scoped
+    // and callers always pass concrete agent type names.
+    const DEFAULT_AGENT_TYPE_NAME: &'static str = "*";
+
     fn from_model(
         file: InitialComponentFile,
         component_id: Uuid,
@@ -448,6 +453,7 @@ impl ComponentFileRecord {
         Self {
             component_id,
             revision_id,
+            agent_type_name: Self::DEFAULT_AGENT_TYPE_NAME.to_string(),
             file_path: file.path.to_abs_string(),
             file_content_hash: file.content_hash.0.into(),
             file_permissions: file.permissions.into(),

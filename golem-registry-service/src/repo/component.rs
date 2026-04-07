@@ -940,11 +940,11 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         self.with_ro("get_component_files")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT component_id, revision_id, file_path,
+                    SELECT component_id, revision_id, agent_type_name, file_path,
                            created_at, created_by, file_content_hash, file_permissions, file_size
                     FROM component_files
                     WHERE component_id = $1 AND revision_id = $2
-                    ORDER BY file_path
+                    ORDER BY agent_type_name, file_path
                 "#})
                 .bind(component_id)
                 .bind(revision_id),
@@ -1019,12 +1019,13 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
                 INSERT INTO component_files
-                (component_id, revision_id, file_path, created_at, created_by, file_content_hash, file_permissions, file_size)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                RETURNING component_id, revision_id, file_path, created_at, created_by, file_content_hash, file_permissions, file_size
+                (component_id, revision_id, agent_type_name, file_path, created_at, created_by, file_content_hash, file_permissions, file_size)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING component_id, revision_id, agent_type_name, file_path, created_at, created_by, file_content_hash, file_permissions, file_size
             "#})
                 .bind(file.component_id)
                 .bind(file.revision_id)
+                .bind(file.agent_type_name)
                 .bind(file.file_path)
                 .bind_revision_audit(file.audit)
                 .bind(file.file_content_hash)

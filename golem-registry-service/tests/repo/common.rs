@@ -626,6 +626,7 @@ pub async fn test_component_stage(deps: &Deps) {
         files: vec![ComponentFileRecord {
             component_id,
             revision_id: 0,
+            agent_type_name: "agent_type_name".to_string(),
             file_path: "file".to_string(),
             file_content_hash: blake3::hash("test-2".as_bytes()).into(),
             audit: RevisionAuditFields::new(user.revision.account_id),
