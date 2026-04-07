@@ -20,7 +20,6 @@ use golem_common::model::quota::LeaseEpoch;
 use golem_common::model::quota::{ResourceDefinition, ResourceLimit};
 use golem_service_base::model::quota_lease::PendingReservation;
 use golem_service_base::repo::Blob;
-use sqlx::types::Json;
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::debug;
@@ -88,7 +87,7 @@ fn elapsed_since(dt: DateTime<Utc>) -> Duration {
         .unwrap_or(Duration::ZERO)
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(super) struct PodLease {
     pub epoch: LeaseEpoch,
     pub allocated: u64,
@@ -339,7 +338,8 @@ impl QuotaState {
         let expires_at = now + lease_duration;
 
         let returned = unused.min(pod_lease.allocated);
-        self.remaining += returned;
+        self.remaining = self.remaining.saturating_add(returned);
+
         pod_lease.allocated = 0;
         pod_lease.granted_at = now;
         pod_lease.expires_at = expires_at;
@@ -361,10 +361,9 @@ impl QuotaState {
             .leases
             .get_mut(pod)
             .expect("just validated and refreshed");
+
         self.remaining -= allocated_amount;
         pod_lease.allocated = allocated_amount;
-        pod_lease.granted_at = now;
-        pod_lease.expires_at = expires_at;
 
         Ok(RenewLeaseResult {
             new_epoch,
@@ -415,7 +414,7 @@ impl QuotaState {
     pub fn to_lease_record(&self, pod: &Pod) -> Option<QuotaLeaseRecord> {
         self.leases.get(pod).map(|lease| QuotaLeaseRecord {
             resource_definition_id: self.definition.id.0,
-            pod_ip: Json(pod.ip),
+            pod_ip: Blob::new(pod.ip),
             pod_port: pod.port.into(),
             epoch: lease.epoch.0.into(),
             allocated: lease.allocated.into(),

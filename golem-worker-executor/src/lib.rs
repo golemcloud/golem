@@ -168,8 +168,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             shard_manager_client,
             golem_config.grpc.port,
             shutdown_token,
+            std::time::Duration::from_secs(2),
             std::time::Duration::from_secs(10),
-            std::time::Duration::from_secs(60),
         )
     }
 

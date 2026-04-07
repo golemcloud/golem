@@ -32,6 +32,7 @@ use golem_common::model::quota::ReserveResult;
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{ScheduledAction, Timestamp};
 use golem_service_base::error::worker_executor::GolemSpecificWasmTrap;
+use tracing::debug;
 use wasmtime::component::Resource;
 
 /// Ensure the token is live, acquiring a lease if it is still pending.
@@ -182,14 +183,20 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
             } => {
                 use golem_common::model::quota::EnforcementAction;
                 match enforcement_action {
-                    EnforcementAction::Reject => Ok(Err(FailedReservation {
-                        estimated_wait_nanos,
-                    })),
+                    EnforcementAction::Reject => {
+                        debug!("Rejecting reservation ({estimated_wait_nanos:?})");
+                        Ok(Err(FailedReservation {
+                            estimated_wait_nanos,
+                        }))
+                    }
                     EnforcementAction::Throttle => {
                         let agent_created_by = self.created_by();
                         let owned_agent_id = self.owned_agent_id().clone();
                         let scheduler_service = self.scheduler_service();
 
+                        debug!(
+                            "Throttling agent due to failed quota reservation ({estimated_wait_nanos:?})"
+                        );
                         let quota_token = self.table().get(&self_)?;
                         if let Some(estimated_wait_nanos) = estimated_wait_nanos {
                             // schedule a continuation for when we expect the quota to be ready to serve us. If it still doesn't have capacity
@@ -222,6 +229,9 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
                         })
                     }
                     EnforcementAction::Terminate => {
+                        debug!(
+                            "Terminating agent due to failed quota reservation ({estimated_wait_nanos:?})"
+                        );
                         let quota_token = self.table().get(&self_)?;
                         anyhow::bail!(GolemSpecificWasmTrap::AgentTerminatedByQuota {
                             environment_id: quota_token.environment_id(),

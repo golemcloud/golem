@@ -26,7 +26,8 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Level, span};
+use tracing::debug;
+use tracing::{Instrument, info, info_span};
 
 type ResourceKey = (EnvironmentId, ResourceName);
 
@@ -294,6 +295,14 @@ struct LeaseEntry {
     lease: TrackedLease,
 }
 
+impl LeaseEntry {
+    // take the lease, replacing it with a lost lease. Should only be called immediately
+    // before releasing the lease back to the shard manager.
+    fn take_lease(&mut self) -> TrackedLease {
+        std::mem::replace(&mut self.lease, TrackedLease::Lost)
+    }
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 enum TrackedLease {
@@ -378,12 +387,16 @@ impl GrpcQuotaService {
                     }
                     let svc = match svc_weak.upgrade() {
                         Some(s) => s,
-                        None => break,
+                        None => {
+                            info!("QuotaService was dropped, stopping renewal loop");
+                            break;
+                        }
                     };
                     svc.renew_all().await;
                 }
             }
-            .instrument(span!(parent: None, Level::INFO, "Quota lease renewal")),
+            .instrument(info_span!("Quota renewal loop"))
+            .instrument(tracing::Span::current()),
         );
     }
 
@@ -452,7 +465,7 @@ impl GrpcQuotaService {
         match limit {
             ResourceLimit::Rate(rate) => {
                 let period_duration = rate.period.duration();
-                let tokens_per_refill = rate.value.max(1);
+                let tokens_per_refill = rate.value;
                 let refills_needed = deficit.div_ceil(tokens_per_refill);
                 let refills_needed_u32 = if refills_needed < u32::MAX as u64 {
                     refills_needed as u32
@@ -471,6 +484,7 @@ impl GrpcQuotaService {
     }
 
     fn process_waiters(&self, slot: &mut LeaseEntry, key: &ResourceKey) {
+        info!("processing quota waiters");
         let lease = match &mut slot.lease {
             TrackedLease::Bounded(b) => b,
             TrackedLease::Unlimited(_) => {
@@ -526,22 +540,20 @@ impl GrpcQuotaService {
     }
 
     async fn renew_all(&self) {
+        info!("running renew_all loop");
+
         // phase 1: collect live and dead slots
-        let mut to_renew: Vec<(ResourceKey, Arc<Mutex<LeaseEntry>>)> = Vec::new();
-        let mut to_release: Vec<BoundedLease> = Vec::new();
+        let mut entries_to_renew: Vec<(ResourceKey, Arc<Mutex<LeaseEntry>>)> = Vec::new();
+        let mut leases_to_release: Vec<TrackedLease> = Vec::new();
 
         self.state
             .retain_async(|key, slot_mutex| {
-                if let Ok(slot) = slot_mutex.try_lock() {
+                if let Ok(mut slot) = slot_mutex.try_lock() {
                     if slot.interest.strong_count() == 0 {
-                        // unlimited leases do not consume capacity, so we can just let them be expired
-                        // by the shard manager
-                        if let TrackedLease::Bounded(b) = &slot.lease {
-                            to_release.push(b.clone());
-                        }
+                        leases_to_release.push(slot.take_lease());
                         false
                     } else {
-                        to_renew.push((key.clone(), slot_mutex.clone()));
+                        entries_to_renew.push((key.clone(), slot_mutex.clone()));
                         true
                     }
                 } else {
@@ -551,33 +563,19 @@ impl GrpcQuotaService {
             })
             .await;
 
+        debug!("releasing {} unneeded leases", leases_to_release.len());
+
         // phase 2: release dead leases
-        for lease in to_release {
-            if let Err(err) = self
-                .client
-                .release_quota_lease(
-                    lease.resource_definition_id,
-                    self.port,
-                    lease.epoch.0,
-                    lease.remaining,
-                )
-                .await
-            {
-                tracing::warn!(
-                    resource_definition_id = %lease.resource_definition_id,
-                    error = %err,
-                    "Failed to release dead quota lease"
-                );
-            }
+        for lease in leases_to_release {
+            self.try_release_lease_if_needed(lease).await;
         }
 
         // phase 3: renew live leases, marking any that fail as Lost.
         // Lost entries are left in the map for phase 4 to re-acquire.
-
         let renewal_threshold = chrono::Duration::from_std(self.renewal_interval * 2)
             .expect("renewal_interval should result in valid renewal_threshold");
 
-        for (key, slot_mutex) in &to_renew {
+        for (key, slot_mutex) in &entries_to_renew {
             let (environment_id, resource_name) = key;
             let mut slot = slot_mutex.lock().await;
 
@@ -599,6 +597,8 @@ impl GrpcQuotaService {
                 // Already Lost from a previous loop iteration — handled in phase 4.
                 TrackedLease::Lost => continue,
             }
+
+            debug!("refreshing lease for {environment_id}/{resource_name}");
 
             let pending_reservations: Vec<PendingReservation> = slot
                 .waiters
@@ -628,6 +628,7 @@ impl GrpcQuotaService {
                     {
                         Ok(new_lease) => {
                             slot.lease = Self::from_quota_lease(&new_lease);
+                            debug!("Refreshed lease: {:?}", slot.lease);
                             self.process_waiters(&mut slot, key);
                         }
                         Err(QuotaError::LeaseNotFound(_) | QuotaError::StaleEpoch(_)) => {
@@ -683,12 +684,14 @@ impl GrpcQuotaService {
         // phase 4: re-acquire all Lost leases that still have live interest.
         // Waiters are kept in place and served once a new lease arrives.
         // If re-acquire fails we leave the entry as Lost and retry next loop.
-        for (key, slot_mutex) in &to_renew {
+        for (key, slot_mutex) in &entries_to_renew {
             let (environment_id, resource_name) = key;
             let is_lost = matches!(slot_mutex.lock().await.lease, TrackedLease::Lost);
             if !is_lost {
                 continue;
             }
+
+            debug!("trying to reacquire lost lease {environment_id}/{resource_name}");
 
             match self
                 .client
@@ -721,6 +724,27 @@ impl GrpcQuotaService {
             }
         }
     }
+
+    async fn try_release_lease_if_needed(&self, tracked_lease: TrackedLease) {
+        // unlimited leases do not reserve any capacity, so we can just let them expire
+        if let TrackedLease::Bounded(lease) = tracked_lease
+            && let Err(err) = self
+                .client
+                .release_quota_lease(
+                    lease.resource_definition_id,
+                    self.port,
+                    lease.epoch.0,
+                    lease.remaining,
+                )
+                .await
+        {
+            tracing::warn!(
+                resource_definition_id = %lease.resource_definition_id,
+                error = %err,
+                "Failed to release dead quota lease"
+            );
+        }
+    }
 }
 
 #[async_trait]
@@ -733,6 +757,8 @@ impl QuotaService for GrpcQuotaService {
         previous_credit: i64,
         previous_credit_at: Option<DateTime<Utc>>,
     ) -> Result<LeaseInterest, QuotaError> {
+        debug!("acquiring lease for {}/{}", environment_id, resource_name);
+
         let key: ResourceKey = (environment_id, resource_name.clone());
 
         let credit_rate = expected_use as f64 * CREDIT_RATE_FACTOR;
@@ -750,14 +776,26 @@ impl QuotaService for GrpcQuotaService {
 
         // fast path: existing live entry -> reuse the lease with fresh credit state
         if let Some(slot_mutex) = self.get_slot(&key).await {
-            let slot = slot_mutex.lock().await;
+            debug!("Reusing existing lease");
+            let mut slot = slot_mutex.lock().await;
             if let Some(arc) = slot.interest.upgrade() {
                 return Ok(make_interest(arc));
             }
-            // entry is dead; fall through to re-acquire.
+
+            // interest is dead, but the lease has not been collected yet. We are holding the lock, so we can revive it and prevent
+            // a pointless reacquire
+            if !matches!(slot.lease, TrackedLease::Lost) {
+                let arc = Arc::new(());
+                slot.interest = Arc::downgrade(&arc);
+                return Ok(make_interest(arc));
+            }
+
+            // entry is completely dead; fall through to re-acquire
         }
 
         // slow path: acquire from shard manager.
+        debug!("Acquiring new lease from shard manager");
+
         let new_lease = self
             .client
             .acquire_quota_lease(environment_id, resource_name, self.port)
@@ -780,6 +818,11 @@ impl QuotaService for GrpcQuotaService {
     }
 
     async fn try_reserve(&self, interest: &mut LeaseInterest, amount: u64) -> ReserveResult {
+        debug!(
+            "reserving {amount} for {}/{}",
+            interest.environment_id, interest.resource_name
+        );
+
         let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
 
         let slot_mutex = self
@@ -794,7 +837,8 @@ impl QuotaService for GrpcQuotaService {
         match &mut slot.lease {
             TrackedLease::Unlimited(_) => return ReserveResult::Ok(Reservation::Unlimited),
             TrackedLease::Bounded(bounded_lease) => {
-                // fast path: if nobody is waiting and we have enough capacity, complete immediately
+                debug!("Trying to reserve {amount} from lease {bounded_lease:?}");
+                // fast path 1: if nobody is waiting and we have enough capacity, complete immediately
                 if no_waiters
                     && let Some(reservation) = Self::try_grant(
                         bounded_lease,
@@ -805,6 +849,21 @@ impl QuotaService for GrpcQuotaService {
                 {
                     interest.debit(amount);
                     return ReserveResult::Ok(reservation);
+                }
+
+                // fast path 2: if we can already determine that we will not be served before inline_wait_threshold, fail immediately.
+                let estimated_wait_time = Self::estimated_wait(
+                    amount,
+                    bounded_lease.total_available_amount,
+                    &bounded_lease.resource_limit,
+                );
+                let keep_inline =
+                    estimated_wait_time.is_some_and(|ewt| ewt <= self.inline_wait_threshold);
+                if !keep_inline {
+                    return ReserveResult::InsufficientAllocation {
+                        enforcement_action: bounded_lease.enforcement_action,
+                        estimated_wait_nanos: estimated_wait_time.map(|d| d.as_nanos() as u64),
+                    };
                 }
             }
             // Lost: fall through to waiter path — phase 4 will re-acquire and serve us.
@@ -819,6 +878,7 @@ impl QuotaService for GrpcQuotaService {
             .push(Waiter::from_interest(amount, interest, tx));
         drop(slot);
 
+        debug!("awaiting waiter outcome");
         match rx.await {
             Ok(WaiterOutcome::Granted(reservation)) => {
                 interest.debit(amount);
@@ -870,6 +930,7 @@ impl QuotaService for GrpcQuotaService {
                         // might have already been lost due to bucket limits etc.
                         if lease.epoch == reservation_epoch {
                             let credit = reserved - used;
+                            debug!("Returning {credit} credits to {}/{}", key.0, key.1);
                             lease.remaining += credit;
                             Some(credit)
                         } else {
