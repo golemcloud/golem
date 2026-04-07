@@ -17,6 +17,7 @@ use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
 use crate::base_model::oplog::PublicOplogEntry;
 use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
+use crate::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
 use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
 use crate::declare_structs;
 use crate::model::agent::{DataSchema, DataValue, UntypedDataValue};
@@ -237,10 +238,10 @@ pub struct PublicNamedRetryPolicy {
     pub name: String,
     /// Selection priority — higher values are evaluated first.
     pub priority: u32,
-    /// The predicate serialized as a JSON string.
-    pub predicate_json: String,
-    /// The retry policy serialized as a JSON string.
-    pub policy_json: String,
+    /// The predicate that determines when this retry policy applies.
+    pub predicate: ApiPredicate,
+    /// The retry policy to use when the predicate matches.
+    pub policy: ApiRetryPolicy,
 }
 
 #[cfg(feature = "full")]
@@ -249,25 +250,21 @@ impl From<crate::model::retry_policy::NamedRetryPolicy> for PublicNamedRetryPoli
         Self {
             name: value.name,
             priority: value.priority,
-            predicate_json: serde_json::to_string(&value.predicate).unwrap_or_default(),
-            policy_json: serde_json::to_string(&value.policy).unwrap_or_default(),
+            predicate: value.predicate.into(),
+            policy: value.policy.into(),
         }
     }
 }
 
 #[cfg(feature = "full")]
-impl TryFrom<PublicNamedRetryPolicy> for crate::model::retry_policy::NamedRetryPolicy {
-    type Error = String;
-
-    fn try_from(value: PublicNamedRetryPolicy) -> Result<Self, Self::Error> {
-        Ok(Self {
+impl From<PublicNamedRetryPolicy> for crate::model::retry_policy::NamedRetryPolicy {
+    fn from(value: PublicNamedRetryPolicy) -> Self {
+        Self {
             name: value.name,
             priority: value.priority,
-            predicate: serde_json::from_str(&value.predicate_json)
-                .map_err(|e| format!("Invalid predicate JSON: {e}"))?,
-            policy: serde_json::from_str(&value.policy_json)
-                .map_err(|e| format!("Invalid policy JSON: {e}"))?,
-        })
+            predicate: value.predicate.into(),
+            policy: value.policy.into(),
+        }
     }
 }
 

@@ -388,12 +388,14 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 last_batch_start: last_batch_start.into(),
             }),
             PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams { timestamp, policy }) => {
+                let named: golem_common::model::retry_policy::NamedRetryPolicy = policy.into();
+                let wit_named: golem_common::model::agent::bindings::golem::api::retry::NamedRetryPolicy = named.into();
                 Self::SetRetryPolicy(oplog::SetRetryPolicyParameters {
                     timestamp: timestamp.into(),
-                    name: policy.name,
-                    priority: policy.priority,
-                    predicate_json: policy.predicate_json,
-                    policy_json: policy.policy_json,
+                    name: wit_named.name,
+                    priority: wit_named.priority,
+                    predicate: wit_named.predicate,
+                    policy: wit_named.policy,
                 })
             }
             PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams { timestamp, name }) => {
@@ -1102,18 +1104,16 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 })
             }
             oplog::OplogEntry::SetRetryPolicy(params) => {
-                let predicate: golem_common::model::retry_policy::Predicate = serde_json::from_str(&params.predicate_json)
-                    .map_err(|e| format!("Invalid predicate JSON: {e}"))?;
-                let policy: golem_common::model::retry_policy::RetryPolicy = serde_json::from_str(&params.policy_json)
-                    .map_err(|e| format!("Invalid policy JSON: {e}"))?;
+                let wit_named = golem_common::model::agent::bindings::golem::api::retry::NamedRetryPolicy {
+                    name: params.name,
+                    priority: params.priority,
+                    predicate: params.predicate,
+                    policy: params.policy,
+                };
+                let named: golem_common::model::retry_policy::NamedRetryPolicy = wit_named.into();
                 Ok(Self::SetRetryPolicy {
                     timestamp: timestamp_from_datetime(params.timestamp),
-                    policy: golem_common::model::retry_policy::NamedRetryPolicy {
-                        name: params.name,
-                        priority: params.priority,
-                        predicate,
-                        policy,
-                    },
+                    policy: named,
                 })
             }
             oplog::OplogEntry::RemoveRetryPolicy(params) => Ok(Self::RemoveRetryPolicy {

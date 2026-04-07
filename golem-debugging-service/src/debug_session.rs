@@ -540,8 +540,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             })
         }
         PublicOplogEntry::SetRetryPolicy(params) => {
-            let policy: golem_common::model::retry_policy::NamedRetryPolicy =
-                params.policy.try_into()?;
+            let policy: golem_common::model::retry_policy::NamedRetryPolicy = params.policy.into();
             Ok(OplogEntry::SetRetryPolicy {
                 timestamp: params.timestamp,
                 policy,

@@ -45,7 +45,7 @@ pub struct ApiBooleanValue {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type")]
 pub enum ApiPredicateValue {
     Text(ApiTextValue),
     Integer(ApiIntegerValue),
@@ -139,7 +139,7 @@ pub struct ApiPredicateFalse {}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type")]
 pub enum ApiPredicate {
     PropEq(ApiPropertyComparison),
     PropNeq(ApiPropertyComparison),
@@ -266,7 +266,7 @@ pub struct ApiRetryPolicyPair {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type")]
 pub enum ApiRetryPolicy {
     Periodic(ApiPeriodicPolicy),
     Exponential(ApiExponentialPolicy),
@@ -557,5 +557,44 @@ impl From<ApiRetryPolicy> for RetryPolicy {
                 RetryPolicy::Intersect(Box::new((*v.first).into()), Box::new((*v.second).into()))
             }
         }
+    }
+}
+
+// IntoValue / FromValue for WIT interop — delegate through the domain types
+// which already implement the flattened node-list WIT representation.
+
+#[cfg(feature = "full")]
+impl golem_wasm::IntoValue for ApiPredicate {
+    fn into_value(self) -> golem_wasm::Value {
+        Predicate::from(self).into_value()
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        Predicate::get_type()
+    }
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::FromValue for ApiPredicate {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        Predicate::from_value(value).map(ApiPredicate::from)
+    }
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::IntoValue for ApiRetryPolicy {
+    fn into_value(self) -> golem_wasm::Value {
+        RetryPolicy::from(self).into_value()
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        RetryPolicy::get_type()
+    }
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::FromValue for ApiRetryPolicy {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        RetryPolicy::from_value(value).map(ApiRetryPolicy::from)
     }
 }

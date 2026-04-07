@@ -9,6 +9,7 @@ interface oplog {
     use wasi:clocks/monotonic-clock@0.2.3.{duration};
 
     use context.{attribute, attribute-value, span-id, trace-id};
+    use retry.{retry-predicate, retry-policy};
 
     record environment-plugin-grant-id {
         uuid: uuid,
@@ -126,14 +127,12 @@ interface oplog {
     }
 
     /// Parameters for a set-retry-policy oplog entry.
-    /// The named policy is represented as JSON strings for predicate and policy
-    /// to avoid duplicating the recursive type algebra in the oplog WIT.
     record set-retry-policy-parameters {
         timestamp: datetime,
         name: string,
         priority: u32,
-        predicate-json: string,
-        policy-json: string,
+        predicate: retry-predicate,
+        policy: retry-policy,
     }
 
     /// Parameters for a remove-retry-policy oplog entry.

@@ -86,7 +86,7 @@ pub struct ServerBootstrap {
 }
 
 #[async_trait]
-impl Bootstrap<DebugContext> for DebugServerBootstrap {
+impl Bootstrap<DebugContext> for ServerBootstrap {
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,

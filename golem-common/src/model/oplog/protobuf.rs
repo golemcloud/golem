@@ -1196,7 +1196,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                 }
             }
             PublicOplogEntry::SetRetryPolicy(params) => {
-                let internal: crate::model::retry_policy::NamedRetryPolicy = params.policy.try_into()?;
+                let internal: crate::model::retry_policy::NamedRetryPolicy = params.policy.into();
                 golem_api_grpc::proto::golem::worker::OplogEntry {
                     entry: Some(oplog_entry::Entry::SetRetryPolicy(
                         golem_api_grpc::proto::golem::worker::SetRetryPolicyParameters {
