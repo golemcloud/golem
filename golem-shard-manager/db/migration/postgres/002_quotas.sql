@@ -14,10 +14,11 @@ CREATE TABLE quota_resources
 CREATE TABLE quota_leases
 (
     resource_definition_id UUID NOT NULL,
-    pod_ip                   TEXT NOT NULL,
+    pod_ip                 TEXT NOT NULL,
     pod_port               INTEGER NOT NULL,
     epoch                  NUMERIC NOT NULL,
     allocated              NUMERIC NOT NULL,
+    pending_reservations   BYTEA NOT NULL,
     granted_at             TIMESTAMP NOT NULL,
     expires_at             TIMESTAMP NOT NULL,
 

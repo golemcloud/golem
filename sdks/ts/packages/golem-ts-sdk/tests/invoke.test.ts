@@ -54,7 +54,7 @@ import { AgentConstructorParamRegistry } from '../src/internal/registry/agentCon
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 import {
-  AgentId,
+  ParsedAgentId,
   MultimodalAdvanced,
   Multimodal,
   Result,
@@ -79,7 +79,7 @@ test('BarAgent can be successfully initiated', () => {
       fc.oneof(fc.string(), fc.constant(null)),
       fc.oneof(unionArb, fc.constant(null)),
       (interfaceValue, stringValue, unionValue) => {
-        overrideSelfAgentId(new AgentId('my-complex-agent()'));
+        overrideSelfAgentId(new ParsedAgentId('my-complex-agent()'));
 
         const typeRegistry = TypeMetadata.get(BarAgentClassName.value);
 
@@ -245,7 +245,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
         unstructuredTextWithLC,
         unstructuredBinaryWithMimeType,
       ) => {
-        overrideSelfAgentId(new AgentId('FooAgent()'));
+        overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
 
         const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
@@ -420,7 +420,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
 });
 
 test('Invoke function that takes and returns inbuilt result type', () => {
-  overrideSelfAgentId(new AgentId('FooAgent()'));
+  overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
   if (!classMetadata) {
     throw new Error('FooAgent type metadata not found');
@@ -443,7 +443,7 @@ test('Invoke function that takes and returns inbuilt result type', () => {
 });
 
 test('Invoke function that returns unit type', () => {
-  overrideSelfAgentId(new AgentId('FooAgent()'));
+  overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
   if (!classMetadata) {
     throw new Error('FooAgent type metadata not found');
@@ -458,7 +458,7 @@ test('Invoke function that returns unit type', () => {
 });
 
 test('Invoke function that takes and returns custom result type with void', () => {
-  overrideSelfAgentId(new AgentId('FooAgent()'));
+  overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
   if (!classMetadata) {
     throw new Error('FooAgent type metadata not found');
@@ -484,7 +484,7 @@ test('Invoke function that takes and returns custom result type with void', () =
 });
 
 test('Invoke function that takes and returns inbuilt result type with void', () => {
-  overrideSelfAgentId(new AgentId('FooAgent()'));
+  overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
   if (!classMetadata) {
     throw new Error('FooAgent type metadata not found');
@@ -510,7 +510,7 @@ test('Invoke function that takes and returns inbuilt result type with void', () 
 });
 
 test('Invoke function that takes and returns inbuilt result type with undefined', () => {
-  overrideSelfAgentId(new AgentId('FooAgent()'));
+  overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
   if (!classMetadata) {
     throw new Error('FooAgent type metadata not found');
@@ -532,7 +532,7 @@ test('Invoke function that takes and returns inbuilt result type with undefined'
 });
 
 test('Invoke function that takes and returns multimodal default', () => {
-  overrideSelfAgentId(new AgentId('FooAgent()'));
+  overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
@@ -562,7 +562,7 @@ test('Invoke function that takes and returns multimodal default', () => {
 });
 
 test('Invoke function that takes and returns multimodal basic', () => {
-  overrideSelfAgentId(new AgentId('FooAgent()'));
+  overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
@@ -590,7 +590,7 @@ test('Invoke function that takes and returns multimodal basic', () => {
 });
 
 test('Invoke function that takes and returns typed array', () => {
-  overrideSelfAgentId(new AgentId('FooAgent()'));
+  overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
@@ -638,7 +638,7 @@ test('Invoke function that takes and returns typed array', () => {
 });
 
 test('Invoke function that takes any unstructured-binary and returns any unstructured-binary', () => {
-  overrideSelfAgentId(new AgentId('FooAgent()'));
+  overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
@@ -658,7 +658,7 @@ test('Invoke function that takes any unstructured-binary and returns any unstruc
 });
 
 test('Invoke function that takes json unstructured-binary and returns json unstructured-binary', () => {
-  overrideSelfAgentId(new AgentId('FooAgent()'));
+  overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
@@ -680,7 +680,7 @@ test('Invoke function that takes json unstructured-binary and returns json unstr
 // This is already in the above big test, but we keep it separate to have a clearer
 // view of how unstructured text is handled.
 test('Invoke method with optional parameter using question syntax', () => {
-  overrideSelfAgentId(new AgentId('FooAgent()'));
+  overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
@@ -713,7 +713,7 @@ test('Invoke method with optional parameter using question syntax', () => {
 });
 
 test('Invoke method with optional parameter using | undefined syntax', () => {
-  overrideSelfAgentId(new AgentId('FooAgent()'));
+  overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
@@ -746,7 +746,7 @@ test('Invoke method with optional parameter using | undefined syntax', () => {
 });
 
 test('Invoke function that takes unstructured-text and returns unstructured-text', () => {
-  overrideSelfAgentId(new AgentId('FooAgent()'));
+  overrideSelfAgentId(new ParsedAgentId('FooAgent()'));
 
   const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
@@ -977,7 +977,7 @@ function deserializeReturnValue(methodName: string, returnValue: DataValue): any
   return result[0];
 }
 
-function overrideSelfAgentId(agentId: AgentId) {
+function overrideSelfAgentId(agentId: ParsedAgentId) {
   (globalThis as any).currentAgentId = agentId.value;
   // vi.mock('wasi:cli/environment@0.2.3', () => ({
   //   getEnvironment: (): [string, string][] => {

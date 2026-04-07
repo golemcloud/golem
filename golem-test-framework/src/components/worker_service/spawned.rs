@@ -15,6 +15,7 @@
 use crate::components::ChildProcessLogger;
 use crate::components::new_reqwest_client_with_tracing;
 use crate::components::rdb::Rdb;
+use crate::components::redis::Redis;
 use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{WorkerService, wait_for_startup};
@@ -45,6 +46,7 @@ impl SpawnedWorkerService {
         custom_request_port: u16,
         shard_manager: &Arc<dyn ShardManager>,
         rdb: &Arc<dyn Rdb>,
+        redis: &Arc<dyn Redis>,
         verbosity: Level,
         out_level: Level,
         err_level: Level,
@@ -67,6 +69,7 @@ impl SpawnedWorkerService {
                     custom_request_port,
                     shard_manager,
                     rdb,
+                    redis,
                     verbosity,
                     false,
                     registry_service,

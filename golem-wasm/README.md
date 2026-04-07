@@ -11,7 +11,7 @@ Defines data types for [Golem](https://golem.cloud)'s remote function invocation
 
 The JSON representation requires additional type information.
 
-## Host and stub mode
+## Host and guest mode
 
 The `golem-wasm-rpc` crate can be both used in host and guest environments:
 
@@ -21,10 +21,10 @@ To compile the host version:
 cargo build -p golem-wasm --no-default-features --features host
 ```
 
-To compile the guest version, has minimal dependencies and feature set to be used in generated stubs:
+To compile the guest version, which uses `wit_bindgen::generate!` and the `wasm32-wasip2` target:
 
 ```shell
-cargo component build -p golem-wasm --no-default-features --features stub
+cargo build --target wasm32-wasip2 -p golem-wasm --no-default-features --features guest
 ```
 
 ## Feature flags
@@ -38,4 +38,4 @@ cargo component build -p golem-wasm --no-default-features --features stub
 - `text` enables `wasm-wave` based text representation for values
 - `wasmtime` adds conversion to `wasmtime` `Val` values
 - `host` enables all features: `arbitrary`, `bincode`, `host-bindings`, `json`, `poem_openapi`, `protobuf`, `serde`, `text`, `typeinfo`, and `wasmtime`
-- `stub` is to be used in generated WASM stubs and disables all features, and generates guest bindings instead of host bindings
+- `guest` is to be used from guest-side `wasm32-wasip2` components and generates guest bindings instead of host bindings

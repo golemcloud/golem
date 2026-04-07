@@ -10581,7 +10581,7 @@ components:
         max:
           type: integer
           format: uint64
-          description: Maximum burst capacity. Defaults to `value` if not specified.
+          description: Maximum burst capacity
     SecuritySchemeAgentSecurity:
       type: object
       title: SecuritySchemeAgentSecurity

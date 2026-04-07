@@ -83,6 +83,7 @@ impl RegistryService {
         self.services
             .registry_change_notifier
             .start_background_tasks(join_set);
+        self.services.provision_builtin_plugins().await;
 
         Ok(RunDetails {
             http_port,
@@ -100,6 +101,7 @@ impl RegistryService {
         self.services
             .registry_change_notifier
             .start_background_tasks(join_set);
+        self.services.provision_builtin_plugins().await;
         let endpoint = api::make_open_api_service(&self.services).boxed();
 
         Ok(SingleExecutableRunDetails {

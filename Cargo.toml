@@ -285,6 +285,7 @@ version-compare = "0.2.0"
 wac-graph = "=0.7.0"
 walkdir = "2.5.0"
 warp = "0.3.7"
+wasip2 = "1.0.2"
 wasm-encoder = "0.244.0"
 wasm-metadata = { version = "0.244.0", features = ["oci"] }
 wasm-rquickjs = { git = "https://github.com/golemcloud/wasm-rquickjs.git", tag = "v0.2.0", features = ["optimize", "use-golem-wasmtime"] }

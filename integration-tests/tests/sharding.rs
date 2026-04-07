@@ -31,6 +31,7 @@ mod tests {
     use golem_common::model::{AgentStatus, IdempotencyKey};
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
     use golem_common::{agent_id, data_value};
+    use golem_test_framework::components::rdb::DbInfo;
     use golem_test_framework::config::{
         EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
@@ -67,7 +68,6 @@ mod tests {
     pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
         let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
             number_of_shards_override: Some(16),
-            db_type: golem_test_framework::config::DbType::Sqlite,
             ..EnvBasedTestDependenciesConfig::new()
         })
         .await
@@ -367,7 +367,7 @@ mod tests {
         async fn start_shard_manager(&self, number_of_shards: Option<usize>);
         async fn stop_shard_manager(&self);
         async fn restart_shard_manager(&self);
-        async fn clean_shard_manager_sqlite(&self);
+        async fn clean_shard_manager_state(&self);
         fn flush_redis_db(&self);
     }
 
@@ -382,7 +382,7 @@ mod tests {
             info!("Reset started");
             self.stop_all_worker_executors().await;
             self.stop_shard_manager().await;
-            self.clean_shard_manager_sqlite().await;
+            self.clean_shard_manager_state().await;
             self.flush_redis_db();
             self.start_shard_manager(Some(number_of_shards)).await;
             self.start_all_worker_executors().await;
@@ -564,17 +564,40 @@ mod tests {
             self.redis().flush_db(0);
         }
 
-        async fn clean_shard_manager_sqlite(&self) {
-            let sqlite_files = [
-                "golem_shard_manager.db",
-                "golem_shard_manager.db-shm",
-                "golem_shard_manager.db-wal",
-            ];
+        async fn clean_shard_manager_state(&self) {
+            match self.rdb().info() {
+                DbInfo::Sqlite(_) => {
+                    let sqlite_files = [
+                        "golem_shard_manager.db",
+                        "golem_shard_manager.db-shm",
+                        "golem_shard_manager.db-wal",
+                    ];
 
-            for file in sqlite_files {
-                tokio::fs::remove_file(self.temp_directory().join("sqlite").join(file))
-                    .await
-                    .unwrap()
+                    for file in sqlite_files {
+                        let _ =
+                            tokio::fs::remove_file(self.temp_directory().join("sqlite").join(file))
+                                .await;
+                    }
+                }
+                DbInfo::Postgres(pg) => {
+                    let pool = sqlx::PgPool::connect(&pg.public_connection_string())
+                        .await
+                        .expect("Failed to connect to Postgres");
+                    sqlx::query("DELETE FROM golem_shard_manager.shard_manager_state")
+                        .execute(&pool)
+                        .await
+                        .expect("Failed to clean shard_manager_state");
+                    let _ = sqlx::query("DELETE FROM golem_shard_manager.quota_leases")
+                        .execute(&pool)
+                        .await;
+                    let _ = sqlx::query("DELETE FROM golem_shard_manager.quota_resources")
+                        .execute(&pool)
+                        .await;
+                    pool.close().await;
+                }
+                DbInfo::Mysql(_) => {
+                    panic!("Mysql is not supported in sharding tests");
+                }
             }
         }
     }

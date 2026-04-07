@@ -16,6 +16,7 @@ pub mod provided;
 pub mod spawned;
 
 use super::rdb::Rdb;
+use super::redis::Redis;
 use super::registry_service::RegistryService;
 use super::shard_manager::ShardManager;
 use super::{
@@ -96,6 +97,7 @@ async fn env_vars(
     custom_request_port: u16,
     shard_manager: &Arc<dyn ShardManager>,
     rdb: &Arc<dyn Rdb>,
+    redis: &Arc<dyn Redis>,
     verbosity: Level,
     rdb_private_connection: bool,
     registry_service: &Arc<dyn RegistryService>,
@@ -117,6 +119,19 @@ async fn env_vars(
             registry_service.grpc_port().to_string(),
         )
         .with_str("GOLEM__ENVIRONMENT", "local")
+        .with_str("GOLEM__GATEWAY_SESSION_STORAGE__TYPE", "Redis")
+        .with(
+            "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__HOST",
+            redis.private_host(),
+        )
+        .with(
+            "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PORT",
+            redis.private_port().to_string(),
+        )
+        .with(
+            "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__KEY_PREFIX",
+            redis.prefix().to_string(),
+        )
         .with("GOLEM__SHARD_MANAGER__HOST", shard_manager.grpc_host())
         .with(
             "GOLEM__SHARD_MANAGER__PORT",

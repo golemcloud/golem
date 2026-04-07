@@ -27,9 +27,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataRequest, get_running_workers_metadata_response,
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use golem_common::config::RedisConfig;
+use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, UntypedDataValue};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::component::ComponentRevision;
@@ -43,7 +43,7 @@ use golem_common::model::oplog::{
     types::ObjectMetadata,
 };
 use golem_common::model::plan::PlanId;
-use golem_common::model::worker::AgentMetadataDto;
+use golem_common::model::worker::{AgentMetadataDto, WorkerAgentConfigEntry};
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
     IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, TransactionId,
@@ -94,8 +94,8 @@ use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
     EnvironmentStateServiceConfig, FilesystemStorageConfig, GolemConfig, GrpcApiConfig,
     HttpClientConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig,
-    KeyValueStorageConfig, MemoryConfig, OplogConfig, ResourceLimitsConfig,
-    ResourceLimitsDisabledConfig, SnapshotPolicy,
+    IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig, MemoryConfig, OplogConfig,
+    ResourceLimitsConfig, ResourceLimitsDisabledConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
@@ -110,7 +110,7 @@ use golem_worker_executor::services::rdbms::{
 use golem_worker_executor::services::resource_limits::{
     AtomicResourceEntry, ResourceLimits, ResourceLimitsDisabled,
 };
-use golem_worker_executor::services::rpc::Rpc;
+use golem_worker_executor::services::rpc::{Rpc, RpcDemand, RpcError as ServiceRpcError};
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::worker::WorkerService;
@@ -452,25 +452,17 @@ pub async fn start_with_oplog_config(
     .await
 }
 
-/// Overrides for customizing the test executor. Allows wrapping services with
-/// failure-injecting wrappers and modifying the GolemConfig.
-type ConfigureFn = dyn Fn(&mut GolemConfig) + Send + Sync;
-type WrapKeyValueServiceFn =
-    dyn Fn(Arc<dyn KeyValueService>) -> Arc<dyn KeyValueService> + Send + Sync;
-type WrapBlobStoreServiceFn =
-    dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
-
-#[derive(Clone, Default)]
-pub struct TestExecutorOverrides {
-    pub configure: Option<Arc<ConfigureFn>>,
-    pub wrap_key_value_service: Option<Arc<WrapKeyValueServiceFn>>,
-    pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
-}
-
-pub async fn start_with_overrides(
+pub async fn start_with_redis_storage(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
-    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_redis_oplog_config(deps, context, None).await
+}
+
+pub async fn start_with_redis_oplog_config(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    oplog_config_override: Option<OplogConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let redis = deps.redis.clone();
     let redis_monitor = deps.redis_monitor.clone();
@@ -478,15 +470,34 @@ pub async fn start_with_overrides(
     redis_monitor.assert_valid();
     info!("Using Redis on port {}", redis.public_port());
 
-    let prometheus = golem_worker_executor::metrics::register_all();
+    let mut config = make_base_test_config(deps);
+    apply_redis_storage_config(&mut config, deps, context);
+    if let Some(oplog_config) = oplog_config_override {
+        config.oplog = oplog_config;
+    }
 
-    let mut config = GolemConfig {
-        key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
-            port: redis.public_port(),
-            key_prefix: context.redis_prefix(),
-            ..Default::default()
-        }),
-        indexed_storage: IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {}),
+    start_executor_with_config(deps, context, config, TestExecutorOverrides::default()).await
+}
+
+/// Overrides for customizing the test executor. Allows wrapping services with
+/// failure-injecting wrappers and modifying the GolemConfig.
+type ConfigureFn = dyn Fn(&mut GolemConfig) + Send + Sync;
+type WrapKeyValueServiceFn =
+    dyn Fn(Arc<dyn KeyValueService>) -> Arc<dyn KeyValueService> + Send + Sync;
+type WrapBlobStoreServiceFn =
+    dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
+type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
+
+#[derive(Clone, Default)]
+pub struct TestExecutorOverrides {
+    pub configure: Option<Arc<ConfigureFn>>,
+    pub wrap_key_value_service: Option<Arc<WrapKeyValueServiceFn>>,
+    pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
+    pub wrap_rpc: Option<Arc<WrapRpcFn>>,
+}
+
+fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
+    GolemConfig {
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
             root: deps.data_dir.path().join("blobs"),
         }),
@@ -498,26 +509,72 @@ pub async fn start_with_overrides(
         compiled_component_service: CompiledComponentServiceConfig::Enabled(
             CompiledComponentServiceEnabledConfig {},
         ),
-        memory: MemoryConfig {
-            ..Default::default()
-        },
         agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
         engine: EngineConfig {
             enable_fs_cache: true,
         },
-        // Use Disabled resource limits so Worker::new() can call
-        // initialize_account without attempting a gRPC connection to a registry
-        // service that does not exist in this test setup.
+        // Use Disabled resource limits so Worker::new() can call initialize_account
+        // without attempting a gRPC connection to a registry service that does
+        // not exist in this test setup.
         resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
         ..Default::default()
-    };
-
-    if let Some(configure) = &overrides.configure {
-        configure(&mut config);
     }
+}
+
+pub fn sqlite_storage_config(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+) -> DbSqliteConfig {
+    let database = deps
+        .data_dir
+        .path()
+        .join(format!(
+            "worker-executor-{}.db",
+            context.redis_prefix().replace(':', "_")
+        ))
+        .to_string_lossy()
+        .into_owned();
+
+    DbSqliteConfig {
+        database,
+        max_connections: 8,
+        foreign_keys: false,
+    }
+}
+
+fn apply_sqlite_storage_config(
+    config: &mut GolemConfig,
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+) {
+    config.key_value_storage = KeyValueStorageConfig::Sqlite(sqlite_storage_config(deps, context));
+    config.indexed_storage =
+        IndexedStorageConfig::KVStoreSqlite(IndexedStorageKVStoreSqliteConfig {});
+}
+
+fn apply_redis_storage_config(
+    config: &mut GolemConfig,
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+) {
+    config.key_value_storage = KeyValueStorageConfig::Redis(RedisConfig {
+        port: deps.redis.public_port(),
+        key_prefix: context.redis_prefix(),
+        ..Default::default()
+    });
+    config.indexed_storage =
+        IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {});
+}
+
+async fn start_executor_with_config(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    config: GolemConfig,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let prometheus = golem_worker_executor::metrics::register_all();
 
     let handle = Handle::current();
-
     let mut join_set = JoinSet::new();
 
     let details = run(
@@ -560,6 +617,24 @@ pub async fn start_with_overrides(
     }
 }
 
+pub async fn start_with_overrides(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let mut config = make_base_test_config(deps);
+    apply_sqlite_storage_config(&mut config, deps, context);
+    config.memory = MemoryConfig {
+        ..Default::default()
+    };
+
+    if let Some(configure) = &overrides.configure {
+        configure(&mut config);
+    }
+
+    start_executor_with_config(deps, context, config, overrides).await
+}
+
 pub async fn start_customized(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
@@ -570,50 +645,14 @@ pub async fn start_customized(
     http_client_override: Option<HttpClientConfig>,
     oplog_config_override: Option<OplogConfig>,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    let redis = deps.redis.clone();
-    let redis_monitor = deps.redis_monitor.clone();
-    redis.assert_valid();
-    redis_monitor.assert_valid();
-    info!("Using Redis on port {}", redis.public_port());
-
-    let prometheus = golem_worker_executor::metrics::register_all();
-
-    let mut config = GolemConfig {
-        key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
-            port: redis.public_port(),
-            key_prefix: context.redis_prefix(),
-            ..Default::default()
-        }),
-        indexed_storage: IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {}),
-        blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
-            root: deps.data_dir.path().join("blobs"),
-        }),
-        http_port: 0,
-        grpc: GrpcApiConfig {
-            port: 0,
-            tls: GrpcServerTlsConfig::disabled(),
-        },
-        compiled_component_service: CompiledComponentServiceConfig::Enabled(
-            CompiledComponentServiceEnabledConfig {},
-        ),
-        memory: MemoryConfig {
-            system_memory_override,
-            ..Default::default()
-        },
-        filesystem_storage: FilesystemStorageConfig {
-            total_worker_filesystem_storage_bytes: system_storage_override,
-            ..Default::default()
-        },
-        agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
-        engine: EngineConfig {
-            enable_fs_cache: true,
-        },
-        // Use Disabled resource limits so Worker::new() can call
-        // initialize_account without attempting a gRPC connection to a registry
-        // service that does not exist in this test setup. Tests that need custom
-        // resource limits inject their own ResourceLimits implementation via
-        // ProductionContextTestServerBootstrap (which overrides this config).
-        resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
+    let mut config = make_base_test_config(deps);
+    apply_sqlite_storage_config(&mut config, deps, context);
+    config.memory = MemoryConfig {
+        system_memory_override,
+        ..Default::default()
+    };
+    config.filesystem_storage = FilesystemStorageConfig {
+        total_worker_filesystem_storage_bytes: system_storage_override,
         ..Default::default()
     };
     if let Some(retry) = retry_override {
@@ -629,48 +668,7 @@ pub async fn start_customized(
         config.oplog = oplog_config;
     }
 
-    let handle = Handle::current();
-
-    let mut join_set = JoinSet::new();
-
-    let details = run(
-        config,
-        prometheus,
-        handle,
-        deps.component_service_directory.clone(),
-        TestExecutorOverrides::default(),
-        &mut join_set,
-    )
-    .await?;
-    let grpc_port = details.grpc_port;
-    let leak_detector = details.leak_detector.clone();
-    let details = Arc::new(details);
-
-    let start = std::time::Instant::now();
-    loop {
-        info!("Waiting for worker-executor to be reachable on port {grpc_port}");
-        let channel = Channel::from_shared(format!("http://127.0.0.1:{grpc_port}"))
-            .expect("Valid URI")
-            .connect()
-            .await;
-
-        if let Ok(channel) = channel {
-            let otel_channel = ServiceBuilder::new()
-                .layer(tonic_tracing_opentelemetry::middleware::client::OtelGrpcLayer)
-                .service(channel);
-            let client = WorkerExecutorClient::new(otel_channel);
-            break Ok(TestWorkerExecutor {
-                _join_set: Arc::new(join_set),
-                _run_details: details,
-                deps: deps.clone(),
-                client,
-                context: context.clone(),
-                leak_detector,
-            });
-        } else if start.elapsed().as_secs() > 10 {
-            break Err(anyhow::anyhow!("Timeout waiting for server to start"));
-        }
-    }
+    start_executor_with_config(deps, context, config, TestExecutorOverrides::default()).await
 }
 
 async fn run(
@@ -1313,6 +1311,8 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     fn create_quota_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _golem_config: &golem_worker_executor::services::golem_config::GolemConfig,
+        _shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn golem_worker_executor::services::quota::QuotaService> {
         Arc::new(golem_worker_executor::services::quota::UnlimitedQuotaService)
     }
@@ -1397,6 +1397,14 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             additional_deps.clone(),
         ))
     }
+
+    fn wrap_rpc(&self, rpc: Arc<dyn Rpc>) -> Arc<dyn Rpc> {
+        if let Some(wrap) = &self.overrides.wrap_rpc {
+            wrap(rpc)
+        } else {
+            rpc
+        }
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -1425,6 +1433,8 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     fn create_quota_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _golem_config: &golem_worker_executor::services::golem_config::GolemConfig,
+        _shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn golem_worker_executor::services::quota::QuotaService> {
         Arc::new(golem_worker_executor::services::quota::UnlimitedQuotaService)
     }
@@ -1512,34 +1522,9 @@ fn make_production_context_config(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
 ) -> GolemConfig {
-    GolemConfig {
-        key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
-            port: deps.redis.public_port(),
-            key_prefix: context.redis_prefix(),
-            ..Default::default()
-        }),
-        indexed_storage: IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {}),
-        blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
-            root: deps.data_dir.path().join("blobs"),
-        }),
-        http_port: 0,
-        grpc: GrpcApiConfig {
-            port: 0,
-            tls: GrpcServerTlsConfig::disabled(),
-        },
-        compiled_component_service: CompiledComponentServiceConfig::Enabled(
-            CompiledComponentServiceEnabledConfig {},
-        ),
-        agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
-        engine: EngineConfig {
-            enable_fs_cache: true,
-        },
-        // Use Disabled resource limits so initialize_account doesn't require a
-        // live registry service. Each caller injects its own ResourceLimits
-        // implementation via ProductionContextTestServerBootstrap.
-        resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
-        ..Default::default()
-    }
+    let mut config = make_base_test_config(deps);
+    apply_sqlite_storage_config(&mut config, deps, context);
+    config
 }
 
 async fn run_production_context_bootstrap(
@@ -1548,9 +1533,6 @@ async fn run_production_context_bootstrap(
     resource_limits: Arc<dyn ResourceLimits>,
     timeout_msg: &'static str,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    deps.redis.assert_valid();
-    deps.redis_monitor.assert_valid();
-
     let prometheus = golem_worker_executor::metrics::register_all();
     let config = make_production_context_config(deps, context);
 
@@ -2571,6 +2553,110 @@ impl BlobStoreService for FailingBlobStoreService {
     ) -> Result<(), BlobStoreError> {
         self.inner
             .write_data(environment_id, container_name, object_name, data)
+            .await
+    }
+}
+
+pub struct FailingRpc {
+    inner: Arc<dyn Rpc>,
+    remaining_failures: AtomicU32,
+}
+
+impl FailingRpc {
+    pub fn new(inner: Arc<dyn Rpc>, failure_count: u32) -> Self {
+        Self {
+            inner,
+            remaining_failures: AtomicU32::new(failure_count),
+        }
+    }
+}
+
+#[async_trait]
+impl Rpc for FailingRpc {
+    async fn create_demand(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+        self_stack: InvocationContextStack,
+        agent_config: Vec<WorkerAgentConfigEntry>,
+    ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
+        self.inner
+            .create_demand(
+                owned_agent_id,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_config,
+                self_stack,
+                agent_config,
+            )
+            .await
+    }
+
+    async fn invoke_and_await(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        idempotency_key: Option<IdempotencyKey>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+        self_stack: InvocationContextStack,
+    ) -> Result<UntypedDataValue, ServiceRpcError> {
+        if self
+            .remaining_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            Err(ServiceRpcError::RemoteInternalError {
+                details: "transient test failure".to_string(),
+            })
+        } else {
+            self.inner
+                .invoke_and_await(
+                    owned_agent_id,
+                    idempotency_key,
+                    method_name,
+                    method_parameters,
+                    self_created_by,
+                    self_agent_id,
+                    self_env,
+                    self_config,
+                    self_stack,
+                )
+                .await
+        }
+    }
+
+    async fn invoke(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        idempotency_key: Option<IdempotencyKey>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+        self_stack: InvocationContextStack,
+    ) -> Result<(), ServiceRpcError> {
+        self.inner
+            .invoke(
+                owned_agent_id,
+                idempotency_key,
+                method_name,
+                method_parameters,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_config,
+                self_stack,
+            )
             .await
     }
 }

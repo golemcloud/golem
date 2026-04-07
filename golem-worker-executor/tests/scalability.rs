@@ -24,7 +24,7 @@ use golem_wasm::Value;
 use golem_worker_executor::services::golem_config::OplogConfig;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
-    start_customized, start_with_oplog_config,
+    start_customized, start_with_redis_oplog_config,
 };
 use pretty_assertions::assert_eq;
 use std::future::Future;
@@ -471,7 +471,7 @@ async fn oplog_archive_scheduled_when_worker_becomes_idle(
         entry_count_limit: 5,
         ..Default::default()
     };
-    let executor = start_with_oplog_config(deps, &context, Some(oplog_config)).await?;
+    let executor = start_with_redis_oplog_config(deps, &context, Some(oplog_config)).await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -532,7 +532,7 @@ async fn oplog_archive_scheduled_when_worker_fails(
         entry_count_limit: 5,
         ..Default::default()
     };
-    let executor = start_with_oplog_config(deps, &context, Some(oplog_config)).await?;
+    let executor = start_with_redis_oplog_config(deps, &context, Some(oplog_config)).await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
