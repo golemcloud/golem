@@ -367,8 +367,7 @@ struct InitializedCacheEntry {
     /// Storage semaphore permit held for the lifetime of this cache entry.
     /// Acquired on cache miss (first download); `None` when no semaphore is
     /// configured. Only returned to the executor pool if the file is
-    /// successfully deleted — if deletion fails the disk space is still
-    /// occupied so the permits must remain consumed.
+    /// successfully deleted
     filesystem_storage_permit: Option<OwnedSemaphorePermit>,
     /// Byte count corresponding to `filesystem_storage_permit`, for metrics.
     filesystem_storage_permit_bytes: u64,
@@ -560,9 +559,6 @@ mod tests {
     /// an external process), the executor must panic — a filesystem that cannot
     /// delete files is in an inconsistent state and the process should not
     /// continue. This is preferable to silently over-committing disk space.
-    ///
-    /// We test this directly via `InitializedCacheEntry::new_for_test` with a
-    /// path that does not exist, so `remove_file` always returns `NotFound`.
     #[test]
     fn ro_panics_when_file_deletion_fails() {
         let result = std::panic::catch_unwind(|| {

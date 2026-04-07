@@ -121,8 +121,6 @@ pub trait OplogArchive: Debug {
 }
 
 /// Wraps an `OplogArchive` to record storage metrics on writes.
-/// Used only on the write path (`MultiLayerOplog::new`); the read-only
-/// path (`OplogArchiveService::read`) uses the raw archive directly.
 #[derive(Debug)]
 pub struct InstrumentedOplogArchive {
     inner: Arc<dyn OplogArchive + Send + Sync>,
@@ -633,8 +631,6 @@ impl MultiLayerOplog {
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in multi_layer_oplog_service.lower.iter().enumerate() {
             if i != (multi_layer_oplog_service.lower.len().get() - 1) {
-                // Wrapping the intermediate layers so they transfer entries to the next layer,
-                // then wrapping with InstrumentedOplogArchive to record storage metrics.
                 let raw = layer.open(&owned_agent_id).await;
                 let instrumented = Arc::new(InstrumentedOplogArchive::new(
                     raw,
@@ -651,8 +647,6 @@ impl MultiLayerOplog {
                     .await,
                 ));
             } else {
-                // Not wrapping with WrappedOplogArchive for the last layer,
-                // but still wrapping with InstrumentedOplogArchive for metrics.
                 let raw = layer.open(&owned_agent_id).await;
                 lower.push(Arc::new(InstrumentedOplogArchive::new(
                     raw,

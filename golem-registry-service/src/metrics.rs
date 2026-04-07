@@ -29,7 +29,6 @@ pub fn register_all() -> Registry {
 }
 
 pub mod storage {
-    // Re-export shared storage metrics from golem-service-base.
     pub use golem_service_base::metrics::storage::*;
 
     pub const STORAGE_TYPE_COMPONENT: &str = "component";
