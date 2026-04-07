@@ -16,6 +16,9 @@ use super::model::retry_policy::{
     RetryPolicyCreationRecord, RetryPolicyExtRevisionRecord, RetryPolicyRepoError,
     RetryPolicyRevisionRecord,
 };
+use super::registry_change::{
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
+};
 use crate::repo::model::BindFields;
 use crate::repo::model::retry_policy::RetryPolicyRecord;
 use async_trait::async_trait;
@@ -34,17 +37,17 @@ pub trait RetryPolicyRepo: Send + Sync {
     async fn create(
         &self,
         record: RetryPolicyCreationRecord,
-    ) -> Result<RetryPolicyExtRevisionRecord, RetryPolicyRepoError>;
+    ) -> Result<RequiresNotificationSignal<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError>;
 
     async fn update(
         &self,
         revision: RetryPolicyRevisionRecord,
-    ) -> Result<RetryPolicyExtRevisionRecord, RetryPolicyRepoError>;
+    ) -> Result<RequiresNotificationSignal<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError>;
 
     async fn delete(
         &self,
         revision: RetryPolicyRevisionRecord,
-    ) -> Result<RetryPolicyExtRevisionRecord, RetryPolicyRepoError>;
+    ) -> Result<RequiresNotificationSignal<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError>;
 
     async fn get_by_id(
         &self,
@@ -82,7 +85,8 @@ impl<Repo: RetryPolicyRepo> RetryPolicyRepo for LoggedRetryPolicyRepo<Repo> {
     async fn create(
         &self,
         record: RetryPolicyCreationRecord,
-    ) -> Result<RetryPolicyExtRevisionRecord, RetryPolicyRepoError> {
+    ) -> Result<RequiresNotificationSignal<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError>
+    {
         let span = Self::span_environment_id(record.environment_id);
         self.repo.create(record).instrument(span).await
     }
@@ -90,7 +94,8 @@ impl<Repo: RetryPolicyRepo> RetryPolicyRepo for LoggedRetryPolicyRepo<Repo> {
     async fn update(
         &self,
         revision: RetryPolicyRevisionRecord,
-    ) -> Result<RetryPolicyExtRevisionRecord, RetryPolicyRepoError> {
+    ) -> Result<RequiresNotificationSignal<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError>
+    {
         let span = Self::span_retry_policy_id(revision.retry_policy_id);
         self.repo.update(revision).instrument(span).await
     }
@@ -98,7 +103,8 @@ impl<Repo: RetryPolicyRepo> RetryPolicyRepo for LoggedRetryPolicyRepo<Repo> {
     async fn delete(
         &self,
         revision: RetryPolicyRevisionRecord,
-    ) -> Result<RetryPolicyExtRevisionRecord, RetryPolicyRepoError> {
+    ) -> Result<RequiresNotificationSignal<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError>
+    {
         let span = Self::span_retry_policy_id(revision.retry_policy_id);
         self.repo.delete(revision).instrument(span).await
     }
@@ -197,6 +203,10 @@ impl DbRetryPolicyRepo<PostgresPool> {
 
         let revision = Self::insert_revision(tx, record.revision).await?;
 
+        let change_event =
+            NewRegistryChangeEvent::retry_policy_changed(retry_policy_record.environment_id);
+        DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event).await?;
+
         Ok(RetryPolicyExtRevisionRecord {
             environment_id: retry_policy_record.environment_id,
             name: retry_policy_record.name,
@@ -226,6 +236,10 @@ impl DbRetryPolicyRepo<PostgresPool> {
             ).await?
             .ok_or(RetryPolicyRepoError::ConcurrentModification)?;
 
+        let change_event =
+            NewRegistryChangeEvent::retry_policy_changed(retry_policy_record.environment_id);
+        DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event).await?;
+
         Ok(RetryPolicyExtRevisionRecord {
             environment_id: retry_policy_record.environment_id,
             name: retry_policy_record.name,
@@ -241,30 +255,39 @@ impl RetryPolicyRepo for DbRetryPolicyRepo<PostgresPool> {
     async fn create(
         &self,
         record: RetryPolicyCreationRecord,
-    ) -> Result<RetryPolicyExtRevisionRecord, RetryPolicyRepoError> {
-        self.db_pool
+    ) -> Result<RequiresNotificationSignal<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError>
+    {
+        let result = self
+            .db_pool
             .with_tx_err(METRICS_SVC_NAME, "create", |tx| {
                 Self::create_within_transaction(tx, record).boxed()
             })
-            .await
+            .await?;
+
+        Ok(result.requires_notification_signal())
     }
 
     async fn update(
         &self,
         revision: RetryPolicyRevisionRecord,
-    ) -> Result<RetryPolicyExtRevisionRecord, RetryPolicyRepoError> {
-        self.db_pool
+    ) -> Result<RequiresNotificationSignal<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError>
+    {
+        let result = self
+            .db_pool
             .with_tx_err(METRICS_SVC_NAME, "update", |tx| {
                 Self::update_within_transaction(tx, revision).boxed()
             })
-            .await
+            .await?;
+
+        Ok(result.requires_notification_signal())
     }
 
     async fn delete(
         &self,
         revision: RetryPolicyRevisionRecord,
-    ) -> Result<RetryPolicyExtRevisionRecord, RetryPolicyRepoError> {
-        self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
+    ) -> Result<RequiresNotificationSignal<RetryPolicyExtRevisionRecord>, RetryPolicyRepoError>
+    {
+        let result = self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
                 let revision = Self::insert_revision(tx, revision.clone()).await?;
 
@@ -283,14 +306,21 @@ impl RetryPolicyRepo for DbRetryPolicyRepo<PostgresPool> {
                     ).await?
                     .ok_or(RetryPolicyRepoError::ConcurrentModification)?;
 
-                Ok(RetryPolicyExtRevisionRecord {
+                let change_event =
+                    NewRegistryChangeEvent::retry_policy_changed(retry_policy_record.environment_id);
+                DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
+                    .await?;
+
+                Ok::<_, RetryPolicyRepoError>(RetryPolicyExtRevisionRecord {
                     environment_id: retry_policy_record.environment_id,
                     name: retry_policy_record.name,
                     entity_created_at: retry_policy_record.audit.created_at,
                     revision
                 })
             }.boxed()
-        }).await
+        }).await?;
+
+        Ok(result.requires_notification_signal())
     }
 
     async fn get_by_id(

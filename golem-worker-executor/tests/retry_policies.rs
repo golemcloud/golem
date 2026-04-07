@@ -18,7 +18,7 @@ use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
 use golem_worker_executor_test_utils::{
-    start, LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
 use test_r::{inherit_test_dep, test, timeout};
 

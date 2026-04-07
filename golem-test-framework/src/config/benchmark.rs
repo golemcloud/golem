@@ -366,6 +366,7 @@ impl BenchmarkTestDependencies {
                 worker_service_http_port,
                 worker_service_grpc_port,
                 worker_service_custom_request_port,
+                worker_service_custom_request_port + 2,
                 &shard_manager,
                 &rdb,
                 &redis,
@@ -509,6 +510,7 @@ impl BenchmarkTestDependencies {
                         *worker_service_http_port,
                         *worker_service_grpc_port,
                         *worker_service_custom_request_port,
+                        *worker_service_custom_request_port + 2,
                     )
                     .await,
                 );

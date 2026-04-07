@@ -288,6 +288,7 @@ impl EnvBasedTestDependencies {
                 8082,
                 9092,
                 9093,
+                9095,
                 shard_manager,
                 rdb,
                 redis,

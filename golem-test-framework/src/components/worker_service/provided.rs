@@ -23,6 +23,7 @@ pub struct ProvidedWorkerService {
     http_port: u16,
     grpc_port: u16,
     custom_request_port: u16,
+    mcp_port: u16,
     base_http_client: OnceCell<reqwest_middleware::ClientWithMiddleware>,
 }
 
@@ -32,15 +33,17 @@ impl ProvidedWorkerService {
         http_port: u16,
         grpc_port: u16,
         custom_request_port: u16,
+        mcp_port: u16,
     ) -> Self {
         info!(
-            "Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}, custom request port: {custom_request_port}"
+            "Using already running golem-worker-service on {host}, http port: {http_port}, grpc port: {grpc_port}, custom request port: {custom_request_port}, mcp port: {mcp_port}"
         );
         Self {
             host: host.clone(),
             http_port,
             grpc_port,
             custom_request_port,
+            mcp_port,
             base_http_client: OnceCell::new(),
         }
     }
@@ -67,6 +70,10 @@ impl WorkerService for ProvidedWorkerService {
     }
     fn custom_request_port(&self) -> u16 {
         self.custom_request_port
+    }
+
+    fn mcp_port(&self) -> u16 {
+        self.mcp_port
     }
 
     async fn base_http_client(&self) -> reqwest_middleware::ClientWithMiddleware {

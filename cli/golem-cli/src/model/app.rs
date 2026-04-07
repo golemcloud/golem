@@ -1925,8 +1925,8 @@ mod app_builder {
                         }
                     }
 
-                    if let Some(bridge) = app.application.bridge {
-                        if self
+                    if let Some(bridge) = app.application.bridge
+                        && self
                             .add_entity_source(UniqueSourceCheckedEntityKey::Bridge, app_source_dir)
                         {
                             self.bridge_sdks =

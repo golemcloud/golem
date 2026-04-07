@@ -348,6 +348,7 @@ impl Services {
         let retry_policy_service = Arc::new(RetryPolicyService::new(
             repos.retry_policy_repo.clone(),
             environment_service.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let deployment_write_service = Arc::new(DeploymentWriteService::new(

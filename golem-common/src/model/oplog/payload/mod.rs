@@ -31,7 +31,6 @@ use crate::model::oplog::types::{
     SerializableRdbmsRequest, SerializableRpcError, SerializableScheduledInvocation,
     SerializableStreamError,
 };
-use crate::model::oplog::PayloadId;
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
 use crate::model::worker::RevertWorkerTarget;
 use crate::model::{AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId};

@@ -14,7 +14,7 @@
 
 mod wit;
 
-use crate::model::agent::{parse_agent_id_parts, DataValue, ElementValue, NamedElementValue};
+use crate::model::agent::{DataValue, ElementValue, NamedElementValue, parse_agent_id_parts};
 use crate::model::{OwnedAgentId, RdbmsPoolKey, RetryConfig};
 use desert_rust::BinaryCodec;
 use golem_wasm::analysis::AnalysedType;
@@ -667,10 +667,7 @@ impl RetryPolicy {
                 (RetryPolicyState::Terminal, RetryVerdict::GiveUp)
             }
             (
-                RetryPolicy::CountBox {
-                    max_retries,
-                    inner,
-                },
+                RetryPolicy::CountBox { max_retries, inner },
                 RetryPolicyState::CountBox { attempts, inner: s },
             ) => {
                 if attempts >= max_retries {
@@ -692,10 +689,7 @@ impl RetryPolicy {
                     )
                 }
             }
-            (
-                RetryPolicy::TimeBox { limit, inner },
-                RetryPolicyState::Wrapper(inner_state),
-            ) => {
+            (RetryPolicy::TimeBox { limit, inner }, RetryPolicyState::Wrapper(inner_state)) => {
                 if elapsed >= *limit {
                     (
                         RetryPolicyState::Wrapper(inner_state.clone()),
@@ -723,10 +717,7 @@ impl RetryPolicy {
                 };
                 (RetryPolicyState::Wrapper(Box::new(new_inner)), verdict)
             }
-            (
-                RetryPolicy::AddDelay { delay, inner },
-                RetryPolicyState::Wrapper(inner_state),
-            ) => {
+            (RetryPolicy::AddDelay { delay, inner }, RetryPolicyState::Wrapper(inner_state)) => {
                 let (new_inner, verdict) = inner.step(inner_state, elapsed, properties, rng);
                 let verdict = match verdict {
                     RetryVerdict::Retry(current) => {
@@ -736,10 +727,7 @@ impl RetryPolicy {
                 };
                 (RetryPolicyState::Wrapper(Box::new(new_inner)), verdict)
             }
-            (
-                RetryPolicy::Jitter { factor, inner },
-                RetryPolicyState::Wrapper(inner_state),
-            ) => {
+            (RetryPolicy::Jitter { factor, inner }, RetryPolicyState::Wrapper(inner_state)) => {
                 let (new_inner, verdict) = inner.step(inner_state, elapsed, properties, rng);
                 let verdict = match verdict {
                     RetryVerdict::Retry(current) if *factor > 0.0 => {
@@ -777,8 +765,7 @@ impl RetryPolicy {
                 },
             ) => {
                 if !on_right {
-                    let (new_left, left_verdict) =
-                        left_policy.step(left, elapsed, properties, rng);
+                    let (new_left, left_verdict) = left_policy.step(left, elapsed, properties, rng);
                     match left_verdict {
                         RetryVerdict::Retry(delay) => (
                             RetryPolicyState::AndThen {
@@ -2437,33 +2424,41 @@ mod tests {
             .set("status", PredicateValue::Integer(503))
             .set("service", PredicateValue::Text("billing-api".to_string()));
 
-        assert!(Predicate::PropGt {
-            property: "status".to_string(),
-            value: PredicateValue::Integer(500),
-        }
-        .matches(&props)
-        .unwrap());
+        assert!(
+            Predicate::PropGt {
+                property: "status".to_string(),
+                value: PredicateValue::Integer(500),
+            }
+            .matches(&props)
+            .unwrap()
+        );
 
-        assert!(Predicate::PropMatches {
-            property: "service".to_string(),
-            pattern: "billing-*".to_string(),
-        }
-        .matches(&props)
-        .unwrap());
+        assert!(
+            Predicate::PropMatches {
+                property: "service".to_string(),
+                pattern: "billing-*".to_string(),
+            }
+            .matches(&props)
+            .unwrap()
+        );
 
-        assert!(Predicate::PropStartsWith {
-            property: "service".to_string(),
-            prefix: "bill".to_string(),
-        }
-        .matches(&props)
-        .unwrap());
+        assert!(
+            Predicate::PropStartsWith {
+                property: "service".to_string(),
+                prefix: "bill".to_string(),
+            }
+            .matches(&props)
+            .unwrap()
+        );
 
-        assert!(Predicate::PropContains {
-            property: "service".to_string(),
-            substring: "api".to_string(),
-        }
-        .matches(&props)
-        .unwrap());
+        assert!(
+            Predicate::PropContains {
+                property: "service".to_string(),
+                substring: "api".to_string(),
+            }
+            .matches(&props)
+            .unwrap()
+        );
     }
 
     #[test]
@@ -2471,20 +2466,24 @@ mod tests {
         let mut props = RetryProperties::new();
         props.set("attempt", PredicateValue::Text("42".to_string()));
 
-        assert!(Predicate::PropEq {
-            property: "attempt".to_string(),
-            value: PredicateValue::Integer(42),
-        }
-        .matches(&props)
-        .unwrap());
+        assert!(
+            Predicate::PropEq {
+                property: "attempt".to_string(),
+                value: PredicateValue::Integer(42),
+            }
+            .matches(&props)
+            .unwrap()
+        );
 
         props.set("attempt", PredicateValue::Integer(42));
-        assert!(Predicate::PropEq {
-            property: "attempt".to_string(),
-            value: PredicateValue::Text("42".to_string()),
-        }
-        .matches(&props)
-        .unwrap());
+        assert!(
+            Predicate::PropEq {
+                property: "attempt".to_string(),
+                value: PredicateValue::Text("42".to_string()),
+            }
+            .matches(&props)
+            .unwrap()
+        );
 
         props.set("attempt", PredicateValue::Boolean(true));
         let error = Predicate::PropEq {

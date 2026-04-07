@@ -66,8 +66,8 @@ mod partial_match;
 mod plugin;
 mod profile;
 mod repl;
-pub(crate) mod template;
 mod retry_policy;
+pub(crate) mod template;
 mod worker;
 
 // NOTE: We are explicitly not using #[async_trait] here to be able to NOT have a Send bound

@@ -20,7 +20,7 @@
 //! `NamedRetryPolicy`) require manual flattening into the WIT node-list
 //! representation, so their conversions live here.
 
-use super::{duration_to_nanos, NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy};
+use super::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy, duration_to_nanos};
 use crate::model::agent::bindings::golem::api::retry::{
     AddDelayConfig, ClampConfig, CountBoxConfig, ExponentialConfig, FibonacciConfig,
     FilteredConfig, JitterConfig, NamedRetryPolicy as WitNamedRetryPolicy, PolicyNode,

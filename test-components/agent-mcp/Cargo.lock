@@ -237,8 +237,7 @@ dependencies = [
  "itertools",
  "uuid",
  "wasip2",
- "wit-bindgen-rt 0.44.0",
- "wstd",
+ "wit-bindgen 0.51.0",
 ]
 
 [[package]]
@@ -920,7 +919,7 @@ version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9fb4e7653763780be47e38f479e9aa83c768aa6a3b2ed086dc2826fdbbb7e7f5"
 dependencies = [
- "wit-bindgen-rt 0.24.0",
+ "wit-bindgen-rt",
  "wit-bindgen-rust-macro 0.24.0",
 ]
 
@@ -981,15 +980,6 @@ name = "wit-bindgen-rt"
 version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b0780cf7046630ed70f689a098cd8d56c5c3b22f2a7379bbdb088879963ff96"
-dependencies = [
- "bitflags",
-]
-
-[[package]]
-name = "wit-bindgen-rt"
-version = "0.44.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "653c85dd7aee6fe6f4bded0d242406deadae9819029ce6f7d258c920c384358a"
 dependencies = [
  "bitflags",
 ]

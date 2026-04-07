@@ -83,7 +83,6 @@ pub use durability::*;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
 use futures::future::try_join_all;
-use golem_common::model::RetryConfig;
 use golem_common::model::TransactionId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
@@ -102,7 +101,6 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::ParsedWorkerAgentConfigEntry;
-use golem_common::model::TransactionId;
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
     AgentMetadata, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, RetryContext,
@@ -770,6 +768,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             AgentError::StackOverflow => "stack-overflow",
             AgentError::ExceededMemoryLimit => "exceeded-memory-limit",
             AgentError::ExceededTableLimit => "exceeded-table-limit",
+            AgentError::ExceededHttpCallLimit => "exceeded-http-call-limit",
+            AgentError::ExceededRpcCallLimit => "exceeded-rpc-call-limit",
             AgentError::NodeOutOfFilesystemStorage => "node-out-of-filesystem-storage",
             AgentError::AgentExceededFilesystemStorageLimit => {
                 "agent-exceeded-filesystem-storage-limit"

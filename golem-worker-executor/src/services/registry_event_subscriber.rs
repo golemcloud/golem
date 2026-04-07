@@ -95,6 +95,15 @@ impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
                     "Received security scheme changed event, ignoring"
                 );
             }
+            RegistryInvalidationEvent::RetryPolicyChanged { environment_id, .. } => {
+                debug!(
+                    environment_id = %environment_id,
+                    "Received retry policy changed event, invalidating environment cache"
+                );
+                self.environment_state_service
+                    .invalidate_environment(*environment_id)
+                    .await;
+            }
             RegistryInvalidationEvent::ResourceDefinitionChanged {
                 environment_id,
                 resource_definition_id,

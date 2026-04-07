@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::environment::{EnvironmentError, EnvironmentService};
+use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::retry_policy::{
     RetryPolicyCreationRecord, RetryPolicyRepoError, RetryPolicyRevisionRecord,
@@ -67,16 +68,19 @@ error_forwarding!(RetryPolicyError, EnvironmentError, RetryPolicyRepoError);
 pub struct RetryPolicyService {
     retry_policy_repo: Arc<dyn RetryPolicyRepo>,
     environment_service: Arc<EnvironmentService>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl RetryPolicyService {
     pub fn new(
         retry_policy_repo: Arc<dyn RetryPolicyRepo>,
         environment_service: Arc<EnvironmentService>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             retry_policy_repo,
             environment_service,
+            registry_change_notifier,
         }
     }
 
@@ -126,7 +130,9 @@ impl RetryPolicyService {
             .await;
 
         match result {
-            Ok(record) => Ok(record.try_into()?),
+            Ok(record) => Ok(record
+                .signal_new_events_available(&self.registry_change_notifier)
+                .try_into()?),
             Err(RetryPolicyRepoError::NameViolatesUniqueness) => {
                 Err(RetryPolicyError::RetryPolicyForNameAlreadyExists { name })
             }
@@ -181,7 +187,9 @@ impl RetryPolicyService {
             .await;
 
         match result {
-            Ok(record) => Ok(record.try_into()?),
+            Ok(record) => Ok(record
+                .signal_new_events_available(&self.registry_change_notifier)
+                .try_into()?),
             Err(RetryPolicyRepoError::ConcurrentModification) => {
                 Err(RetryPolicyError::ConcurrentModification)
             }
@@ -218,7 +226,9 @@ impl RetryPolicyService {
             .await;
 
         match result {
-            Ok(record) => Ok(record.try_into()?),
+            Ok(record) => Ok(record
+                .signal_new_events_available(&self.registry_change_notifier)
+                .try_into()?),
             Err(RetryPolicyRepoError::ConcurrentModification) => {
                 Err(RetryPolicyError::ConcurrentModification)
             }

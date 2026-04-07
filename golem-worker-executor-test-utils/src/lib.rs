@@ -77,6 +77,7 @@ use golem_worker_executor::model::{
 use golem_worker_executor::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
 };
+use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
@@ -140,8 +141,8 @@ use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tower::ServiceBuilder;
 use tracing::{Level, debug, info};
 use uuid::Uuid;
-use wasmtime::component::{Instance, Resource, ResourceAny};
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
+use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
+use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
@@ -1459,35 +1460,40 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         engine: &Engine,
     ) -> anyhow::Result<Linker<golem_worker_executor::workerctx::default::Context>> {
         use golem_worker_executor::workerctx::default::Context;
-        let mut linker =
-            golem_worker_executor::wasi_host::create_linker(engine, get_durable_ctx_from_context)?;
+        let mut linker = golem_worker_executor::wasi_host::create_linker(
+            engine,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
         golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
             &mut linker,
-            get_durable_ctx_from_context,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
         golem_api_1_x::retry::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
             &mut linker,
-            get_durable_ctx_from_context,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
         golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
             &mut linker,
-            get_durable_ctx_from_context,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
         golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
             &mut linker,
-            get_durable_ctx_from_context,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
-        durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+        golem_durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
             &mut linker,
-            get_durable_ctx_from_context,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
         golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
             _,
             HasSelf<DurableWorkerCtx<Context>>,
-        >(&mut linker, get_durable_ctx_from_context)?;
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
         golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
             &mut linker,
-            get_durable_ctx_from_context,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
         )?;
         Ok(linker)
     }

@@ -28,12 +28,12 @@
 //!   was partially consumed. Requires re-sending the request and verifying the
 //!   response prefix matches.
 
+use crate::durable_host::HttpRequestState;
 use crate::durable_host::durability::{
     AsyncRetryDecision, DurabilityHost, DurableExecutionState, HostFailureKind,
     InFunctionRetryHost, InFunctionRetryState,
 };
 use crate::durable_host::http::types::classify_http_error_code;
-use crate::durable_host::HttpRequestState;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::{HasOplog, HasWorker};
@@ -53,15 +53,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
 use wasmtime_wasi::OutputStream;
+use wasmtime_wasi_http::HttpConnectionPool;
 use wasmtime_wasi_http::bindings::http::types as wasi_http_types;
 use wasmtime_wasi_http::body::{
     HostIncomingBody, HostOutgoingBody, HyperOutgoingBody, StreamContext,
 };
 use wasmtime_wasi_http::types::{
-    default_send_request_with_pool, FutureIncomingResponseHandle, HostFutureIncomingResponse,
-    IncomingResponse, OutgoingRequestConfig,
+    FutureIncomingResponseHandle, HostFutureIncomingResponse, IncomingResponse,
+    OutgoingRequestConfig, default_send_request_with_pool,
 };
-use wasmtime_wasi_http::HttpConnectionPool;
 
 /// Reasons why an HTTP request is not eligible for transparent inline retry.
 #[derive(Debug, Clone, PartialEq, Eq)]

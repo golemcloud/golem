@@ -5,7 +5,9 @@ interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
     use golem:core/types@1.5.0.{value-and-type, account-id, data-value, data-schema, wit-value};
 
-    use host.{component-revision, oplog-index, persistence-level, environment-id, retry-policy, uuid, agent-id, snapshot};
+    use host.{component-revision, oplog-index, persistence-level, environment-id, uuid, agent-id, snapshot};
+    use wasi:clocks/monotonic-clock@0.2.3.{duration};
+
     use context.{attribute, attribute-value, span-id, trace-id};
 
     record environment-plugin-grant-id {
@@ -107,7 +109,10 @@ interface oplog {
     record error-parameters {
         timestamp: datetime,
         error: string,
-        retry-from: oplog-index
+        retry-from: oplog-index,
+        inside-atomic-region: bool,
+        /// Serialized retry policy state (JSON-encoded PublicRetryPolicyState)
+        retry-policy-state: option<list<u8>>,
     }
 
     record oplog-region {
@@ -120,9 +125,21 @@ interface oplog {
         jump: oplog-region
     }
 
-    record change-retry-policy-parameters {
+    /// Parameters for a set-retry-policy oplog entry.
+    /// The named policy is represented as JSON strings for predicate and policy
+    /// to avoid duplicating the recursive type algebra in the oplog WIT.
+    record set-retry-policy-parameters {
         timestamp: datetime,
-        new-policy: retry-policy
+        name: string,
+        priority: u32,
+        predicate-json: string,
+        policy-json: string,
+    }
+
+    /// Parameters for a remove-retry-policy oplog entry.
+    record remove-retry-policy-parameters {
+        timestamp: datetime,
+        name: string,
     }
 
     record end-atomic-region-parameters {
@@ -422,6 +439,8 @@ interface oplog {
         error: worker-error,
         retry-from: oplog-index,
         inside-atomic-region: bool,
+        /// Serialized retry policy state (JSON-encoded RetryPolicyState)
+        retry-policy-state: option<list<u8>>,
     }
 
     record raw-pending-agent-invocation-parameters {
@@ -533,8 +552,6 @@ interface oplog {
         interrupted(timestamp),
         /// Indicates that the agent has been exited using WASI's exit function.
         exited(timestamp),
-        /// Overrides the agent's retry policy
-        change-retry-policy(change-retry-policy-parameters),
         /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
         /// recovery except if there is a corresponding `EndAtomicRegion` entry.
         begin-atomic-region(timestamp),
@@ -597,7 +614,11 @@ interface oplog {
         /// A snapshot of the agent's state
         snapshot(raw-snapshot-parameters),
         /// Checkpoint for oplog processor plugin delivery tracking
-        oplog-processor-checkpoint(raw-oplog-processor-checkpoint-parameters)
+        oplog-processor-checkpoint(raw-oplog-processor-checkpoint-parameters),
+        /// Sets or overwrites a named retry policy
+        set-retry-policy(set-retry-policy-parameters),
+        /// Removes a named retry policy by name
+        remove-retry-policy(remove-retry-policy-parameters)
     }
 
     variant public-oplog-entry {
@@ -626,8 +647,6 @@ interface oplog {
         interrupted(timestamp),
         /// Indicates that the agent has been exited using WASI's exit function.
         exited(timestamp),
-        /// Overrides the agent's retry policy
-        change-retry-policy(change-retry-policy-parameters),
         /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
         /// recovery except if there is a corresponding `EndAtomicRegion` entry.
         begin-atomic-region(timestamp),
@@ -690,7 +709,11 @@ interface oplog {
         /// A snapshot of the worker's state
         snapshot(snapshot-parameters),
         /// Checkpoint for oplog processor plugin delivery tracking
-        oplog-processor-checkpoint(oplog-processor-checkpoint-parameters)
+        oplog-processor-checkpoint(oplog-processor-checkpoint-parameters),
+        /// Sets or overwrites a named retry policy
+        set-retry-policy(set-retry-policy-parameters),
+        /// Removes a named retry policy by name
+        remove-retry-policy(remove-retry-policy-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads

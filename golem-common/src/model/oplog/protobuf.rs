@@ -21,7 +21,6 @@ use super::{
     PublicAgentInvocationResult, PublicAttribute, PublicAttributeValue, PublicDurableFunctionType,
     PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicOplogEntryWithIndex,
     PublicRetryPolicyState, PublicSnapshotData, PublicSpanData, PublicUpdateDescription,
-    PublicRetryConfig,
     RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
     StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };

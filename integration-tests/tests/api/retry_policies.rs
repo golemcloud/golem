@@ -18,7 +18,7 @@ use golem_common::base_model::retry_policy::{
     ApiPropertyComparison, ApiRetryPolicy, ApiTextValue,
 };
 use golem_common::model::retry_policy::{
-    RetryPolicyCreation, RetryPolicyRevision, RetryPolicyUpdate,
+    Predicate, RetryPolicy, RetryPolicyCreation, RetryPolicyRevision, RetryPolicyUpdate,
 };
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
@@ -29,15 +29,22 @@ use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
+fn predicate_json(predicate: ApiPredicate) -> String {
+    serde_json::to_string(&Predicate::from(predicate)).unwrap()
+}
+
+fn policy_json(policy: ApiRetryPolicy) -> String {
+    serde_json::to_string(&RetryPolicy::from(policy)).unwrap()
+}
+
 fn simple_predicate() -> String {
-    serde_json::to_string(&ApiPredicate::True(ApiPredicateTrue {})).unwrap()
+    predicate_json(ApiPredicate::True(ApiPredicateTrue {}))
 }
 
 fn simple_policy() -> String {
-    serde_json::to_string(&ApiRetryPolicy::Periodic(ApiPeriodicPolicy {
+    policy_json(ApiRetryPolicy::Periodic(ApiPeriodicPolicy {
         delay_ms: 1000,
     }))
-    .unwrap()
 }
 
 #[test]
@@ -93,19 +100,19 @@ async fn update_retry_policy(deps: &EnvBasedTestDependencies) -> anyhow::Result<
 
     let created = client.create_retry_policy(&env.id.0, &creation).await?;
 
-    let new_predicate = serde_json::to_string(&ApiPredicate::PropEq(ApiPropertyComparison {
+    let new_predicate = predicate_json(ApiPredicate::PropEq(ApiPropertyComparison {
         property: "status".to_string(),
         value: ApiPredicateValue::Text(ApiTextValue {
             value: "error".to_string(),
         }),
-    }))?;
+    }));
 
-    let new_policy = serde_json::to_string(&ApiRetryPolicy::CountBox(ApiCountBoxPolicy {
+    let new_policy = policy_json(ApiRetryPolicy::CountBox(ApiCountBoxPolicy {
         max_retries: 3,
         inner: Box::new(ApiRetryPolicy::Periodic(ApiPeriodicPolicy {
             delay_ms: 500,
         })),
-    }))?;
+    }));
 
     let update = RetryPolicyUpdate {
         current_revision: created.revision,

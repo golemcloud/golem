@@ -8,7 +8,7 @@ use golem_rust::{
     atomically, get_promise, fork, oplog_commit,
     fallible_transaction, infallible_transaction,
     use_idempotence_mode, use_persistence_level,
-    with_persistence_level, PersistenceLevel,
+    with_persistence_level, Checkpoint, CheckpointResultExt, PersistenceLevel,
     ForkResult, PromiseId, Transaction, Uuid,
 };
 use golem_rust::retry::{

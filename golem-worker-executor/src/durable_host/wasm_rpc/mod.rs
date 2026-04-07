@@ -19,10 +19,10 @@ use crate::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
     HostWasmRpc, RpcError,
 };
+use crate::services::HasWorker;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{Rpc, RpcDemand, RpcError as InternalRpcError};
-use crate::services::HasWorker;
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
 use anyhow::Error;
 use async_trait::async_trait;

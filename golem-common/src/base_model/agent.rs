@@ -155,6 +155,11 @@ pub enum RegistryInvalidationEvent {
         event_id: u64,
         environment_id: EnvironmentId,
     },
+    /// An environment retry policy was created, updated, or deleted.
+    RetryPolicyChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+    },
     /// A resource definition was created, updated, or deleted.
     ResourceDefinitionChanged {
         event_id: u64,
@@ -173,6 +178,7 @@ impl RegistryInvalidationEvent {
             Self::AccountTokensInvalidated { event_id, .. } => *event_id,
             Self::EnvironmentPermissionsChanged { event_id, .. } => *event_id,
             Self::SecuritySchemeChanged { event_id, .. } => *event_id,
+            Self::RetryPolicyChanged { event_id, .. } => *event_id,
             Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
         }
     }

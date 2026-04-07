@@ -719,55 +719,54 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
 
         // Try semantic policy resolution first
         let policies = self.state.named_retry_policies().await;
-        if !policies.is_empty() {
-            if let Ok(Some(named_policy)) = NamedRetryPolicy::resolve(&policies, &properties) {
-                let current_state = latest_status
-                    .current_retry_state
-                    .get(&current_retry_point)
-                    .cloned();
-                let total_attempts = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
-                match evaluate_named_policy_step(named_policy, &properties, current_state.as_ref())
-                {
-                    Ok((_new_state, RetryVerdict::Retry(_))) => {
-                        debug!(
-                            retry_policy = %named_policy.name,
-                            retry_path = "host-trap",
-                            retry_policy_source = "worker-local",
-                            retry_decision = "retry",
-                            attempt = total_attempts + 1,
-                            "Semantic host-trap retry: triggering retry"
-                        );
-                        return Err(failure);
-                    }
-                    Ok((_new_state, RetryVerdict::GiveUp)) => {
-                        debug!(
-                            retry_policy = %named_policy.name,
-                            retry_path = "host-trap",
-                            retry_policy_source = "worker-local",
-                            retry_decision = "give-up",
-                            attempt = total_attempts + 1,
-                            "Semantic host-trap retry: exhausted"
-                        );
-                        return Ok(());
-                    }
-                    Ok((_new_state, RetryVerdict::Error(error))) => {
-                        warn!(
-                            retry_policy = %named_policy.name,
-                            ?error,
-                            retry_path = "host-trap",
-                            fallback_reason = "eval-error",
-                            "Semantic host-trap retry evaluation error, falling back to legacy"
-                        );
-                    }
-                    Err(error) => {
-                        warn!(
-                            retry_policy = %named_policy.name,
-                            ?error,
-                            retry_path = "host-trap",
-                            fallback_reason = "eval-error",
-                            "Failed evaluating semantic host-trap retry policy, falling back to legacy"
-                        );
-                    }
+        if !policies.is_empty()
+            && let Ok(Some(named_policy)) = NamedRetryPolicy::resolve(&policies, &properties)
+        {
+            let current_state = latest_status
+                .current_retry_state
+                .get(&current_retry_point)
+                .cloned();
+            let total_attempts = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
+            match evaluate_named_policy_step(named_policy, &properties, current_state.as_ref()) {
+                Ok((_new_state, RetryVerdict::Retry(_))) => {
+                    debug!(
+                        retry_policy = %named_policy.name,
+                        retry_path = "host-trap",
+                        retry_policy_source = "worker-local",
+                        retry_decision = "retry",
+                        attempt = total_attempts + 1,
+                        "Semantic host-trap retry: triggering retry"
+                    );
+                    return Err(failure);
+                }
+                Ok((_new_state, RetryVerdict::GiveUp)) => {
+                    debug!(
+                        retry_policy = %named_policy.name,
+                        retry_path = "host-trap",
+                        retry_policy_source = "worker-local",
+                        retry_decision = "give-up",
+                        attempt = total_attempts + 1,
+                        "Semantic host-trap retry: exhausted"
+                    );
+                    return Ok(());
+                }
+                Ok((_new_state, RetryVerdict::Error(error))) => {
+                    warn!(
+                        retry_policy = %named_policy.name,
+                        ?error,
+                        retry_path = "host-trap",
+                        fallback_reason = "eval-error",
+                        "Semantic host-trap retry evaluation error, falling back to legacy"
+                    );
+                }
+                Err(error) => {
+                    warn!(
+                        retry_policy = %named_policy.name,
+                        ?error,
+                        retry_path = "host-trap",
+                        fallback_reason = "eval-error",
+                        "Failed evaluating semantic host-trap retry policy, falling back to legacy"
+                    );
                 }
             }
         }
@@ -1078,10 +1077,10 @@ pub async fn count_oplog_errors_for(
     let entries = oplog.read_many(OplogIndex::INITIAL, len).await;
     let mut count: u32 = 0;
     for entry in entries.values() {
-        if let OplogEntry::Error { retry_from, .. } = entry {
-            if *retry_from == retry_point {
-                count += 1;
-            }
+        if let OplogEntry::Error { retry_from, .. } = entry
+            && *retry_from == retry_point
+        {
+            count += 1;
         }
     }
     count
@@ -1300,8 +1299,8 @@ impl DynamicPollable for LazyInitializedPollableEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::oplog::host_functions::KeyvalueEventualGet;
     use golem_common::model::oplog::PersistenceLevel;
+    use golem_common::model::oplog::host_functions::KeyvalueEventualGet;
     use golem_common::model::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};

@@ -253,15 +253,14 @@ fn calculate_latest_worker_status(
         // Errors are counted in skipped regions too (but not in deleted ones),
         // otherwise we would not be able to know how many times we retried failures in atomic regions.
         // This must happen before the skipped-region continue below.
-        if !deleted_regions.is_in_deleted_region(*idx) {
-            if let OplogEntry::Error {
+        if !deleted_regions.is_in_deleted_region(*idx)
+            && let OplogEntry::Error {
                 retry_from,
                 retry_policy_state: Some(state),
                 ..
             } = entry
-            {
-                current_retry_state.insert(*retry_from, state.clone());
-            }
+        {
+            current_retry_state.insert(*retry_from, state.clone());
         }
 
         // Skipping entries in skipped regions, as they are skipped during replay too
