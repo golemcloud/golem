@@ -45,8 +45,8 @@ fn make_limiter(per_second: u32) -> DefaultDirectRateLimiter {
 /// The rate limit (writes per second) is read dynamically from the supplied
 /// [`AtomicResourceEntry`] on every `add` call. When the value changes the governor
 /// token bucket is rebuilt atomically behind an [`ArcSwap`] so the hot path
-/// remains lock-free. When the entry reports `u64::MAX` (unlimited) the governor
-/// is bypassed entirely.
+/// remains lock-free. When the entry reports
+/// [`AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND`] the governor is bypassed entirely.
 ///
 /// All other [`Oplog`] methods are pure delegation to the inner oplog.
 pub struct RateLimitedOplog {
@@ -72,10 +72,11 @@ impl RateLimitedOplog {
 }
 
 /// Returns an `Arc<DefaultDirectRateLimiter>` for the given rate, or a placeholder
-/// limiter that is never consulted when the rate is `u64::MAX` (unlimited).
+/// limiter that is never consulted when the rate is
+/// [`AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND`].
 fn limiter_for_rate(rate: u64) -> Arc<DefaultDirectRateLimiter> {
-    if rate == u64::MAX || rate == 0 {
-        // Placeholder — never consulted when rate == u64::MAX.
+    if rate >= AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND || rate == 0 {
+        // Placeholder — never consulted for unlimited rates.
         Arc::new(make_limiter(1))
     } else {
         let clamped = rate.min(u32::MAX as u64) as u32;
@@ -96,7 +97,7 @@ impl Oplog for RateLimitedOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
         let rate = self.resource_entry.oplog_writes_per_second();
 
-        if rate != u64::MAX {
+        if rate < AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND {
             // Detect rate change and atomically swap in a new limiter if needed.
             let cached = self.cached_rate.load(Ordering::Acquire);
             if cached != rate {
@@ -393,11 +394,12 @@ mod tests {
         );
     }
 
-    // When the rate is u64::MAX (unlimited), writes complete with no meaningful
-    // delay — well under 100 ms for 100 entries.
+    // When the rate is UNLIMITED_OPLOG_WRITES_PER_SECOND, writes complete with
+    // no meaningful delay — well under 100 ms for 100 entries.
     #[test]
     async fn unlimited_rate_has_no_meaningful_delay() {
-        let entry = resource_entry_with_rate(u64::MAX);
+        let entry =
+            resource_entry_with_rate(AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND);
         let oplog = make_oplog(entry).await;
 
         let start = Instant::now();

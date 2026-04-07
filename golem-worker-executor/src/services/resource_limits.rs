@@ -72,8 +72,8 @@ pub struct AtomicResourceEntry {
     max_concurrent_agents_per_executor: AtomicU64,
 
     // Plan-level per-agent oplog write rate limit (writes per second).
-    // u64::MAX means unlimited (no rate limiting). Refreshed via
-    // update_last_known_limits when batch sync responses arrive.
+    // UNLIMITED_OPLOG_WRITES_PER_SECOND (10^18) means no rate limiting.
+    // Refreshed via update_last_known_limits when batch sync responses arrive.
     oplog_writes_per_second: AtomicU64,
 }
 
@@ -84,6 +84,11 @@ impl AtomicResourceEntry {
     /// is safe for SQLite REAL, consistent with `monthly_gas_limit` and the
     /// `default_unlimited()` convention from PR #3068.
     pub const UNLIMITED_CONCURRENT_AGENTS: u64 = 1_000_000_000_000_000_000;
+
+    /// Sentinel value for the oplog write rate limit meaning "no rate limit".
+    /// Same 10^18 value — fits in i64 (TOML max), safe for SQLite REAL,
+    /// consistent with other unlimited sentinels in this codebase.
+    pub const UNLIMITED_OPLOG_WRITES_PER_SECOND: u64 = 1_000_000_000_000_000_000;
 
     pub fn new(
         fuel: u64,
@@ -109,7 +114,9 @@ impl AtomicResourceEntry {
             unsynced_rpc_calls: AtomicU64::new(0),
             syncing_rpc_calls: AtomicU64::new(0),
             max_concurrent_agents_per_executor: AtomicU64::new(max_concurrent_agents_per_executor),
-            oplog_writes_per_second: AtomicU64::new(u64::MAX),
+            oplog_writes_per_second: AtomicU64::new(
+                AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            ),
         }
     }
 
@@ -140,7 +147,9 @@ impl AtomicResourceEntry {
             max_concurrent_agents_per_executor: AtomicU64::new(
                 AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
             ),
-            oplog_writes_per_second: AtomicU64::new(u64::MAX),
+            oplog_writes_per_second: AtomicU64::new(
+                AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+            ),
         }
     }
 
@@ -156,6 +165,7 @@ impl AtomicResourceEntry {
         available_http_calls: u64,
         available_rpc_calls: u64,
         max_concurrent_agents_per_executor: u64,
+        oplog_writes_per_second: u64,
     ) -> Self {
         Self {
             fuel: AtomicU64::new(fuel),
@@ -174,7 +184,7 @@ impl AtomicResourceEntry {
             unsynced_rpc_calls: AtomicU64::new(0),
             syncing_rpc_calls: AtomicU64::new(0),
             max_concurrent_agents_per_executor: AtomicU64::new(max_concurrent_agents_per_executor),
-            oplog_writes_per_second: AtomicU64::new(u64::MAX),
+            oplog_writes_per_second: AtomicU64::new(oplog_writes_per_second),
         }
     }
 
@@ -590,6 +600,9 @@ impl ResourceLimitsGrpc {
                 Ordering::Release,
             );
             entry
+                .oplog_writes_per_second
+                .store(updated_limits.oplog_writes_per_second, Ordering::Release);
+            entry
                 .last_refresh_secs
                 .store(Utc::now().timestamp(), Ordering::Release);
         }
@@ -632,6 +645,7 @@ impl ResourceLimits for ResourceLimitsGrpc {
                         fetched.available_http_calls,
                         fetched.available_rpc_calls,
                         fetched.max_concurrent_agents_per_executor,
+                        fetched.oplog_writes_per_second,
                     ),
                 ))
             })
@@ -915,6 +929,7 @@ mod tests {
             5,
             5,
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         );
         // Simulate what send_batch does: move unsynced → syncing
         entry.syncing_http_calls.store(3, Ordering::Release);
@@ -947,6 +962,7 @@ mod tests {
             0,
             u64::MAX,
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         );
         assert!(
             !entry.record_http_call(),
@@ -967,6 +983,7 @@ mod tests {
             2,
             u64::MAX,
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         );
         assert!(entry.record_http_call(), "first call should succeed");
         assert!(entry.record_http_call(), "second call should succeed");
@@ -988,6 +1005,7 @@ mod tests {
             u64::MAX,
             3,
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         );
         assert!(entry.record_rpc_call());
         assert_eq!(entry.remaining_rpc_calls(), 2);
@@ -1005,6 +1023,7 @@ mod tests {
             u64::MAX,
             0,
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         );
         assert!(!entry.record_rpc_call());
     }
@@ -1022,6 +1041,7 @@ mod tests {
             0,
             5,
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         );
         assert!(!entry.record_http_call(), "HTTP should be exhausted");
         assert!(entry.record_rpc_call(), "RPC should still be available");
@@ -1040,6 +1060,7 @@ mod tests {
             10,
             u64::MAX,
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         );
         entry.record_http_call();
         entry.record_http_call();
@@ -1063,6 +1084,7 @@ mod tests {
             10,
             u64::MAX,
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         );
         entry.unsynced_http_calls.store(3, Ordering::Release);
         assert_eq!(entry.remaining_http_calls(), 7);
@@ -1092,6 +1114,7 @@ mod tests {
             10,
             u64::MAX,
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         );
 
         // One call is included in the in-flight batch.
@@ -1136,6 +1159,7 @@ mod tests {
             available_http_calls: 5,
             available_rpc_calls: 3,
             max_concurrent_agents_per_executor: u64::MAX,
+            oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         });
 
         let svc = make_grpc(mock.clone());
@@ -1160,6 +1184,7 @@ mod tests {
                 available_http_calls: 50,
                 available_rpc_calls: 40,
                 max_concurrent_agents_per_executor: u64::MAX,
+                oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1192,6 +1217,7 @@ mod tests {
             available_http_calls: 10,
             available_rpc_calls: 10,
             max_concurrent_agents_per_executor: u64::MAX,
+            oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         });
         let mut updated = HashMap::new();
         updated.insert(
@@ -1206,6 +1232,7 @@ mod tests {
                 available_http_calls: 10,
                 available_rpc_calls: 10,
                 max_concurrent_agents_per_executor: u64::MAX,
+                oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1302,6 +1329,7 @@ mod tests {
                     available_http_calls: u64::MAX,
                     available_rpc_calls: u64::MAX,
                     max_concurrent_agents_per_executor: u64::MAX,
+                    oplog_writes_per_second: u64::MAX,
                 })),
                 batch_update_result: Mutex::new(Ok(AccountResourceLimits(HashMap::new()))),
             }
@@ -1632,6 +1660,7 @@ mod tests {
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
+                oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1664,6 +1693,7 @@ mod tests {
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
+                oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1697,6 +1727,7 @@ mod tests {
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
+                oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1781,6 +1812,7 @@ mod tests {
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
+                oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1812,6 +1844,7 @@ mod tests {
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
+                oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1870,6 +1903,7 @@ mod tests {
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
+                oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1908,6 +1942,7 @@ mod tests {
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
+                oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -1980,6 +2015,7 @@ mod tests {
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: u64::MAX,
+                oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2011,6 +2047,7 @@ mod tests {
             available_http_calls: u64::MAX,
             available_rpc_calls: u64::MAX,
             max_concurrent_agents_per_executor: limit,
+            oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         });
         mock
     }
@@ -2060,6 +2097,7 @@ mod tests {
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: 10,
+                oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));
@@ -2093,6 +2131,7 @@ mod tests {
                 available_http_calls: u64::MAX,
                 available_rpc_calls: u64::MAX,
                 max_concurrent_agents_per_executor: 3,
+                oplog_writes_per_second: AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
             },
         );
         mock.set_batch_update_response(AccountResourceLimits(updated));

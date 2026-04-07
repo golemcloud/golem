@@ -1775,6 +1775,7 @@ impl ResourceLimits for FixedMonthlyCallLimitResourceLimits {
             self.monthly_http_calls,
             self.monthly_rpc_calls,
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         )))
     }
 }

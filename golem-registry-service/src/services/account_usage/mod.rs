@@ -220,6 +220,7 @@ impl AccountUsageService {
                             available_http_calls: 0,
                             available_rpc_calls: 0,
                             max_concurrent_agents_per_executor: 0,
+                            oplog_writes_per_second: 0,
                         },
                     );
                 }

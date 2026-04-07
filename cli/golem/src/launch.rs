@@ -251,6 +251,7 @@ fn registry_service_config(
                     monthly_http_call_limit: u64::MAX,
                     monthly_rpc_call_limit: u64::MAX,
                     max_concurrent_agents_per_executor: 1_000_000_000_000_000_000, // unlimited sentinel
+                    oplog_writes_per_second: 1_000_000_000_000_000_000, // unlimited sentinel
                 },
             );
             plans
