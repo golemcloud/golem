@@ -106,6 +106,7 @@ tree-sitter-json = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 tree-sitter-yaml = { workspace = true }
+strip-ansi-escapes = { workspace = true }
 unicode-segmentation = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
@@ -134,7 +135,6 @@ pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true }
-strip-ansi-escapes = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]

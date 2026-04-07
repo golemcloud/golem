@@ -13,17 +13,17 @@
 // limitations under the License.
 
 use crate::fuzzy::Match;
+pub use crate::log::log_table;
 pub use crate::log::logln;
-use crate::log::{LogColorize, LogIndent, log_warn_action};
+use crate::log::{LogColorize, LogIndent, current_indent_width, log_warn_action};
 use crate::model::app::ComponentLayerId;
 use crate::model::format::Format;
 use crate::model::text::component::is_sensitive_env_var_name;
 use anyhow::anyhow;
-pub use comfy_table::Table as ComfyTable;
-use comfy_table::{Cell, CellAlignment, ColumnConstraint, ContentArrangement};
-use terminal_size::terminal_size;
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
+pub use comfy_table::Table as ComfyTable;
+use comfy_table::{Cell, CellAlignment, ColumnConstraint, ContentArrangement};
 use golem_common::model::AgentStatus;
 use golem_common::model::component::{InitialComponentFile, InstalledPlugin};
 use itertools::Itertools;
@@ -32,6 +32,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use synoptic::TokOpt;
+use terminal_size::terminal_size;
 
 pub trait TextView {
     fn log(&self);
@@ -439,10 +440,17 @@ impl std::fmt::Display for Column {
 /// Creates a comfy-table pre-configured with Dynamic arrangement, terminal width, and
 /// a preset chosen from the global colorize flag. Column constraints and alignment are
 /// applied from the `headers` descriptors.
+///
+/// The terminal width is automatically reduced by the current log indent width so that
+/// tables render correctly when called inside an indented context.
 pub fn new_table(headers: Vec<Column>) -> ComfyTable {
     use comfy_table::presets::{ASCII_FULL_CONDENSED, UTF8_FULL_CONDENSED};
     let colorize = SHOULD_COLORIZE.should_colorize();
-    let term_width = terminal_size().map(|(w, _)| w.0).unwrap_or(80);
+    let indent_width = current_indent_width();
+    let term_width = terminal_size()
+        .map(|(w, _)| w.0 as usize)
+        .unwrap_or(80)
+        .saturating_sub(indent_width) as u16;
     let mut table = ComfyTable::new();
     table
         .load_preset(if colorize {
@@ -473,11 +481,6 @@ pub fn new_table(headers: Vec<Column>) -> ComfyTable {
         }
     }
     table
-}
-
-/// Renders and logs a comfy-table via `logln`.
-pub fn log_table(table: ComfyTable) {
-    logln(table.to_string());
 }
 
 pub fn log_text_view<View: TextView>(view: &View) {

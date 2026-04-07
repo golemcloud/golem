@@ -21,6 +21,7 @@ use colored::{ColoredString, Colorize};
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
+
 use terminal_size::terminal_size;
 use textwrap::WordSplitter;
 use tracing::debug;
@@ -274,6 +275,38 @@ pub fn log_error_action(action: &str, subject: impl AsRef<str>) {
 
 pub fn logln(message: impl AsRef<str>) {
     logln_internal(message.as_ref());
+}
+
+pub fn current_indent_width() -> usize {
+    let state = LOG_STATE.read().unwrap();
+    strip_ansi_escapes::strip_str(&state.calculated_indent)
+        .chars()
+        .count()
+}
+
+/// Prints a comfy-table correctly inside the current log indent context.
+///
+/// Unlike `logln`, which would only prepend the indent to the first line of a multi-line
+/// string, this function prepends the current indent to **every** line of the table and
+/// writes directly to the active output channel — bypassing `logln_internal`'s text-wrapping
+/// logic, which must not be applied to pre-formatted table output.
+pub fn log_table(table: impl std::fmt::Display) {
+    let state = LOG_STATE.read().unwrap();
+    let indent = &state.calculated_indent;
+    for line in table.to_string().lines() {
+        match state.output {
+            Output::Stdout => println!("{indent}{line}"),
+            Output::Stderr => eprintln!("{indent}{line}"),
+            Output::None => {}
+            Output::TracingDebug => debug!("{indent}{line}"),
+            Output::BufferedUntilErr => {
+                LOG_STATE_BUFFER
+                    .write()
+                    .unwrap()
+                    .push(format!("{indent}{line}"));
+            }
+        }
+    }
 }
 
 pub fn logln_internal(message: &str) {
