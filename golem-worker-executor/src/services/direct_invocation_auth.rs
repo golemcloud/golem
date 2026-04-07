@@ -149,6 +149,10 @@ impl DefaultDirectInvocationAuthService {
         environment_id: EnvironmentId,
         caller_account_id: AccountId,
     ) -> Result<Option<AccountId>, RpcError> {
+        if let Some(owner) = self.env_owner_cache.get(&environment_id).await {
+            return Ok(Some(owner));
+        }
+
         // Fetch auth details (cached per (env_id, caller)); the response carries the env owner.
         let auth_details = self
             .get_auth_details(environment_id, caller_account_id)
