@@ -29,6 +29,10 @@ declare_revision!(AccountRevision);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Display)]
 #[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
+#[cfg_attr(
+    feature = "full",
+    oai(from_json = false, from_parameter = false, from_multipart = false)
+)]
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct AccountEmail(String);
@@ -66,6 +70,35 @@ impl From<String> for AccountEmail {
 impl From<&str> for AccountEmail {
     fn from(value: &str) -> Self {
         Self::new(value)
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromJSON for AccountEmail {
+    fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
+        let raw = <String as poem_openapi::types::ParseFromJSON>::parse_from_json(value)
+            .map_err(poem_openapi::types::ParseError::propagate)?;
+        Ok(Self::new(raw))
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromParameter for AccountEmail {
+    fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
+        Ok(Self::new(value))
+    }
+}
+
+#[cfg(feature = "full")]
+impl poem_openapi::types::ParseFromMultipartField for AccountEmail {
+    async fn parse_from_multipart(
+        field: Option<poem::web::Field>,
+    ) -> poem_openapi::types::ParseResult<Self> {
+        let raw =
+            <String as poem_openapi::types::ParseFromMultipartField>::parse_from_multipart(field)
+                .await
+                .map_err(poem_openapi::types::ParseError::propagate)?;
+        Ok(Self::new(raw))
     }
 }
 
