@@ -1307,6 +1307,8 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     fn create_quota_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _golem_config: &golem_worker_executor::services::golem_config::GolemConfig,
+        _shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn golem_worker_executor::services::quota::QuotaService> {
         Arc::new(golem_worker_executor::services::quota::UnlimitedQuotaService)
     }
@@ -1412,6 +1414,8 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     fn create_quota_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _golem_config: &golem_worker_executor::services::golem_config::GolemConfig,
+        _shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn golem_worker_executor::services::quota::QuotaService> {
         Arc::new(golem_worker_executor::services::quota::UnlimitedQuotaService)
     }
