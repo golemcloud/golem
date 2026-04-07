@@ -82,7 +82,8 @@ impl FilesystemStorageSemaphore {
                         self.semaphore.available_permits(),
                         permit.num_permits()
                     );
-                    record_filesystem_pool_acquired(storage_bytes);
+                    let actual_bytes = permits as u64 * FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024;
+                    record_filesystem_pool_acquired(actual_bytes);
                     break permit;
                 }
                 Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
@@ -121,7 +122,8 @@ impl FilesystemStorageSemaphore {
                         storage_bytes,
                         self.semaphore.available_permits()
                     );
-                    record_filesystem_pool_acquired(storage_bytes);
+                    let actual_bytes = permits as u64 * FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024;
+                    record_filesystem_pool_acquired(actual_bytes);
                     break Some(permit);
                 }
                 Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
