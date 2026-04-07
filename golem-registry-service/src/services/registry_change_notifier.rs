@@ -23,7 +23,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::resource_definition::ResourceDefinitionId;
+use golem_common::model::quota::ResourceDefinitionId;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast, mpsc};
 

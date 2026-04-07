@@ -60,6 +60,8 @@ wasmtime::component::bindgen!({
         "golem:rdbms/postgres.lazy-db-column-type": super::durable_host::rdbms::postgres::LazyDbColumnTypeEntry,
         "golem:rdbms/postgres.lazy-db-value": super::durable_host::rdbms::postgres::LazyDbValueEntry,
         "golem:websocket/client.websocket-connection": super::durable_host::websocket::client::WebSocketConnectionEntry,
+        "golem:quota/host.quota-token": super::durable_host::quota::types::QuotaTokenEntry,
+        "golem:quota/host.reservation": super::durable_host::quota::types::ReservationEntry,
     },
 });
 
@@ -71,4 +73,5 @@ pub type Pollable = wasmtime_wasi::p2::bindings::io::poll::Pollable;
 // reexports so that we don't have to change version numbers everywhere
 pub use self::golem::api1_5_0 as golem_api_1_x;
 pub use self::golem::durability as golem_durability;
+pub use self::golem::quota as golem_quota;
 pub use golem_common::model::agent::bindings::golem::agent as golem_agent;

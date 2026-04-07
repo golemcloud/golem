@@ -29,7 +29,7 @@ declare_revision!(ResourceDefinitionRevision);
 
 declare_transparent_newtypes! {
     #[derive(Display, Eq, Hash, PartialOrd, Ord)]
-    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, golem_wasm_derive::IntoValue, golem_wasm_derive::FromValue))]
     #[cfg_attr(feature = "full", desert(transparent))]
     pub struct ResourceName(pub String);
 }
@@ -105,7 +105,8 @@ declare_unions! {
 }
 
 declare_enums! {
-    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, golem_wasm_derive::IntoValue, golem_wasm_derive::FromValue))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
     pub enum EnforcementAction {
         Reject,
         Throttle,
