@@ -36,6 +36,10 @@ pub struct ExtendedAgentType {
     pub http_mount: Option<HttpMountDetails>,
     pub snapshotting: Snapshotting,
     pub config: Vec<AgentConfigDeclaration>,
+    /// Maps from a name-sorted method index to the original index in `methods`.
+    /// Built at registration time to allow O(1) index-based lookup on the hot path
+    /// while preserving user-declared method order in `methods`.
+    pub sorted_method_indices: Vec<usize>,
 }
 
 impl ExtendedAgentType {
