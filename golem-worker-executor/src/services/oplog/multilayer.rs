@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::storage::{
+    STORAGE_TYPE_OPLOG_ARCHIVE, record_storage_bytes_written, record_storage_objects_deleted,
+    record_storage_objects_written,
+};
 use crate::model::ExecutionStatus;
 use crate::services::oplog::ephemeral::EphemeralOplog;
 use crate::services::oplog::multilayer::BackgroundTransferMessage::{
@@ -44,12 +48,8 @@ use tracing::{Instrument, Level, Span, debug, error, info, span, warn};
 
 #[async_trait]
 pub trait OplogArchiveService: Debug + Send + Sync {
-    /// Opens an oplog archive for writing
-    async fn open(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        account_id: &AccountId,
-    ) -> Arc<dyn OplogArchive + Send + Sync>;
+    /// Opens an oplog archive for reading and writing
+    async fn open(&self, owned_agent_id: &OwnedAgentId) -> Arc<dyn OplogArchive + Send + Sync>;
 
     /// Deletes the oplog archive for a worker completely
     async fn delete(&self, owned_agent_id: &OwnedAgentId);
@@ -101,8 +101,9 @@ pub trait OplogArchive: Debug {
         self.read_range(OplogIndex::INITIAL, last_idx).await
     }
 
-    /// Append a new chunk of entries to the oplog
-    async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>);
+    /// Append a new chunk of entries to the oplog.
+    /// Returns the number of compressed bytes written to storage.
+    async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) -> u64;
 
     /// Gets the last appended chunk's last index
     async fn current_oplog_index(&self) -> OplogIndex;
@@ -117,6 +118,88 @@ pub trait OplogArchive: Debug {
 
     /// Gets the last index in this oplog archive
     async fn get_last_index(&self) -> OplogIndex;
+}
+
+/// Wraps an `OplogArchive` to record storage metrics on writes.
+/// Used only on the write path (`MultiLayerOplog::new`); the read-only
+/// path (`OplogArchiveService::read`) uses the raw archive directly.
+#[derive(Debug)]
+pub struct InstrumentedOplogArchive {
+    inner: Arc<dyn OplogArchive + Send + Sync>,
+    account_id: AccountId,
+    environment_id: EnvironmentId,
+}
+
+impl InstrumentedOplogArchive {
+    pub fn new(
+        inner: Arc<dyn OplogArchive + Send + Sync>,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+    ) -> Self {
+        Self {
+            inner,
+            account_id,
+            environment_id,
+        }
+    }
+}
+
+#[async_trait]
+impl OplogArchive for InstrumentedOplogArchive {
+    async fn read(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        self.inner.read(idx, n).await
+    }
+
+    async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) -> u64 {
+        if chunk.is_empty() {
+            return 0;
+        }
+        let entry_count = chunk.len() as u64;
+        let account_id = self.account_id.to_string();
+        let environment_id = self.environment_id.to_string();
+
+        let bytes = self.inner.append(chunk).await;
+
+        record_storage_bytes_written(
+            STORAGE_TYPE_OPLOG_ARCHIVE,
+            &account_id,
+            &environment_id,
+            bytes,
+        );
+        record_storage_objects_written(
+            STORAGE_TYPE_OPLOG_ARCHIVE,
+            &account_id,
+            &environment_id,
+            entry_count,
+        );
+
+        bytes
+    }
+
+    async fn current_oplog_index(&self) -> OplogIndex {
+        self.inner.current_oplog_index().await
+    }
+
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
+        let dropped = self.inner.drop_prefix(last_dropped_id).await;
+        if dropped > 0 {
+            record_storage_objects_deleted(
+                STORAGE_TYPE_OPLOG_ARCHIVE,
+                &self.account_id.to_string(),
+                &self.environment_id.to_string(),
+                dropped,
+            );
+        }
+        dropped
+    }
+
+    async fn length(&self) -> u64 {
+        self.inner.length().await
+    }
+
+    async fn get_last_index(&self) -> OplogIndex {
+        self.inner.get_last_index().await
+    }
 }
 
 #[derive(Debug)]
@@ -253,7 +336,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 };
                 MultiLayerOplog::new(
                     self.owned_agent_id,
-                    &account_id,
+                    account_id,
                     primary,
                     self.service,
                     close,
@@ -273,7 +356,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     .await;
 
                 let target_layer = self.service.lower.last();
-                let target = target_layer.open(&self.owned_agent_id, &account_id).await;
+                let target = target_layer.open(&self.owned_agent_id).await;
 
                 if let Some(initial_entry) = self.initial_entry {
                     target
@@ -538,7 +621,7 @@ impl MultiLayerOplog {
     #[allow(clippy::new_ret_no_self)]
     pub async fn new(
         owned_agent_id: OwnedAgentId,
-        account_id: &AccountId,
+        account_id: AccountId,
         primary: Arc<dyn Oplog>,
         multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
@@ -548,19 +631,32 @@ impl MultiLayerOplog {
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in multi_layer_oplog_service.lower.iter().enumerate() {
             if i != (multi_layer_oplog_service.lower.len().get() - 1) {
-                // Wrapping the intermediate layers to they transfer entries to the next layer
+                // Wrapping the intermediate layers so they transfer entries to the next layer,
+                // then wrapping with InstrumentedOplogArchive to record storage metrics.
+                let raw = layer.open(&owned_agent_id).await;
+                let instrumented = Arc::new(InstrumentedOplogArchive::new(
+                    raw,
+                    account_id,
+                    owned_agent_id.environment_id(),
+                ));
                 lower.push(Arc::new(
                     WrappedOplogArchive::new(
                         i,
-                        layer.open(&owned_agent_id, account_id).await,
+                        instrumented,
                         tx.clone(),
                         multi_layer_oplog_service.entry_count_limit,
                     )
                     .await,
                 ));
             } else {
-                // Not wrapping the last layer
-                lower.push(layer.open(&owned_agent_id, account_id).await);
+                // Not wrapping with WrappedOplogArchive for the last layer,
+                // but still wrapping with InstrumentedOplogArchive for metrics.
+                let raw = layer.open(&owned_agent_id).await;
+                lower.push(Arc::new(InstrumentedOplogArchive::new(
+                    raw,
+                    account_id,
+                    owned_agent_id.environment_id(),
+                )));
             }
         }
         let lower = NEVec::try_from_vec(lower).expect("At least one lower layer is required");
@@ -968,10 +1064,10 @@ impl OplogArchive for WrappedOplogArchive {
         self.archive.read(idx, n).await
     }
 
-    async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) {
+    async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) -> u64 {
         if !chunk.is_empty() {
             let last_idx = chunk.last().unwrap().0;
-            self.archive.append(chunk).await;
+            let bytes = self.archive.append(chunk).await;
             let old_count = self.entry_count.fetch_add(1, Ordering::AcqRel); // Note: the whole chunk is stored as one entry, so incrementing only by one
             let count = old_count + 1;
             if count >= self.entry_count_limit {
@@ -988,6 +1084,9 @@ impl OplogArchive for WrappedOplogArchive {
                 // Resetting the counter, otherwise it would trigger additional transfers until the background process finishes
                 self.entry_count.store(0, Ordering::Release);
             }
+            bytes
+        } else {
+            0
         }
     }
 
@@ -1051,7 +1150,7 @@ impl BackgroundTransfer for BackgroundTransferFromPrimary {
     }
 
     async fn append_target(&self, entries: Vec<(OplogIndex, OplogEntry)>) {
-        self.lower.first().append(entries).await
+        let _ = self.lower.first().append(entries).await;
     }
 
     async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) {
@@ -1093,7 +1192,7 @@ impl BackgroundTransfer for BackgroundTransferBetweenLowers {
     }
 
     async fn append_target(&self, entries: Vec<(OplogIndex, OplogEntry)>) {
-        self.target_layer.append(entries).await
+        let _ = self.target_layer.append(entries).await;
     }
 
     async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) {

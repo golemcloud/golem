@@ -782,11 +782,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             .length()
             .await;
 
-        let secondary_length = secondary_layer
-            .open(&owned_agent_id, &account_id)
-            .await
-            .length()
-            .await;
+        let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
         if primary_length == expected_1 && secondary_length == expected_2 {
             break;
         }
@@ -811,16 +807,8 @@ async fn multilayer_transfers_entries_after_limit_reached(
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
-    let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
+    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
 
     let all_entries = oplog_service
         .read(&owned_agent_id, OplogIndex::NONE, n + 100)
@@ -933,16 +921,8 @@ async fn read_from_archive_impl(use_blob: bool) {
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
-    let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
+    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
 
     info!("primary_length: {}", primary_length);
     info!("secondary_length: {}", secondary_length);
@@ -1199,16 +1179,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
-    let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
+    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
 
     info!("initial oplog index: {}", initial_oplog_idx);
     info!("primary_length: {}", primary_length);
@@ -1283,16 +1255,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
-    let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
+    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
 
     info!("initial oplog index: {}", initial_oplog_idx);
     info!("primary_length: {}", primary_length);
@@ -1507,16 +1471,8 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
-    let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
+    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
 
     info!("primary_length: {}", primary_length);
     info!("secondary_length: {}", secondary_length);
@@ -1626,16 +1582,8 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
-    let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
+    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
 
     info!("primary_length: {}", primary_length);
     info!("secondary_length: {}", secondary_length);
@@ -1679,16 +1627,8 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .await
         .length()
         .await;
-    let secondary_length = secondary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
-    let tertiary_length = tertiary_layer
-        .open(&owned_agent_id, &account_id)
-        .await
-        .length()
-        .await;
+    let secondary_length = secondary_layer.open(&owned_agent_id).await.length().await;
+    let tertiary_length = tertiary_layer.open(&owned_agent_id).await.length().await;
 
     info!("primary_length 2: {}", primary_length);
     info!("secondary_length 2: {}", secondary_length);
