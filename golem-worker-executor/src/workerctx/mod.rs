@@ -14,6 +14,8 @@
 
 pub mod default;
 
+use crate::durable_host::DurableWorkerCtxView;
+use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
@@ -68,6 +70,7 @@ use wasmtime_wasi_http::WasiHttpView;
 #[async_trait]
 pub trait WorkerCtx:
     FuelManagement
+    + CallCountManagement
     + InvocationManagement
     + StatusManagement
     + InvocationHooks
@@ -76,6 +79,7 @@ pub trait WorkerCtx:
     + UpdateManagement
     + FileSystemReading
     + InvocationContextManagement
+    + DurableWorkerCtxView<Self>
     + Send
     + Sync
     + Sized
@@ -143,6 +147,7 @@ pub trait WorkerCtx:
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError>;
@@ -217,6 +222,27 @@ pub trait FuelManagement {
 
     /// Returns the amount of fuel consumed since the last call to return_fuel.
     fn return_fuel(&mut self, current_level: u64) -> u64;
+}
+
+/// Manages per-invocation and monthly account-level HTTP and RPC call counts.
+///
+/// Per-invocation counters are reset at the start of each exported function call.
+/// Monthly counters are tracked optimistically and batch-synced to the registry service.
+pub trait CallCountManagement {
+    /// Resets the per-invocation HTTP and RPC call counters to zero.
+    ///
+    /// Called at the start of each exported function invocation.
+    fn reset_invocation_call_counts(&mut self);
+
+    /// Records one outgoing HTTP call against the monthly account quota.
+    ///
+    /// Returns `Err` with `WorkerMonthlyHttpCallBudgetExhausted` if budget is exhausted.
+    fn record_monthly_http_call(&mut self) -> anyhow::Result<()>;
+
+    /// Records one outgoing RPC call against the monthly account quota.
+    ///
+    /// Returns `Err` with `WorkerMonthlyRpcCallBudgetExhausted` if budget is exhausted.
+    fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()>;
 }
 
 /// The invocation management interface of a worker context is responsible for connecting

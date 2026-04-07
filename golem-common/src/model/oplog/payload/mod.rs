@@ -22,7 +22,7 @@ use crate::model::component::ComponentRevision;
 use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
-    SerializableSocketError,
+    SerializableSocketError, SerializableWebsocketError, SerializableWebsocketMessage,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -184,6 +184,21 @@ oplog_payload! {
         SocketsResolveName {
             name: String
         },
+        WebsocketConnect {
+            url: String,
+            headers: Option<Vec<(String, String)>>,
+        },
+        WebsocketSend {
+            message: SerializableWebsocketMessage,
+        },
+        WebsocketReceive {},
+        WebsocketReceiveWithTimeout {
+            timeout_ms: u64,
+        },
+        WebsocketClose {
+            code: Option<u16>,
+            reason: Option<String>,
+        },
     }
 }
 
@@ -328,6 +343,21 @@ oplog_payload! {
         SocketsResolveName {
             result: Result<SerializableIpAddresses, SerializableSocketError>
         },
+        WebsocketConnectResponse {
+            result: Result<(), SerializableWebsocketError>,
+        },
+        WebsocketSendResponse {
+            result: Result<(), SerializableWebsocketError>,
+        },
+        WebsocketReceiveResponse {
+            result: Result<SerializableWebsocketMessage, SerializableWebsocketError>,
+        },
+        WebsocketReceiveWithTimeoutResponse {
+            result: Result<Option<SerializableWebsocketMessage>, SerializableWebsocketError>,
+        },
+        WebsocketCloseResponse {
+            result: Result<(), SerializableWebsocketError>,
+        },
         StreamCheckWrite {
             result: Result<u64, SerializableStreamError>
         },
@@ -339,6 +369,12 @@ oplog_payload! {
         },
         StreamWriteResult {
             result: Result<(), SerializableStreamError>
+        },
+        StreamWriteWithBytes {
+            result: Result<Vec<u8>, SerializableStreamError>
+        },
+        StreamWriteZeroes {
+            result: Result<u64, SerializableStreamError>
         }
     }
 }
@@ -400,6 +436,7 @@ pub mod host_functions {
         (GolemRpcWasmRpcInvoke => "golem::rpc::wasm-rpc", "invoke", GolemRpcInvoke, GolemRpcUnitOrFailure),
         (GolemRpcWasmRpcScheduleInvocation => "golem::rpc::wasm-rpc", "schedule_invocation", GolemRpcScheduledInvocation, GolemRpcScheduledInvocation),
         (GolemRpcCancellationTokenCancel => "golem::rpc::cancellation-token", "cancel", GolemRpcScheduledInvocationCancellation, GolemRpcUnit),
+        (GolemRpcFutureInvokeResultCancel => "golem::rpc::future-invoke-result", "cancel", GolemRpcInvoke, GolemRpcUnit),
         (IoPollReady => "io::poll::pollable", "ready", NoInput, PollReady),
         (IoPollPoll => "io::poll", "poll", PollCount, PollResult),
         (HttpTypesFutureTrailersGet => "http::types::future_trailers", "get", HttpRequest, HttpFutureTrailersGet),
@@ -409,10 +446,10 @@ pub mod host_functions {
         (HttpTypesIncomingBodyStreamSkip => "http::types::incoming_body_stream", "skip", HttpRequest, StreamSkip),
         (HttpTypesIncomingBodyStreamBlockingSkip => "http::types::incoming_body_stream", "blocking_skip", HttpRequest, StreamSkip),
         (HttpTypesOutgoingBodyStreamCheckWrite => "http::types::outgoing_body_stream", "check_write", HttpRequest, StreamCheckWrite),
-        (HttpTypesOutgoingBodyStreamWrite => "http::types::outgoing_body_stream", "write", HttpRequest, StreamWriteResult),
+        (HttpTypesOutgoingBodyStreamWrite => "http::types::outgoing_body_stream", "write", HttpRequest, StreamWriteWithBytes),
         (HttpTypesOutgoingBodyStreamFlush => "http::types::outgoing_body_stream", "flush", HttpRequest, StreamWriteResult),
         (HttpTypesOutgoingBodyStreamBlockingFlush => "http::types::outgoing_body_stream", "blocking_flush", HttpRequest, StreamWriteResult),
-        (HttpTypesOutgoingBodyStreamWriteZeroes => "http::types::outgoing_body_stream", "write_zeroes", HttpRequest, StreamWriteResult),
+        (HttpTypesOutgoingBodyStreamWriteZeroes => "http::types::outgoing_body_stream", "write_zeroes", HttpRequest, StreamWriteZeroes),
         (HttpTypesOutgoingBodyStreamSplice => "http::types::outgoing_body_stream", "splice", HttpRequest, StreamSkip),
         (HttpTypesOutgoingBodyStreamBlockingSplice => "http::types::outgoing_body_stream", "blocking_splice", HttpRequest, StreamSkip),
         (WallClockNow => "wall_clock", "now", NoInput, WallClock),
@@ -452,7 +489,12 @@ pub mod host_functions {
         (GolemApiRevertWorker => "golem::api", "revert_worker", GolemApiRevertAgent, GolemApiUnit),
         (GolemApiResolveComponentId => "golem::api", "resolve_component_id", GolemApiComponentSlug, GolemApiComponentId),
         (GolemApiResolveAgentIdStrict => "golem::api", "resolve_agent_id_strict", GolemApiComponentSlugAndAgentName, GolemApiAgentId),
-        (GolemApiFork => "golem::api", "fork", NoInput, GolemApiFork)
+        (GolemApiFork => "golem::api", "fork", NoInput, GolemApiFork),
+        (WebsocketClientConnect => "golem:websocket/client", "connect", WebsocketConnect, WebsocketConnectResponse),
+        (WebsocketClientSend => "golem:websocket/client", "send", WebsocketSend, WebsocketSendResponse),
+        (WebsocketClientReceive => "golem:websocket/client", "receive", WebsocketReceive, WebsocketReceiveResponse),
+        (WebsocketClientReceiveWithTimeout => "golem:websocket/client", "receive-with-timeout", WebsocketReceiveWithTimeout, WebsocketReceiveWithTimeoutResponse),
+        (WebsocketClientClose => "golem:websocket/client", "close", WebsocketClose, WebsocketCloseResponse)
     }
 }
 

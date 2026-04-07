@@ -14,7 +14,6 @@
 
 use super::audit::DeletableRevisionAuditFields;
 use super::hash::SqlBlake3Hash;
-use crate::repo::model::datetime::SqlDateTime;
 use desert_rust::BinaryCodec;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
@@ -29,8 +28,9 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::mcp_deployment::{
     McpDeployment, McpDeploymentAgentOptions, McpDeploymentId, McpDeploymentRevision,
 };
+use golem_service_base::repo::Blob;
 use golem_service_base::repo::RepoError;
-use golem_service_base::repo::blob::Blob;
+use golem_service_base::repo::SqlDateTime;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::BTreeMap;

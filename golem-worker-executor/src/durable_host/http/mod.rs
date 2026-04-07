@@ -18,6 +18,7 @@ use golem_common::model::oplog::DurableFunctionType;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use tracing::warn;
 
+pub mod inline_retry;
 pub mod outgoing_http;
 pub mod types;
 

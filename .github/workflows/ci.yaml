@@ -19,7 +19,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "v0.1.4"
+  WASM_RQUICKJS_VERSION: "v0.2.0"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 
@@ -207,9 +207,6 @@ jobs:
           redis-version: latest
           auto-start: false
 
-      - name: Install cargo-component
-        if: startsWith(matrix.group.name, 'cli-integration-tests')
-        run: cargo binstall --force cargo-component@0.21.1
       - name: Install wasm-tools
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         run: cargo binstall --force --locked wasm-tools@1.227.1
@@ -219,17 +216,38 @@ jobs:
 
       - name: Setup Node
         if: startsWith(matrix.group.name, 'cli-integration-tests')
-        uses: actions/setup-node@v4
+        uses: ./.github/actions/setup-js-wasm-tools
         with:
-          node-version: "lts/*"
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          install-wasi-sdk: ${{ matrix.group.name == 'cli-integration-tests-group2' }}
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
 
-      - uses: pnpm/action-setup@v2
+      - name: Setup Java
         if: startsWith(matrix.group.name, 'cli-integration-tests')
+        uses: actions/setup-java@v5
         with:
-          version: latest
-      - name: Install wasm-rquickjs
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup SBT
         if: startsWith(matrix.group.name, 'cli-integration-tests')
-        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
+        uses: sbt/setup-sbt@v1
+
+      - name: Sync WIT dependencies
+        if: matrix.group.name == 'cli-integration-tests-group2'
+        run: cargo make wit
+
+      - name: Build agent_guest.wasm
+        if: matrix.group.name == 'cli-integration-tests-group2'
+        working-directory: sdks/scala
+        run: ./scripts/generate-agent-guest-wasm.sh
+
+      - name: Publish Scala SDK locally
+        if: matrix.group.name == 'cli-integration-tests-group2'
+        working-directory: sdks/scala
+        run: |
+          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
 
       - name: Restore built TS SDK
         if: startsWith(matrix.group.name, 'cli-integration-tests')
@@ -270,7 +288,86 @@ jobs:
           artifact-name: '${{ matrix.group.name }}-report'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-  wasm-rpc-stub:
+  scala-sdk-integration-tests:
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs:
+      - build-and-store
+      - build-golem-ts
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip2'
+          install-cargo-binstall: 'true'
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup SBT
+        uses: sbt/setup-sbt@v1
+
+      - name: Cache scala dependencies
+        uses: coursier/cache-action@v8
+
+      - uses: ./.github/actions/setup-js-wasm-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+
+      - name: Sync WIT dependencies
+        run: cargo make wit
+
+      - name: Build agent_guest.wasm
+        working-directory: sdks/scala
+        run: ./scripts/generate-agent-guest-wasm.sh
+
+      - uses: ./.github/actions/restore-binaries
+        with:
+          run-id: ${{ github.run_id }}
+          copy-to-target: 'true'
+
+      - name: Restore built TS SDK
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            sdks/ts/packages/golem-ts-sdk/dist
+            sdks/ts/packages/golem-ts-sdk/types
+            sdks/ts/packages/golem-ts-sdk/wasm
+            sdks/ts/packages/golem-ts-typegen/dist
+            sdks/ts/packages/golem-ts-types-core/dist
+            sdks/ts/packages/golem-ts-bridge/dist
+            sdks/ts/packages/golem-ts-repl/dist
+          key: golem-ts-sdk-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Install TS SDK dependencies
+        working-directory: sdks/ts
+        run: pnpm install --frozen-lockfile
+
+      - name: Add golem to PATH
+        run: echo "${{ github.workspace }}/target/debug" >> $GITHUB_PATH
+
+      - name: Publish Scala SDK locally
+        working-directory: sdks/scala
+        run: |
+          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
+
+      - name: Run Scala SDK integration tests
+        working-directory: sdks/scala
+        env:
+          GOLEM_TS_PACKAGES_PATH: ${{ github.workspace }}/sdks/ts/packages
+        run: sbt -batch "++3.8.2; integrationTests/test"
+        timeout-minutes: 20
+
+  golem-wasm-guest:
     runs-on: blacksmith
     env:
       CARGO_BUILD_JOBS: 10
@@ -281,13 +378,10 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           rust-targets: 'wasm32-wasip2'
-          install-cargo-binstall: 'true'
-      - name: Install cargo-component
-        run: cargo binstall --force cargo-component@0.21.1
       - name: Prepare WIT dependencies
         run: cargo make wit
-      - name: Build wasm-rpc in stub mode
-        run: cargo component build -p golem-wasm --no-default-features --features stub
+      - name: Build golem-wasm in guest mode
+        run: cargo build --target wasm32-wasip2 -p golem-wasm --no-default-features --features guest
 
   golem-client:
     runs-on: blacksmith
@@ -304,6 +398,55 @@ jobs:
         run: cargo make wit
       - name: Build golem-client (dependencies in features=client mode)
         run: cargo build -p golem-client
+
+  build-golem-scala:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup SBT
+        uses: sbt/setup-sbt@v1
+
+      - name: Cache scala dependencies
+        uses: coursier/cache-action@v8
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip2'
+          install-cargo-binstall: 'true'
+
+      - uses: ./.github/actions/setup-wasm-component-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+
+      - name: Sync WIT dependencies
+        run: cargo make wit
+
+      - name: Build agent_guest.wasm
+        working-directory: sdks/scala
+        run: ./scripts/generate-agent-guest-wasm.sh
+
+      - name: Run Golem tests (Scala 3.8.2)
+        working-directory: sdks/scala
+        run: sbt -mem 4096 "++3.8.2; modelJVM/test; modelJS/test; core/test; macros/test; codegen/test"
+
+      - name: Run Golem tests (Scala 2.13.18)
+        working-directory: sdks/scala
+        run: sbt -mem 4096 "++2.13.18; modelJVM/test; modelJS/test; core/test; macros/test"
+
+      - name: Compile sbt plugin (Scala 2.12)
+        working-directory: sdks/scala
+        run: sbt "++2.12.21!; sbtPlugin/compile"
 
   build-golem-rust:
     runs-on: blacksmith
@@ -334,23 +477,19 @@ jobs:
     runs-on: blacksmith
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
         with:
-          node-version: "lts/*"
-      - uses: pnpm/action-setup@v2
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
         with:
-          version: latest
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip1 wasm32-wasip2
-      - uses: cargo-bins/cargo-binstall@main
-      - name: Install WASI SDK
-        run: |
-          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
-          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
-      - name: Install cargo-component
-        run: cargo binstall --force cargo-component@0.21.1
-      - name: Install wasm-rquickjs
-        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip2'
+          install-cargo-make: 'false'
+
+      - uses: ./.github/actions/setup-js-wasm-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
       - name: Install dependencies
         working-directory: sdks/ts
@@ -466,32 +605,18 @@ jobs:
           key: golem-ts-sdk-${{ github.run_id }}
           fail-on-cache-miss: true
 
-      - name: Setup Node
+      - name: Setup JS and WASM build tools
         if: matrix.chunk.needs-node
-        uses: actions/setup-node@v4
+        uses: ./.github/actions/setup-js-wasm-tools
         with:
-          node-version: "lts/*"
-
-      - name: Setup pnpm
-        if: matrix.chunk.needs-node
-        uses: pnpm/action-setup@v2
-        with:
-          version: latest
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
       - name: Install TS SDK dependencies
         if: matrix.chunk.needs-node
         working-directory: sdks/ts
         run: pnpm install --frozen-lockfile
-
-      - name: Install WASI SDK
-        if: matrix.chunk.needs-node
-        run: |
-          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
-          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
-
-      - name: Install wasm-rquickjs
-        if: matrix.chunk.needs-node
-        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
 
       - name: Remove any pre-existing WASMs
         run: find test-components -maxdepth 1 -name '*.wasm' -delete
@@ -651,7 +776,7 @@ jobs:
     needs:
       - check-clippy-and-format
       - unit-tests-and-checks
-      - wasm-rpc-stub
+      - golem-wasm-guest
       - worker-tests
       - it
     if: "startsWith(github.ref, 'refs/tags/v')"

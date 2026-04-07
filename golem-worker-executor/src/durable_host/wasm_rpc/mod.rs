@@ -12,15 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::get_oplog_entry;
 use crate::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult,
     HostWasmRpc, RpcError,
 };
-use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, OplogOps};
-use crate::services::rpc::{RpcDemand, RpcError as InternalRpcError};
+use crate::services::rpc::{Rpc, RpcDemand, RpcError as InternalRpcError};
+use crate::services::{HasOplog, HasWorker};
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
 use anyhow::Error;
 use async_trait::async_trait;
@@ -28,10 +29,12 @@ use futures::future::Either;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::UntypedDataValue;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::{
-    GolemRpcCancellationTokenCancel, GolemRpcFutureInvokeResultGet, GolemRpcWasmRpcInvoke,
-    GolemRpcWasmRpcInvokeAndAwaitResult, GolemRpcWasmRpcScheduleInvocation,
+    GolemRpcCancellationTokenCancel, GolemRpcFutureInvokeResultCancel,
+    GolemRpcFutureInvokeResultGet, GolemRpcWasmRpcInvoke, GolemRpcWasmRpcInvokeAndAwaitResult,
+    GolemRpcWasmRpcScheduleInvocation,
 };
 use golem_common::model::oplog::types::{
     SerializableInvokeResult, SerializableScheduledInvocation,
@@ -44,9 +47,11 @@ use golem_common::model::oplog::{
     HostResponseGolemRpcUnitOrFailure, OplogEntry, PersistenceLevel,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, IdempotencyKey, OplogIndex, OwnedAgentId, ScheduledAction,
+    AgentId, AgentInvocation, IdempotencyKey, OplogIndex, OwnedAgentId, RetryConfig,
+    ScheduledAction,
 };
 use golem_common::serialization::{deserialize, serialize};
+
 use golem_wasm::{
     CancellationTokenEntry, FutureInvokeResultEntry, SubscribeAny, ValueAndType, WasmRpcEntry,
 };
@@ -54,6 +59,7 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{Instrument, error};
 use wasmtime::component::Resource;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
@@ -61,6 +67,15 @@ use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
+
+fn classify_rpc_error(err: &InternalRpcError) -> HostFailureKind {
+    match err {
+        InternalRpcError::ProtocolError { .. }
+        | InternalRpcError::Denied { .. }
+        | InternalRpcError::NotFound { .. } => HostFailureKind::Permanent,
+        InternalRpcError::RemoteInternalError { .. } => HostFailureKind::Transient,
+    }
+}
 
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn new(
@@ -149,6 +164,16 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             ));
         }
 
+        // Check the per-invocation RPC call limit before initiating the call.
+        // Only counted in live mode; replay is a no-op.
+        self.state
+            .check_and_increment_rpc_call_count()
+            .map_err(wasmtime::Error::from)?;
+
+        // Returns Err(WorkerMonthlyRpcCallBudgetExhausted) when exhausted,
+        // which maps to RetryDecision::TryStop — suspending the worker.
+        self.record_monthly_rpc_call()?;
+
         let current_idempotency_key = self
             .get_current_idempotency_key()
             .await
@@ -160,7 +185,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
                 .await?;
 
-        let durability = Durability::<GolemRpcWasmRpcInvokeAndAwaitResult>::new(
+        let mut durability = Durability::<GolemRpcWasmRpcInvokeAndAwaitResult>::new(
             self,
             DurableFunctionType::WriteRemote,
         )
@@ -177,43 +202,51 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_agent_type: None,
                 remote_agent_parameters: None,
             };
-            let stack = self
-                .state
-                .invocation_context
-                .clone_as_inherited_stack(span.span_id());
+            let result = loop {
+                let stack = self
+                    .state
+                    .invocation_context
+                    .clone_as_inherited_stack(span.span_id());
 
-            let interrupt_signal = self
-                .execution_status
-                .read()
-                .unwrap()
-                .create_await_interrupt_signal();
-            let rpc = self.rpc();
-            let created_by = self.created_by();
-            let agent_id = self.agent_id().clone();
+                let interrupt_signal = self
+                    .execution_status
+                    .read()
+                    .unwrap()
+                    .create_await_interrupt_signal();
+                let rpc = self.rpc();
+                let created_by = self.created_by();
+                let agent_id = self.agent_id().clone();
 
-            let either_result = futures::future::select(
-                rpc.invoke_and_await(
-                    &remote_agent_id,
-                    Some(idempotency_key),
-                    method_name,
-                    input_untyped,
-                    created_by,
-                    &agent_id,
-                    &env,
-                    config_vars,
-                    stack,
-                ),
-                interrupt_signal,
-            )
-            .await;
-            let result = match either_result {
-                Either::Left((result, _)) => result,
-                Either::Right((interrupt_kind, _)) => {
-                    tracing::info!("Interrupted while waiting for RPC result");
-                    return Err(interrupt_kind.into());
+                let either_result = futures::future::select(
+                    rpc.invoke_and_await(
+                        &remote_agent_id,
+                        Some(idempotency_key.clone()),
+                        method_name.clone(),
+                        input_untyped.clone(),
+                        created_by,
+                        &agent_id,
+                        &env,
+                        config_vars.clone(),
+                        stack,
+                    ),
+                    interrupt_signal,
+                )
+                .await;
+                let result = match either_result {
+                    Either::Left((result, _)) => result,
+                    Either::Right((interrupt_kind, _)) => {
+                        tracing::info!("Interrupted while waiting for RPC result");
+                        return Err(interrupt_kind.into());
+                    }
+                };
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, classify_rpc_error)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
                 }
             };
-            durability.try_trigger_retry(self, &result).await?;
 
             durability
                 .persist(
@@ -267,6 +300,16 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             ));
         }
 
+        // Check the per-invocation RPC call limit before initiating the call.
+        self.state
+            .check_and_increment_rpc_call_count()
+            .map_err(wasmtime::Error::from)?;
+
+        // Record against the monthly account-level RPC call quota.
+        // Returns Err(WorkerMonthlyRpcCallBudgetExhausted) when exhausted,
+        // which maps to RetryDecision::TryStop — suspending the worker.
+        self.record_monthly_rpc_call()?;
+
         let current_idempotency_key = self
             .get_current_idempotency_key()
             .await
@@ -278,7 +321,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
                 .await?;
 
-        let durability =
+        let mut durability =
             Durability::<GolemRpcWasmRpcInvoke>::new(self, DurableFunctionType::WriteRemote)
                 .await?;
 
@@ -293,25 +336,33 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_agent_type: None,
                 remote_agent_parameters: None,
             };
-            let stack = self
-                .state
-                .invocation_context
-                .clone_as_inherited_stack(span.span_id());
-            let result = self
-                .rpc()
-                .invoke(
-                    &remote_agent_id,
-                    Some(idempotency_key),
-                    method_name,
-                    input_untyped,
-                    self.created_by(),
-                    self.agent_id(),
-                    &env,
-                    config_vars,
-                    stack,
-                )
-                .await;
-            durability.try_trigger_retry(self, &result).await?;
+            let result = loop {
+                let stack = self
+                    .state
+                    .invocation_context
+                    .clone_as_inherited_stack(span.span_id());
+                let result = self
+                    .rpc()
+                    .invoke(
+                        &remote_agent_id,
+                        Some(idempotency_key.clone()),
+                        method_name.clone(),
+                        input_untyped.clone(),
+                        self.created_by(),
+                        self.agent_id(),
+                        &env,
+                        config_vars.clone(),
+                        stack,
+                    )
+                    .await;
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, classify_rpc_error)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
 
             let result = result.map_err(|err| err.into());
             durability
@@ -346,10 +397,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let config_vars = self.state.config_vars.clone();
         let own_agent_id = self.owned_agent_id().clone();
 
-        let begin_index = self
-            .begin_function(&DurableFunctionType::WriteRemote)
-            .await?;
-
         let entry = self.table().get(&this)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_agent_id = payload.remote_agent_id.clone();
@@ -360,6 +407,19 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 "RPC calls to the same agent are not supported"
             ));
         }
+
+        // Check the per-invocation RPC call limit before initiating the call.
+        self.state
+            .check_and_increment_rpc_call_count()
+            .map_err(wasmtime::Error::from)?;
+
+        // Returns Err(WorkerMonthlyRpcCallBudgetExhausted) when exhausted,
+        // which maps to RetryDecision::TryStop — suspending the worker.
+        self.record_monthly_rpc_call()?;
+
+        let begin_index = self
+            .begin_function(&DurableFunctionType::WriteRemote)
+            .await?;
 
         let current_idempotency_key = self
             .get_current_idempotency_key()
@@ -391,23 +451,31 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .state
                 .invocation_context
                 .clone_as_inherited_stack(span.span_id());
-            let handle = wasmtime_wasi::runtime::spawn(
-                async move {
-                    Ok(rpc
-                        .invoke_and_await(
-                            &remote_agent_id,
-                            Some(idempotency_key),
-                            method_name,
-                            input_untyped,
-                            created_by,
-                            &agent_id,
-                            &env,
-                            config_vars,
-                            stack,
-                        )
-                        .await)
-                }
-                .in_current_span(),
+
+            let retry_config = if self.in_atomic_region() {
+                None
+            } else {
+                Some(self.retry_config())
+            };
+            let max_delay = self.durable_execution_state().max_in_function_retry_delay;
+            let worker = self.public_state.worker();
+
+            let handle = spawn_rpc_task_with_retry(
+                rpc,
+                remote_agent_id,
+                idempotency_key,
+                method_name,
+                input_untyped,
+                created_by,
+                agent_id,
+                env,
+                config_vars,
+                stack,
+                retry_config,
+                max_delay,
+                worker,
+                begin_index,
+                self.execution_status.clone(),
             );
 
             let fut = self.table().push(FutureInvokeResultEntry {
@@ -417,6 +485,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     span_id: span.span_id().clone(),
                     begin_index,
                 }),
+                child_pollables: Vec::new(),
             })?;
             Ok(fut)
         } else {
@@ -433,6 +502,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     span_id: span.span_id().clone(),
                     begin_index,
                 }),
+                child_pollables: Vec::new(),
             })?;
             Ok(fut)
         };
@@ -568,7 +638,13 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         this: Resource<FutureInvokeResult>,
     ) -> anyhow::Result<Resource<golem_wasm::DynPollable>> {
         self.observe_function_call("golem::rpc::future-invoke-result", "subscribe");
-        Ok(wasmtime_wasi::dynamic_subscribe(self.table(), this, None)?)
+        let parent_rep = this.rep();
+        let pollable = wasmtime_wasi::dynamic_subscribe(self.table(), this, None)?;
+        let child_rep = pollable.rep();
+        let parent: Resource<FutureInvokeResult> = Resource::new_borrow(parent_rep);
+        let entry = self.table().get_mut(&parent)?;
+        entry.child_pollables.push(child_rep);
+        Ok(pollable)
     }
 
     async fn get(
@@ -593,10 +669,20 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         };
 
         if self.state.is_live() || self.state.snapshotting_mode.is_some() {
+            // Main state machine match
             let stack = self
                 .state
                 .invocation_context
                 .clone_as_inherited_stack(&span_id);
+
+            let retry_config = if self.in_atomic_region() {
+                None
+            } else {
+                Some(self.retry_config())
+            };
+            let max_delay = self.durable_execution_state().max_in_function_retry_delay;
+            let worker = self.public_state.worker();
+            let execution_status = self.execution_status.clone();
 
             let entry = self.table().get_mut(&this)?;
             let entry = entry
@@ -620,7 +706,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     let begin_index = *begin_index;
                     let message = "future-invoke-result already consumed";
                     (
-                        Err(anyhow::anyhow!(message)),
+                        Err(anyhow::Error::new(ClassifiedHostError {
+                            kind: HostFailureKind::Permanent,
+                            message: message.to_string(),
+                        })),
                         request.clone(),
                         SerializableInvokeResult::Failed(message.to_string()),
                         begin_index,
@@ -640,140 +729,62 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         begin_index,
                     )
                 }
-                FutureInvokeResultState::Completed {
-                    request,
-                    begin_index,
-                    ..
-                } => {
-                    let request = request.clone();
-                    let begin_index = *begin_index;
-                    let span_id = span_id.clone();
-                    let result = std::mem::replace(
-                        entry,
-                        FutureInvokeResultState::Consumed {
-                            request,
-                            span_id,
-                            begin_index,
-                        },
-                    );
-                    if let FutureInvokeResultState::Completed {
-                        request, result, ..
-                    } = result
-                    {
-                        match result {
-                            Ok(Ok(untyped)) => (
-                                Ok(Some(Ok(untyped.clone()))),
-                                request,
-                                SerializableInvokeResult::Completed(Ok(untyped)),
-                                begin_index,
-                            ),
-                            Ok(Err(rpc_error)) => (
-                                Ok(Some(Err(rpc_error.clone().into()))),
-                                request,
-                                SerializableInvokeResult::Completed(Err(rpc_error.into())),
-                                begin_index,
-                            ),
-                            Err(err) => {
-                                let serializable_err = err.to_string();
-                                (
-                                    Err(err),
-                                    request,
-                                    SerializableInvokeResult::Failed(serializable_err),
-                                    begin_index,
-                                )
-                            }
-                        }
-                    } else {
-                        panic!("unexpected state: not FutureInvokeResultState::Completed")
-                    }
+                FutureInvokeResultState::Completed { .. } => {
+                    handle_completed_rpc_result(entry, &span_id)
                 }
-                FutureInvokeResultState::Deferred { begin_index, .. } => {
+                FutureInvokeResultState::Cancelled {
+                    request,
+                    span_id,
+                    begin_index,
+                } => {
                     let begin_index = *begin_index;
-
-                    let (tx, rx) = tokio::sync::oneshot::channel();
-                    let handle = wasmtime_wasi::runtime::spawn(
-                        async move {
-                            let request = rx.await.map_err(|err| anyhow::anyhow!(err))?;
-                            let FutureInvokeResultState::Deferred {
-                                remote_agent_id,
-                                self_agent_id,
-                                self_created_by,
-                                env,
-                                wasi_config_vars: config_vars,
-                                method_name,
-                                method_parameters,
-                                idempotency_key,
-                                ..
-                            } = request
-                            else {
-                                return Err(anyhow::anyhow!(
-                                    "unexpected incoming response state".to_string()
-                                ));
-                            };
-                            Ok(rpc
-                                .invoke_and_await(
-                                    &remote_agent_id,
-                                    Some(idempotency_key),
-                                    method_name,
-                                    method_parameters,
-                                    self_created_by,
-                                    &self_agent_id,
-                                    &env,
-                                    config_vars,
-                                    stack,
-                                )
-                                .await)
-                        }
-                        .in_current_span(),
-                    );
-                    let FutureInvokeResultState::Deferred {
-                        remote_agent_id,
-                        method_name,
-                        method_parameters,
-                        idempotency_key,
-                        span_id,
-                        ..
-                    } = &*entry
-                    else {
-                        return Err(anyhow::anyhow!("unexpected state entry".to_string()));
+                    let request = request.clone();
+                    let rpc_error = InternalRpcError::ProtocolError {
+                        details: "Invocation cancelled".to_string(),
                     };
-                    let request = HostRequestGolemRpcInvoke {
-                        remote_agent_id: remote_agent_id.agent_id(),
-                        idempotency_key: idempotency_key.clone(),
-                        method_name: method_name.clone(),
-                        input: method_parameters.clone(),
-                        remote_agent_type: None,
-                        remote_agent_parameters: None,
+                    let serializable_result = SerializableInvokeResult::Completed(Err(
+                        rpc_error.clone().into(),
+                    ));
+                    *entry = FutureInvokeResultState::Consumed {
+                        request: request.clone(),
+                        span_id: span_id.clone(),
+                        begin_index,
                     };
-
-                    tx.send(std::mem::replace(
-                        entry,
-                        FutureInvokeResultState::Pending {
-                            handle,
-                            request: request.clone(),
-                            span_id: span_id.clone(),
-                            begin_index,
-                        },
-                    ))
-                    .map_err(|_| anyhow::anyhow!("failed to send request to handler"))?;
                     (
-                        Ok(None),
+                        Ok(Some(Err(rpc_error.into()))),
                         request,
-                        SerializableInvokeResult::Pending,
+                        serializable_result,
                         begin_index,
                     )
                 }
+                FutureInvokeResultState::Deferred { .. } => {
+                    handle_deferred_rpc_dispatch(entry, rpc, stack, retry_config, max_delay, worker, execution_status)?
+                }
             };
 
+            // For non-retried transient errors (e.g., from Err(anyhow::Error) path
+            // or non-RPC transient errors), fall back to trap+replay
             let for_retry = match &result {
-                Err(err) => Err(anyhow::anyhow!(err.to_string())),
-                Ok(Some(Err(err))) => Err(anyhow::anyhow!(err.to_string())),
-                _ => Ok(()),
+                Err(err) => {
+                    let kind = err
+                        .downcast_ref::<ClassifiedHostError>()
+                        .map(|c| c.kind)
+                        .unwrap_or(HostFailureKind::Transient);
+                    if kind == HostFailureKind::Transient {
+                        Some((err.to_string(), kind))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
             };
 
-            if let Err(err) = for_retry {
+            if let Some((message, kind)) = for_retry
+                && kind == HostFailureKind::Transient
+            {
                 self.state.current_retry_point = begin_index;
-                self.try_trigger_retry(err).await?;
+                let failure = anyhow::Error::new(ClassifiedHostError { kind, message });
+                self.try_trigger_retry(failure).await?;
             }
 
             if self.state.snapshotting_mode.is_none() {
@@ -884,8 +895,143 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         }
     }
 
+    async fn cancel(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
+        self.observe_function_call("golem::rpc::future-invoke-result", "cancel");
+
+        let (should_attempt_remote_cancel, remote_agent_id, idempotency_key, request) = {
+            let entry = self.table().get(&this)?;
+            let state = entry
+                .payload
+                .as_any()
+                .downcast_ref::<FutureInvokeResultState>()
+                .unwrap();
+            match state {
+                FutureInvokeResultState::Pending { request, .. } => (
+                    true,
+                    request.remote_agent_id.clone(),
+                    request.idempotency_key.clone(),
+                    request.clone(),
+                ),
+                FutureInvokeResultState::Deferred {
+                    remote_agent_id,
+                    idempotency_key,
+                    method_name,
+                    method_parameters,
+                    ..
+                } => (
+                    true,
+                    remote_agent_id.agent_id(),
+                    idempotency_key.clone(),
+                    HostRequestGolemRpcInvoke {
+                        remote_agent_id: remote_agent_id.agent_id(),
+                        idempotency_key: idempotency_key.clone(),
+                        method_name: method_name.clone(),
+                        input: method_parameters.clone(),
+                        remote_agent_type: None,
+                        remote_agent_parameters: None,
+                    },
+                ),
+                FutureInvokeResultState::Completed { request, .. }
+                | FutureInvokeResultState::Cancelled { request, .. }
+                | FutureInvokeResultState::Consumed { request, .. } => (
+                    false,
+                    request.remote_agent_id.clone(),
+                    request.idempotency_key.clone(),
+                    request.clone(),
+                ),
+            }
+        };
+
+        let durability = Durability::<GolemRpcFutureInvokeResultCancel>::new(
+            self,
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
+
+        if durability.is_live() {
+            if should_attempt_remote_cancel {
+                let caller_account_id = self.created_by();
+                if let Err(err) = self
+                    .worker_proxy()
+                    .cancel_invocation(&remote_agent_id, idempotency_key, caller_account_id)
+                    .await
+                {
+                    tracing::info!(err=%err, "Best-effort cancel_invocation failed");
+                }
+            }
+
+            durability
+                .persist(self, request, HostResponseGolemRpcUnit {})
+                .await
+        } else {
+            durability.replay(self).await
+        }?;
+
+        // Transition deferred/pending futures to Cancelled so they won't be initiated on recovery
+        {
+            let entry = self.table().get_mut(&this)?;
+            let state = entry
+                .payload
+                .as_any_mut()
+                .downcast_mut::<FutureInvokeResultState>()
+                .unwrap();
+            match state {
+                FutureInvokeResultState::Deferred {
+                    remote_agent_id,
+                    method_name,
+                    method_parameters,
+                    idempotency_key,
+                    span_id,
+                    begin_index,
+                    ..
+                } => {
+                    *state = FutureInvokeResultState::Cancelled {
+                        request: HostRequestGolemRpcInvoke {
+                            remote_agent_id: remote_agent_id.agent_id(),
+                            idempotency_key: idempotency_key.clone(),
+                            method_name: method_name.clone(),
+                            input: method_parameters.clone(),
+                            remote_agent_type: None,
+                            remote_agent_parameters: None,
+                        },
+                        span_id: span_id.clone(),
+                        begin_index: *begin_index,
+                    };
+                }
+                FutureInvokeResultState::Pending {
+                    request,
+                    span_id,
+                    begin_index,
+                    ..
+                } => {
+                    *state = FutureInvokeResultState::Cancelled {
+                        request: request.clone(),
+                        span_id: span_id.clone(),
+                        begin_index: *begin_index,
+                    };
+                }
+                _ => {} // Completed/Consumed/already Cancelled - no-op
+            }
+        }
+
+        Ok(())
+    }
+
     async fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         self.observe_function_call("golem::rpc::future-invoke-result", "drop");
+
+        let child_reps = {
+            let entry = self.table().get_mut(&this)?;
+            std::mem::take(&mut entry.child_pollables)
+        };
+
+        for rep in child_reps {
+            let child: Resource<golem_wasm::DynPollable> = Resource::new_own(rep);
+            if let Err(err) = self.table().delete(child) {
+                tracing::debug!(rep, err=%err, "Child pollable already dropped by guest");
+            }
+        }
+
         let _ = self.table().delete(this)?;
         Ok(())
     }
@@ -984,6 +1130,219 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     Ok(entry)
 }
 
+fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
+    rpc: Arc<dyn Rpc>,
+    remote_agent_id: OwnedAgentId,
+    idempotency_key: IdempotencyKey,
+    method_name: String,
+    input: UntypedDataValue,
+    created_by: AccountId,
+    agent_id: AgentId,
+    env: Vec<(String, String)>,
+    config_vars: BTreeMap<String, String>,
+    stack: InvocationContextStack,
+    retry_config: Option<RetryConfig>,
+    max_in_function_retry_delay: Duration,
+    worker: Arc<crate::worker::Worker<Ctx>>,
+    retry_point: OplogIndex,
+    execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
+) -> AbortOnDropJoinHandle<Result<Result<UntypedDataValue, InternalRpcError>, Error>> {
+    let invoke = move || {
+        let rpc = rpc.clone();
+        let remote_agent_id = remote_agent_id.clone();
+        let idempotency_key = idempotency_key.clone();
+        let method_name = method_name.clone();
+        let input = input.clone();
+        let created_by = created_by;
+        let agent_id = agent_id.clone();
+        let env = env.clone();
+        let config_vars = config_vars.clone();
+        let stack = stack.clone();
+        async move {
+            rpc.invoke_and_await(
+                &remote_agent_id,
+                Some(idempotency_key),
+                method_name,
+                input,
+                created_by,
+                &agent_id,
+                &env,
+                config_vars,
+                stack,
+            )
+            .await
+        }
+    };
+
+    wasmtime_wasi::runtime::spawn(
+        async move {
+            let result = match retry_config {
+                Some(retry_config) => {
+                    let base_retry_count = crate::durable_host::durability::count_oplog_errors_for(
+                        &worker.oplog(),
+                        retry_point,
+                    )
+                    .await;
+                    let task_ctx = crate::durable_host::durability::TaskRetryContext {
+                        retry_point,
+                        retry_config,
+                        max_in_function_retry_delay,
+                        base_retry_count,
+                        worker,
+                    };
+                    crate::durable_host::durability::in_task_retry_loop(
+                        task_ctx,
+                        classify_rpc_error,
+                        invoke,
+                        || {
+                            execution_status
+                                .read()
+                                .unwrap()
+                                .create_await_interrupt_signal()
+                        },
+                    )
+                    .await
+                }
+                None => invoke().await,
+            };
+            Ok(result)
+        }
+        .in_current_span(),
+    )
+}
+
+#[allow(clippy::type_complexity)]
+fn handle_completed_rpc_result(
+    entry: &mut FutureInvokeResultState,
+    span_id: &SpanId,
+) -> (
+    Result<Option<Result<UntypedDataValue, RpcError>>, anyhow::Error>,
+    HostRequestGolemRpcInvoke,
+    SerializableInvokeResult,
+    OplogIndex,
+) {
+    let request = match entry {
+        FutureInvokeResultState::Completed { request, .. } => request.clone(),
+        _ => panic!("unexpected state: not FutureInvokeResultState::Completed"),
+    };
+    let begin_index = entry.begin_index();
+    let span_id = span_id.clone();
+    let result = std::mem::replace(
+        entry,
+        FutureInvokeResultState::Consumed {
+            request,
+            span_id,
+            begin_index,
+        },
+    );
+    if let FutureInvokeResultState::Completed {
+        request, result, ..
+    } = result
+    {
+        match result {
+            Ok(Ok(untyped)) => (
+                Ok(Some(Ok(untyped.clone()))),
+                request,
+                SerializableInvokeResult::Completed(Ok(untyped)),
+                begin_index,
+            ),
+            Ok(Err(rpc_error)) => (
+                Ok(Some(Err(rpc_error.clone().into()))),
+                request,
+                SerializableInvokeResult::Completed(Err(rpc_error.into())),
+                begin_index,
+            ),
+            Err(err) => {
+                let serializable_err = err.to_string();
+                (
+                    Err(err),
+                    request,
+                    SerializableInvokeResult::Failed(serializable_err),
+                    begin_index,
+                )
+            }
+        }
+    } else {
+        panic!("unexpected state: not FutureInvokeResultState::Completed")
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
+    entry: &mut FutureInvokeResultState,
+    rpc: Arc<dyn Rpc>,
+    stack: InvocationContextStack,
+    retry_config: Option<RetryConfig>,
+    max_in_function_retry_delay: Duration,
+    worker: Arc<crate::worker::Worker<Ctx>>,
+    execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
+) -> anyhow::Result<(
+    Result<Option<Result<UntypedDataValue, RpcError>>, anyhow::Error>,
+    HostRequestGolemRpcInvoke,
+    SerializableInvokeResult,
+    OplogIndex,
+)> {
+    let begin_index = entry.begin_index();
+
+    let FutureInvokeResultState::Deferred {
+        remote_agent_id,
+        self_agent_id,
+        self_created_by,
+        env,
+        wasi_config_vars: config_vars,
+        method_name,
+        method_parameters,
+        idempotency_key,
+        span_id,
+        ..
+    } = &*entry
+    else {
+        return Err(anyhow::anyhow!("unexpected state entry"));
+    };
+
+    let request = HostRequestGolemRpcInvoke {
+        remote_agent_id: remote_agent_id.agent_id(),
+        idempotency_key: idempotency_key.clone(),
+        method_name: method_name.clone(),
+        input: method_parameters.clone(),
+        remote_agent_type: None,
+        remote_agent_parameters: None,
+    };
+
+    let handle = spawn_rpc_task_with_retry(
+        rpc,
+        remote_agent_id.clone(),
+        idempotency_key.clone(),
+        method_name.clone(),
+        method_parameters.clone(),
+        *self_created_by,
+        self_agent_id.clone(),
+        env.clone(),
+        config_vars.clone(),
+        stack,
+        retry_config,
+        max_in_function_retry_delay,
+        worker,
+        begin_index,
+        execution_status,
+    );
+
+    let span_id = span_id.clone();
+    *entry = FutureInvokeResultState::Pending {
+        handle,
+        request: request.clone(),
+        span_id,
+        begin_index,
+    };
+
+    Ok((
+        Ok(None),
+        request,
+        SerializableInvokeResult::Pending,
+        begin_index,
+    ))
+}
+
 pub struct WasmRpcEntryPayload {
     #[allow(dead_code)]
     pub demand: Box<dyn RpcDemand>,
@@ -1073,6 +1432,11 @@ enum FutureInvokeResultState {
         span_id: SpanId,
         begin_index: OplogIndex,
     },
+    Cancelled {
+        request: HostRequestGolemRpcInvoke,
+        span_id: SpanId,
+        begin_index: OplogIndex,
+    },
     Consumed {
         request: HostRequestGolemRpcInvoke,
         span_id: SpanId,
@@ -1086,6 +1450,7 @@ impl Debug for FutureInvokeResultState {
             Self::Pending { .. } => write!(f, "Pending"),
             Self::Completed { .. } => write!(f, "Completed"),
             Self::Deferred { .. } => write!(f, "Deferred"),
+            Self::Cancelled { .. } => write!(f, "Cancelled"),
             Self::Consumed { .. } => write!(f, "Consumed"),
         }
     }
@@ -1097,6 +1462,7 @@ impl FutureInvokeResultState {
             Self::Pending { span_id, .. }
             | Self::Completed { span_id, .. }
             | Self::Deferred { span_id, .. }
+            | Self::Cancelled { span_id, .. }
             | Self::Consumed { span_id, .. } => span_id,
         }
     }
@@ -1106,6 +1472,7 @@ impl FutureInvokeResultState {
             Self::Pending { begin_index, .. } => *begin_index,
             Self::Completed { begin_index, .. } => *begin_index,
             Self::Deferred { begin_index, .. } => *begin_index,
+            Self::Cancelled { begin_index, .. } => *begin_index,
             Self::Consumed { begin_index, .. } => *begin_index,
         }
     }
@@ -1121,11 +1488,15 @@ impl SubscribeAny for FutureInvokeResultState {
             begin_index,
         } = self
         {
+            let result = handle.await;
+            let request = request.clone();
+            let span_id = span_id.clone();
+            let begin_index = *begin_index;
             *self = Self::Completed {
-                result: handle.await,
-                request: request.clone(),
-                span_id: span_id.clone(),
-                begin_index: *begin_index,
+                result,
+                request,
+                span_id,
+                begin_index,
             };
         }
     }

@@ -15,7 +15,7 @@
 #[allow(unused)]
 #[rustfmt::skip]
 #[cfg(not(feature = "host"))]
-#[cfg(feature = "stub")]
+#[cfg(feature = "guest")]
 mod bindings;
 
 #[cfg(test)]
@@ -30,11 +30,11 @@ pub mod analysis;
 pub mod desert;
 
 /// A builder interface for WitValue instances
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 mod builder;
 
 /// Extension methods for extracting values from WitValue instances
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 mod extractor;
 
 /// Conversion to and from JSON, in the presence of golem-wasm-ast generated type information
@@ -71,13 +71,13 @@ mod value_and_type;
 #[cfg(feature = "host")]
 pub mod wasmtime;
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 use crate::builder::WitValueBuilder;
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 pub use extractor::{WitNodePointer, WitValueExtractor};
 
 #[cfg(feature = "derive")]
@@ -86,22 +86,22 @@ pub mod derive {
 }
 
 #[cfg(not(feature = "host"))]
-#[cfg(feature = "stub")]
+#[cfg(feature = "guest")]
 pub use wasip2 as wasi;
 
 #[cfg(not(feature = "host"))]
-#[cfg(feature = "stub")]
+#[cfg(feature = "guest")]
 pub use bindings::golem::core as golem_core_1_5_x;
 
 #[cfg(not(feature = "host"))]
-#[cfg(feature = "stub")]
+#[cfg(feature = "guest")]
 pub use golem_core_1_5_x::types::{
     AccountId, AgentId, ComponentId, NodeIndex, PromiseId, ResourceMode, Uri, Uuid, WitNode,
     WitType, WitTypeNode, WitValue,
 };
 
 #[cfg(not(feature = "host"))]
-#[cfg(feature = "stub")]
+#[cfg(feature = "guest")]
 pub use wasip2::io::poll::Pollable;
 
 #[cfg(feature = "host")]
@@ -139,14 +139,14 @@ pub use golem_core_1_5_x::types::{
     WitType, WitTypeNode, WitValue,
 };
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl From<Uuid> for uuid::Uuid {
     fn from(value: Uuid) -> Self {
         uuid::Uuid::from_u64_pair(value.high_bits, value.low_bits)
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl From<uuid::Uuid> for Uuid {
     fn from(uuid: uuid::Uuid) -> Self {
         let (high_bits, low_bits) = uuid.as_u64_pair();
@@ -173,6 +173,10 @@ pub trait SubscribeAny: std::any::Any {
 #[cfg(feature = "host")]
 pub struct FutureInvokeResultEntry {
     pub payload: Box<dyn SubscribeAny + Send + Sync>,
+    /// Tracks child Pollable rep indices created by `subscribe()`.
+    /// Used to delete children before the parent in `drop()`, because
+    /// JS GC does not guarantee LIFO drop order.
+    pub child_pollables: Vec<u32>,
 }
 
 #[cfg(feature = "host")]
@@ -272,7 +276,7 @@ pub enum Value {
     },
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl From<Value> for WitValue {
     fn from(value: Value) -> Self {
         let mut builder = WitValueBuilder::new();
@@ -281,7 +285,7 @@ impl From<Value> for WitValue {
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl PartialEq for WitValue {
     fn eq(&self, other: &Self) -> bool {
         let a: Value = self.clone().into();
@@ -290,7 +294,7 @@ impl PartialEq for WitValue {
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> NodeIndex {
     match value {
         Value::Bool(value) => builder.add_bool(value),
@@ -410,7 +414,7 @@ impl Value {
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl From<WitValue> for Value {
     fn from(value: WitValue) -> Self {
         assert!(!value.nodes.is_empty());
@@ -418,7 +422,7 @@ impl From<WitValue> for Value {
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
     match node {
         WitNode::RecordValue(field_indices) => {
@@ -501,21 +505,21 @@ impl<'a> arbitrary::Arbitrary<'a> for WitValue {
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl From<uuid::Uuid> for AccountId {
     fn from(value: uuid::Uuid) -> Self {
         Self { uuid: value.into() }
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl From<AccountId> for uuid::Uuid {
     fn from(value: AccountId) -> Self {
         value.uuid.into()
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl std::str::FromStr for AccountId {
     type Err = uuid::Error;
 
@@ -524,7 +528,7 @@ impl std::str::FromStr for AccountId {
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl std::fmt::Display for AccountId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let uuid: uuid::Uuid = self.uuid.into();
@@ -532,21 +536,21 @@ impl std::fmt::Display for AccountId {
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl From<uuid::Uuid> for ComponentId {
     fn from(value: uuid::Uuid) -> Self {
         Self { uuid: value.into() }
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl From<ComponentId> for uuid::Uuid {
     fn from(value: ComponentId) -> Self {
         value.uuid.into()
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl std::str::FromStr for ComponentId {
     type Err = uuid::Error;
 
@@ -555,7 +559,7 @@ impl std::str::FromStr for ComponentId {
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl std::fmt::Display for ComponentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let uuid: uuid::Uuid = self.uuid.into();
@@ -563,14 +567,14 @@ impl std::fmt::Display for ComponentId {
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl std::fmt::Display for AgentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.component_id, self.agent_id)
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl std::str::FromStr for AgentId {
     type Err = String;
 
@@ -592,7 +596,7 @@ impl std::str::FromStr for AgentId {
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl TryFrom<Uri> for AgentId {
     type Error = String;
 
@@ -623,14 +627,14 @@ impl TryFrom<Uri> for AgentId {
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl std::fmt::Display for PromiseId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.agent_id, self.oplog_idx)
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 impl std::str::FromStr for PromiseId {
     type Err = String;
 
@@ -655,7 +659,7 @@ impl std::str::FromStr for PromiseId {
     }
 }
 
-#[cfg(any(feature = "host", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "guest"))]
 #[cfg(test)]
 mod tests {
     use test_r::test;

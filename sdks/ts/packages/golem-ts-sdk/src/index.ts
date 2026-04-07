@@ -26,7 +26,9 @@ import { AgentClassName } from './agentClassName';
 import { clearAgentValidationError, getAgentValidationError } from './decorators/agent';
 
 export { BaseAgent } from './baseAgent';
-export { AgentId } from './agentId';
+export { Uuid } from './uuid';
+export { ComponentId, AccountId, EnvironmentId } from './ids';
+export { ParsedAgentId } from './agentId';
 export { description } from './decorators/description';
 export {
   agent,
@@ -46,6 +48,7 @@ export { AgentClassName } from './agentClassName';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
 export * from './webhook';
 export * from './host/hostapi';
+export * as oplog from './host/oplog';
 export * from './host/guard';
 export * from './host/result';
 export * from './host/transaction';

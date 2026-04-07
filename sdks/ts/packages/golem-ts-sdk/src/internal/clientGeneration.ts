@@ -14,7 +14,8 @@
 
 import { ClassMetadata, Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as WitValue from './mapping/values/WitValue';
-import { makeAgentId, Uuid, WasmRpc, Datetime } from 'golem:agent/host@1.5.0';
+import { makeAgentId, WasmRpc, Datetime } from 'golem:agent/host@1.5.0';
+import { Uuid } from '../uuid';
 import { AgentClassName } from '../agentClassName';
 import * as WitType from './mapping/types/WitType';
 import * as Either from '../newTypes/either';
@@ -27,6 +28,7 @@ import {
   TypedAgentConfigValue,
 } from 'golem:agent/common@1.5.0';
 import { RemoteMethod } from '../baseAgent';
+import { awaitPollable, throwIfAborted } from './pollableUtils';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 import { AgentMethodRegistry } from './registry/agentMethodRegistry';
@@ -36,8 +38,8 @@ import {
 } from './mapping/values/serializer';
 import { TypeInfoInternal } from './typeInfoInternal';
 import { deserializeDataValue, serializeToDataValue } from './mapping/values/dataValue';
-import { randomUuid, ValueAndType } from '../host/hostapi';
-import { AgentId } from '../agentId';
+import { ValueAndType } from '../host/hostapi';
+import { ParsedAgentId } from '../agentId';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   agentClassName: AgentClassName,
@@ -106,7 +108,7 @@ export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>
   return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
-    const finalPhantomId = randomUuid();
+    const finalPhantomId = Uuid.generate();
     const constructedId = shared.constructWasmRpcParams(args, configIncludedInArgs, finalPhantomId);
 
     return new Proxy(instance, new WasmRpcProxyHandler(shared, constructedId));
@@ -158,6 +160,10 @@ class WasmRpcProxyHandlerShared {
       }
       this.constructorParamTypes.push(typeInfo);
     }
+  }
+
+  hasMethod(methodName: string): boolean {
+    return this.metadata.methods.has(methodName);
   }
 
   constructWasmRpcParams(
@@ -301,12 +307,12 @@ class WasmRpcProxyHandlerShared {
 
 class WasmRpcProxyHandler implements ProxyHandler<any> {
   private readonly shared: WasmRpcProxyHandlerShared;
-  private readonly agentId: AgentId;
+  private readonly agentId: ParsedAgentId;
   private readonly wasmRpc: WasmRpc;
 
   private readonly methodProxyCache = new Map<string, RemoteMethod<any[], any>>();
 
-  private readonly getIdMethod: () => AgentId = () => this.agentId;
+  private readonly getIdMethod: () => ParsedAgentId = () => this.agentId;
   private readonly phantomIdMethod: () => Uuid | undefined = () => {
     const [, , phantomId] = this.agentId.parsed();
     return phantomId;
@@ -315,7 +321,7 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
 
   constructor(shared: WasmRpcProxyHandlerShared, rpcParams: WasmRpcParams) {
     this.shared = shared;
-    this.agentId = new AgentId(rpcParams.agentIdString);
+    this.agentId = new ParsedAgentId(rpcParams.agentIdString);
 
     this.wasmRpc = new WasmRpc(
       rpcParams.agentTypeName,
@@ -346,18 +352,21 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
         case 'saveSnapshot': {
           throw new Error('Cannot call saveSnapshot on a remote client');
         }
-        default:
-          const methodProxy = this.methodProxyCache.get(propString);
-          if (methodProxy) {
-            return methodProxy;
-          } else {
-            const methodProxy = this.createMethodProxy(propString);
-            this.methodProxyCache.set(propString, methodProxy);
-            return methodProxy;
-          }
       }
     }
-    return undefined;
+
+    if (typeof prop === 'string' && this.shared.hasMethod(prop)) {
+      const methodProxy = this.methodProxyCache.get(prop);
+      if (methodProxy) {
+        return methodProxy;
+      } else {
+        const methodProxy = this.createMethodProxy(prop);
+        this.methodProxyCache.set(prop, methodProxy);
+        return methodProxy;
+      }
+    }
+
+    return val;
   }
 
   private createMethodProxy(prop: string): RemoteMethod<any[], any> {
@@ -365,33 +374,55 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
     const agentIdString = this.agentId.value;
     const wasmRpc = this.wasmRpc;
 
-    async function invokeAndAwait(...fnArgs: any[]) {
+    async function invokeAndAwaitInternal(fnArgs: any[], signal?: AbortSignal) {
+      throwIfAborted(signal);
+
       const inputDataValue = serializeArgs(methodInfo.params, fnArgs);
 
       const rpcResultFuture = wasmRpc.asyncInvokeAndAwait(methodInfo.name, inputDataValue);
 
-      const rpcResultPollable = rpcResultFuture.subscribe();
+      const onAbort = signal
+        ? () => {
+            try {
+              rpcResultFuture.cancel();
+            } catch {
+              // best-effort: ignore cancellation failures
+            }
+          }
+        : undefined;
 
-      await rpcResultPollable.promise();
-
-      const rpcResult = rpcResultFuture.get();
-
-      if (!rpcResult) {
-        throw new Error(
-          `RPC to remote agent failed. Failed to invoke ${methodInfo.name} in agent ${agentIdString}`,
-        );
+      if (signal && onAbort) {
+        signal.addEventListener('abort', onAbort, { once: true });
       }
 
-      const resultDataValue =
-        rpcResult.tag === 'err'
-          ? (() => {
-              throw new Error(
-                'Remote agent returned error result: ' + JSON.stringify(rpcResult.val),
-              );
-            })()
-          : rpcResult.val;
+      try {
+        const rpcResultPollable = rpcResultFuture.subscribe();
 
-      return deserializeRpcResult(resultDataValue, methodInfo.returnType);
+        await awaitPollable(rpcResultPollable, signal);
+
+        const rpcResult = rpcResultFuture.get();
+
+        if (!rpcResult) {
+          throw new Error(
+            `RPC to remote agent failed. Failed to invoke ${methodInfo.name} in agent ${agentIdString}`,
+          );
+        }
+
+        const resultDataValue =
+          rpcResult.tag === 'err'
+            ? (() => {
+                throw new Error(
+                  'Remote agent returned error result: ' + JSON.stringify(rpcResult.val),
+                );
+              })()
+            : rpcResult.val;
+
+        return deserializeRpcResult(resultDataValue, methodInfo.returnType);
+      } finally {
+        if (signal && onAbort) {
+          signal.removeEventListener('abort', onAbort);
+        }
+      }
     }
 
     function invokeFireAndForget(...fnArgs: any[]) {
@@ -404,8 +435,10 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
       wasmRpc.scheduleInvocation(ts, methodInfo.name, inputDataValue);
     }
 
-    const methodFn: any = (...args: any[]) => invokeAndAwait(...args);
+    const methodFn: any = (...args: any[]) => invokeAndAwaitInternal(args);
 
+    methodFn.abortable = (signal: AbortSignal, ...args: any[]) =>
+      invokeAndAwaitInternal(args, signal);
     methodFn.trigger = (...args: any[]) => invokeFireAndForget(...args);
     methodFn.schedule = (ts: Datetime, ...args: any[]) => invokeSchedule(ts, ...args);
 

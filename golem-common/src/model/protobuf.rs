@@ -24,9 +24,11 @@ use crate::model::{
 use applying::Apply;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{
-    Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
+    IpAddress as GrpcIpAddress, Pod as GrpcPod, RoutingTable as GrpcRoutingTable,
+    RoutingTableEntry as GrpcRoutingTableEntry,
 };
 use golem_api_grpc::proto::golem::worker::Cursor;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::Add;
 use std::time::Duration;
 
@@ -132,37 +134,102 @@ impl From<golem::shardmanager::ShardId> for ShardId {
     }
 }
 
-impl From<GrpcPod> for Pod {
-    fn from(value: GrpcPod) -> Self {
-        Self {
-            host: value.host,
-            port: value.port as u16,
+impl From<Pod> for GrpcPod {
+    fn from(value: Pod) -> Self {
+        use crate::model::protobuf::golem::shardmanager::ip_address;
+
+        let kind = match value.ip {
+            IpAddr::V4(v4) => ip_address::Kind::Ipv4(u32::from(v4)),
+            IpAddr::V6(v6) => ip_address::Kind::Ipv6(v6.octets().to_vec()),
+        };
+
+        GrpcPod {
+            ip: Some(GrpcIpAddress { kind: Some(kind) }),
+            port: value.port.into(),
         }
     }
 }
 
-impl From<GrpcRoutingTableEntry> for RoutingTableEntry {
-    fn from(value: GrpcRoutingTableEntry) -> Self {
+impl TryFrom<GrpcPod> for Pod {
+    type Error = String;
+    fn try_from(value: GrpcPod) -> Result<Self, Self::Error> {
+        use crate::model::protobuf::golem::shardmanager::ip_address;
+
+        let ip = value.ip.ok_or("missing ip field")?;
+
+        let ip = match ip.kind.ok_or("IpAddress.kind missing")? {
+            ip_address::Kind::Ipv4(v4) => IpAddr::V4(Ipv4Addr::from(v4)),
+            ip_address::Kind::Ipv6(v6) => {
+                let bytes: [u8; 16] = v6
+                    .try_into()
+                    .map_err(|_| "invalid IPv6 length (must be 16 bytes)")?;
+                IpAddr::V6(Ipv6Addr::from(bytes))
+            }
+        };
+
+        Ok(Self {
+            ip,
+            port: value
+                .port
+                .try_into()
+                .map_err(|_| "Could not convert port to u16")?,
+        })
+    }
+}
+
+impl From<RoutingTableEntry> for GrpcRoutingTableEntry {
+    fn from(value: RoutingTableEntry) -> Self {
         Self {
-            shard_id: value.shard_id.unwrap().into(),
-            pod: value.pod.unwrap().into(),
+            shard_id: Some(value.shard_id.into()),
+            pod: Some(value.pod.into()),
         }
     }
 }
 
-impl From<GrpcRoutingTable> for RoutingTable {
-    fn from(value: GrpcRoutingTable) -> Self {
+impl TryFrom<GrpcRoutingTableEntry> for RoutingTableEntry {
+    type Error = String;
+
+    fn try_from(value: GrpcRoutingTableEntry) -> Result<Self, Self::Error> {
+        Ok(Self {
+            shard_id: value.shard_id.ok_or("shard_id field missing")?.into(),
+            pod: value.pod.ok_or("pod field missing")?.try_into()?,
+        })
+    }
+}
+
+impl From<RoutingTable> for GrpcRoutingTable {
+    fn from(value: RoutingTable) -> Self {
         Self {
+            number_of_shards: value.number_of_shards.value as u32,
+            shard_assignments: value
+                .shard_assignments
+                .into_iter()
+                .map(|(shard_id, pod)| RoutingTableEntry { shard_id, pod }.into())
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<GrpcRoutingTable> for RoutingTable {
+    type Error = String;
+
+    fn try_from(value: GrpcRoutingTable) -> Result<Self, Self::Error> {
+        Ok(Self {
             number_of_shards: NumberOfShards {
-                value: value.number_of_shards as usize,
+                value: value
+                    .number_of_shards
+                    .try_into()
+                    .map_err(|_| "failed converting number_of_shards to usize")?,
             },
             shard_assignments: value
                 .shard_assignments
                 .into_iter()
-                .map(RoutingTableEntry::from)
+                .map(RoutingTableEntry::try_from)
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
                 .map(|routing_table_entry| (routing_table_entry.shard_id, routing_table_entry.pod))
                 .collect(),
-        }
+        })
     }
 }
 

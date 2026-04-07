@@ -26,7 +26,7 @@ use crate::model::app_raw;
 use crate::model::app_raw::{
     GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
 };
-use crate::process::CommandExt;
+use crate::process::{CommandExt, normalized_program_name, which};
 use anyhow::{Context as AnyhowContext, anyhow};
 use camino::Utf8Path;
 use golem_common::model::component::ComponentName;
@@ -397,7 +397,7 @@ pub async fn execute_external_command(
 
                 ensure_common_deps_for_tool(ctx, command_tokens[0].as_str()).await?;
 
-                let mut process = Command::new(command_tokens[0].clone());
+                let mut process = Command::new(which(command_tokens[0].as_str())?);
 
                 process
                     .args(command_tokens.iter().skip(1))
@@ -420,7 +420,7 @@ pub async fn execute_external_command(
 }
 
 pub async fn ensure_common_deps_for_tool(ctx: &BuildContext<'_>, tool: &str) -> anyhow::Result<()> {
-    match tool {
+    match normalized_program_name(tool).as_str() {
         "node" | "npx" => {
             let package_json_path = ctx.application().app_root_dir().join("package.json");
             if !package_json_path.exists() {
@@ -494,7 +494,7 @@ async fn ensure_npm_dependencies(
 }
 
 async fn run_npm_install(app_root_dir: &Path) -> anyhow::Result<()> {
-    Command::new("npm")
+    Command::new(which("npm")?)
         .args(["install"])
         .current_dir(app_root_dir)
         .stream_and_run("npm")

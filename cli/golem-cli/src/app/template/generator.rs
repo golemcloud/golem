@@ -96,6 +96,7 @@ enum Transform {
     ManifestHints,
     TsSdk,
     RustSdk,
+    ScalaSdk,
     ApplicationName,
 }
 
@@ -284,6 +285,9 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                     }
                     (true, "package.json") => vec![Transform::TsSdk],
                     (true, "Cargo.toml") => vec![Transform::RustSdk],
+                    (true, "build.sbt") => vec![Transform::ScalaSdk, Transform::ApplicationName],
+                    (true, "plugins.sbt") => vec![Transform::ScalaSdk],
+                    (true, "build.properties") => vec![Transform::ScalaSdk],
                     (true, _) => vec![],
                     (false, "golem.yaml") => {
                         vec![
@@ -294,6 +298,18 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                         ]
                     }
                     (false, "Cargo.toml") => vec![Transform::ComponentName, Transform::RustSdk],
+                    (false, "build.sbt") => vec![
+                        Transform::ComponentName,
+                        Transform::ScalaSdk,
+                        Transform::ApplicationName,
+                    ],
+                    (false, name) if name.ends_with(".sbt") => {
+                        vec![
+                            Transform::ComponentName,
+                            Transform::ComponentDir,
+                            Transform::ScalaSdk,
+                        ]
+                    }
                     (false, _) => vec![Transform::ComponentName],
                 };
 
@@ -394,7 +410,10 @@ fn transform(
                 }
             }
             Transform::RustSdk => {
-                replacements.insert("GOLEM_RUST_VERSION_OR_PATH", sdk_overrides.golem_rust_dep());
+                replacements.insert(
+                    "GOLEM_RUST_VERSION_OR_PATH",
+                    sdk_overrides.golem_rust_dep()?,
+                );
                 replacements.insert(
                     "GOLEM_RUST_LOG_VERSION",
                     versions::rust_dep::LOG.to_string(),
@@ -412,14 +431,29 @@ fn transform(
                     versions::rust_dep::WSTD.to_string(),
                 );
             }
+            Transform::ScalaSdk => {
+                replacements.insert("GOLEM_SCALA_SDK_VERSION", sdk_overrides.scala_sdk_dep());
+                replacements.insert(
+                    "GOLEM_SCALA_VERSION",
+                    versions::scala_dep::SCALA_VERSION.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_SCALA_SCALAJS_PLUGIN_VERSION",
+                    versions::scala_dep::SCALAJS_PLUGIN_VERSION.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_SCALA_SBT_VERSION",
+                    versions::scala_dep::SBT_VERSION.to_string(),
+                );
+            }
             Transform::TsSdk => {
                 replacements.insert(
                     "GOLEM_TS_SDK_VERSION_OR_PATH",
-                    sdk_overrides.ts_package_dep("golem-ts-sdk"),
+                    sdk_overrides.ts_package_dep("golem-ts-sdk")?,
                 );
                 replacements.insert(
                     "GOLEM_TS_TYPEGEN_VERSION_OR_PATH",
-                    sdk_overrides.ts_package_dep("golem-ts-typegen"),
+                    sdk_overrides.ts_package_dep("golem-ts-typegen")?,
                 );
                 replacements.insert(
                     "GOLEM_TS_ROLLUP_PLUGIN_ALIAS_VERSION",

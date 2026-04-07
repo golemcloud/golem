@@ -14,7 +14,7 @@
 
 import { Result } from 'golem:agent/host@1.5.0';
 import { AgentError, AgentType, DataValue, Principal } from 'golem:agent/common@1.5.0';
-import { AgentId } from '../agentId';
+import { ParsedAgentId } from '../agentId';
 import { AgentClassName } from '../agentClassName';
 import { BaseAgent } from '../baseAgent';
 import {
@@ -29,7 +29,7 @@ import {
 import { AgentMethodMetadata, AgentMethodRegistry } from './registry/agentMethodRegistry';
 import { createCustomError, invalidInput, invalidMethod, invalidType } from './agentError';
 import { TypeInfoInternal } from './typeInfoInternal';
-import { Uuid } from 'golem:agent/host@1.5.0';
+import { Uuid } from '../uuid';
 
 /**
  * An AgentInternal is an internal interface that represents the basic usage of an agent
@@ -38,7 +38,7 @@ import { Uuid } from 'golem:agent/host@1.5.0';
 export class ResolvedAgent {
   private readonly agentInstance: BaseAgent;
   private readonly agentClassName: AgentClassName;
-  private readonly uniqueAgentId: AgentId;
+  private readonly uniqueAgentId: ParsedAgentId;
   private readonly constructorInput: DataValue;
 
   private parameterMetadata: Map<string, Map<string, AgentMethodParamMetadata>> | undefined =
@@ -49,7 +49,7 @@ export class ResolvedAgent {
   constructor(
     agentInstance: BaseAgent,
     agentClassName: AgentClassName,
-    uniqueAgentId: AgentId,
+    uniqueAgentId: ParsedAgentId,
     constructorInput: DataValue,
   ) {
     this.agentInstance = agentInstance;
@@ -58,7 +58,7 @@ export class ResolvedAgent {
     this.constructorInput = constructorInput;
   }
 
-  getId(): AgentId {
+  getId(): ParsedAgentId {
     return this.uniqueAgentId;
   }
 

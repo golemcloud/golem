@@ -1,8 +1,8 @@
-use golem_rust::{agent_definition, agent_implementation, Schema};
+use golem_rust::{Schema, agent_definition, agent_implementation};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
-use std::fs::{create_dir_all, read_dir, read_to_string, remove_file, write, File};
+use std::fs::{File, create_dir_all, read_dir, read_to_string, remove_file, write};
 use std::hash::{Hash, Hasher};
 use wasi::filesystem::types::{Descriptor, DescriptorFlags, OpenFlags, PathFlags};
 use wasi::io::streams::OutputStream;

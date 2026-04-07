@@ -18,12 +18,13 @@ use chrono::{DateTime, Utc};
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    AgentError, CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest,
-    InvokeAgentRequest, InvokeAgentResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
-    UpdateWorkerRequest, UpdateWorkerResponse, agent_error, complete_promise_response,
-    fork_worker_response, invoke_agent_response, launch_new_worker_response,
-    resume_worker_response, revert_worker_response, update_worker_response,
+    AgentError, CancelInvocationRequest, CancelInvocationResponse, CompletePromiseRequest,
+    CompletePromiseResponse, ForkWorkerRequest, InvokeAgentRequest, InvokeAgentResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse,
+    RevertWorkerRequest, RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    agent_error, cancel_invocation_response, complete_promise_response, fork_worker_response,
+    invoke_agent_response, launch_new_worker_response, resume_worker_response,
+    revert_worker_response, update_worker_response,
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, UpdateMode};
 use golem_common::model::account::AccountId;
@@ -124,6 +125,13 @@ pub trait WorkerProxy: Send + Sync {
         caller_account_id: AccountId,
         environment_id: Option<EnvironmentId>,
     ) -> Result<InvocationStatus, WorkerProxyError>;
+
+    async fn cancel_invocation(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: IdempotencyKey,
+        caller_account_id: AccountId,
+    ) -> Result<bool, WorkerProxyError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
@@ -601,6 +609,37 @@ impl WorkerProxy for RemoteWorkerProxy {
                 None => Ok(InvocationStatus::Unknown),
             },
             Some(invoke_agent_response::Result::Error(error)) => Err(error.into()),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
+            )),
+        }
+    }
+
+    async fn cancel_invocation(
+        &self,
+        agent_id: &AgentId,
+        idempotency_key: IdempotencyKey,
+        caller_account_id: AccountId,
+    ) -> Result<bool, WorkerProxyError> {
+        debug!(agent_id=%agent_id, idempotency_key=%idempotency_key, "Cancelling invocation on remote agent");
+
+        let auth_ctx = self.get_auth_ctx(caller_account_id);
+
+        let response: CancelInvocationResponse = self
+            .worker_service_client
+            .call("cancel_invocation", move |client| {
+                Box::pin(client.cancel_invocation(CancelInvocationRequest {
+                    agent_id: Some(agent_id.clone().into()),
+                    idempotency_key: Some(idempotency_key.clone().into()),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                }))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(cancel_invocation_response::Result::Success(canceled)) => Ok(canceled),
+            Some(cancel_invocation_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(
                 WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
             )),

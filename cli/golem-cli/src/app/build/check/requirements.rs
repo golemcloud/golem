@@ -140,6 +140,7 @@ pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [Tool
     match language {
         GuestLanguage::Rust => RUST_TOOL_REQUIREMENTS,
         GuestLanguage::TypeScript => TYPESCRIPT_TOOL_REQUIREMENTS,
+        GuestLanguage::Scala => &[],
     }
 }
 

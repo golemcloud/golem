@@ -19,7 +19,7 @@ test-components/python-1/__pycache__/
 test-components/tinygo-wasi*/tinygo_wasi/
 golem-client/openapi/
 logs
-data
+/data
 sdks/**/node_modules/
 sdks/**/dist/
 golem-skills/**/node_modules/

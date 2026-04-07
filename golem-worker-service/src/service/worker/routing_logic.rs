@@ -21,9 +21,10 @@ use golem_common::model::RetryConfig;
 use golem_common::model::{AgentId, Pod, ShardId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
+use golem_service_base::clients::shard_manager::ShardManagerError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
-use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableError};
+use golem_service_base::service::routing_table::HasRoutingTableService;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::future::Future;
@@ -111,10 +112,14 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AgentId {
             .await
             .map_err(CallWorkerExecutorErrorWithContext::failed_to_get_routing_table)?;
 
+        tracing::debug!("Routing agent call for {self} using routing table: {routing_table:?}");
+
         match routing_table.lookup(self) {
             None => Ok((None, None)),
             Some(pod) => {
                 let clients = context.worker_executor_clients();
+
+                tracing::debug!("Calling agent {self} on pod: {pod:?}");
 
                 Ok((
                     Some(
@@ -123,12 +128,11 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AgentId {
                             .await
                             .map_err(|err| {
                                 CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
-                                    err,
-                                    pod.clone(),
+                                    err, *pod,
                                 )
                             })?,
                     ),
-                    Some(pod.clone()),
+                    Some(*pod),
                 ))
             }
         }
@@ -179,12 +183,11 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
                             .await
                             .map_err(|status| {
                                 CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
-                                    status,
-                                    pod.clone(),
+                                    status, *pod,
                                 )
                             })?,
                     ),
-                    Some(pod.clone()),
+                    Some(*pod),
                 ))
             }
         }
@@ -233,7 +236,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
                 let worker_executor_clients = context.worker_executor_clients().clone();
                 let _ = fibers.spawn(
                     {
-                        let pod = pod.clone();
+                        let pod = *pod;
                         let f = f.clone();
                         let description = description.clone();
                         async move {
@@ -420,7 +423,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
 #[derive(Debug, thiserror::Error)]
 pub enum CallWorkerExecutorError {
     #[error("Failed to get routing table: {0}")]
-    FailedToGetRoutingTable(RoutingTableError),
+    FailedToGetRoutingTable(ShardManagerError),
     #[error("Failed to connect to pod: {} {}", .0.code(), .0.message())]
     FailedToConnectToPod(Status),
 }
@@ -441,7 +444,7 @@ pub struct CallWorkerExecutorErrorWithContext {
 }
 
 impl CallWorkerExecutorErrorWithContext {
-    fn failed_to_get_routing_table(error: RoutingTableError) -> Self {
+    fn failed_to_get_routing_table(error: ShardManagerError) -> Self {
         CallWorkerExecutorErrorWithContext {
             error: CallWorkerExecutorError::FailedToGetRoutingTable(error),
             pod: None,

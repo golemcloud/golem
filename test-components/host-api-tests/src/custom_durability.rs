@@ -5,7 +5,9 @@ use golem_rust::durability::Durability;
 use golem_rust::golem_wasm::{NodeBuilder, Pollable, WitValueExtractor};
 use golem_rust::value_and_type::type_builder::TypeNodeBuilder;
 use golem_rust::value_and_type::{FromValueAndType, IntoValue};
-use golem_rust::{agent_definition, agent_implementation, with_persistence_level, PersistenceLevel};
+use golem_rust::{
+    PersistenceLevel, agent_definition, agent_implementation, with_persistence_level,
+};
 use golem_wasi_http::{Client, IncomingBody, InputStream, Method};
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
