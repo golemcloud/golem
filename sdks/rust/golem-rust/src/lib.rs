@@ -259,9 +259,7 @@ pub async fn await_promise(promise_id: &PromiseId) -> Vec<u8> {
 pub mod retry {
     use crate::bindings::golem::api::retry as retry_api;
 
-    pub use retry_api::{
-        NamedRetryPolicy, PredicateValue, RetryPolicy, RetryPredicate,
-    };
+    pub use retry_api::{NamedRetryPolicy, PredicateValue, RetryPolicy, RetryPredicate};
 
     /// Get all retry policies active for this agent.
     pub fn get_retry_policies() -> Vec<NamedRetryPolicy> {
@@ -387,8 +385,6 @@ pub fn with_idempotence_mode<R>(mode: bool, f: impl FnOnce() -> R) -> R {
 pub fn generate_idempotency_key() -> uuid::Uuid {
     Into::into(bindings::golem::api::host::generate_idempotency_key())
 }
-
-
 
 pub struct AtomicOperationGuard {
     begin: OplogIndex,

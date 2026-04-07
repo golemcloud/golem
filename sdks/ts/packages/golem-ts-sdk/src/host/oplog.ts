@@ -17,8 +17,6 @@ import {
   SearchOplog as RawSearchOplog,
   enrichOplogEntries as rawEnrichOplogEntries,
   PublicOplogEntry as RawPublicOplogEntry,
-  CreateParameters as RawCreateParameters_Public,
-  OplogProcessorCheckpointParameters as RawOplogProcessorCheckpointParameters_Public,
   AgentId as RawAgentId,
   EnvironmentId as RawEnvironmentId,
 } from 'golem:api/oplog@1.5.0';

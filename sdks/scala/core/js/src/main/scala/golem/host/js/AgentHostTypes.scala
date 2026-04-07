@@ -84,36 +84,6 @@ object JsSnapshot {
     js.Dynamic.literal("data" -> data, "mimeType" -> mimeType).asInstanceOf[JsSnapshot]
 }
 
-// --- RetryPolicy ---
-
-@js.native
-sealed trait JsRetryPolicy extends js.Object {
-  def maxAttempts: Int                    = js.native
-  def minDelay: js.BigInt                 = js.native
-  def maxDelay: js.BigInt                 = js.native
-  def multiplier: Double                  = js.native
-  def maxJitterFactor: js.UndefOr[Double] = js.native
-}
-
-object JsRetryPolicy {
-  def apply(
-    maxAttempts: Int,
-    minDelay: js.BigInt,
-    maxDelay: js.BigInt,
-    multiplier: Double,
-    maxJitterFactor: js.UndefOr[Double] = js.undefined
-  ): JsRetryPolicy = {
-    val obj = js.Dynamic.literal(
-      "maxAttempts" -> maxAttempts,
-      "minDelay"    -> minDelay,
-      "maxDelay"    -> maxDelay,
-      "multiplier"  -> multiplier
-    )
-    maxJitterFactor.foreach(j => obj.updateDynamic("maxJitterFactor")(j))
-    obj.asInstanceOf[JsRetryPolicy]
-  }
-}
-
 // --- PersistenceLevel  –  tagged union ---
 
 @js.native

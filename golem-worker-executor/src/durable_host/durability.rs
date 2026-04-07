@@ -222,7 +222,7 @@ impl InFunctionRetryState {
         let current_state = ctx.current_retry_state_for(retry_point).await;
         let oplog_retry_count = current_state.as_ref().map(|s| s.retry_count()).unwrap_or(0);
         let total_attempts = self.retry_count + oplog_retry_count;
-        let mut retry_policy_state: Option<RetryPolicyState> = None;
+        let retry_policy_state: Option<RetryPolicyState>;
 
         let policies = ctx.named_retry_policies().await;
         let named_policy = match NamedRetryPolicy::resolve(&policies, properties) {

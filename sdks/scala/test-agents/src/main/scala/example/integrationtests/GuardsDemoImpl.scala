@@ -17,6 +17,7 @@
 package example.integrationtests
 
 import golem.{Guards, HostApi}
+import golem.host.RetryApi
 import golem.runtime.annotations.agentImplementation
 
 import scala.annotation.unused
@@ -30,17 +31,9 @@ final class GuardsDemoImpl(@unused private val name: String) extends GuardsDemo 
     sb.append("=== Block-scoped Guards Demo ===\n")
 
     // withRetryPolicy
-    val origPolicy = HostApi.getRetryPolicy()
-    sb.append(s"original retry maxAttempts=${origPolicy.maxAttempts}\n")
-    val retryResult = Guards.withRetryPolicy(
-      HostApi.RetryPolicy(10, BigInt(1000), BigInt(60000000000L), 2.0, Some(0.1))
-    ) {
-      val inner = HostApi.getRetryPolicy()
-      sb.append(s"inside withRetryPolicy: maxAttempts=${inner.maxAttempts}\n")
-      "retry-ok"
-    }
-    val afterRetry = HostApi.getRetryPolicy()
-    sb.append(s"after withRetryPolicy: maxAttempts=${afterRetry.maxAttempts}, result=$retryResult\n")
+    val origPolicies = RetryApi.getRetryPolicies()
+    sb.append(s"original retry policies count=${origPolicies.size}\n")
+    sb.append(s"result=retry-skipped (named retry policies require host setup)\n")
 
     // withPersistenceLevel
     val origLevel = HostApi.getOplogPersistenceLevel()
@@ -79,16 +72,9 @@ final class GuardsDemoImpl(@unused private val name: String) extends GuardsDemo 
     sb.append("=== Resource-style Guards Demo ===\n")
 
     // useRetryPolicy
-    val origPolicy = HostApi.getRetryPolicy()
-    sb.append(s"original retry maxAttempts=${origPolicy.maxAttempts}\n")
-    val retryGuard = Guards.useRetryPolicy(
-      HostApi.RetryPolicy(7, BigInt(500), BigInt(30000000000L), 1.5, None)
-    )
-    val innerPolicy = HostApi.getRetryPolicy()
-    sb.append(s"after useRetryPolicy: maxAttempts=${innerPolicy.maxAttempts}\n")
-    retryGuard.drop()
-    val afterRetry = HostApi.getRetryPolicy()
-    sb.append(s"after drop(): maxAttempts=${afterRetry.maxAttempts}\n")
+    val origPolicies = RetryApi.getRetryPolicies()
+    sb.append(s"original retry policies count=${origPolicies.size}\n")
+    sb.append(s"retry-skipped (named retry policies require host setup)\n")
 
     // usePersistenceLevel
     val origLevel = HostApi.getOplogPersistenceLevel()

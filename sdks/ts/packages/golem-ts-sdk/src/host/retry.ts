@@ -23,3 +23,56 @@ export {
   setRetryPolicy,
   removeRetryPolicy,
 } from 'golem:api/retry@1.5.0';
+
+import {
+  type NamedRetryPolicy,
+  getRetryPolicyByName,
+  setRetryPolicy,
+  removeRetryPolicy,
+} from 'golem:api/retry@1.5.0';
+import { executeWithDrop } from './guard';
+
+/**
+ * RetryPolicyGuard is a guard type that restores the previous retry policy on drop.
+ * If the policy existed before, it is restored; if it was newly added, it is removed.
+ * You must call drop on the guard once you are finished using it.
+ */
+export class RetryPolicyGuard {
+  constructor(
+    private previous: NamedRetryPolicy | undefined,
+    private name: string,
+  ) {}
+  drop() {
+    if (this.previous !== undefined) {
+      setRetryPolicy(this.previous);
+    } else {
+      removeRetryPolicy(this.name);
+    }
+  }
+}
+
+/**
+ * Temporarily sets a named retry policy and returns a guard.
+ * When the guard is dropped, the previous policy with the same name is restored
+ * (or removed if it didn't exist).
+ * @param policy - The named retry policy to set.
+ * @returns A RetryPolicyGuard instance.
+ */
+export function useRetryPolicy(policy: NamedRetryPolicy): RetryPolicyGuard {
+  const previous = getRetryPolicyByName(policy.name);
+  const name = policy.name;
+  setRetryPolicy(policy);
+  return new RetryPolicyGuard(previous, name);
+}
+
+/**
+ * Executes a function with a named retry policy temporarily set.
+ * The policy is restored (or removed) after the function completes.
+ * @param policy - The named retry policy to set.
+ * @param f - The function to execute.
+ * @returns The result of the executed function.
+ */
+export function withRetryPolicy<R>(policy: NamedRetryPolicy, f: () => R): R {
+  const guard = useRetryPolicy(policy);
+  return executeWithDrop([guard], f);
+}

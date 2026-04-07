@@ -22,8 +22,7 @@ import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { setAgentId } from './internal/registry/agentId';
 import { encodeMultipart, decodeMultipart } from './internal/multipart';
-import { AgentClassName } from './agentClassName';
-import { clearAgentValidationError, getAgentValidationError } from './decorators/agent';
+import { getAgentValidationError } from './decorators/agent';
 
 export { BaseAgent } from './baseAgent';
 export { Uuid } from './uuid';

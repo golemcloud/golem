@@ -123,9 +123,17 @@ object OplogApi {
     jump: OplogRegion
   )
 
-  final case class ChangeRetryPolicyParameters(
+  final case class SetRetryPolicyParameters(
     timestamp: ContextApi.DateTime,
-    newPolicy: HostApi.RetryPolicy
+    name: String,
+    priority: Int,
+    predicateJson: String,
+    policyJson: String
+  )
+
+  final case class RemoveRetryPolicyParameters(
+    timestamp: ContextApi.DateTime,
+    name: String
   )
 
   final case class EndAtomicRegionParameters(
@@ -341,7 +349,10 @@ object OplogApi {
     final case class Exited(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
-    final case class ChangeRetryPolicy(params: ChangeRetryPolicyParameters) extends OplogEntry {
+    final case class SetRetryPolicy(params: SetRetryPolicyParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
+    final case class RemoveRetryPolicy(params: RemoveRetryPolicyParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
     final case class BeginAtomicRegion(ts: ContextApi.DateTime) extends OplogEntry {
@@ -453,8 +464,10 @@ object OplogApi {
         case "jump"                => Jump(parseJumpParameters(v.asInstanceOf[JsJumpParameters]))
         case "interrupted"         => Interrupted(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "exited"              => Exited(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "change-retry-policy" =>
-          ChangeRetryPolicy(parseChangeRetryPolicyParameters(v.asInstanceOf[JsChangeRetryPolicyParameters]))
+        case "set-retry-policy" =>
+          SetRetryPolicy(parseSetRetryPolicyParameters(v.asInstanceOf[JsSetRetryPolicyParameters]))
+        case "remove-retry-policy" =>
+          RemoveRetryPolicy(parseRemoveRetryPolicyParameters(v.asInstanceOf[JsRemoveRetryPolicyParameters]))
         case "begin-atomic-region" => BeginAtomicRegion(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "end-atomic-region"   =>
           EndAtomicRegion(parseEndAtomicRegionParameters(v.asInstanceOf[JsEndAtomicRegionParameters]))
@@ -709,19 +722,20 @@ object OplogApi {
       jump = OplogRegion(BigInt(raw.jump.start.toString), BigInt(raw.jump.end.toString))
     )
 
-  private def parseChangeRetryPolicyParameters(raw: JsChangeRetryPolicyParameters): ChangeRetryPolicyParameters = {
-    val p = raw.newPolicy
-    ChangeRetryPolicyParameters(
+  private def parseSetRetryPolicyParameters(raw: JsSetRetryPolicyParameters): SetRetryPolicyParameters =
+    SetRetryPolicyParameters(
       timestamp = parseDateTime(raw.timestamp),
-      newPolicy = HostApi.RetryPolicy(
-        maxAttempts = p.maxAttempts,
-        minDelayNanos = BigInt(p.minDelay.toString),
-        maxDelayNanos = BigInt(p.maxDelay.toString),
-        multiplier = p.multiplier,
-        maxJitterFactor = p.maxJitterFactor.toOption
-      )
+      name = raw.name,
+      priority = raw.priority,
+      predicateJson = raw.predicateJson,
+      policyJson = raw.policyJson
     )
-  }
+
+  private def parseRemoveRetryPolicyParameters(raw: JsRemoveRetryPolicyParameters): RemoveRetryPolicyParameters =
+    RemoveRetryPolicyParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      name = raw.name
+    )
 
   private def parseEndAtomicRegionParameters(raw: JsEndAtomicRegionParameters): EndAtomicRegionParameters =
     EndAtomicRegionParameters(

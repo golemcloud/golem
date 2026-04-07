@@ -25,32 +25,6 @@ object HostApiCompileSpec extends ZIOSpecDefault {
 
   def spec = suite("HostApiCompileSpec")(
     // ---------------------------------------------------------------------------
-    // RetryPolicy
-    // ---------------------------------------------------------------------------
-
-    test("RetryPolicy construction with all fields") {
-      val rp = HostApi.RetryPolicy(
-        maxAttempts = 5,
-        minDelayNanos = BigInt(1000000),
-        maxDelayNanos = BigInt(60000000000L),
-        multiplier = 2.0,
-        maxJitterFactor = Some(0.1)
-      )
-      assertTrue(
-        rp.maxAttempts == 5,
-        rp.minDelayNanos == BigInt(1000000),
-        rp.maxDelayNanos == BigInt(60000000000L),
-        rp.multiplier == 2.0,
-        rp.maxJitterFactor.contains(0.1)
-      )
-    },
-
-    test("RetryPolicy with None maxJitterFactor") {
-      val rp = HostApi.RetryPolicy(3, BigInt(0), BigInt(0), 1.0, None)
-      assertTrue(rp.maxJitterFactor.isEmpty)
-    },
-
-    // ---------------------------------------------------------------------------
     // PersistenceLevel
     // ---------------------------------------------------------------------------
 

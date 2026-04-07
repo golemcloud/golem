@@ -147,12 +147,23 @@ sealed trait JsJumpParameters extends js.Object {
   def jump: JsOplogRegion   = js.native
 }
 
-// --- ChangeRetryPolicyParameters ---
+// --- SetRetryPolicyParameters ---
 
 @js.native
-sealed trait JsChangeRetryPolicyParameters extends js.Object {
-  def timestamp: JsDatetime    = js.native
-  def newPolicy: JsRetryPolicy = js.native
+sealed trait JsSetRetryPolicyParameters extends js.Object {
+  def timestamp: JsDatetime = js.native
+  def name: String          = js.native
+  def priority: Int         = js.native
+  def predicateJson: String = js.native
+  def policyJson: String    = js.native
+}
+
+// --- RemoveRetryPolicyParameters ---
+
+@js.native
+sealed trait JsRemoveRetryPolicyParameters extends js.Object {
+  def timestamp: JsDatetime = js.native
+  def name: String          = js.native
 }
 
 // --- EndAtomicRegionParameters ---

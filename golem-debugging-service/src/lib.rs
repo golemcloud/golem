@@ -185,6 +185,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_debugging_service_services(
     active_workers: Arc<ActiveWorkers<DebugContext>>,
     engine: Arc<Engine>,

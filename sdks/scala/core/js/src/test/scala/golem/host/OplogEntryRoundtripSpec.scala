@@ -262,27 +262,40 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         j.params.jump.end == BigInt(10)
       )
     },
-    test("ChangeRetryPolicy from dynamic") {
+    test("SetRetryPolicy from dynamic") {
       val raw = wrapEntry(
-        "change-retry-policy",
+        "set-retry-policy",
         js.Dynamic.literal(
           timestamp = ts(),
-          newPolicy = js.Dynamic.literal(
-            maxAttempts = 5,
-            minDelay = js.BigInt("1000000"),
-            maxDelay = js.BigInt("60000000000"),
-            multiplier = 2.0,
-            maxJitterFactor = 0.1
-          )
+          name = "default",
+          priority = 10,
+          predicateJson = """{"nodes":[]}""",
+          policyJson = """{"nodes":[]}"""
         )
       )
       val parsed = OplogEntry.fromJs(raw)
-      val p      = parsed.asInstanceOf[OplogEntry.ChangeRetryPolicy].params.newPolicy
+      val p      = parsed.asInstanceOf[OplogEntry.SetRetryPolicy].params
       assertTrue(
-        parsed.isInstanceOf[OplogEntry.ChangeRetryPolicy],
-        p.maxAttempts == 5,
-        p.multiplier == 2.0,
-        p.maxJitterFactor == Some(0.1)
+        parsed.isInstanceOf[OplogEntry.SetRetryPolicy],
+        p.name == "default",
+        p.priority == 10,
+        p.predicateJson == """{"nodes":[]}""",
+        p.policyJson == """{"nodes":[]}"""
+      )
+    },
+    test("RemoveRetryPolicy from dynamic") {
+      val raw = wrapEntry(
+        "remove-retry-policy",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          name = "default"
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw)
+      val p      = parsed.asInstanceOf[OplogEntry.RemoveRetryPolicy].params
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.RemoveRetryPolicy],
+        p.name == "default"
       )
     },
     test("Log from dynamic") {

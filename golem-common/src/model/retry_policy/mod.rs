@@ -14,7 +14,7 @@
 
 mod wit;
 
-use crate::model::agent::{DataValue, ElementValue, NamedElementValue, parse_agent_id_parts};
+use crate::model::agent::parse_agent_id_parts;
 use crate::model::{OwnedAgentId, RdbmsPoolKey, RetryConfig};
 use desert_rust::BinaryCodec;
 use golem_wasm::analysis::AnalysedType;
@@ -474,27 +474,6 @@ impl RetryContext {
             .set("verb", PredicateValue::Text(verb.to_string()))
             .set("noun-uri", PredicateValue::Text(noun_uri.to_string()));
         props
-    }
-}
-
-/// Flattens an agent's invocation parameters into retry properties using dot-separated keys.
-fn flatten_agent_params(props: &mut RetryProperties, prefix: &str, value: &DataValue) {
-    match value {
-        DataValue::Tuple(elements) => {
-            for (index, element) in elements.elements.iter().enumerate() {
-                flatten_element_value(props, &format!("{prefix}.{index}"), element);
-            }
-        }
-        DataValue::Multimodal(elements) => {
-            for NamedElementValue {
-                name,
-                value,
-                schema_index: _,
-            } in &elements.elements
-            {
-                flatten_element_value(props, &format!("{prefix}.{name}"), value);
-            }
-        }
     }
 }
 
@@ -1590,97 +1569,6 @@ fn coerce_eq(
     property: &str,
 ) -> Result<bool, RetryEvaluationError> {
     Ok(coerce_cmp(actual, expected, property)? == Ordering::Equal)
-}
-
-fn flatten_element_value(props: &mut RetryProperties, key: &str, value: &ElementValue) {
-    match value {
-        ElementValue::ComponentModel(value) => {
-            flatten_component_model_value(props, key, &value.value.value);
-        }
-        ElementValue::UnstructuredText(value) => {
-            let text = match &value.value {
-                crate::model::agent::TextReference::Url(url) => url.value.clone(),
-                crate::model::agent::TextReference::Inline(source) => source.data.clone(),
-            };
-            props.set(key.to_string(), PredicateValue::Text(text));
-        }
-        ElementValue::UnstructuredBinary(_) => {
-            // Binary values are intentionally skipped.
-        }
-    }
-}
-
-fn flatten_component_model_value(props: &mut RetryProperties, key: &str, value: &Value) {
-    if let Some(predicate_value) = primitive_predicate_value(value) {
-        props.set(key.to_string(), predicate_value);
-        return;
-    }
-
-    match value {
-        Value::Tuple(values) | Value::List(values) | Value::Record(values) => {
-            for (index, value) in values.iter().enumerate() {
-                flatten_component_model_value(props, &format!("{key}.{index}"), value);
-            }
-        }
-        Value::Option(Some(value)) => flatten_component_model_value(props, key, value),
-        Value::Variant {
-            case_idx,
-            case_value,
-        } => {
-            props.set(
-                format!("{key}.case"),
-                PredicateValue::Integer(*case_idx as i64),
-            );
-            if let Some(case_value) = case_value {
-                flatten_component_model_value(props, &format!("{key}.value"), case_value);
-            }
-        }
-        Value::Enum(value) => {
-            props.set(key.to_string(), PredicateValue::Integer(*value as i64));
-        }
-        Value::Flags(values) => {
-            for (index, value) in values.iter().enumerate() {
-                props.set(format!("{key}.{index}"), PredicateValue::Boolean(*value));
-            }
-        }
-        Value::Result(result) => match result {
-            Ok(Some(ok)) => flatten_component_model_value(props, &format!("{key}.ok"), ok),
-            Ok(None) => {
-                props.set(
-                    format!("{key}.ok"),
-                    PredicateValue::Text("none".to_string()),
-                );
-            }
-            Err(Some(err)) => flatten_component_model_value(props, &format!("{key}.err"), err),
-            Err(None) => {
-                props.set(
-                    format!("{key}.err"),
-                    PredicateValue::Text("none".to_string()),
-                );
-            }
-        },
-        Value::Handle { .. } | Value::Option(None) => {}
-        _ => {}
-    }
-}
-
-fn primitive_predicate_value(value: &Value) -> Option<PredicateValue> {
-    match value {
-        Value::Bool(value) => Some(PredicateValue::Boolean(*value)),
-        Value::String(value) => Some(PredicateValue::Text(value.clone())),
-        Value::S8(value) => Some(PredicateValue::Integer(*value as i64)),
-        Value::S16(value) => Some(PredicateValue::Integer(*value as i64)),
-        Value::S32(value) => Some(PredicateValue::Integer(*value as i64)),
-        Value::S64(value) => Some(PredicateValue::Integer(*value)),
-        Value::U8(value) => Some(PredicateValue::Integer(*value as i64)),
-        Value::U16(value) => Some(PredicateValue::Integer(*value as i64)),
-        Value::U32(value) => Some(PredicateValue::Integer(*value as i64)),
-        Value::U64(value) => i64::try_from(*value).ok().map(PredicateValue::Integer),
-        Value::F32(value) => Some(PredicateValue::Text(value.to_string())),
-        Value::F64(value) => Some(PredicateValue::Text(value.to_string())),
-        Value::Char(value) => Some(PredicateValue::Text(value.to_string())),
-        _ => None,
-    }
 }
 
 #[cfg(feature = "full")]
