@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::components::ChildProcessLogger;
-use crate::components::redis::Redis;
+use crate::components::rdb::Rdb;
 use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::{WorkerExecutor, wait_for_startup};
@@ -33,7 +33,7 @@ pub struct SpawnedWorkerExecutor {
     logger: Arc<Mutex<Option<ChildProcessLogger>>>,
     executable: PathBuf,
     working_directory: PathBuf,
-    redis: Arc<dyn Redis>,
+    rdb: Arc<dyn Rdb>,
     shard_manager: Arc<dyn ShardManager>,
     worker_service: Arc<dyn WorkerService>,
     verbosity: Level,
@@ -49,7 +49,7 @@ impl SpawnedWorkerExecutor {
         working_directory: &Path,
         http_port: u16,
         grpc_port: u16,
-        redis: Arc<dyn Redis>,
+        rdb: Arc<dyn Rdb>,
         shard_manager: Arc<dyn ShardManager>,
         worker_service: Arc<dyn WorkerService>,
         verbosity: Level,
@@ -69,7 +69,7 @@ impl SpawnedWorkerExecutor {
             working_directory,
             http_port,
             grpc_port,
-            &redis,
+            &rdb,
             &shard_manager,
             &worker_service,
             verbosity,
@@ -87,7 +87,7 @@ impl SpawnedWorkerExecutor {
             logger: Arc::new(Mutex::new(Some(logger))),
             executable: executable.to_path_buf(),
             working_directory: working_directory.to_path_buf(),
-            redis,
+            rdb,
             shard_manager,
             worker_service,
             verbosity,
@@ -103,7 +103,7 @@ impl SpawnedWorkerExecutor {
         working_directory: &Path,
         http_port: u16,
         grpc_port: u16,
-        redis: &Arc<dyn Redis>,
+        rdb: &Arc<dyn Rdb>,
         shard_manager: &Arc<dyn ShardManager>,
         worker_service: &Arc<dyn WorkerService>,
         verbosity: Level,
@@ -120,7 +120,7 @@ impl SpawnedWorkerExecutor {
                     grpc_port,
                     shard_manager,
                     worker_service,
-                    redis,
+                    rdb,
                     registry_service,
                     verbosity,
                     otlp,
@@ -181,7 +181,7 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             &self.working_directory,
             self.http_port,
             self.grpc_port,
-            &self.redis,
+            &self.rdb,
             &self.shard_manager,
             &self.worker_service,
             self.verbosity,

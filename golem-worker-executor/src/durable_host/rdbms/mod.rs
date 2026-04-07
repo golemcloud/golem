@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::durability::HostFailureKind;
+use crate::durable_host::durability::{HostFailureKind, InFunctionRetryHost};
 use crate::durable_host::rdbms::serialized::RdbmsRequest;
 use crate::durable_host::{
     Durability, DurabilityHost, DurableWorkerCtx, InternalRetryResult, RemoteTransactionHandler,

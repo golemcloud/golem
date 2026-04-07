@@ -161,6 +161,10 @@ class WasmRpcProxyHandlerShared {
     }
   }
 
+  hasMethod(methodName: string): boolean {
+    return this.metadata.methods.has(methodName);
+  }
+
   constructWasmRpcParams(
     args: any[],
     configIncludedInArgs: boolean,
@@ -347,18 +351,21 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
         case 'saveSnapshot': {
           throw new Error('Cannot call saveSnapshot on a remote client');
         }
-        default:
-          const methodProxy = this.methodProxyCache.get(propString);
-          if (methodProxy) {
-            return methodProxy;
-          } else {
-            const methodProxy = this.createMethodProxy(propString);
-            this.methodProxyCache.set(propString, methodProxy);
-            return methodProxy;
-          }
       }
     }
-    return undefined;
+
+    if (typeof prop === 'string' && this.shared.hasMethod(prop)) {
+      const methodProxy = this.methodProxyCache.get(prop);
+      if (methodProxy) {
+        return methodProxy;
+      } else {
+        const methodProxy = this.createMethodProxy(prop);
+        this.methodProxyCache.set(prop, methodProxy);
+        return methodProxy;
+      }
+    }
+
+    return val;
   }
 
   private createMethodProxy(prop: string): RemoteMethod<any[], any> {

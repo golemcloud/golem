@@ -797,9 +797,8 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "funResultLikeWithVoid", &[r#"{error: null}"#]).await;
     run_and_assert(&ctx, "funResultLikeWithVoid", &[r#"{ok: null}"#]).await;
 
-    // TODO: fix root cause for this
     // An arrow function
-    // run_and_assert(&ctx, "funArrowSync", &[r#""foo""#]).await;
+    run_and_assert(&ctx, "funArrowSync", &[r#""foo""#]).await;
 
     // A function that takes many inputs
     run_and_assert(

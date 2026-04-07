@@ -1,0 +1,43 @@
+name: 'Setup WASM Component Tools'
+description: 'Install the WASI SDK, wasm-rquickjs, and optionally cargo-component'
+inputs:
+  install-wasi-sdk:
+    description: 'Whether to install the WASI SDK'
+    default: 'true'
+  wasi-sdk-version:
+    description: 'WASI SDK version to install'
+    default: '25'
+  wasi-sdk-path:
+    description: 'Install path for the WASI SDK'
+    default: '/opt/wasi-sdk'
+  install-wasm-rquickjs:
+    description: 'Whether to install wasm-rquickjs'
+    default: 'true'
+  wasm-rquickjs-version:
+    description: 'wasm-rquickjs tag to install'
+    required: true
+  install-cargo-component:
+    description: 'Whether to install cargo-component'
+    default: 'false'
+  cargo-component-version:
+    description: 'cargo-component version to install'
+    default: '0.21.1'
+runs:
+  using: 'composite'
+  steps:
+    - name: Install WASI SDK
+      if: inputs.install-wasi-sdk == 'true'
+      shell: bash
+      run: |
+        curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${{ inputs.wasi-sdk-version }}/wasi-sdk-${{ inputs.wasi-sdk-version }}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
+        sudo mv /opt/wasi-sdk-${{ inputs.wasi-sdk-version }}.0-x86_64-linux ${{ inputs.wasi-sdk-path }}
+
+    - name: Install wasm-rquickjs
+      if: inputs.install-wasm-rquickjs == 'true'
+      shell: bash
+      run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag ${{ inputs.wasm-rquickjs-version }}
+
+    - name: Install cargo-component
+      if: inputs.install-cargo-component == 'true'
+      shell: bash
+      run: cargo binstall --force cargo-component@${{ inputs.cargo-component-version }}
