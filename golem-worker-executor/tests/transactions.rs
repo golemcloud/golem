@@ -324,9 +324,11 @@ async fn golem_rust_explicit_oplog_commit(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
-    // Note: we can only test with replicas=0 because we don't have redis slaves in the test environment currently
+    // Test environments use non-replicated indexed storage, so committing to 0 replicas must
+    // succeed immediately.
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "explicit_commit", data_value!(0u8))
         .await;
@@ -358,7 +360,8 @@ async fn golem_rust_set_retry_policy(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let start = SystemTime::now();
     let result1 = executor
@@ -652,7 +655,8 @@ async fn golem_rust_fallible_transaction(
         )
         .await?;
 
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let result = executor
         .invoke_and_await_agent(
@@ -726,7 +730,8 @@ async fn golem_rust_infallible_transaction(
         )
         .await?;
 
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let result = executor
         .invoke_and_await_agent(

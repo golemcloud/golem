@@ -36,7 +36,7 @@ use golem_wasm::{IntoValue, Record};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_customized,
+    WorkerExecutorTestDependencies, start, start_customized, start_with_redis_storage,
 };
 use pretty_assertions::assert_eq;
 use redis::Commands;
@@ -2700,7 +2700,7 @@ async fn reconstruct_interrupted_state(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_redis_storage(deps, &context).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
