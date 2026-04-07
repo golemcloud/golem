@@ -663,7 +663,12 @@ fn trait_methods(
     Ok(res.into_iter().flatten().collect())
 }
 
-fn render_errors(method_name: &str, error_kind: &ErrorKind, errors: &MethodErrors) -> RustResult {
+fn render_errors(
+    method_name: &str,
+    error_kind: &ErrorKind,
+    errors: &MethodErrors,
+    service_name: &str,
+) -> RustResult {
     let name = error_name(method_name, error_kind);
 
     let variant_cases = errors
@@ -776,6 +781,11 @@ fn render_errors(method_name: &str, error_kind: &ErrorKind, errors: &MethodError
         line("}") +
         line(unit() + "impl " + rust_name("crate", "ErrorInfo") + " for " + name.clone() + " {") +
         indented(
+            line(unit() + "fn service_name() -> &'static str {") +
+                indented(
+                    line(unit() + "\"" + service_name.to_string() + "\"")
+                ) +
+            line("}") +
             line(unit() + "fn status_code(&self) -> u16 {") +
                 indented(
                     status_code_impl
@@ -1298,7 +1308,7 @@ pub fn client_gen(
 
     let rendered_errors: Result<Vec<_>> = all_errors
         .iter()
-        .map(|(method_name, errors)| render_errors(method_name, &error_kind, errors))
+        .map(|(method_name, errors)| render_errors(method_name, &error_kind, errors, &name))
         .collect();
 
     let rendered_errors = rendered_errors?

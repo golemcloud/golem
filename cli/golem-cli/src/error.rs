@@ -70,14 +70,6 @@ pub mod service {
 
     use bytes::Bytes;
 
-    use golem_client::api::{
-        AccountError, AgentError, AgentSecretsError, ApiDeploymentError, ApiDomainError,
-        ApiSecurityError, ApplicationError, ComponentError, EnvironmentError,
-        LoginCompleteOauth2DeviceFlowError, LoginCurrentLoginTokenError, LoginLoginOauth2Error,
-        LoginPollOauth2WebflowError, LoginStartOauth2DeviceFlowError, LoginStartOauth2WebflowError,
-        LoginSubmitOauth2WebflowCallbackError, McpDeploymentError, PluginError, TokenError,
-        WorkerError,
-    };
     use golem_common::model::{AgentId, PromiseId};
     use reqwest::StatusCode;
     use std::error::Error;
@@ -98,10 +90,6 @@ pub mod service {
         fn first_message(&self) -> Option<&str> {
             self.messages.first().map(String::as_str)
         }
-    }
-
-    pub trait HasServiceName {
-        fn service_name() -> &'static str;
     }
 
     #[derive(Debug)]
@@ -232,7 +220,7 @@ pub mod service {
 
     impl<T> From<golem_client::Error<T>> for ServiceError
     where
-        T: golem_client::ErrorInfo + HasServiceName,
+        T: golem_client::ErrorInfo,
     {
         fn from(error: golem_client::Error<T>) -> Self {
             ServiceError {
@@ -293,126 +281,6 @@ pub mod service {
                     }
                 }
             }
-        }
-    }
-
-    impl HasServiceName for ApplicationError {
-        fn service_name() -> &'static str {
-            "Application"
-        }
-    }
-
-    impl HasServiceName for EnvironmentError {
-        fn service_name() -> &'static str {
-            "Environment"
-        }
-    }
-
-    impl HasServiceName for ComponentError {
-        fn service_name() -> &'static str {
-            "Component"
-        }
-    }
-
-    impl HasServiceName for AgentError {
-        fn service_name() -> &'static str {
-            "Agent"
-        }
-    }
-
-    impl HasServiceName for WorkerError {
-        fn service_name() -> &'static str {
-            "Worker"
-        }
-    }
-
-    impl HasServiceName for PluginError {
-        fn service_name() -> &'static str {
-            "Plugin"
-        }
-    }
-
-    impl HasServiceName for LoginLoginOauth2Error {
-        fn service_name() -> &'static str {
-            "Login"
-        }
-    }
-
-    impl HasServiceName for LoginCurrentLoginTokenError {
-        fn service_name() -> &'static str {
-            "Login"
-        }
-    }
-
-    impl HasServiceName for LoginStartOauth2DeviceFlowError {
-        fn service_name() -> &'static str {
-            "Login"
-        }
-    }
-
-    impl HasServiceName for LoginCompleteOauth2DeviceFlowError {
-        fn service_name() -> &'static str {
-            "Login"
-        }
-    }
-
-    impl HasServiceName for LoginStartOauth2WebflowError {
-        fn service_name() -> &'static str {
-            "Login"
-        }
-    }
-
-    impl HasServiceName for LoginSubmitOauth2WebflowCallbackError {
-        fn service_name() -> &'static str {
-            "Login"
-        }
-    }
-
-    impl HasServiceName for LoginPollOauth2WebflowError {
-        fn service_name() -> &'static str {
-            "Login"
-        }
-    }
-
-    impl HasServiceName for ApiDeploymentError {
-        fn service_name() -> &'static str {
-            "API Deployment"
-        }
-    }
-
-    impl HasServiceName for ApiSecurityError {
-        fn service_name() -> &'static str {
-            "API Security Scheme"
-        }
-    }
-
-    impl HasServiceName for TokenError {
-        fn service_name() -> &'static str {
-            "Token"
-        }
-    }
-
-    impl HasServiceName for AccountError {
-        fn service_name() -> &'static str {
-            "Account"
-        }
-    }
-
-    impl HasServiceName for ApiDomainError {
-        fn service_name() -> &'static str {
-            "API Domain"
-        }
-    }
-
-    impl HasServiceName for McpDeploymentError {
-        fn service_name() -> &'static str {
-            "MCP Deployment"
-        }
-    }
-
-    impl HasServiceName for AgentSecretsError {
-        fn service_name() -> &'static str {
-            "AgentSecrets"
         }
     }
 

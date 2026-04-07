@@ -20,6 +20,7 @@ pub fn error_gen() -> Module {
         use bytes::Bytes;
 
         pub trait ErrorInfo {
+            fn service_name() -> &'static str;
             fn status_code(&self) -> u16;
             fn messages(&self) -> Vec<String>;
             fn message(&self) -> String {
