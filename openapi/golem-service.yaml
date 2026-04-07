@@ -16997,7 +16997,7 @@ components:
         period:
           $ref: '#/components/schemas/TimePeriod'
         max:
-          description: Maximum burst capacity. Defaults to `value` if not specified.
+          description: Maximum burst capacity
           type: integer
           format: uint64
       required:

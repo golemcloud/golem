@@ -11601,7 +11601,7 @@ components:
         max:
           type: integer
           format: uint64
-          description: Maximum burst capacity. Defaults to `value` if not specified.
+          description: Maximum burst capacity
     RetryPolicyCreation:
       type: object
       title: RetryPolicyCreation
