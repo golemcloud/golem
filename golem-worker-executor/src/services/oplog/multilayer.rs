@@ -183,10 +183,12 @@ impl OplogArchive for InstrumentedOplogArchive {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         let dropped = self.inner.drop_prefix(last_dropped_id).await;
         if dropped > 0 {
+            let account_id = self.account_id.to_string();
+            let environment_id = self.environment_id.to_string();
             record_storage_objects_deleted(
                 STORAGE_TYPE_OPLOG_ARCHIVE,
-                &self.account_id.to_string(),
-                &self.environment_id.to_string(),
+                &account_id,
+                &environment_id,
                 dropped,
             );
         }

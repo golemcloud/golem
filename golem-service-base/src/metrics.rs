@@ -28,6 +28,8 @@ pub mod storage {
     pub const STORAGE_TYPE_COMPILATION_CACHE: &str = "compilation_cache";
 
     lazy_static! {
+        /// Storage metrics for user-owned storage types: blob_store, kv, oplog, oplog_archive,
+        /// filesystem, component. Labeled by storage_type, account_id, and environment_id.
         pub static ref STORAGE_BYTES_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
             "golem_storage_bytes_written_total",
             "Total bytes written to storage, by storage type, account and environment",
@@ -50,6 +52,21 @@ pub mod storage {
             "golem_storage_objects_deleted_total",
             "Total objects deleted from storage, by storage type, account and environment",
             &["storage_type", "account_id", "environment_id"]
+        )
+        .unwrap();
+
+        /// Compilation cache metrics: no account context is available so only
+        /// storage_type and environment_id are used as labels.
+        pub static ref COMPILATION_CACHE_BYTES_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
+            "golem_compilation_cache_bytes_written_total",
+            "Total bytes written to the compiled component cache, by environment",
+            &["storage_type", "environment_id"]
+        )
+        .unwrap();
+        pub static ref COMPILATION_CACHE_OBJECTS_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
+            "golem_compilation_cache_objects_written_total",
+            "Total objects written to the compiled component cache, by environment",
+            &["storage_type", "environment_id"]
         )
         .unwrap();
     }
@@ -95,6 +112,20 @@ pub mod storage {
     ) {
         STORAGE_OBJECTS_DELETED_TOTAL
             .with_label_values(&[storage_type, account_id, environment_id])
+            .inc_by(count as f64);
+    }
+
+    /// Records compilation cache bytes written (no account context available).
+    pub fn record_compilation_cache_bytes_written(environment_id: &str, bytes: u64) {
+        COMPILATION_CACHE_BYTES_WRITTEN_TOTAL
+            .with_label_values(&[STORAGE_TYPE_COMPILATION_CACHE, environment_id])
+            .inc_by(bytes as f64);
+    }
+
+    /// Records compilation cache objects written (no account context available).
+    pub fn record_compilation_cache_objects_written(environment_id: &str, count: u64) {
+        COMPILATION_CACHE_OBJECTS_WRITTEN_TOTAL
+            .with_label_values(&[STORAGE_TYPE_COMPILATION_CACHE, environment_id])
             .inc_by(count as f64);
     }
 }

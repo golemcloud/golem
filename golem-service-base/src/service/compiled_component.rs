@@ -14,7 +14,7 @@
 
 use crate::error::worker_executor::WorkerExecutorError;
 use crate::metrics::storage::{
-    STORAGE_TYPE_COMPILATION_CACHE, record_storage_bytes_written, record_storage_objects_written,
+    record_compilation_cache_bytes_written, record_compilation_cache_objects_written,
 };
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use async_trait::async_trait;
@@ -200,8 +200,8 @@ impl CompiledComponentService for DefaultCompiledComponentService {
             });
         if result.is_ok() {
             let env_str = environment_id.to_string();
-            record_storage_bytes_written(STORAGE_TYPE_COMPILATION_CACHE, "", &env_str, byte_count);
-            record_storage_objects_written(STORAGE_TYPE_COMPILATION_CACHE, "", &env_str, 1);
+            record_compilation_cache_bytes_written(&env_str, byte_count);
+            record_compilation_cache_objects_written(&env_str, 1);
         }
         result
     }
