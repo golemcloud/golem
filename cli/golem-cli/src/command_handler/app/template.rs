@@ -20,6 +20,7 @@ use crate::app::template::{
 };
 use crate::command_handler::Handlers;
 use crate::command_handler::app::AppCommandHandler;
+use crate::command_name;
 use crate::context::Context;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
@@ -28,11 +29,10 @@ use crate::log::{
     log_finished_ok, log_skipping_up_to_date, logln,
 };
 use crate::model::GuestLanguage;
-use crate::model::text::fmt::log_text_view;
 use crate::model::text::diff::log_unified_diff_for_path;
+use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::{AppNewNextStepsHint, AppNewNextStepsMode};
 use crate::validation::ValidationBuilder;
-use crate::command_name;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_common::model::application::ApplicationName;
@@ -206,7 +206,10 @@ impl TemplateHandler {
 
             if fs::path_eq_normalized(&application_dir, &target_app_root) {
                 if let Some(app_ctx) = app_ctx
-                    && fs::path_eq_normalized(app_ctx.application().app_root_dir(), &target_app_root)
+                    && fs::path_eq_normalized(
+                        app_ctx.application().app_root_dir(),
+                        &target_app_root,
+                    )
                 {
                     if application_name.is_some() {
                         logln("");
@@ -214,7 +217,9 @@ impl TemplateHandler {
                             "Specifying the application name is not allowed in an existing application directory",
                         );
                         logln("");
-                        logln("Use `golem new .` for adding new templates to the current application,");
+                        logln(
+                            "Use `golem new .` for adding new templates to the current application,",
+                        );
                         logln("or switch to a different directory!");
                     }
 
@@ -244,7 +249,11 @@ impl TemplateHandler {
                         .collect::<Result<BTreeMap<_, _>, _>>()?;
 
                     return Ok(NewCommandContext {
-                        application_name_candidate: app_ctx.application().application_name().0.clone(),
+                        application_name_candidate: app_ctx
+                            .application()
+                            .application_name()
+                            .0
+                            .clone(),
                         application_path: app_ctx.application().app_root_dir().to_path_buf(),
                         existing_components,
                         existing_app_mode: true,
@@ -275,7 +284,7 @@ impl TemplateHandler {
             && !self
                 .ctx
                 .interactive_handler()
-            .confirm_new_app_in_non_empty_dir(&application_dir)?
+                .confirm_new_app_in_non_empty_dir(&application_dir)?
         {
             bail!(NonSuccessfulExit);
         }

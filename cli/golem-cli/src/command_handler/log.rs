@@ -134,7 +134,7 @@ impl LogHandler {
     ) {
         let output = self.render_view_truncated(view, max_lines);
         let mut stdout = std::io::stdout();
-        write!(stdout, "{output}\n").unwrap();
+        writeln!(stdout, "{output}").unwrap();
         stdout.flush().unwrap();
     }
 

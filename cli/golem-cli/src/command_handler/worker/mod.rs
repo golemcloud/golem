@@ -70,6 +70,10 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{IdempotencyKey, OplogIndex};
 
+use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::execute;
+use crossterm::queue;
+use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap};
@@ -79,10 +83,6 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use crossterm::cursor::{Hide, MoveTo, Show};
-use crossterm::execute;
-use crossterm::queue;
-use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use terminal_size::terminal_size;
 use tokio::time::{sleep, timeout};
 use tracing::debug;

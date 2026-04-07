@@ -34,7 +34,6 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 use synoptic::TokOpt;
 
-
 pub trait TextView {
     fn log(&self);
 }
