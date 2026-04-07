@@ -325,6 +325,12 @@ pub struct ApplicationNameAndEnvironments {
 #[derive(Clone, Debug)]
 pub struct Application {
     app_root_dir: PathBuf,
+
+    // For template rendering
+    app_root_dir_str: String,
+    golem_temp_dir_str: String,
+    cargo_workspace_mode: bool,
+
     application_name: WithSource<ApplicationName>,
     environments: BTreeMap<EnvironmentName, app_raw::Environment>,
     component_preset_selector: ComponentPresetSelector,
@@ -474,13 +480,20 @@ impl Application {
                 let component = self.component(component_name);
                 let template_apply_ctx = ComponentLayerApplyContext::new(
                     Some(component_name.clone()),
-                    fs::path_to_str(self.app_root_dir())
-                        .ok()
-                        .map(|s| s.to_string()),
-                    fs::path_to_str(self.temp_dir()).ok().map(|s| s.to_string()),
+                    Some(self.app_root_dir_str.clone()),
+                    Some(self.golem_temp_dir_str.clone()),
                     fs::path_to_str(component.component_dir())
                         .ok()
                         .map(|s| s.to_string()),
+                    fs::path_to_str(component.component_dir())
+                        .ok()
+                        .map(|component_dir| {
+                            if self.cargo_workspace_mode {
+                                format!("{}/target", self.app_root_dir_str)
+                            } else {
+                                format!("{}/target", component_dir)
+                            }
+                        }),
                 );
 
                 let mut latest_parent_id = base_component_id.clone();
@@ -2208,6 +2221,9 @@ mod app_builder {
 
             validation.build(Application {
                 app_root_dir,
+                app_root_dir_str: builder.app_root_dir_str,
+                golem_temp_dir_str: builder.golem_temp_dir_str,
+                cargo_workspace_mode: builder.cargo_workspace_mode,
                 environments,
                 component_preset_selector: component_presets,
                 application_name,
