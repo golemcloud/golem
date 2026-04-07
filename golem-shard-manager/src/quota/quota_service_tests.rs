@@ -26,7 +26,7 @@ use golem_common::model::quota::{
     ResourceDefinitionId, ResourceDefinitionRevision, ResourceLimit, ResourceName,
     ResourceRateLimit, TimePeriod,
 };
-use sqlx::types::Json;
+use golem_service_base::repo::Blob;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -43,7 +43,7 @@ impl QuotaRepo for InMemoryQuotaRepo {
         _resource: &QuotaResourceRecord,
         _previous_resource_revision: i64,
         _lease: &QuotaLeaseRecord,
-        _expired_pods: &[(Json<IpAddr>, i32)],
+        _expired_pods: &[(Blob<IpAddr>, i32)],
     ) -> Result<(), QuotaRepoError> {
         Ok(())
     }
@@ -51,7 +51,7 @@ impl QuotaRepo for InMemoryQuotaRepo {
         &self,
         _resource: &QuotaResourceRecord,
         _previous_resource_revision: i64,
-        _pod_ip: Json<IpAddr>,
+        _pod_ip: Blob<IpAddr>,
         _pod_port: i32,
     ) -> Result<(), QuotaRepoError> {
         Ok(())

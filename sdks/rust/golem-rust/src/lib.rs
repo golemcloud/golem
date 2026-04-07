@@ -55,6 +55,7 @@ pub mod load_snapshot {
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
+            "golem:quota/host@1.5.0": crate::bindings::golem::quota::host,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -91,6 +92,7 @@ pub mod save_snapshot {
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
+            "golem:quota/host@1.5.0": crate::bindings::golem::quota::host,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -128,6 +130,7 @@ pub mod golem_agentic {
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
+            "golem:quota/host@1.5.0": crate::bindings::golem::quota::host,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -176,6 +179,7 @@ pub mod oplog_processor {
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
+            "golem:quota/host@1.5.0": crate::bindings::golem::quota::host,
             "golem:rdbms/mysql@1.5.0": crate::bindings::golem::rdbms::mysql,
             "golem:rdbms/postgres@1.5.0": crate::bindings::golem::rdbms::postgres,
             "golem:rdbms/types@1.5.0": crate::bindings::golem::rdbms::types,
@@ -206,6 +210,7 @@ mod json;
 pub use json::*;
 
 mod checkpoint;
+pub mod quota;
 mod transaction;
 pub mod value_and_type;
 
@@ -223,7 +228,7 @@ pub use bindings::golem::websocket::client::{
     WebsocketConnection,
 };
 pub use checkpoint::*;
-
+pub use quota::*;
 pub use transaction::*;
 
 #[cfg(feature = "macro")]

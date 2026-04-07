@@ -25,7 +25,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::LeaseEpoch;
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_service_base::model::quota_lease::PendingReservation;
-use sqlx::types::Json;
+use golem_service_base::repo::Blob;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -135,7 +135,7 @@ impl QuotaService {
             {
                 for lr in lease_records {
                     let pod = Pod {
-                        ip: lr.pod_ip.0,
+                        ip: lr.pod_ip.into_value(),
                         port: lr
                             .pod_port
                             .try_into()
@@ -399,9 +399,9 @@ impl QuotaService {
             .to_lease_record(pod)
             .ok_or_else(|| anyhow::anyhow!("pod lease not found after mutation"))?;
 
-        let expired: Vec<(Json<IpAddr>, i32)> = expired_pods
+        let expired: Vec<(Blob<IpAddr>, i32)> = expired_pods
             .iter()
-            .map(|p| (Json(p.ip), p.port.into()))
+            .map(|p| (Blob::new(p.ip), p.port.into()))
             .collect();
 
         self.repo
@@ -420,7 +420,7 @@ impl QuotaService {
             .save_lease_release(
                 &resource_record,
                 previous_revision,
-                Json(pod.ip),
+                Blob::new(pod.ip),
                 pod.port.into(),
             )
             .await
