@@ -15,7 +15,7 @@
 use crate::model::GuestLanguage;
 use crate::model::app::CustomBridgeSdkTarget;
 use crate::model::environment::ResolvedEnvironmentIdentity;
-use golem_common::base_model::agent::AgentTypeName;
+use golem_common::base_model::agent::{AgentMode, AgentTypeName};
 use golem_common::model::component::ComponentName;
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -122,4 +122,5 @@ pub struct ReplMetadata {
 #[serde(rename_all = "camelCase")]
 pub struct ReplAgentMetadata {
     pub client_dir: PathBuf,
+    pub mode: AgentMode,
 }

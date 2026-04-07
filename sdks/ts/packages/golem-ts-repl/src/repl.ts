@@ -332,15 +332,17 @@ export class Repl {
 
     for (const agentTypeName of agentNames) {
       const methods = languageService.getClientMethodSignatures(agentTypeName);
-      const getSignature = languageService.getAgentTypeGetSignature(agentTypeName);
-      if (!methods?.length) {
-        lines.push('');
-        continue;
+      const primaryFactoryMethodSignature =
+        languageService.getAgentTypePrimaryFactoryMethodSignature(agentTypeName);
+      const header = primaryFactoryMethodSignature ?? agentTypeName;
+      lines.push(`  ${pc.bold(header)}`);
+
+      if (methods?.length) {
+        for (const method of methods) {
+          lines.push(`    ${pc.green(method.name)}: ${method.signature}`);
+        }
       }
-      lines.push(`  ${pc.bold(getSignature ?? agentTypeName)}`);
-      for (const method of methods) {
-        lines.push(`    ${pc.green(method.name)}: ${method.signature}`);
-      }
+
       lines.push('');
     }
 

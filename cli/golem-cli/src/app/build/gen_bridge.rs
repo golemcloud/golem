@@ -33,12 +33,13 @@ pub async fn gen_bridge(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
                 .entry(target.target_language)
                 .or_default()
                 .agents
-                .insert(
-                    target.agent_type.type_name.clone(),
-                    ReplAgentMetadata {
-                        client_dir: target.output_dir.clone(),
-                    },
-                );
+                    .insert(
+                        target.agent_type.type_name.clone(),
+                        ReplAgentMetadata {
+                            client_dir: target.output_dir.clone(),
+                            mode: target.agent_type.mode,
+                        },
+                    );
         }
         for (language, repl_meta) in repl_meta_by_lang {
             fs::write_str(
