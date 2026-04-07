@@ -13,12 +13,15 @@
 // limitations under the License.
 
 use crate::fuzzy::Match;
-use crate::log::{LogColorize, LogIndent, log_warn_action, logln};
+pub use crate::log::logln;
+use crate::log::{LogColorize, LogIndent, log_warn_action};
 use crate::model::app::ComponentLayerId;
 use crate::model::format::Format;
 use crate::model::text::component::is_sensitive_env_var_name;
 use anyhow::anyhow;
-use cli_table::{Row, Title, WithTitle};
+pub use comfy_table::Table as ComfyTable;
+use comfy_table::{Cell, CellAlignment, ColumnConstraint, ContentArrangement};
+use terminal_size::terminal_size;
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::model::AgentStatus;
@@ -386,28 +389,95 @@ pub fn format_env(show_sensitive: bool, env: &BTreeMap<String, String>) -> Strin
         .join("\n")
 }
 
-pub fn format_table<E, R>(table: &[E]) -> String
-where
-    R: Title + 'static + for<'b> From<&'b E>,
-    for<'a> &'a R: Row,
-{
-    let rows: Vec<R> = table.iter().map(R::from).collect();
-    let rows = &rows;
-
-    format!(
-        "{}",
-        rows.with_title()
-            .display()
-            .expect("Failed to display table")
-    )
+/// Describes a single table column: its header title, whether it is pinned to content
+/// width, and whether its data rows should be right-aligned.
+pub struct Column {
+    title: String,
+    fixed: bool,
+    right_aligned: bool,
 }
 
-pub fn log_table<E, R>(table: &[E])
-where
-    R: Title + 'static + for<'b> From<&'b E>,
-    for<'a> &'a R: Row,
-{
-    logln(format_table(table));
+impl Column {
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            fixed: false,
+            right_aligned: false,
+        }
+    }
+
+    /// Pin the column to its content width — it will not expand to fill surplus space.
+    pub fn fixed(mut self) -> Self {
+        self.fixed = true;
+        self
+    }
+
+    /// Right-align the data rows of this column.
+    pub fn right(mut self) -> Self {
+        self.right_aligned = true;
+        self
+    }
+
+    /// Pin to content width and right-align — the common case for numeric/fixed columns.
+    pub fn fixed_right(mut self) -> Self {
+        self.fixed = true;
+        self.right_aligned = true;
+        self
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.title
+    }
+}
+
+impl std::fmt::Display for Column {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.title)
+    }
+}
+
+/// Creates a comfy-table pre-configured with Dynamic arrangement, terminal width, and
+/// a preset chosen from the global colorize flag. Column constraints and alignment are
+/// applied from the `headers` descriptors.
+pub fn new_table(headers: Vec<Column>) -> ComfyTable {
+    use comfy_table::presets::{ASCII_FULL_CONDENSED, UTF8_FULL_CONDENSED};
+    let colorize = SHOULD_COLORIZE.should_colorize();
+    let term_width = terminal_size().map(|(w, _)| w.0).unwrap_or(80);
+    let mut table = ComfyTable::new();
+    table
+        .load_preset(if colorize {
+            UTF8_FULL_CONDENSED
+        } else {
+            ASCII_FULL_CONDENSED
+        })
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_width(term_width)
+        .set_header(
+            headers
+                .iter()
+                .map(|c| Cell::new(&c.title))
+                .collect::<Vec<_>>(),
+        );
+    for (i, col) in headers.iter().enumerate() {
+        if col.fixed {
+            table
+                .column_mut(i)
+                .unwrap()
+                .set_constraint(ColumnConstraint::ContentWidth);
+        }
+        if col.right_aligned {
+            table
+                .column_mut(i)
+                .unwrap()
+                .set_cell_alignment(CellAlignment::Right);
+        }
+    }
+    table
+}
+
+/// Renders and logs a comfy-table via `logln`.
+pub fn log_table(table: ComfyTable) {
+    logln(table.to_string());
 }
 
 pub fn log_text_view<View: TextView>(view: &View) {

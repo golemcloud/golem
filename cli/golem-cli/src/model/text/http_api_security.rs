@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::text::fmt::*;
-use cli_table::Table;
+
 use golem_client::model::SecuritySchemeDto;
 use serde_derive::{Deserialize, Serialize};
 
@@ -64,40 +64,28 @@ fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)
     fields.build()
 }
 
-#[derive(Table)]
-struct HttpApiSecuritySchemeTableView {
-    #[table(title = "Name")]
-    pub name: String,
-    #[table(title = "ID")]
-    pub id: String,
-    #[table(title = "Revision", Justify = "Right")]
-    pub revision: u64,
-    #[table(title = "Provider")]
-    pub provider: String,
-    #[table(title = "Client ID")]
-    pub client_id: String,
-    #[table(title = "Redirect URL")]
-    pub redirect_url: String,
-    #[table(title = "Scopes")]
-    pub scopes: String,
-}
-
-impl From<&SecuritySchemeDto> for HttpApiSecuritySchemeTableView {
-    fn from(value: &SecuritySchemeDto) -> Self {
-        Self {
-            name: value.name.0.clone(),
-            id: value.id.to_string(),
-            revision: value.revision.get(),
-            provider: value.provider_type.to_string(),
-            client_id: value.client_id.clone(),
-            redirect_url: value.redirect_url.clone(),
-            scopes: value.scopes.join("\n"),
-        }
-    }
-}
-
 impl TextView for Vec<SecuritySchemeDto> {
     fn log(&self) {
-        log_table::<_, HttpApiSecuritySchemeTableView>(self.as_slice())
+        let mut table = new_table(vec![
+            Column::new("Name").fixed(),
+            Column::new("ID").fixed(),
+            Column::new("Revision").fixed_right(),
+            Column::new("Provider").fixed(),
+            Column::new("Client ID").fixed(),
+            Column::new("Redirect URL"),
+            Column::new("Scopes"),
+        ]);
+        for scheme in self {
+            table.add_row(vec![
+                scheme.name.0.clone(),
+                scheme.id.to_string(),
+                scheme.revision.get().to_string(),
+                scheme.provider_type.to_string(),
+                scheme.client_id.clone(),
+                scheme.redirect_url.clone(),
+                scheme.scopes.join("\n"),
+            ]);
+        }
+        log_table(table);
     }
 }

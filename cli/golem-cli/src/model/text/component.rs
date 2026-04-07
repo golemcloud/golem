@@ -14,40 +14,28 @@
 
 use crate::model::component::ComponentView;
 use crate::model::text::fmt::*;
-use cli_table::{Table, format::Justify};
 
-use golem_common::model::component::ComponentName;
 use serde::{Deserialize, Serialize};
-
-#[derive(Table)]
-struct ComponentTableView {
-    #[table(title = "Name")]
-    pub component_name: ComponentName,
-    #[table(title = "Revision", justify = "Justify::Right")]
-    pub component_revision: u64,
-    #[table(title = "Version", justify = "Justify::Right")]
-    pub component_version: String,
-    #[table(title = "Size", justify = "Justify::Right")]
-    pub component_size: u64,
-    #[table(title = "Exports count", justify = "Justify::Right")]
-    pub n_exports: usize,
-}
-
-impl From<&ComponentView> for ComponentTableView {
-    fn from(value: &ComponentView) -> Self {
-        Self {
-            component_name: value.component_name.clone(),
-            component_revision: value.component_revision,
-            component_version: value.component_version.clone().unwrap_or_default(),
-            component_size: value.component_size,
-            n_exports: value.exports.len(),
-        }
-    }
-}
 
 impl TextView for Vec<ComponentView> {
     fn log(&self) {
-        log_table::<_, ComponentTableView>(self.as_slice())
+        let mut table = new_table(vec![
+            Column::new("Name"),
+            Column::new("Revision").fixed_right(),
+            Column::new("Version").fixed_right(),
+            Column::new("Size").fixed_right(),
+            Column::new("Exports").fixed_right(),
+        ]);
+        for comp in self {
+            table.add_row(vec![
+                comp.component_name.to_string(),
+                comp.component_revision.to_string(),
+                comp.component_version.clone().unwrap_or_default(),
+                format_binary_size(&comp.component_size),
+                comp.exports.len().to_string(),
+            ]);
+        }
+        log_table(table);
     }
 }
 

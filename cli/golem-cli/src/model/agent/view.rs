@@ -13,18 +13,14 @@
 // limitations under the License.
 
 use crate::model::component::render_agent_constructor;
-use cli_table::Table;
 use golem_common::model::agent::DeployedRegisteredAgentType;
 use serde_derive::{Deserialize, Serialize};
 
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize, Table)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentTypeView {
-    #[table(title = "Agent Type")]
     pub agent_type: String,
-    #[table(title = "Constructor")]
     pub constructor: String,
-    #[table(title = "Description")]
     pub description: String,
 }
 

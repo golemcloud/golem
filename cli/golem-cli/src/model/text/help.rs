@@ -15,10 +15,9 @@
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::log::{LogColorize, LogIndent, logln};
 use crate::model::text::fmt::{
-    FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode, TextView, format_export,
-    log_table,
+    Column, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode, TextView, format_export,
+    log_table, new_table,
 };
-use cli_table::Table;
 use colored::Colorize;
 use golem_client::model::ComponentDto;
 use golem_common::model::agent::{AgentType, ParsedAgentId};
@@ -26,7 +25,6 @@ use golem_common::model::component::ComponentName;
 use golem_wasm::analysis::AnalysedType;
 use indoc::indoc;
 use std::path::PathBuf;
-use textwrap::WordSplitter;
 
 pub struct WorkerNameHelp;
 
@@ -298,40 +296,26 @@ pub struct ArgumentError {
     pub source_language: SourceLanguage,
 }
 
-// TODO: limit long values
-#[derive(Table)]
-pub struct ParameterErrorTable {
-    #[table(title = "Parameter type")]
-    pub parameter_type_: String,
-    #[table(title = "Argument value")]
-    pub argument_value: String,
-    #[table(title = "Error")]
-    pub error: String,
-}
-
-impl From<&ArgumentError> for ParameterErrorTable {
-    fn from(value: &ArgumentError) -> Self {
-        Self {
-            parameter_type_: textwrap::wrap(
-                &value
-                    .type_
-                    .as_ref()
-                    .map(|t| render_type_for_language(&value.source_language, t, true))
-                    .unwrap_or_default(),
-                textwrap::Options::new(30).word_splitter(WordSplitter::NoHyphenation),
-            )
-            .join("\n"),
-            argument_value: value.value.clone().unwrap_or_default(),
-            error: value.error.clone().unwrap_or_default(),
-        }
-    }
-}
-
 pub struct ParameterErrorTableView(pub Vec<ArgumentError>);
 
 impl TextView for ParameterErrorTableView {
     fn log(&self) {
-        log_table::<_, ParameterErrorTable>(self.0.as_slice());
+        let mut table = new_table(vec![
+            Column::new("Parameter type"),
+            Column::new("Argument value"),
+            Column::new("Error"),
+        ]);
+        for err in &self.0 {
+            table.add_row(vec![
+                err.type_
+                    .as_ref()
+                    .map(|t| render_type_for_language(&err.source_language, t, true))
+                    .unwrap_or_default(),
+                err.value.clone().unwrap_or_default(),
+                err.error.clone().unwrap_or_default(),
+            ]);
+        }
+        log_table(table);
     }
 }
 

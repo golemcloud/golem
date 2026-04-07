@@ -13,12 +13,10 @@
 // limitations under the License.
 
 use crate::model::text::fmt::*;
-use chrono::{DateTime, Utc};
-use cli_table::Table;
+
 use colored::Colorize;
 use golem_client::model::{Token, TokenWithSecret};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TokenNewView(pub TokenWithSecret);
@@ -47,34 +45,25 @@ impl MessageWithFields for TokenNewView {
     }
 }
 
-#[derive(Table)]
-struct TokenTableView {
-    #[table(title = "ID")]
-    pub id: Uuid,
-    #[table(title = "Created at")]
-    pub created_at: DateTime<Utc>,
-    #[table(title = "Expires at")]
-    pub expires_at: DateTime<Utc>,
-    #[table(title = "Account")]
-    pub account_id: String,
-}
-
-impl From<&Token> for TokenTableView {
-    fn from(value: &Token) -> Self {
-        TokenTableView {
-            id: value.id.0,
-            created_at: value.created_at,
-            expires_at: value.expires_at,
-            account_id: value.account_id.to_string(),
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TokenListView(pub Vec<Token>);
 
 impl TextView for TokenListView {
     fn log(&self) {
-        log_table::<_, TokenTableView>(&self.0);
+        let mut table = new_table(vec![
+            Column::new("ID"),
+            Column::new("Created at").fixed(),
+            Column::new("Expires at").fixed(),
+            Column::new("Account").fixed(),
+        ]);
+        for token in &self.0 {
+            table.add_row(vec![
+                token.id.0.to_string(),
+                token.created_at.to_string(),
+                token.expires_at.to_string(),
+                token.account_id.to_string(),
+            ]);
+        }
+        log_table(table);
     }
 }

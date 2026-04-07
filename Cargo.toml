@@ -86,7 +86,6 @@ chrono = { version = "0.4.40", features = ["serde"] }
 clap = { version = "4.5.60", features = ["derive", "suggestions", "color", "help", ] }
 clap-verbosity-flag = { version = "3.0.4", features = ["tracing"] }
 clap_complete = "4.5.66"
-cli-table = "0.4.9"
 colored = "3.0.0"
 colored-diff = "0.2.3"
 comfy-table = "7.2.2"

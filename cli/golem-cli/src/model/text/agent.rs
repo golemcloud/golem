@@ -14,7 +14,8 @@
 
 use crate::model::agent::view::AgentTypeView;
 use crate::model::text::fmt::{
-    FieldsBuilder, MessageWithFields, TextView, format_message_highlight, log_table,
+    Column, FieldsBuilder, MessageWithFields, TextView, format_message_highlight, log_table,
+    new_table,
 };
 use golem_common::model::agent::DeployedRegisteredAgentType;
 
@@ -45,6 +46,15 @@ impl From<&DeployedRegisteredAgentType> for AgentTypeView {
 
 impl TextView for Vec<DeployedRegisteredAgentType> {
     fn log(&self) {
-        log_table::<_, AgentTypeView>(self);
+        let mut table = new_table(vec![
+            Column::new("Agent Type").fixed(),
+            Column::new("Constructor"),
+            Column::new("Description"),
+        ]);
+        for agent_type in self {
+            let view = AgentTypeView::new(agent_type, true);
+            table.add_row(vec![view.agent_type, view.constructor, view.description]);
+        }
+        log_table(table);
     }
 }

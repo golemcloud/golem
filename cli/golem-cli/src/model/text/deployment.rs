@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use crate::model::text::fmt::{
-    FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id, log_table,
+    Column, FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id, log_table,
+    new_table,
 };
-use cli_table::Table;
-use cli_table::format::Justify;
 use golem_client::model::Deployment;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::deployment::CurrentDeployment;
@@ -58,28 +57,20 @@ impl MessageWithFields for DeploymentNewView {
     }
 }
 
-#[derive(Table)]
-struct DeploymentTableView {
-    #[table(title = "Deployment Revision", justify = "Justify::Right")]
-    pub deployment_revision: u64,
-    #[table(title = "Deployment Version", justify = "Justify::Right")]
-    pub deployment_version: String,
-    #[table(title = "Hash")]
-    pub hash: String,
-}
-
-impl From<&Deployment> for DeploymentTableView {
-    fn from(value: &Deployment) -> Self {
-        Self {
-            deployment_revision: value.revision.get(),
-            deployment_version: value.version.0.clone(),
-            hash: value.deployment_hash.to_string(),
-        }
-    }
-}
-
 impl TextView for Vec<Deployment> {
     fn log(&self) {
-        log_table::<_, DeploymentTableView>(self.as_slice())
+        let mut table = new_table(vec![
+            Column::new("Deployment Revision").fixed_right(),
+            Column::new("Deployment Version").fixed_right(),
+            Column::new("Hash"),
+        ]);
+        for dep in self {
+            table.add_row(vec![
+                dep.revision.get().to_string(),
+                dep.version.0.clone(),
+                dep.deployment_hash.to_string(),
+            ]);
+        }
+        log_table(table);
     }
 }
