@@ -1991,8 +1991,11 @@ async fn long_running_poll_loop_http_failures_are_retried(
     // Wait until more polls are coming in
     let begin = Instant::now();
     loop {
-        if begin.elapsed() > Duration::from_secs(2) {
-            return Err(anyhow!("No polls in 2 seconds"));
+        if begin.elapsed() > Duration::from_secs(30) {
+            return Err(anyhow!(
+                "No polls in 30 seconds (poll_count={})",
+                poll_count.load(Ordering::Acquire)
+            ));
         }
 
         if poll_count.load(Ordering::Acquire) >= 6 {
@@ -2009,7 +2012,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
     }
 
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;

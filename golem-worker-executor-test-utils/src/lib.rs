@@ -29,7 +29,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, UntypedDataValue};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::component::ComponentRevision;
@@ -43,7 +43,7 @@ use golem_common::model::oplog::{
     types::ObjectMetadata,
 };
 use golem_common::model::plan::PlanId;
-use golem_common::model::worker::AgentMetadataDto;
+use golem_common::model::worker::{AgentMetadataDto, WorkerAgentConfigEntry};
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
     IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, TransactionId,
@@ -106,7 +106,7 @@ use golem_worker_executor::services::rdbms::{
 use golem_worker_executor::services::resource_limits::{
     AtomicResourceEntry, ResourceLimits, ResourceLimitsDisabled,
 };
-use golem_worker_executor::services::rpc::Rpc;
+use golem_worker_executor::services::rpc::{Rpc, RpcDemand, RpcError as ServiceRpcError};
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::worker::WorkerService;
@@ -482,12 +482,14 @@ type WrapKeyValueServiceFn =
     dyn Fn(Arc<dyn KeyValueService>) -> Arc<dyn KeyValueService> + Send + Sync;
 type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
+type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
 
 #[derive(Clone, Default)]
 pub struct TestExecutorOverrides {
     pub configure: Option<Arc<ConfigureFn>>,
     pub wrap_key_value_service: Option<Arc<WrapKeyValueServiceFn>>,
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
+    pub wrap_rpc: Option<Arc<WrapRpcFn>>,
 }
 
 fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
@@ -1373,6 +1375,14 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms)),
             additional_deps.clone(),
         ))
+    }
+
+    fn wrap_rpc(&self, rpc: Arc<dyn Rpc>) -> Arc<dyn Rpc> {
+        if let Some(wrap) = &self.overrides.wrap_rpc {
+            wrap(rpc)
+        } else {
+            rpc
+        }
     }
 }
 
@@ -2505,6 +2515,110 @@ impl BlobStoreService for FailingBlobStoreService {
     ) -> Result<(), BlobStoreError> {
         self.inner
             .write_data(environment_id, container_name, object_name, data)
+            .await
+    }
+}
+
+pub struct FailingRpc {
+    inner: Arc<dyn Rpc>,
+    remaining_failures: AtomicU32,
+}
+
+impl FailingRpc {
+    pub fn new(inner: Arc<dyn Rpc>, failure_count: u32) -> Self {
+        Self {
+            inner,
+            remaining_failures: AtomicU32::new(failure_count),
+        }
+    }
+}
+
+#[async_trait]
+impl Rpc for FailingRpc {
+    async fn create_demand(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+        self_stack: InvocationContextStack,
+        agent_config: Vec<WorkerAgentConfigEntry>,
+    ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
+        self.inner
+            .create_demand(
+                owned_agent_id,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_config,
+                self_stack,
+                agent_config,
+            )
+            .await
+    }
+
+    async fn invoke_and_await(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        idempotency_key: Option<IdempotencyKey>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+        self_stack: InvocationContextStack,
+    ) -> Result<UntypedDataValue, ServiceRpcError> {
+        if self
+            .remaining_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            Err(ServiceRpcError::RemoteInternalError {
+                details: "transient test failure".to_string(),
+            })
+        } else {
+            self.inner
+                .invoke_and_await(
+                    owned_agent_id,
+                    idempotency_key,
+                    method_name,
+                    method_parameters,
+                    self_created_by,
+                    self_agent_id,
+                    self_env,
+                    self_config,
+                    self_stack,
+                )
+                .await
+        }
+    }
+
+    async fn invoke(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        idempotency_key: Option<IdempotencyKey>,
+        method_name: String,
+        method_parameters: UntypedDataValue,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+        self_stack: InvocationContextStack,
+    ) -> Result<(), ServiceRpcError> {
+        self.inner
+            .invoke(
+                owned_agent_id,
+                idempotency_key,
+                method_name,
+                method_parameters,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_config,
+                self_stack,
+            )
             .await
     }
 }
