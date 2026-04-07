@@ -71,8 +71,11 @@ impl LeaseInterest {
         let elapsed_ms = (Utc::now() - self.last_credit_value_at)
             .num_milliseconds()
             .max(0) as f64;
-        let accrued = (elapsed_ms * self.credit_rate).clamp(i64::MIN as f64, i64::MAX as f64) as i64;
-        self.last_credit_value.saturating_add(accrued).min(self.max_credit)
+        let accrued =
+            (elapsed_ms * self.credit_rate).clamp(i64::MIN as f64, i64::MAX as f64) as i64;
+        self.last_credit_value
+            .saturating_add(accrued)
+            .min(self.max_credit)
     }
 
     fn debit(&mut self, amount: u64) {
@@ -83,7 +86,10 @@ impl LeaseInterest {
 
     fn credit_back(&mut self, amount: u64) {
         let amount_i64 = amount.min(i64::MAX as u64) as i64;
-        self.last_credit_value = self.current_credit().saturating_add(amount_i64).min(self.max_credit);
+        self.last_credit_value = self
+            .current_credit()
+            .saturating_add(amount_i64)
+            .min(self.max_credit);
         self.last_credit_value_at = Utc::now();
     }
 
@@ -147,8 +153,7 @@ impl LeaseInterest {
     ///
     /// Returns an error string if the tokens refer to different resources.
     pub fn merge(&mut self, other: LeaseInterest) -> Result<(), String> {
-        if self.environment_id != other.environment_id
-            || self.resource_name != other.resource_name
+        if self.environment_id != other.environment_id || self.resource_name != other.resource_name
         {
             return Err(format!(
                 "cannot merge tokens for different resources: `{}` vs `{}`",
@@ -861,6 +866,8 @@ impl QuotaService for GrpcQuotaService {
                         None
                     }
                     std::cmp::Ordering::Less => {
+                        // we can only process refunds if the epochs match, otherwise the capacity
+                        // might have already been lost due to bucket limits etc.
                         if lease.epoch == reservation_epoch {
                             let credit = reserved - used;
                             lease.remaining += credit;

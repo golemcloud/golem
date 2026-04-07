@@ -117,9 +117,8 @@ impl QuotaTokenEntry {
     /// Update the replayed credit state. Used during replay of reserve/commit entries.
     pub fn update_replayed_credit(&mut self, credit: i64, at: DateTime<Utc>) {
         match &mut self.lease {
-            LeaseInterestHandle::Live(interest) => {
-                interest.last_credit_value = credit;
-                interest.last_credit_value_at = at;
+            LeaseInterestHandle::Live(_) => {
+                panic!("update replayed credit may not be called with a live lease interest")
             }
             LeaseInterestHandle::Pending(p) => {
                 p.last_credit = credit;
@@ -130,14 +129,7 @@ impl QuotaTokenEntry {
 }
 
 /// Resource table entry for a `reservation` WIT resource.
-pub enum ReservationEntry {
-    /// Live execution: holds the reservation and a handle back to the token
-    /// so `commit` can apply credit-back to the real `LeaseInterest`.
-    Live {
-        reservation: Reservation,
-        token: Resource<QuotaTokenEntry>,
-    },
-    /// Replay: no live reservation, but we still need the token handle so
-    /// `commit` can update the replayed credit state on the token.
-    Replayed { token: Resource<QuotaTokenEntry> },
+pub struct ReservationEntry {
+    pub reservation: Reservation,
+    pub token: Resource<QuotaTokenEntry>,
 }

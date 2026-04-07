@@ -16,7 +16,9 @@ pub mod types;
 
 use crate::durable_host::quota::types::{LeaseInterestHandle, QuotaTokenEntry, ReservationEntry};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
-use crate::preview2::golem::quota::host::{Host, HostQuotaToken, HostReservation, FailedReservation};
+use crate::preview2::golem::quota::host::{
+    FailedReservation, Host, HostQuotaToken, HostReservation,
+};
 use crate::services::quota::LeaseInterest;
 use crate::workerctx::WorkerCtx;
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
@@ -73,17 +75,16 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
         resource_name: String,
         expected_use: u64,
     ) -> anyhow::Result<Resource<QuotaTokenEntry>> {
-        DurabilityHost::observe_function_call(
-            self,
-            "golem::quota::quota-token",
-            "[constructor]quota-token",
-        );
-
         let env_id = self.owned_agent_id.environment_id;
         let rn = ResourceName(resource_name.clone());
-        let is_live = self.state.is_live();
 
-        let token_entry = if is_live {
+        let durability = Durability::<host_functions::GolemQuotaTokenNew>::new(
+            self,
+            DurableFunctionType::WriteLocal,
+        )
+        .await?;
+
+        let token_entry = if durability.is_live() {
             let svc = self.state.quota_service.clone();
             let interest = svc
                 .acquire(env_id, rn, expected_use, 0, None)
@@ -92,11 +93,6 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
 
             let credit_at_ms = interest.last_credit_value_at.timestamp_millis();
 
-            let durability = Durability::<host_functions::GolemQuotaTokenNew>::new(
-                self,
-                DurableFunctionType::WriteLocal,
-            )
-            .await?;
             durability
                 .persist(
                     self,
@@ -110,12 +106,7 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
 
             QuotaTokenEntry::live(interest)
         } else {
-            let durability = Durability::<host_functions::GolemQuotaTokenNew>::new(
-                self,
-                DurableFunctionType::WriteLocal,
-            )
-            .await?;
-            let replayed: HostResponseQuotaTokenAcquired = durability.replay(self).await?;
+            let replayed = durability.replay(self).await?;
 
             let credit_at = Utc
                 .timestamp_millis_opt(replayed.credit_at_ms)
@@ -135,15 +126,13 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
         self_: Resource<QuotaTokenEntry>,
         amount: u64,
     ) -> anyhow::Result<Result<Resource<ReservationEntry>, FailedReservation>> {
-        DurabilityHost::observe_function_call(self, "golem::quota::quota-token", "reserve");
-
         let durability = Durability::<host_functions::GolemQuotaTokenReserve>::new(
             self,
             DurableFunctionType::WriteRemote,
         )
         .await?;
 
-        let (reserve_result, is_live) = if self.state.is_live() {
+        let reserve_result = if durability.is_live() {
             let svc = self.state.quota_service.clone();
             let interest = get_live_lease_interest(self, &self_).await?;
             let result = svc.try_reserve(interest, amount).await;
@@ -163,9 +152,9 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
                 )
                 .await?;
 
-            (result, true)
+            result
         } else {
-            let replayed: HostResponseQuotaReserveResult = durability.replay(self).await?;
+            let replayed = durability.replay(self).await?;
 
             let credit_at = Utc
                 .timestamp_millis_opt(replayed.credit_after_at_ms)
@@ -176,20 +165,14 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
                 .get_mut(&self_)?
                 .update_replayed_credit(replayed.credit_after, credit_at);
 
-            (replayed.result, false)
+            replayed.result
         };
 
         match reserve_result {
             ReserveResult::Ok(reservation) => {
-                let res_entry = if is_live {
-                    ReservationEntry::Live {
-                        reservation,
-                        token: Resource::new_own(self_.rep()),
-                    }
-                } else {
-                    ReservationEntry::Replayed {
-                        token: Resource::new_own(self_.rep()),
-                    }
+                let res_entry = ReservationEntry {
+                    reservation,
+                    token: Resource::new_own(self_.rep()),
                 };
                 Ok(Ok(self.table().push(res_entry)?))
             }
@@ -332,7 +315,10 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
 
         let self_entry = self.table().get_mut(&self_)?;
         match (&mut self_entry.lease, other_entry.lease) {
-            (LeaseInterestHandle::Live(self_interest), LeaseInterestHandle::Live(other_interest)) => {
+            (
+                LeaseInterestHandle::Live(self_interest),
+                LeaseInterestHandle::Live(other_interest),
+            ) => {
                 self_interest
                     .merge(other_interest)
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -342,12 +328,10 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
                 p.last_credit = p.last_credit.saturating_add(other_p.last_credit);
             }
             (LeaseInterestHandle::Live(interest), LeaseInterestHandle::Pending(other_p)) => {
-                interest.expected_use =
-                    interest.expected_use.saturating_add(other_p.expected_use);
+                interest.expected_use = interest.expected_use.saturating_add(other_p.expected_use);
                 interest.credit_rate =
                     interest.expected_use as f64 * crate::services::quota::CREDIT_RATE_FACTOR;
-                interest.max_credit =
-                    crate::services::quota::max_credit_for(interest.expected_use);
+                interest.max_credit = crate::services::quota::max_credit_for(interest.expected_use);
                 interest.last_credit_value = interest
                     .last_credit_value
                     .saturating_add(other_p.last_credit)
@@ -373,56 +357,46 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> HostReservation for DurableWorkerCtx<Ctx> {
     async fn commit(&mut self, self_: Resource<ReservationEntry>, used: u64) -> anyhow::Result<()> {
-        DurabilityHost::observe_function_call(self, "golem::quota::reservation", "commit");
-
         let entry = self.table().delete(self_)?;
 
-        match entry {
-            ReservationEntry::Live { reservation, token } => {
-                let token_resource: Resource<QuotaTokenEntry> = Resource::new_own(token.rep());
-                let svc = self.state.quota_service.clone();
+        let durability = Durability::<host_functions::GolemQuotaReservationCommit>::new(
+            self,
+            DurableFunctionType::WriteRemote,
+        )
+        .await?;
 
-                let interest = get_live_lease_interest(self, &token_resource).await?;
-                svc.commit(interest, reservation, used).await;
-                let credit_after = interest.last_credit_value;
-                let credit_after_at_ms = interest.last_credit_value_at.timestamp_millis();
+        if durability.is_live() {
+            let token_resource: Resource<QuotaTokenEntry> = Resource::new_own(entry.token.rep());
+            let svc = self.state.quota_service.clone();
 
-                let durability = Durability::<host_functions::GolemQuotaReservationCommit>::new(
+            let interest = get_live_lease_interest(self, &token_resource).await?;
+            svc.commit(interest, entry.reservation, used).await;
+            let credit_after = interest.last_credit_value;
+            let credit_after_at_ms = interest.last_credit_value_at.timestamp_millis();
+
+            durability
+                .persist(
                     self,
-                    DurableFunctionType::WriteLocal,
+                    HostRequestQuotaCommitRequest { used },
+                    HostResponseQuotaCommitResult {
+                        credit_after,
+                        credit_after_at_ms,
+                    },
                 )
                 .await?;
-                durability
-                    .persist(
-                        self,
-                        HostRequestQuotaCommitRequest { used },
-                        HostResponseQuotaCommitResult {
-                            credit_after,
-                            credit_after_at_ms,
-                        },
-                    )
-                    .await?;
-            }
-            ReservationEntry::Replayed { token } => {
-                let token_resource: Resource<QuotaTokenEntry> = Resource::new_own(token.rep());
+        } else {
+            let token_resource: Resource<QuotaTokenEntry> = Resource::new_own(entry.token.rep());
 
-                let durability = Durability::<host_functions::GolemQuotaReservationCommit>::new(
-                    self,
-                    DurableFunctionType::WriteLocal,
-                )
-                .await?;
+            let replayed = durability.replay(self).await?;
 
-                let replayed: HostResponseQuotaCommitResult = durability.replay(self).await?;
+            let credit_at = Utc
+                .timestamp_millis_opt(replayed.credit_after_at_ms)
+                .single()
+                .unwrap_or_else(Utc::now);
 
-                let credit_at = Utc
-                    .timestamp_millis_opt(replayed.credit_after_at_ms)
-                    .single()
-                    .unwrap_or_else(Utc::now);
-
-                self.table()
-                    .get_mut(&token_resource)?
-                    .update_replayed_credit(replayed.credit_after, credit_at);
-            }
+            self.table()
+                .get_mut(&token_resource)?
+                .update_replayed_credit(replayed.credit_after, credit_at);
         }
 
         Ok(())
