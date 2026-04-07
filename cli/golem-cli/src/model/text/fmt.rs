@@ -15,6 +15,7 @@
 use crate::fuzzy::Match;
 pub use crate::log::log_table;
 pub use crate::log::logln;
+pub use crate::log::terminal_width;
 use crate::log::{LogColorize, LogIndent, current_indent_width, log_warn_action};
 use crate::model::app::ComponentLayerId;
 use crate::model::format::Format;
@@ -32,7 +33,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use synoptic::TokOpt;
-use terminal_size::terminal_size;
+
 
 pub trait TextView {
     fn log(&self);
@@ -447,10 +448,7 @@ pub fn new_table(headers: Vec<Column>) -> ComfyTable {
     use comfy_table::presets::{ASCII_FULL_CONDENSED, UTF8_FULL_CONDENSED};
     let colorize = SHOULD_COLORIZE.should_colorize();
     let indent_width = current_indent_width();
-    let term_width = terminal_size()
-        .map(|(w, _)| w.0 as usize)
-        .unwrap_or(80)
-        .saturating_sub(indent_width) as u16;
+    let term_width = (terminal_width() as usize).saturating_sub(indent_width) as u16;
     let mut table = ComfyTable::new();
     table
         .load_preset(if colorize {

@@ -31,8 +31,16 @@ static LOG_STATE_BUFFER: LazyLock<RwLock<Vec<String>>> = LazyLock::new(RwLock::d
 static TERMINAL_WIDTH: OnceLock<Option<usize>> = OnceLock::new();
 static WRAP_PADDING: usize = 2;
 
-fn terminal_width() -> Option<usize> {
+/// Returns the terminal width as `Some(width)` or `None` if not detectable.
+/// Cached via `OnceLock` — read once at startup for use in `LogState` text-wrapping.
+fn terminal_width_opt() -> Option<usize> {
     *TERMINAL_WIDTH.get_or_init(|| terminal_size().map(|(width, _)| width.0 as usize))
+}
+
+/// Returns the current terminal width in columns, or 80 if not detectable.
+/// Called fresh each time — no caching — so watch-mode adapts to terminal resizes.
+pub fn terminal_width() -> u16 {
+    terminal_size().map(|(w, _)| w.0).unwrap_or(80)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,7 +66,7 @@ impl LogState {
             indents: Vec::new(),
             stashed_indents: Vec::new(),
             calculated_indent: String::new(),
-            max_width: terminal_width().map(|w| w - WRAP_PADDING),
+            max_width: terminal_width_opt().map(|w| w - WRAP_PADDING),
             output: Output::Stdout,
         }
     }
@@ -91,7 +99,8 @@ impl LogState {
             self.calculated_indent
                 .push_str(indent.as_ref().map(|s| s.as_str()).unwrap_or("  "))
         }
-        self.max_width = terminal_width().map(|w| w - WRAP_PADDING - self.calculated_indent.len());
+        self.max_width =
+            terminal_width_opt().map(|w| w - WRAP_PADDING - self.calculated_indent.len());
     }
 
     fn set_output(&mut self, output: Output) {

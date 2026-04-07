@@ -46,7 +46,6 @@ use indoc::indoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
-use terminal_size::terminal_size;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerCreateView {
@@ -223,7 +222,7 @@ impl MessageWithFields for WorkerGetView {
 impl TextView for AgentsMetadataResponseView {
     fn log(&self) {
         let colorize = colored::control::SHOULD_COLORIZE.should_colorize();
-        let term_width = terminal_size().map(|(w, _)| w.0).unwrap_or(120);
+        let term_width = terminal_width();
         logln(Self::format_table_wide(
             &self.agents,
             term_width,
@@ -330,7 +329,7 @@ impl TruncatableTextView for AgentsMetadataResponseView {
         };
         let available_for_table = max_lines.saturating_sub(cursor_lines);
 
-        let term_width = terminal_size().map(|(w, _)| w.0).unwrap_or(120);
+        let term_width = terminal_width();
         let table_str = Self::format_table_wide(&self.agents, term_width, colorize, true);
 
         let mut out = truncate_rendered(table_str, available_for_table, "agents");
