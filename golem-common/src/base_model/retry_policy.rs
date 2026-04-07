@@ -315,5 +315,3 @@ declare_structs! {
         pub policy_json: Option<String>,
     }
 }
-
-
