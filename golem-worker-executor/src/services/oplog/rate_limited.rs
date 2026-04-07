@@ -14,6 +14,7 @@
 
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{CommitLevel, Oplog, OplogService};
+use crate::services::resource_limits::AtomicResourceEntry;
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use golem_common::model::component::ComponentId;
@@ -34,9 +35,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tracing::debug;
 
-/// Sentinel value meaning "no rate limit"
-pub const UNLIMITED: u64 = u64::MAX;
-
 fn make_limiter(per_second: u32) -> DefaultDirectRateLimiter {
     let quota = Quota::per_second(NonZeroU32::new(per_second).unwrap_or(nonzero!(1u32)));
     RateLimiter::direct(quota)
@@ -44,13 +42,16 @@ fn make_limiter(per_second: u32) -> DefaultDirectRateLimiter {
 
 /// A wrapper around an [`Oplog`] that rate-limits calls to [`Oplog::add`].
 ///
-/// When the configured rate (in writes per second) is [`UNLIMITED`], calls pass through
-/// immediately with no governor overhead. When a limit is set, `add` async-sleeps until
-/// the governor token bucket allows the write, then delegates to the inner oplog.
+/// The rate limit (writes per second) is read dynamically from the supplied
+/// [`AtomicResourceEntry`] on every `add` call. When the value changes the governor
+/// token bucket is rebuilt atomically behind an [`ArcSwap`] so the hot path
+/// remains lock-free. When the entry reports `u64::MAX` (unlimited) the governor
+/// is bypassed entirely.
 ///
 /// All other [`Oplog`] methods are pure delegation to the inner oplog.
 pub struct RateLimitedOplog {
     inner: Arc<dyn Oplog>,
+    resource_entry: Arc<AtomicResourceEntry>,
     /// Current governor rate limiter. Swapped atomically when the rate changes.
     limiter: ArcSwap<DefaultDirectRateLimiter>,
     /// Last rate value used to build the current limiter. Used to detect changes.
@@ -58,45 +59,27 @@ pub struct RateLimitedOplog {
 }
 
 impl RateLimitedOplog {
-    /// Creates a new `RateLimitedOplog` wrapping `inner`.
-    ///
-    /// `writes_per_second` sets the initial rate limit.  Pass [`UNLIMITED`] to disable
-    /// rate limiting entirely (the `ArcSwap` is still allocated but never consulted).
-    pub fn new(inner: Arc<dyn Oplog>, writes_per_second: u64) -> Self {
-        // Clamp to u32::MAX for governor; anything that large is effectively unlimited anyway.
-        let clamped = writes_per_second.min(u32::MAX as u64) as u32;
-        let initial_limiter = if writes_per_second == UNLIMITED || clamped == 0 {
-            // We need something in the ArcSwap even when unlimited; it is never consulted.
-            Arc::new(make_limiter(1))
-        } else {
-            Arc::new(make_limiter(clamped))
-        };
+    pub fn new(inner: Arc<dyn Oplog>, resource_entry: Arc<AtomicResourceEntry>) -> Self {
+        let initial_rate = resource_entry.oplog_writes_per_second();
+        let initial_limiter = limiter_for_rate(initial_rate);
         Self {
             inner,
+            resource_entry,
             limiter: ArcSwap::from(initial_limiter),
-            cached_rate: AtomicU64::new(writes_per_second),
+            cached_rate: AtomicU64::new(initial_rate),
         }
     }
+}
 
-    /// Returns the currently configured rate limit (writes per second), or [`UNLIMITED`].
-    pub fn current_rate(&self) -> u64 {
-        self.cached_rate.load(Ordering::Acquire)
-    }
-
-    /// Updates the rate limit. If `new_rate` differs from the current cached rate, the
-    /// governor is rebuilt and the `ArcSwap` is updated atomically.
-    pub fn set_rate(&self, new_rate: u64) {
-        let old = self.cached_rate.load(Ordering::Acquire);
-        if old == new_rate {
-            return;
-        }
-        self.cached_rate.store(new_rate, Ordering::Release);
-        if new_rate != UNLIMITED {
-            let clamped = new_rate.min(u32::MAX as u64) as u32;
-            if clamped > 0 {
-                self.limiter.store(Arc::new(make_limiter(clamped)));
-            }
-        }
+/// Returns an `Arc<DefaultDirectRateLimiter>` for the given rate, or a placeholder
+/// limiter that is never consulted when the rate is `u64::MAX` (unlimited).
+fn limiter_for_rate(rate: u64) -> Arc<DefaultDirectRateLimiter> {
+    if rate == u64::MAX || rate == 0 {
+        // Placeholder — never consulted when rate == u64::MAX.
+        Arc::new(make_limiter(1))
+    } else {
+        let clamped = rate.min(u32::MAX as u64) as u32;
+        Arc::new(make_limiter(clamped))
     }
 }
 
@@ -111,14 +94,23 @@ impl Debug for RateLimitedOplog {
 #[async_trait]
 impl Oplog for RateLimitedOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
-        let rate = self.cached_rate.load(Ordering::Acquire);
-        if rate != UNLIMITED {
+        let rate = self.resource_entry.oplog_writes_per_second();
+
+        if rate != u64::MAX {
+            // Detect rate change and atomically swap in a new limiter if needed.
+            let cached = self.cached_rate.load(Ordering::Acquire);
+            if cached != rate {
+                self.limiter.store(limiter_for_rate(rate));
+                self.cached_rate.store(rate, Ordering::Release);
+            }
+
             let limiter = self.limiter.load();
             if limiter.check().is_err() {
                 debug!("RateLimitedOplog: back-pressure applied (rate={rate} writes/sec)");
                 limiter.until_ready().await;
             }
         }
+
         self.inner.add(entry).await
     }
 
@@ -179,18 +171,19 @@ impl Oplog for RateLimitedOplog {
 /// instance it creates or opens.
 ///
 /// `create` and `open` delegate to the inner service, then wrap the returned oplog in a
-/// [`RateLimitedOplog`]. All other service methods are pure delegation.
+/// [`RateLimitedOplog`] backed by the provided [`AtomicResourceEntry`]. All other service
+/// methods are pure delegation.
 #[derive(Debug)]
 pub struct RateLimitedOplogService {
     inner: Arc<dyn OplogService>,
-    writes_per_second: u64,
+    resource_entry: Arc<AtomicResourceEntry>,
 }
 
 impl RateLimitedOplogService {
-    pub fn new(inner: Arc<dyn OplogService>, writes_per_second: u64) -> Self {
+    pub fn new(inner: Arc<dyn OplogService>, resource_entry: Arc<AtomicResourceEntry>) -> Self {
         Self {
             inner,
-            writes_per_second,
+            resource_entry,
         }
     }
 }
@@ -215,7 +208,10 @@ impl OplogService for RateLimitedOplogService {
                 execution_status,
             )
             .await;
-        Arc::new(RateLimitedOplog::new(inner_oplog, self.writes_per_second))
+        Arc::new(RateLimitedOplog::new(
+            inner_oplog,
+            self.resource_entry.clone(),
+        ))
     }
 
     async fn open(
@@ -236,7 +232,10 @@ impl OplogService for RateLimitedOplogService {
                 execution_status,
             )
             .await;
-        Arc::new(RateLimitedOplog::new(inner_oplog, self.writes_per_second))
+        Arc::new(RateLimitedOplog::new(
+            inner_oplog,
+            self.resource_entry.clone(),
+        ))
     }
 
     async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
@@ -292,6 +291,10 @@ impl OplogService for RateLimitedOplogService {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,12 +316,24 @@ mod tests {
 
     test_r::enable!();
 
-    async fn make_oplog(writes_per_second: u64) -> Arc<dyn Oplog> {
+    fn resource_entry_with_rate(writes_per_second: u64) -> Arc<AtomicResourceEntry> {
+        let entry = Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+        ));
+        entry.set_oplog_writes_per_second(writes_per_second);
+        entry
+    }
+
+    async fn make_oplog(resource_entry: Arc<AtomicResourceEntry>) -> Arc<dyn Oplog> {
         let indexed = Arc::new(InMemoryIndexedStorage::new());
         let blob = Arc::new(InMemoryBlobStorage::new());
         let service = RateLimitedOplogService::new(
             Arc::new(PrimaryOplogService::new(indexed, blob, 1, 1, 4096).await),
-            writes_per_second,
+            resource_entry,
         );
 
         let account_id = AccountId::new();
@@ -363,7 +378,8 @@ mod tests {
     // the remaining 10. Total elapsed must be >= 1.5 s (conservative bound).
     #[test]
     async fn rate_limit_slows_down_writes_that_exceed_the_quota() {
-        let oplog = make_oplog(5).await;
+        let entry = resource_entry_with_rate(5);
+        let oplog = make_oplog(entry).await;
 
         let start = Instant::now();
         for _ in 0..15 {
@@ -377,11 +393,12 @@ mod tests {
         );
     }
 
-    // When the rate is UNLIMITED (u64::MAX), writes complete with no meaningful
+    // When the rate is u64::MAX (unlimited), writes complete with no meaningful
     // delay — well under 100 ms for 100 entries.
     #[test]
     async fn unlimited_rate_has_no_meaningful_delay() {
-        let oplog = make_oplog(UNLIMITED).await;
+        let entry = resource_entry_with_rate(u64::MAX);
+        let oplog = make_oplog(entry).await;
 
         let start = Instant::now();
         for _ in 0..100 {

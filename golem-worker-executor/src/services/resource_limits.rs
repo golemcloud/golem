@@ -70,6 +70,11 @@ pub struct AtomicResourceEntry {
     // account. Uses the unlimited sentinel (10^18) when unlimited.
     // Refreshed via update_last_known_limits when batch sync responses arrive.
     max_concurrent_agents_per_executor: AtomicU64,
+
+    // Plan-level per-agent oplog write rate limit (writes per second).
+    // u64::MAX means unlimited (no rate limiting). Refreshed via
+    // update_last_known_limits when batch sync responses arrive.
+    oplog_writes_per_second: AtomicU64,
 }
 
 impl AtomicResourceEntry {
@@ -104,6 +109,7 @@ impl AtomicResourceEntry {
             unsynced_rpc_calls: AtomicU64::new(0),
             syncing_rpc_calls: AtomicU64::new(0),
             max_concurrent_agents_per_executor: AtomicU64::new(max_concurrent_agents_per_executor),
+            oplog_writes_per_second: AtomicU64::new(u64::MAX),
         }
     }
 
@@ -134,6 +140,7 @@ impl AtomicResourceEntry {
             max_concurrent_agents_per_executor: AtomicU64::new(
                 AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
             ),
+            oplog_writes_per_second: AtomicU64::new(u64::MAX),
         }
     }
 
@@ -167,6 +174,7 @@ impl AtomicResourceEntry {
             unsynced_rpc_calls: AtomicU64::new(0),
             syncing_rpc_calls: AtomicU64::new(0),
             max_concurrent_agents_per_executor: AtomicU64::new(max_concurrent_agents_per_executor),
+            oplog_writes_per_second: AtomicU64::new(u64::MAX),
         }
     }
 
@@ -176,6 +184,15 @@ impl AtomicResourceEntry {
 
     pub fn per_invocation_rpc_call_limit(&self) -> u64 {
         self.per_invocation_rpc_call_limit.load(Ordering::Acquire)
+    }
+
+    pub fn oplog_writes_per_second(&self) -> u64 {
+        self.oplog_writes_per_second.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_oplog_writes_per_second(&self, value: u64) {
+        self.oplog_writes_per_second.store(value, Ordering::Release);
     }
 
     fn secs_since_last_refresh(&self) -> i64 {
