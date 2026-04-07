@@ -14,8 +14,9 @@
 
 use crate::base_model::auth::AccountRole;
 use crate::base_model::plan::PlanId;
-use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use crate::{declare_revision, declare_structs, newtype_uuid};
 use derive_more::Display;
+use serde::{Deserialize, Serialize};
 use uuid::uuid;
 
 newtype_uuid!(AccountId, wit_name: "account-id", wit_owner: "golem:core@1.5.0/types", golem_api_grpc::proto::golem::common::AccountId);
@@ -26,9 +27,46 @@ impl AccountId {
 
 declare_revision!(AccountRevision);
 
-declare_transparent_newtypes! {
-    #[derive(Display)]
-    pub struct AccountEmail(pub String);
+#[derive(Debug, Clone, PartialEq, Serialize, Display)]
+#[cfg_attr(feature = "full", derive(poem_openapi::NewType))]
+#[repr(transparent)]
+#[serde(transparent)]
+pub struct AccountEmail(String);
+
+impl AccountEmail {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into().to_ascii_lowercase())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for AccountEmail {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(Self::new(value))
+    }
+}
+
+impl From<String> for AccountEmail {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&str> for AccountEmail {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
 }
 
 declare_structs! {

@@ -482,7 +482,7 @@ async fn list_visible_environments_filters_by_account_email(
 
     // Filter by user_1 email
     let filtered_1 = client_1
-        .list_visible_environments(Some(&user_1.account_email.0), None, None)
+        .list_visible_environments(Some(user_1.account_email.as_str()), None, None)
         .await?
         .values;
     assert!(
@@ -495,7 +495,7 @@ async fn list_visible_environments_filters_by_account_email(
 
     // Filter by user_2 email
     let filtered_2 = client_2
-        .list_visible_environments(Some(&user_2.account_email.0), None, None)
+        .list_visible_environments(Some(user_2.account_email.as_str()), None, None)
         .await?
         .values;
     assert!(
@@ -571,7 +571,7 @@ async fn list_visible_environments_combined_filters(
     // Apply all filters together (account_email + app_name + environment_name)
     let filtered = client
         .list_visible_environments(
-            Some(&user.account_email.0),
+            Some(user.account_email.as_str()),
             Some(&app_1.name.0),
             Some(&env_1.name.0),
         )
