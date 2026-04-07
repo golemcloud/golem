@@ -369,6 +369,12 @@ oplog_payload! {
         },
         StreamWriteResult {
             result: Result<(), SerializableStreamError>
+        },
+        StreamWriteWithBytes {
+            result: Result<Vec<u8>, SerializableStreamError>
+        },
+        StreamWriteZeroes {
+            result: Result<u64, SerializableStreamError>
         }
     }
 }
@@ -440,10 +446,10 @@ pub mod host_functions {
         (HttpTypesIncomingBodyStreamSkip => "http::types::incoming_body_stream", "skip", HttpRequest, StreamSkip),
         (HttpTypesIncomingBodyStreamBlockingSkip => "http::types::incoming_body_stream", "blocking_skip", HttpRequest, StreamSkip),
         (HttpTypesOutgoingBodyStreamCheckWrite => "http::types::outgoing_body_stream", "check_write", HttpRequest, StreamCheckWrite),
-        (HttpTypesOutgoingBodyStreamWrite => "http::types::outgoing_body_stream", "write", HttpRequest, StreamWriteResult),
+        (HttpTypesOutgoingBodyStreamWrite => "http::types::outgoing_body_stream", "write", HttpRequest, StreamWriteWithBytes),
         (HttpTypesOutgoingBodyStreamFlush => "http::types::outgoing_body_stream", "flush", HttpRequest, StreamWriteResult),
         (HttpTypesOutgoingBodyStreamBlockingFlush => "http::types::outgoing_body_stream", "blocking_flush", HttpRequest, StreamWriteResult),
-        (HttpTypesOutgoingBodyStreamWriteZeroes => "http::types::outgoing_body_stream", "write_zeroes", HttpRequest, StreamWriteResult),
+        (HttpTypesOutgoingBodyStreamWriteZeroes => "http::types::outgoing_body_stream", "write_zeroes", HttpRequest, StreamWriteZeroes),
         (HttpTypesOutgoingBodyStreamSplice => "http::types::outgoing_body_stream", "splice", HttpRequest, StreamSkip),
         (HttpTypesOutgoingBodyStreamBlockingSplice => "http::types::outgoing_body_stream", "blocking_splice", HttpRequest, StreamSkip),
         (WallClockNow => "wall_clock", "now", NoInput, WallClock),

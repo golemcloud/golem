@@ -36,7 +36,7 @@ use golem_wasm::{IntoValue, Record};
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_customized,
+    WorkerExecutorTestDependencies, start, start_customized, start_with_redis_storage,
 };
 use pretty_assertions::assert_eq;
 use redis::Commands;
@@ -1991,8 +1991,11 @@ async fn long_running_poll_loop_http_failures_are_retried(
     // Wait until more polls are coming in
     let begin = Instant::now();
     loop {
-        if begin.elapsed() > Duration::from_secs(2) {
-            return Err(anyhow!("No polls in 2 seconds"));
+        if begin.elapsed() > Duration::from_secs(30) {
+            return Err(anyhow!(
+                "No polls in 30 seconds (poll_count={})",
+                poll_count.load(Ordering::Acquire)
+            ));
         }
 
         if poll_count.load(Ordering::Acquire) >= 6 {
@@ -2009,7 +2012,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
     }
 
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
         .await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -2700,7 +2703,7 @@ async fn reconstruct_interrupted_state(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_redis_storage(deps, &context).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)

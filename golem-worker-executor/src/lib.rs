@@ -160,10 +160,16 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     fn create_quota_service(
         &self,
         shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        golem_config: &GolemConfig,
+        shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn QuotaService> {
-        Arc::new(crate::services::quota::GrpcQuotaService::new(
+        crate::services::quota::GrpcQuotaService::new(
             shard_manager_client,
-        ))
+            golem_config.grpc.port,
+            shutdown_token,
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(60),
+        )
     }
 
     fn create_environment_state_service(
@@ -234,6 +240,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         _additional_deps: &Ctx::ExtraDeps,
     ) -> Arc<dyn RdbmsService> {
         Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms))
+    }
+
+    fn wrap_rpc(
+        &self,
+        rpc: Arc<dyn crate::services::rpc::Rpc>,
+    ) -> Arc<dyn crate::services::rpc::Rpc> {
+        rpc
     }
 
     async fn create_services(
@@ -348,6 +361,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
+        let rpc = self.wrap_rpc(rpc);
 
         Ok(All::new(
             active_workers,
@@ -730,7 +744,8 @@ pub async fn create_worker_executor_impl<
     let shard_manager_service =
         bootstrap.create_shard_manager_service(shard_manager_client.clone());
 
-    let quota_service = bootstrap.create_quota_service(shard_manager_client);
+    let quota_service =
+        bootstrap.create_quota_service(shard_manager_client, &golem_config, shutdown_token.clone());
 
     let config = bootstrap.create_wasmtime_config(&golem_config.engine);
     let engine = Arc::new(Engine::new(&config)?);

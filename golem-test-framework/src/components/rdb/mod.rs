@@ -110,6 +110,10 @@ impl DbInfo {
                     "GOLEM__DB__CONFIG__MAX_CONNECTIONS".to_string(),
                     "10".to_string(),
                 ),
+                (
+                    "GOLEM__DB__CONFIG__FOREIGN_KEYS".to_string(),
+                    "false".to_string(),
+                ),
             ]
             .into(),
         }

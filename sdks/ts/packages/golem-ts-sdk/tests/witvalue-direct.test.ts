@@ -14,6 +14,7 @@
 
 import { describe, it, expect } from 'vitest';
 import * as WitValue from '../src/internal/mapping/values/WitValue';
+import { matchesType } from '../src/internal/mapping/values/serializer';
 import {
   AnalysedType,
   bool,
@@ -391,6 +392,43 @@ describe('WitValue direct: variant', () => {
     expectRoundTrip({ tag: 'text', val: 'hello' }, typ, 'variant-value');
   });
 
+  it('uses the declared payload key instead of an incidental extra key', () => {
+    const typ = variant(
+      undefined,
+      [{ tagLiteralName: 'text', valueType: ['text', { kind: 'string' } as any] }],
+      [case_('text', str())],
+    );
+
+    const back = roundTrip(
+      { tag: 'text', extra: 'wrong payload', text: 'hello' },
+      typ,
+      'variant-value',
+    );
+
+    expect(back).toEqual({ tag: 'text', text: 'hello' });
+  });
+
+  it('rejects tagged variants when the declared payload key is missing', () => {
+    const typ = variant(
+      undefined,
+      [{ tagLiteralName: 'text', valueType: ['text', { kind: 'string' } as any] }],
+      [case_('text', str())],
+    );
+
+    expectSerializationError({ tag: 'text', extra: 'hello' }, typ);
+  });
+
+  it('matches tagged variants using the declared payload key', () => {
+    const typ = variant(
+      undefined,
+      [{ tagLiteralName: 'text', valueType: ['text', { kind: 'string' } as any] }],
+      [case_('text', str())],
+    );
+
+    expect(matchesType({ tag: 'text', extra: 'wrong payload', text: 'hello' }, typ)).toBe(true);
+    expect(matchesType({ tag: 'text', extra: 'hello' }, typ)).toBe(false);
+  });
+
   it('round-trips tagged variant unit case (no payload)', () => {
     const typ = variant(
       undefined,
@@ -515,6 +553,19 @@ describe('WitValue direct: result', () => {
       );
       const input = { tag: 'ok', value: 42 };
       const back = roundTrip(input, typ, 'result-value');
+      expect(back).toEqual({ tag: 'ok', value: 42 });
+    });
+
+    it('uses the declared ok payload key instead of an incidental extra key', () => {
+      const typ = result(
+        undefined,
+        { tag: 'custom', okValueName: 'value', errValueName: 'error' },
+        u32(),
+        str(),
+      );
+
+      const back = roundTrip({ tag: 'ok', extra: 7, value: 42 }, typ, 'result-value');
+
       expect(back).toEqual({ tag: 'ok', value: 42 });
     });
 

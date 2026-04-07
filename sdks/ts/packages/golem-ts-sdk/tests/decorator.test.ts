@@ -30,7 +30,7 @@ import { FooAgent } from './validAgents';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { WitNodeBuilder } from '../src/internal/mapping/values/WitNodeBuilder';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
-import { Uuid } from 'golem:agent/host@1.5.0';
+import { Uuid } from '../src/uuid';
 import { AgentClassName } from '../src';
 
 // Test setup ensures loading agents prior to every test
@@ -945,10 +945,7 @@ describe('Annotated FooAgent class', () => {
     builder.string('hello');
     const witValue = builder.build();
 
-    const uuid: Uuid = {
-      highBits: BigInt(1234),
-      lowBits: BigInt(5678),
-    };
+    const uuid = new Uuid(BigInt(1234), BigInt(5678));
 
     (globalThis as any).currentAgentId = `FooAgent("hello")[${uuid.highBits}-${uuid.lowBits}]`;
 
@@ -961,7 +958,10 @@ describe('Annotated FooAgent class', () => {
     );
     expect(fooResult.tag).toEqual('ok');
     const foo = fooResult.val as ResolvedAgent;
-    expect(foo.phantomId()).toEqual(uuid);
+    const phantomId = foo.phantomId();
+    expect(phantomId).toBeInstanceOf(Uuid);
+    expect(phantomId!.highBits).toEqual(uuid.highBits);
+    expect(phantomId!.lowBits).toEqual(uuid.lowBits);
   });
   it('get is implemented by the decorator', async () => {
     const agentType = AgentTypeRegistry.get(new AgentClassName('FooAgent'));

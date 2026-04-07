@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentId } from '../../agentId';
+import { ParsedAgentId } from '../../agentId';
 
-let agentId: AgentId | null = null;
+let agentId: ParsedAgentId | null = null;
 
-export function setAgentId(id: AgentId): void {
+export function setAgentId(id: ParsedAgentId): void {
   agentId = id;
 }
 
-export function getAgentId(): AgentId | null {
+export function getAgentId(): ParsedAgentId | null {
   return agentId;
 }

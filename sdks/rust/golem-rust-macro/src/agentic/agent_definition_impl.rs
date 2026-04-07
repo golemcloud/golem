@@ -565,7 +565,8 @@ fn get_agent_type_with_remote_client(
                 mode: #mode_value,
                 http_mount: #http_options,
                 snapshotting: #snapshotting_value,
-                config: #config_impl
+                config: #config_impl,
+                sorted_method_indices: vec![],
             }
         },
         remote_client,

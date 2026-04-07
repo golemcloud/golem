@@ -52,7 +52,7 @@ impl<T: AllowedMimeTypes> UnstructuredBinary<T> {
         UnstructuredBinary::Url(url.into())
     }
 
-    #[cfg(any(feature = "host", feature = "stub"))]
+    #[cfg(any(feature = "host", feature = "guest"))]
     pub fn from_wit_value(wit_value: crate::WitValue) -> Result<Self, String> {
         let value = crate::Value::from(wit_value);
 

@@ -19,7 +19,7 @@ import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as AnalysedType from '../src/internal/mapping/types/analysedType';
 import { TypeScope } from '../src/internal/mapping/types/scope';
 import * as Either from '../src/newTypes/either';
-import { agent, AgentId, BaseAgent } from '../src';
+import { agent, ParsedAgentId, BaseAgent } from '../src';
 import { typeMapper } from '../src/internal/mapping/types/typeMapperImpl';
 import { validateAgentHttpConfig } from '../src/internal/http/validation';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
@@ -300,7 +300,7 @@ function getAnalysedTypeInFun1(
 }
 
 export class UndecoratedAgent extends BaseAgent {
-  async foo(): Promise<AgentId> {
+  async foo(): Promise<ParsedAgentId> {
     return this.getId();
   }
 }

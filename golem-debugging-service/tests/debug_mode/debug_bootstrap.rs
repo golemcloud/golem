@@ -80,6 +80,8 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
     fn create_quota_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _golem_config: &GolemConfig,
+        _shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn golem_worker_executor::services::quota::QuotaService> {
         Arc::new(golem_worker_executor::services::quota::UnlimitedQuotaService)
     }
