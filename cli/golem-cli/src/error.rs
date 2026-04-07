@@ -264,32 +264,21 @@ pub mod service {
     }
 
     trait ClientErrorResultExt<R, E> {
-        fn map_status_to_none(self, status_code: u16) -> Result<Option<R>, golem_client::Error<E>>
-        where
-            E: golem_client::ErrorInfo;
-
         fn map_not_found_to_none(self) -> Result<Option<R>, golem_client::Error<E>>
         where
             E: golem_client::ErrorInfo;
     }
 
     impl<R, E> ClientErrorResultExt<R, E> for Result<R, golem_client::Error<E>> {
-        fn map_status_to_none(self, status_code: u16) -> Result<Option<R>, golem_client::Error<E>>
+        fn map_not_found_to_none(self) -> Result<Option<R>, golem_client::Error<E>>
         where
             E: golem_client::ErrorInfo,
         {
             match self {
                 Ok(result) => Ok(Some(result)),
-                Err(error) if error.is_status_code(status_code) => Ok(None),
+                Err(error) if error.is_not_found() => Ok(None),
                 Err(error) => Err(error),
             }
-        }
-
-        fn map_not_found_to_none(self) -> Result<Option<R>, golem_client::Error<E>>
-        where
-            E: golem_client::ErrorInfo,
-        {
-            self.map_status_to_none(404)
         }
     }
 
