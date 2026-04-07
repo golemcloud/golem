@@ -540,7 +540,8 @@ impl PrimaryOplogState {
             last_idx = oplog_idx;
         }
         let pairs_ref: Vec<(u64, &OplogEntry)> = pairs.iter().map(|(id, e)| (*id, e)).collect();
-        let bytes_written = self.indexed_storage
+        let bytes_written = self
+            .indexed_storage
             .with_entity("oplog", "append", "entry")
             .append_many(
                 IndexedStorageNamespace::OpLog {
@@ -560,8 +561,18 @@ impl PrimaryOplogState {
         if entry_count > 0 {
             let account_id = self.account_id.to_string();
             let environment_id = self.owned_agent_id.environment_id().to_string();
-            record_storage_bytes_written(STORAGE_TYPE_OPLOG, &account_id, &environment_id, bytes_written);
-            record_storage_objects_written(STORAGE_TYPE_OPLOG, &account_id, &environment_id, entry_count);
+            record_storage_bytes_written(
+                STORAGE_TYPE_OPLOG,
+                &account_id,
+                &environment_id,
+                bytes_written,
+            );
+            record_storage_objects_written(
+                STORAGE_TYPE_OPLOG,
+                &account_id,
+                &environment_id,
+                entry_count,
+            );
         }
         drop(pairs_ref);
 

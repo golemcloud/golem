@@ -20,7 +20,8 @@ mod tests;
 pub use concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
 pub use fs_semaphore::{
     FILESYSTEM_STORAGE_PERMIT_SIZE_KB, FilesystemStorageSemaphore,
-    bytes_to_filesystem_storage_permits, filesystem_storage_pool_bytes_to_permits,
+    bytes_to_filesystem_storage_permits, filesystem_storage_bytes_rounded_up,
+    filesystem_storage_permits_to_bytes, filesystem_storage_pool_bytes_to_permits,
 };
 
 use std::collections::BTreeMap;

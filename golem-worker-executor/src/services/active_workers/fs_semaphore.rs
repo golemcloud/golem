@@ -44,7 +44,7 @@ impl FilesystemStorageSemaphore {
     /// Available bytes remaining in the pool (rounded down to KB boundary).
     #[cfg(test)]
     pub(crate) fn available_bytes(&self) -> u64 {
-        self.semaphore.available_permits() as u64 * FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024
+        filesystem_storage_permits_to_bytes(self.semaphore.available_permits() as u32)
     }
 
     /// Expose the inner semaphore for tests that need to simulate external
@@ -82,7 +82,7 @@ impl FilesystemStorageSemaphore {
                         self.semaphore.available_permits(),
                         permit.num_permits()
                     );
-                    let actual_bytes = permits as u64 * FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024;
+                    let actual_bytes = filesystem_storage_permits_to_bytes(permits);
                     record_filesystem_pool_acquired(actual_bytes);
                     break permit;
                 }
@@ -122,7 +122,7 @@ impl FilesystemStorageSemaphore {
                         storage_bytes,
                         self.semaphore.available_permits()
                     );
-                    let actual_bytes = permits as u64 * FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024;
+                    let actual_bytes = filesystem_storage_permits_to_bytes(permits);
                     record_filesystem_pool_acquired(actual_bytes);
                     break Some(permit);
                 }
@@ -160,6 +160,20 @@ pub const FILESYSTEM_STORAGE_PERMIT_SIZE_KB: u64 = 1;
 pub fn bytes_to_filesystem_storage_permits(bytes: u64) -> u32 {
     let kb = bytes.div_ceil(FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024);
     kb.min(u32::MAX as u64) as u32
+}
+
+/// Convert a permit count back to bytes. This is the inverse of
+/// `bytes_to_filesystem_storage_permits` and always returns a multiple of
+/// `FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024`.
+pub fn filesystem_storage_permits_to_bytes(permits: u32) -> u64 {
+    permits as u64 * FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024
+}
+
+/// Round a byte count up to the nearest permit boundary (1 KB).
+/// Returns the actual number of bytes consumed from the pool when acquiring
+/// permits for `bytes` — i.e. what will be released when those permits are dropped.
+pub fn filesystem_storage_bytes_rounded_up(bytes: u64) -> u64 {
+    filesystem_storage_permits_to_bytes(bytes_to_filesystem_storage_permits(bytes))
 }
 
 /// Convert a storage semaphore pool size in bytes to the number of permits to

@@ -26,7 +26,6 @@ use self::status::{
 use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
-use crate::services::active_workers::FILESYSTEM_STORAGE_PERMIT_SIZE_KB;
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
@@ -887,7 +886,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let n = permits_to_release as usize;
             let actual_n = n.min(permit.num_permits());
             let to_drop = permit.split(actual_n);
-            let released_bytes = actual_n as u64 * FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024;
+            let released_bytes =
+                crate::services::active_workers::filesystem_storage_permits_to_bytes(
+                    actual_n as u32,
+                );
             record_filesystem_pool_released(released_bytes);
             drop(to_drop); // returns permits to the semaphore
         }
@@ -2298,7 +2300,9 @@ struct RunningWorker {
 impl Drop for RunningWorker {
     fn drop(&mut self) {
         if let Some(ref permit) = self.filesystem_storage_permit {
-            let bytes = permit.num_permits() as u64 * FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024;
+            let bytes = crate::services::active_workers::filesystem_storage_permits_to_bytes(
+                permit.num_permits() as u32,
+            );
             if bytes > 0 {
                 record_filesystem_pool_released(bytes);
             }
