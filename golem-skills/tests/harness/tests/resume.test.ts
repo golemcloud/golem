@@ -5,6 +5,10 @@ import {
   type ScenarioSpec,
   type StepSpec,
 } from "../src/executor.js";
+
+function makePromptStep(id: string, prompt: string): StepSpec {
+  return { tag: "prompt", id, prompt };
+}
 import type { AgentDriver } from "../src/driver/base.js";
 import { SkillWatcher } from "../src/watcher.js";
 
@@ -45,8 +49,8 @@ describe("Resume-from validation", () => {
     const spec: ScenarioSpec = {
       name: "test",
       steps: [
-        { id: "step-1", prompt: "hello" } as StepSpec,
-        { id: "step-2", prompt: "world" } as StepSpec,
+        makePromptStep("step-1", "hello"),
+        makePromptStep("step-2", "world"),
       ],
     };
 
@@ -72,8 +76,8 @@ describe("Resume-from validation", () => {
     const spec: ScenarioSpec = {
       name: "test",
       steps: [
-        { id: "step-1", prompt: "hello" } as StepSpec,
-        { id: "step-2", prompt: "world" } as StepSpec,
+        makePromptStep("step-1", "hello"),
+        makePromptStep("step-2", "world"),
       ],
     };
 

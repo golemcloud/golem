@@ -8,6 +8,10 @@ import type {
 } from "../src/html-report.js";
 import type { StepSpec } from "../src/executor.js";
 
+function makePromptStep(id: string, prompt: string): StepSpec {
+  return { tag: "prompt", id, prompt };
+}
+
 describe("escapeHtml", () => {
   it("escapes HTML special characters", () => {
     assert.equal(
@@ -60,7 +64,7 @@ describe("generateHtmlReport", () => {
       durationSeconds: 10,
       results: [
         {
-          step: { id: "step-1", prompt: "Do something" } as StepSpec,
+          step: makePromptStep("step-1", "Do something"),
           success: true,
           durationSeconds: 10,
           expectedSkills: [],
@@ -77,7 +81,7 @@ describe("generateHtmlReport", () => {
       durationSeconds: 32.5,
       results: [
         {
-          step: { id: "step-1", prompt: "Build it" } as StepSpec,
+          step: makePromptStep("step-1", "Build it"),
           success: false,
           durationSeconds: 32.5,
           expectedSkills: [],
@@ -125,7 +129,7 @@ describe("generateHtmlReport", () => {
         durationSeconds: 1,
         results: [
           {
-            step: { id: "step-1", prompt: "test" } as StepSpec,
+            step: makePromptStep("step-1", "test"),
             success: true,
             durationSeconds: 1,
             expectedSkills: [],
@@ -151,7 +155,7 @@ describe("generateHtmlReport", () => {
         durationSeconds: 20,
         results: [
           {
-            step: { id: "flaky", prompt: "flaky step" } as StepSpec,
+            step: makePromptStep("flaky", "flaky step"),
             success: true,
             durationSeconds: 20,
             expectedSkills: [],
@@ -193,7 +197,7 @@ describe("generateHtmlReport", () => {
         durationSeconds: 5,
         results: [
           {
-            step: { id: "failing", prompt: "build it" } as StepSpec,
+            step: makePromptStep("failing", "build it"),
             success: false,
             durationSeconds: 5,
             expectedSkills: [],

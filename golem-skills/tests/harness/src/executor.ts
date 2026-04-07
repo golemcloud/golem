@@ -168,17 +168,26 @@ type HttpSpec = {
   headers?: Record<string, string>;
 };
 
-export type StepSpec = StepCommon &
-  (
-    | { tag: "prompt"; prompt: string; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined; http?: undefined }
-    | { tag: "invoke"; invoke: InvokeSpec; prompt?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined; http?: undefined }
-    | { tag: "shell"; shell: ShellSpec; prompt?: undefined; invoke?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined; http?: undefined }
-    | { tag: "trigger"; trigger: TriggerSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined; http?: undefined }
-    | { tag: "create_agent"; create_agent: CreateAgentSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; delete_agent?: undefined; sleep?: undefined; http?: undefined }
-    | { tag: "delete_agent"; delete_agent: DeleteAgentSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; sleep?: undefined; http?: undefined }
-    | { tag: "sleep"; sleep: number; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; http?: undefined }
-    | { tag: "http"; http: HttpSpec; prompt?: undefined; invoke?: undefined; shell?: undefined; trigger?: undefined; create_agent?: undefined; delete_agent?: undefined; sleep?: undefined }
-  );
+type RawStepSpec = z.infer<typeof StepSpecSchema>;
+
+type PromptStep = StepCommon & { tag: "prompt"; prompt: string };
+type InvokeStep = StepCommon & { tag: "invoke"; invoke: InvokeSpec };
+type ShellStep = StepCommon & { tag: "shell"; shell: ShellSpec };
+type TriggerStep = StepCommon & { tag: "trigger"; trigger: TriggerSpec };
+type CreateAgentStep = StepCommon & { tag: "create_agent"; create_agent: CreateAgentSpec };
+type DeleteAgentStep = StepCommon & { tag: "delete_agent"; delete_agent: DeleteAgentSpec };
+type SleepStep = StepCommon & { tag: "sleep"; sleep: number };
+type HttpStep = StepCommon & { tag: "http"; http: HttpSpec };
+
+export type StepSpec =
+  | PromptStep
+  | InvokeStep
+  | ShellStep
+  | TriggerStep
+  | CreateAgentStep
+  | DeleteAgentStep
+  | SleepStep
+  | HttpStep;
 
 export interface ScenarioSpec {
   name: string;
@@ -197,6 +206,36 @@ export interface ScenarioSpec {
   steps: StepSpec[];
 }
 
+export function parseStep(raw: RawStepSpec): StepSpec {
+  const tag = ACTION_FIELDS.find((f) => raw[f] !== undefined);
+  if (!tag) throw new Error("Step has no action field");
+
+  const common: StepCommon = {
+    ...(raw.id !== undefined && { id: raw.id }),
+    ...(raw.expectedSkills !== undefined && { expectedSkills: raw.expectedSkills }),
+    ...(raw.allowedExtraSkills !== undefined && { allowedExtraSkills: raw.allowedExtraSkills }),
+    ...(raw.strictSkillMatch !== undefined && { strictSkillMatch: raw.strictSkillMatch }),
+    ...(raw.timeout !== undefined && { timeout: raw.timeout }),
+    ...(raw.continue_session !== undefined && { continue_session: raw.continue_session }),
+    ...(raw.verify !== undefined && { verify: raw.verify }),
+    ...(raw.expect !== undefined && { expect: raw.expect }),
+    ...(raw.only_if !== undefined && { only_if: raw.only_if }),
+    ...(raw.skip_if !== undefined && { skip_if: raw.skip_if }),
+    ...(raw.retry !== undefined && { retry: raw.retry }),
+  };
+
+  switch (tag) {
+    case "prompt": return { ...common, tag, prompt: raw.prompt! };
+    case "invoke": return { ...common, tag, invoke: raw.invoke! };
+    case "shell": return { ...common, tag, shell: raw.shell! };
+    case "trigger": return { ...common, tag, trigger: raw.trigger! };
+    case "create_agent": return { ...common, tag, create_agent: raw.create_agent! };
+    case "delete_agent": return { ...common, tag, delete_agent: raw.delete_agent! };
+    case "sleep": return { ...common, tag, sleep: raw.sleep! };
+    case "http": return { ...common, tag, http: raw.http! };
+  }
+}
+
 export class ScenarioLoader {
   static async load(filePath: string): Promise<ScenarioSpec> {
     const content = await fs.readFile(filePath, "utf8");
@@ -208,12 +247,8 @@ export class ScenarioLoader {
         .join("\n");
       throw new Error(`Invalid scenario file "${filePath}":\n${issues}`);
     }
-    // Add the tag field based on which action field is present
     const data = result.data;
-    const steps = data.steps.map((step) => {
-      const tag = ACTION_FIELDS.find((f) => step[f] !== undefined)!;
-      return { ...step, tag } as StepSpec;
-    });
+    const steps = data.steps.map(parseStep);
     return { ...data, steps } as ScenarioSpec;
   }
 }
@@ -280,7 +315,7 @@ function normalizePlatform(platform: string): string {
 }
 
 export function shouldRunStep(
-  step: StepSpec,
+  step: Pick<StepCommon, "only_if" | "skip_if">,
   context: { agent?: string; language?: string; os: string },
 ): boolean {
   const normalizedOs = normalizePlatform(context.os);
@@ -342,44 +377,39 @@ export class ScenarioExecutor {
     const subArr = (arr: string[] | undefined) =>
       arr?.map((s) => substituteVariables(s, variables));
 
-    return {
-      ...step,
-      prompt: sub(step.prompt),
-      shell: step.shell
-        ? {
-          command: substituteVariables(step.shell.command, variables),
-          args: subArr(step.shell.args),
-          cwd: sub(step.shell.cwd),
-        }
-        : step.shell,
-      invoke: step.invoke
-        ? {
+    switch (step.tag) {
+      case "prompt":
+        return { ...step, prompt: substituteVariables(step.prompt, variables) };
+      case "invoke":
+        return { ...step, invoke: {
           agent: substituteVariables(step.invoke.agent, variables),
           function: substituteVariables(step.invoke.function, variables),
           args: sub(step.invoke.args),
-        }
-        : step.invoke,
-      trigger: step.trigger
-        ? {
+        }};
+      case "shell":
+        return { ...step, shell: {
+          command: substituteVariables(step.shell.command, variables),
+          args: subArr(step.shell.args),
+          cwd: sub(step.shell.cwd),
+        }};
+      case "trigger":
+        return { ...step, trigger: {
           agent: substituteVariables(step.trigger.agent, variables),
           function: substituteVariables(step.trigger.function, variables),
           args: sub(step.trigger.args),
-        }
-        : step.trigger,
-      create_agent: step.create_agent
-        ? {
+        }};
+      case "create_agent":
+        return { ...step, create_agent: {
           ...step.create_agent,
           name: substituteVariables(step.create_agent.name, variables),
-        }
-        : step.create_agent,
-      delete_agent: step.delete_agent
-        ? {
+        }};
+      case "delete_agent":
+        return { ...step, delete_agent: {
           ...step.delete_agent,
           name: substituteVariables(step.delete_agent.name, variables),
-        }
-        : step.delete_agent,
-      http: step.http
-        ? {
+        }};
+      case "http":
+        return { ...step, http: {
           ...step.http,
           url: substituteVariables(step.http.url, variables),
           body: sub(step.http.body),
@@ -391,9 +421,10 @@ export class ScenarioExecutor {
               ]),
             )
             : step.http.headers,
-        }
-        : step.http,
-    } as StepSpec;
+        }};
+      case "sleep":
+        return { ...step };
+    }
   }
 
   async execute(spec: ScenarioSpec): Promise<ScenarioRunResult> {
@@ -405,7 +436,7 @@ export class ScenarioExecutor {
         os: process.platform,
       };
       // Reuse shouldRunStep with a fake step that has only skip_if
-      if (!shouldRunStep({ skip_if: spec.skip_if } as StepSpec, ctx)) {
+      if (!shouldRunStep({ skip_if: spec.skip_if }, ctx)) {
         console.log(`Scenario ${spec.name}: skipped (skip_if condition met)`);
         return {
           status: "pass",
@@ -639,22 +670,31 @@ export class ScenarioExecutor {
     };
 
     // Dispatch action
-    if (step.sleep !== undefined) {
-      await this.executeSleep(stepLabel, step.sleep);
-    } else if (step.create_agent) {
-      await this.executeCreateAgent(stepLabel, step.create_agent, stepTimeoutSeconds, commandEnv, fail);
-    } else if (step.delete_agent) {
-      await this.executeDeleteAgent(stepLabel, step.delete_agent, stepTimeoutSeconds, commandEnv, fail);
-    } else if (step.shell) {
-      await this.executeShell(stepLabel, step.shell, step.expect, stepTimeoutSeconds, commandEnv, fail);
-    } else if (step.trigger) {
-      this.executeTrigger(stepLabel, step.trigger, stepTimeoutSeconds, commandEnv);
-    } else if (step.prompt) {
-      isFirstPrompt = await this.executePrompt(stepLabel, step.prompt, step.continue_session, isFirstPrompt, stepTimeoutSeconds, fail);
-    } else if (step.invoke) {
-      await this.executeInvoke(stepLabel, step.invoke, step.expect, stepTimeoutSeconds, commandEnv, fail);
-    } else if (step.http) {
-      await this.executeHttp(stepLabel, step.http, step.expect, stepTimeoutSeconds, fail);
+    switch (step.tag) {
+      case "sleep":
+        await this.executeSleep(stepLabel, step.sleep);
+        break;
+      case "create_agent":
+        await this.executeCreateAgent(stepLabel, step.create_agent, stepTimeoutSeconds, commandEnv, fail);
+        break;
+      case "delete_agent":
+        await this.executeDeleteAgent(stepLabel, step.delete_agent, stepTimeoutSeconds, commandEnv, fail);
+        break;
+      case "shell":
+        await this.executeShell(stepLabel, step.shell, step.expect, stepTimeoutSeconds, commandEnv, fail);
+        break;
+      case "trigger":
+        this.executeTrigger(stepLabel, step.trigger, stepTimeoutSeconds, commandEnv);
+        break;
+      case "prompt":
+        isFirstPrompt = await this.executePrompt(stepLabel, step.prompt, step.continue_session, isFirstPrompt, stepTimeoutSeconds, fail);
+        break;
+      case "invoke":
+        await this.executeInvoke(stepLabel, step.invoke, step.expect, stepTimeoutSeconds, commandEnv, fail);
+        break;
+      case "http":
+        await this.executeHttp(stepLabel, step.http, step.expect, stepTimeoutSeconds, fail);
+        break;
     }
 
     // Verify skills activation

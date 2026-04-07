@@ -308,10 +308,11 @@ Options:
       for (let i = 0; i < spec.steps.length; i++) {
         const step = spec.steps[i];
         const label = step.id ?? `step-${i + 1}`;
-        const promptPreview = step.prompt
-          ? step.prompt.length > 60
-            ? step.prompt.slice(0, 57) + "..."
-            : step.prompt
+        const promptText = step.tag === "prompt" ? step.prompt : undefined;
+        const promptPreview = promptText
+          ? promptText.length > 60
+            ? promptText.slice(0, 57) + "..."
+            : promptText
           : "(no prompt)";
         const skills = step.expectedSkills?.join(", ") || "(none)";
         const timeoutVal =
