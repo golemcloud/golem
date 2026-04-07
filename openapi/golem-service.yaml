@@ -10741,6 +10741,632 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/TypeVariant'
+    ApiAddDelayPolicy:
+      title: ApiAddDelayPolicy
+      type: object
+      properties:
+        delayMs:
+          type: integer
+          format: uint64
+        inner:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+      required:
+      - delayMs
+      - inner
+    ApiBooleanValue:
+      title: ApiBooleanValue
+      type: object
+      properties:
+        value:
+          type: boolean
+      required:
+      - value
+    ApiClampPolicy:
+      title: ApiClampPolicy
+      type: object
+      properties:
+        minDelayMs:
+          type: integer
+          format: uint64
+        maxDelayMs:
+          type: integer
+          format: uint64
+        inner:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+      required:
+      - minDelayMs
+      - maxDelayMs
+      - inner
+    ApiCountBoxPolicy:
+      title: ApiCountBoxPolicy
+      type: object
+      properties:
+        maxRetries:
+          type: integer
+          format: uint32
+        inner:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+      required:
+      - maxRetries
+      - inner
+    ApiExponentialPolicy:
+      title: ApiExponentialPolicy
+      type: object
+      properties:
+        baseDelayMs:
+          type: integer
+          format: uint64
+        factor:
+          type: number
+          format: double
+      required:
+      - baseDelayMs
+      - factor
+    ApiFibonacciPolicy:
+      title: ApiFibonacciPolicy
+      type: object
+      properties:
+        firstMs:
+          type: integer
+          format: uint64
+        secondMs:
+          type: integer
+          format: uint64
+      required:
+      - firstMs
+      - secondMs
+    ApiFilteredOnPolicy:
+      title: ApiFilteredOnPolicy
+      type: object
+      properties:
+        predicate:
+          $ref: '#/components/schemas/ApiPredicate'
+        inner:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+      required:
+      - predicate
+      - inner
+    ApiImmediatePolicy:
+      title: ApiImmediatePolicy
+      type: object
+    ApiIntegerValue:
+      title: ApiIntegerValue
+      type: object
+      properties:
+        value:
+          type: integer
+          format: int64
+      required:
+      - value
+    ApiJitterPolicy:
+      title: ApiJitterPolicy
+      type: object
+      properties:
+        factor:
+          type: number
+          format: double
+        inner:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+      required:
+      - factor
+      - inner
+    ApiNeverPolicy:
+      title: ApiNeverPolicy
+      type: object
+    ApiPeriodicPolicy:
+      title: ApiPeriodicPolicy
+      type: object
+      properties:
+        delayMs:
+          type: integer
+          format: uint64
+      required:
+      - delayMs
+    ApiPredicate:
+      discriminator:
+        propertyName: type
+        mapping:
+          PropEq: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+          PropNeq: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+          PropGt: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+          PropGte: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+          PropLt: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+          PropLte: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+          PropExists: '#/components/schemas/ApiPredicate_ApiPropertyExistence'
+          PropIn: '#/components/schemas/ApiPredicate_ApiPropertySetCheck'
+          PropMatches: '#/components/schemas/ApiPredicate_ApiPropertyPattern'
+          PropStartsWith: '#/components/schemas/ApiPredicate_ApiPropertyPrefix'
+          PropContains: '#/components/schemas/ApiPredicate_ApiPropertySubstring'
+          And: '#/components/schemas/ApiPredicate_ApiPredicatePair'
+          Or: '#/components/schemas/ApiPredicate_ApiPredicatePair'
+          Not: '#/components/schemas/ApiPredicate_ApiPredicateNot'
+          'True': '#/components/schemas/ApiPredicate_ApiPredicateTrue'
+          'False': '#/components/schemas/ApiPredicate_ApiPredicateFalse'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyExistence'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertySetCheck'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyPattern'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyPrefix'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertySubstring'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPredicatePair'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPredicatePair'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPredicateNot'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPredicateTrue'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPredicateFalse'
+    ApiPredicateFalse:
+      title: ApiPredicateFalse
+      type: object
+    ApiPredicateNot:
+      title: ApiPredicateNot
+      type: object
+      properties:
+        predicate:
+          $ref: '#/components/schemas/ApiPredicate'
+      required:
+      - predicate
+    ApiPredicatePair:
+      title: ApiPredicatePair
+      type: object
+      properties:
+        left:
+          $ref: '#/components/schemas/ApiPredicate'
+        right:
+          $ref: '#/components/schemas/ApiPredicate'
+      required:
+      - left
+      - right
+    ApiPredicateTrue:
+      title: ApiPredicateTrue
+      type: object
+    ApiPredicateValue:
+      discriminator:
+        propertyName: type
+        mapping:
+          Text: '#/components/schemas/ApiPredicateValue_ApiTextValue'
+          Integer: '#/components/schemas/ApiPredicateValue_ApiIntegerValue'
+          Boolean: '#/components/schemas/ApiPredicateValue_ApiBooleanValue'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ApiPredicateValue_ApiTextValue'
+      - $ref: '#/components/schemas/ApiPredicateValue_ApiIntegerValue'
+      - $ref: '#/components/schemas/ApiPredicateValue_ApiBooleanValue'
+    ApiPredicateValue_ApiBooleanValue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Boolean
+            type: string
+            enum:
+            - Boolean
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiBooleanValue'
+    ApiPredicateValue_ApiIntegerValue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Integer
+            type: string
+            enum:
+            - Integer
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiIntegerValue'
+    ApiPredicateValue_ApiTextValue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Text
+            type: string
+            enum:
+            - Text
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiTextValue'
+    ApiPredicate_ApiPredicateFalse:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: 'False'
+            type: string
+            enum:
+            - 'False'
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiPredicateFalse'
+    ApiPredicate_ApiPredicateNot:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Not
+            type: string
+            enum:
+            - Not
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiPredicateNot'
+    ApiPredicate_ApiPredicatePair:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Or
+            type: string
+            enum:
+            - Or
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiPredicatePair'
+    ApiPredicate_ApiPredicateTrue:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: 'True'
+            type: string
+            enum:
+            - 'True'
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiPredicateTrue'
+    ApiPredicate_ApiPropertyComparison:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PropLte
+            type: string
+            enum:
+            - PropLte
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiPropertyComparison'
+    ApiPredicate_ApiPropertyExistence:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PropExists
+            type: string
+            enum:
+            - PropExists
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiPropertyExistence'
+    ApiPredicate_ApiPropertyPattern:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PropMatches
+            type: string
+            enum:
+            - PropMatches
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiPropertyPattern'
+    ApiPredicate_ApiPropertyPrefix:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PropStartsWith
+            type: string
+            enum:
+            - PropStartsWith
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiPropertyPrefix'
+    ApiPredicate_ApiPropertySetCheck:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PropIn
+            type: string
+            enum:
+            - PropIn
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiPropertySetCheck'
+    ApiPredicate_ApiPropertySubstring:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PropContains
+            type: string
+            enum:
+            - PropContains
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiPropertySubstring'
+    ApiPropertyComparison:
+      title: ApiPropertyComparison
+      type: object
+      properties:
+        property:
+          type: string
+        value:
+          $ref: '#/components/schemas/ApiPredicateValue'
+      required:
+      - property
+      - value
+    ApiPropertyExistence:
+      title: ApiPropertyExistence
+      type: object
+      properties:
+        property:
+          type: string
+      required:
+      - property
+    ApiPropertyPattern:
+      title: ApiPropertyPattern
+      type: object
+      properties:
+        property:
+          type: string
+        pattern:
+          type: string
+      required:
+      - property
+      - pattern
+    ApiPropertyPrefix:
+      title: ApiPropertyPrefix
+      type: object
+      properties:
+        property:
+          type: string
+        prefix:
+          type: string
+      required:
+      - property
+      - prefix
+    ApiPropertySetCheck:
+      title: ApiPropertySetCheck
+      type: object
+      properties:
+        property:
+          type: string
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiPredicateValue'
+      required:
+      - property
+      - values
+    ApiPropertySubstring:
+      title: ApiPropertySubstring
+      type: object
+      properties:
+        property:
+          type: string
+        substring:
+          type: string
+      required:
+      - property
+      - substring
+    ApiRetryPolicy:
+      discriminator:
+        propertyName: type
+        mapping:
+          Periodic: '#/components/schemas/ApiRetryPolicy_ApiPeriodicPolicy'
+          Exponential: '#/components/schemas/ApiRetryPolicy_ApiExponentialPolicy'
+          Fibonacci: '#/components/schemas/ApiRetryPolicy_ApiFibonacciPolicy'
+          Immediate: '#/components/schemas/ApiRetryPolicy_ApiImmediatePolicy'
+          Never: '#/components/schemas/ApiRetryPolicy_ApiNeverPolicy'
+          CountBox: '#/components/schemas/ApiRetryPolicy_ApiCountBoxPolicy'
+          TimeBox: '#/components/schemas/ApiRetryPolicy_ApiTimeBoxPolicy'
+          Clamp: '#/components/schemas/ApiRetryPolicy_ApiClampPolicy'
+          AddDelay: '#/components/schemas/ApiRetryPolicy_ApiAddDelayPolicy'
+          Jitter: '#/components/schemas/ApiRetryPolicy_ApiJitterPolicy'
+          FilteredOn: '#/components/schemas/ApiRetryPolicy_ApiFilteredOnPolicy'
+          AndThen: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
+          Union: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
+          Intersect: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiPeriodicPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiExponentialPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiFibonacciPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiImmediatePolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiNeverPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiCountBoxPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiTimeBoxPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiClampPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiAddDelayPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiJitterPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiFilteredOnPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
+    ApiRetryPolicyPair:
+      title: ApiRetryPolicyPair
+      type: object
+      properties:
+        first:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+        second:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+      required:
+      - first
+      - second
+    ApiRetryPolicy_ApiAddDelayPolicy:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AddDelay
+            type: string
+            enum:
+            - AddDelay
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiAddDelayPolicy'
+    ApiRetryPolicy_ApiClampPolicy:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Clamp
+            type: string
+            enum:
+            - Clamp
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiClampPolicy'
+    ApiRetryPolicy_ApiCountBoxPolicy:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: CountBox
+            type: string
+            enum:
+            - CountBox
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiCountBoxPolicy'
+    ApiRetryPolicy_ApiExponentialPolicy:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Exponential
+            type: string
+            enum:
+            - Exponential
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiExponentialPolicy'
+    ApiRetryPolicy_ApiFibonacciPolicy:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Fibonacci
+            type: string
+            enum:
+            - Fibonacci
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiFibonacciPolicy'
+    ApiRetryPolicy_ApiFilteredOnPolicy:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: FilteredOn
+            type: string
+            enum:
+            - FilteredOn
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiFilteredOnPolicy'
+    ApiRetryPolicy_ApiImmediatePolicy:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Immediate
+            type: string
+            enum:
+            - Immediate
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiImmediatePolicy'
+    ApiRetryPolicy_ApiJitterPolicy:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Jitter
+            type: string
+            enum:
+            - Jitter
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiJitterPolicy'
+    ApiRetryPolicy_ApiNeverPolicy:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Never
+            type: string
+            enum:
+            - Never
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiNeverPolicy'
+    ApiRetryPolicy_ApiPeriodicPolicy:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Periodic
+            type: string
+            enum:
+            - Periodic
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiPeriodicPolicy'
+    ApiRetryPolicy_ApiRetryPolicyPair:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Intersect
+            type: string
+            enum:
+            - Intersect
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiRetryPolicyPair'
+    ApiRetryPolicy_ApiTimeBoxPolicy:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: TimeBox
+            type: string
+            enum:
+            - TimeBox
+        required:
+        - type
+      - $ref: '#/components/schemas/ApiTimeBoxPolicy'
+    ApiTextValue:
+      title: ApiTextValue
+      type: object
+      properties:
+        value:
+          type: string
+      required:
+      - value
+    ApiTimeBoxPolicy:
+      title: ApiTimeBoxPolicy
+      type: object
+      properties:
+        limitMs:
+          type: integer
+          format: uint64
+        inner:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+      required:
+      - limitMs
+      - inner
     BinaryDescriptor:
       title: BinaryDescriptor
       type: object
@@ -11677,17 +12303,21 @@ components:
           description: Selection priority — higher values are evaluated first.
           type: integer
           format: uint32
-        predicateJson:
-          description: The predicate serialized as a JSON string.
-          type: string
-        policyJson:
-          description: The retry policy serialized as a JSON string.
-          type: string
+        predicate:
+          description: The predicate that determines when this retry policy applies.
+          allOf:
+          - $ref: '#/components/schemas/ApiPredicate'
+          - description: The predicate that determines when this retry policy applies.
+        policy:
+          description: The retry policy to use when the predicate matches.
+          allOf:
+          - $ref: '#/components/schemas/ApiRetryPolicy'
+          - description: The retry policy to use when the predicate matches.
       required:
       - name
       - priority
-      - predicateJson
-      - policyJson
+      - predicate
+      - policy
     PublicOplogEntry:
       discriminator:
         propertyName: type
@@ -14298,632 +14928,6 @@ components:
       required:
       - name
       - functions
-    ApiAddDelayPolicy:
-      title: ApiAddDelayPolicy
-      type: object
-      properties:
-        delayMs:
-          type: integer
-          format: uint64
-        inner:
-          $ref: '#/components/schemas/ApiRetryPolicy'
-      required:
-      - delayMs
-      - inner
-    ApiBooleanValue:
-      title: ApiBooleanValue
-      type: object
-      properties:
-        value:
-          type: boolean
-      required:
-      - value
-    ApiClampPolicy:
-      title: ApiClampPolicy
-      type: object
-      properties:
-        minDelayMs:
-          type: integer
-          format: uint64
-        maxDelayMs:
-          type: integer
-          format: uint64
-        inner:
-          $ref: '#/components/schemas/ApiRetryPolicy'
-      required:
-      - minDelayMs
-      - maxDelayMs
-      - inner
-    ApiCountBoxPolicy:
-      title: ApiCountBoxPolicy
-      type: object
-      properties:
-        maxRetries:
-          type: integer
-          format: uint32
-        inner:
-          $ref: '#/components/schemas/ApiRetryPolicy'
-      required:
-      - maxRetries
-      - inner
-    ApiExponentialPolicy:
-      title: ApiExponentialPolicy
-      type: object
-      properties:
-        baseDelayMs:
-          type: integer
-          format: uint64
-        factor:
-          type: number
-          format: double
-      required:
-      - baseDelayMs
-      - factor
-    ApiFibonacciPolicy:
-      title: ApiFibonacciPolicy
-      type: object
-      properties:
-        firstMs:
-          type: integer
-          format: uint64
-        secondMs:
-          type: integer
-          format: uint64
-      required:
-      - firstMs
-      - secondMs
-    ApiFilteredOnPolicy:
-      title: ApiFilteredOnPolicy
-      type: object
-      properties:
-        predicate:
-          $ref: '#/components/schemas/ApiPredicate'
-        inner:
-          $ref: '#/components/schemas/ApiRetryPolicy'
-      required:
-      - predicate
-      - inner
-    ApiImmediatePolicy:
-      title: ApiImmediatePolicy
-      type: object
-    ApiIntegerValue:
-      title: ApiIntegerValue
-      type: object
-      properties:
-        value:
-          type: integer
-          format: int64
-      required:
-      - value
-    ApiJitterPolicy:
-      title: ApiJitterPolicy
-      type: object
-      properties:
-        factor:
-          type: number
-          format: double
-        inner:
-          $ref: '#/components/schemas/ApiRetryPolicy'
-      required:
-      - factor
-      - inner
-    ApiNeverPolicy:
-      title: ApiNeverPolicy
-      type: object
-    ApiPeriodicPolicy:
-      title: ApiPeriodicPolicy
-      type: object
-      properties:
-        delayMs:
-          type: integer
-          format: uint64
-      required:
-      - delayMs
-    ApiPredicate:
-      discriminator:
-        propertyName: type
-        mapping:
-          PropEq: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
-          PropNeq: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
-          PropGt: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
-          PropGte: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
-          PropLt: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
-          PropLte: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
-          PropExists: '#/components/schemas/ApiPredicate_ApiPropertyExistence'
-          PropIn: '#/components/schemas/ApiPredicate_ApiPropertySetCheck'
-          PropMatches: '#/components/schemas/ApiPredicate_ApiPropertyPattern'
-          PropStartsWith: '#/components/schemas/ApiPredicate_ApiPropertyPrefix'
-          PropContains: '#/components/schemas/ApiPredicate_ApiPropertySubstring'
-          And: '#/components/schemas/ApiPredicate_ApiPredicatePair'
-          Or: '#/components/schemas/ApiPredicate_ApiPredicatePair'
-          Not: '#/components/schemas/ApiPredicate_ApiPredicateNot'
-          'True': '#/components/schemas/ApiPredicate_ApiPredicateTrue'
-          'False': '#/components/schemas/ApiPredicate_ApiPredicateFalse'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyExistence'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPropertySetCheck'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyPattern'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyPrefix'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPropertySubstring'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPredicatePair'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPredicatePair'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPredicateNot'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPredicateTrue'
-      - $ref: '#/components/schemas/ApiPredicate_ApiPredicateFalse'
-    ApiPredicateFalse:
-      title: ApiPredicateFalse
-      type: object
-    ApiPredicateNot:
-      title: ApiPredicateNot
-      type: object
-      properties:
-        predicate:
-          $ref: '#/components/schemas/ApiPredicate'
-      required:
-      - predicate
-    ApiPredicatePair:
-      title: ApiPredicatePair
-      type: object
-      properties:
-        left:
-          $ref: '#/components/schemas/ApiPredicate'
-        right:
-          $ref: '#/components/schemas/ApiPredicate'
-      required:
-      - left
-      - right
-    ApiPredicateTrue:
-      title: ApiPredicateTrue
-      type: object
-    ApiPredicateValue:
-      discriminator:
-        propertyName: type
-        mapping:
-          Text: '#/components/schemas/ApiPredicateValue_ApiTextValue'
-          Integer: '#/components/schemas/ApiPredicateValue_ApiIntegerValue'
-          Boolean: '#/components/schemas/ApiPredicateValue_ApiBooleanValue'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/ApiPredicateValue_ApiTextValue'
-      - $ref: '#/components/schemas/ApiPredicateValue_ApiIntegerValue'
-      - $ref: '#/components/schemas/ApiPredicateValue_ApiBooleanValue'
-    ApiPredicateValue_ApiBooleanValue:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Boolean
-            type: string
-            enum:
-            - Boolean
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiBooleanValue'
-    ApiPredicateValue_ApiIntegerValue:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Integer
-            type: string
-            enum:
-            - Integer
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiIntegerValue'
-    ApiPredicateValue_ApiTextValue:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Text
-            type: string
-            enum:
-            - Text
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiTextValue'
-    ApiPredicate_ApiPredicateFalse:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: 'False'
-            type: string
-            enum:
-            - 'False'
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiPredicateFalse'
-    ApiPredicate_ApiPredicateNot:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Not
-            type: string
-            enum:
-            - Not
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiPredicateNot'
-    ApiPredicate_ApiPredicatePair:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Or
-            type: string
-            enum:
-            - Or
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiPredicatePair'
-    ApiPredicate_ApiPredicateTrue:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: 'True'
-            type: string
-            enum:
-            - 'True'
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiPredicateTrue'
-    ApiPredicate_ApiPropertyComparison:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: PropLte
-            type: string
-            enum:
-            - PropLte
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiPropertyComparison'
-    ApiPredicate_ApiPropertyExistence:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: PropExists
-            type: string
-            enum:
-            - PropExists
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiPropertyExistence'
-    ApiPredicate_ApiPropertyPattern:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: PropMatches
-            type: string
-            enum:
-            - PropMatches
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiPropertyPattern'
-    ApiPredicate_ApiPropertyPrefix:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: PropStartsWith
-            type: string
-            enum:
-            - PropStartsWith
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiPropertyPrefix'
-    ApiPredicate_ApiPropertySetCheck:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: PropIn
-            type: string
-            enum:
-            - PropIn
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiPropertySetCheck'
-    ApiPredicate_ApiPropertySubstring:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: PropContains
-            type: string
-            enum:
-            - PropContains
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiPropertySubstring'
-    ApiPropertyComparison:
-      title: ApiPropertyComparison
-      type: object
-      properties:
-        property:
-          type: string
-        value:
-          $ref: '#/components/schemas/ApiPredicateValue'
-      required:
-      - property
-      - value
-    ApiPropertyExistence:
-      title: ApiPropertyExistence
-      type: object
-      properties:
-        property:
-          type: string
-      required:
-      - property
-    ApiPropertyPattern:
-      title: ApiPropertyPattern
-      type: object
-      properties:
-        property:
-          type: string
-        pattern:
-          type: string
-      required:
-      - property
-      - pattern
-    ApiPropertyPrefix:
-      title: ApiPropertyPrefix
-      type: object
-      properties:
-        property:
-          type: string
-        prefix:
-          type: string
-      required:
-      - property
-      - prefix
-    ApiPropertySetCheck:
-      title: ApiPropertySetCheck
-      type: object
-      properties:
-        property:
-          type: string
-        values:
-          type: array
-          items:
-            $ref: '#/components/schemas/ApiPredicateValue'
-      required:
-      - property
-      - values
-    ApiPropertySubstring:
-      title: ApiPropertySubstring
-      type: object
-      properties:
-        property:
-          type: string
-        substring:
-          type: string
-      required:
-      - property
-      - substring
-    ApiRetryPolicy:
-      discriminator:
-        propertyName: type
-        mapping:
-          Periodic: '#/components/schemas/ApiRetryPolicy_ApiPeriodicPolicy'
-          Exponential: '#/components/schemas/ApiRetryPolicy_ApiExponentialPolicy'
-          Fibonacci: '#/components/schemas/ApiRetryPolicy_ApiFibonacciPolicy'
-          Immediate: '#/components/schemas/ApiRetryPolicy_ApiImmediatePolicy'
-          Never: '#/components/schemas/ApiRetryPolicy_ApiNeverPolicy'
-          CountBox: '#/components/schemas/ApiRetryPolicy_ApiCountBoxPolicy'
-          TimeBox: '#/components/schemas/ApiRetryPolicy_ApiTimeBoxPolicy'
-          Clamp: '#/components/schemas/ApiRetryPolicy_ApiClampPolicy'
-          AddDelay: '#/components/schemas/ApiRetryPolicy_ApiAddDelayPolicy'
-          Jitter: '#/components/schemas/ApiRetryPolicy_ApiJitterPolicy'
-          FilteredOn: '#/components/schemas/ApiRetryPolicy_ApiFilteredOnPolicy'
-          AndThen: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
-          Union: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
-          Intersect: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiPeriodicPolicy'
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiExponentialPolicy'
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiFibonacciPolicy'
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiImmediatePolicy'
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiNeverPolicy'
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiCountBoxPolicy'
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiTimeBoxPolicy'
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiClampPolicy'
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiAddDelayPolicy'
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiJitterPolicy'
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiFilteredOnPolicy'
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
-      - $ref: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
-    ApiRetryPolicyPair:
-      title: ApiRetryPolicyPair
-      type: object
-      properties:
-        first:
-          $ref: '#/components/schemas/ApiRetryPolicy'
-        second:
-          $ref: '#/components/schemas/ApiRetryPolicy'
-      required:
-      - first
-      - second
-    ApiRetryPolicy_ApiAddDelayPolicy:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: AddDelay
-            type: string
-            enum:
-            - AddDelay
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiAddDelayPolicy'
-    ApiRetryPolicy_ApiClampPolicy:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Clamp
-            type: string
-            enum:
-            - Clamp
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiClampPolicy'
-    ApiRetryPolicy_ApiCountBoxPolicy:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: CountBox
-            type: string
-            enum:
-            - CountBox
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiCountBoxPolicy'
-    ApiRetryPolicy_ApiExponentialPolicy:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Exponential
-            type: string
-            enum:
-            - Exponential
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiExponentialPolicy'
-    ApiRetryPolicy_ApiFibonacciPolicy:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Fibonacci
-            type: string
-            enum:
-            - Fibonacci
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiFibonacciPolicy'
-    ApiRetryPolicy_ApiFilteredOnPolicy:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: FilteredOn
-            type: string
-            enum:
-            - FilteredOn
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiFilteredOnPolicy'
-    ApiRetryPolicy_ApiImmediatePolicy:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Immediate
-            type: string
-            enum:
-            - Immediate
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiImmediatePolicy'
-    ApiRetryPolicy_ApiJitterPolicy:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Jitter
-            type: string
-            enum:
-            - Jitter
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiJitterPolicy'
-    ApiRetryPolicy_ApiNeverPolicy:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Never
-            type: string
-            enum:
-            - Never
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiNeverPolicy'
-    ApiRetryPolicy_ApiPeriodicPolicy:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Periodic
-            type: string
-            enum:
-            - Periodic
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiPeriodicPolicy'
-    ApiRetryPolicy_ApiRetryPolicyPair:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Intersect
-            type: string
-            enum:
-            - Intersect
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiRetryPolicyPair'
-    ApiRetryPolicy_ApiTimeBoxPolicy:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: TimeBox
-            type: string
-            enum:
-            - TimeBox
-        required:
-        - type
-      - $ref: '#/components/schemas/ApiTimeBoxPolicy'
-    ApiTextValue:
-      title: ApiTextValue
-      type: object
-      properties:
-        value:
-          type: string
-      required:
-      - value
-    ApiTimeBoxPolicy:
-      title: ApiTimeBoxPolicy
-      type: object
-      properties:
-        limitMs:
-          type: integer
-          format: uint64
-        inner:
-          $ref: '#/components/schemas/ApiRetryPolicy'
-      required:
-      - limitMs
-      - inner
     Application:
       title: Application
       type: object

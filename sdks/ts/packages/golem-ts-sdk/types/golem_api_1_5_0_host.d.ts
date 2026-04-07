@@ -4,7 +4,6 @@
  */
 declare module 'golem:api/host@1.5.0' {
   import * as golemCore150Types from 'golem:core/types@1.5.0';
-  import * as wasiClocks023MonotonicClock from 'wasi:clocks/monotonic-clock@0.2.3';
   import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';
   /**
    * Create a new promise
@@ -45,15 +44,6 @@ declare module 'golem:api/host@1.5.0' {
    * with the same parameter will do nothing.
    */
   export function markEndOperation(begin: OplogIndex): void;
-  /**
-   * Gets the current retry policy associated with the agent
-   */
-  export function getRetryPolicy(): RetryPolicy;
-  /**
-   * Overrides the current retry policy associated with the agent. Following this call, `get-retry-policy` will return the
-   * new retry policy.
-   */
-  export function setRetryPolicy(newRetryPolicy: RetryPolicy): void;
   /**
    * Gets the agent's current persistence level.
    */
@@ -152,7 +142,6 @@ declare module 'golem:api/host@1.5.0' {
      */
     get(): Uint8Array | undefined;
   }
-  export type Duration = wasiClocks023MonotonicClock.Duration;
   export type ComponentId = golemCore150Types.ComponentId;
   export type Uuid = golemCore150Types.Uuid;
   export type ValueAndType = golemCore150Types.ValueAndType;
@@ -169,21 +158,6 @@ declare module 'golem:api/host@1.5.0' {
    */
   export type EnvironmentId = {
     uuid: Uuid;
-  };
-  /**
-   * Configures how the executor retries failures
-   */
-  export type RetryPolicy = {
-    /** The maximum number of retries before the agent becomes permanently failed */
-    maxAttempts: number;
-    /** The minimum delay between retries (applied to the first retry) */
-    minDelay: Duration;
-    /** The maximum delay between retries */
-    maxDelay: Duration;
-    /** Multiplier applied to the delay on each retry to implement exponential backoff */
-    multiplier: number;
-    /** The maximum amount of jitter to add to the delay */
-    maxJitterFactor?: number;
   };
   /**
    * Configurable persistence level for agents

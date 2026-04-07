@@ -29,7 +29,7 @@ import type {
   AgentInvocationFinishedParameters,
   ErrorParameters,
   JumpParameters,
-  ChangeRetryPolicyParameters,
+  SetRetryPolicyParameters,
   EndAtomicRegionParameters,
   EndRemoteWriteParameters,
   PendingAgentInvocationParameters,
@@ -76,7 +76,6 @@ export type {
   ComponentRevision,
   OplogIndex,
   PersistenceLevel,
-  RetryPolicy,
   Snapshot,
   Attribute,
   AttributeValue,
@@ -93,7 +92,7 @@ export type {
   ErrorParameters,
   OplogRegion,
   JumpParameters,
-  ChangeRetryPolicyParameters,
+  SetRetryPolicyParameters,
   EndAtomicRegionParameters,
   EndRemoteWriteParameters,
   TypedDataValue,
@@ -203,7 +202,7 @@ export type PublicOplogEntry =
   | { tag: 'jump'; val: JumpParameters }
   | { tag: 'interrupted'; val: Timestamp }
   | { tag: 'exited'; val: Timestamp }
-  | { tag: 'change-retry-policy'; val: ChangeRetryPolicyParameters }
+  | { tag: 'set-retry-policy'; val: SetRetryPolicyParameters }
   | { tag: 'begin-atomic-region'; val: Timestamp }
   | { tag: 'end-atomic-region'; val: EndAtomicRegionParameters }
   | { tag: 'begin-remote-write'; val: Timestamp }

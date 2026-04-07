@@ -4,7 +4,9 @@
 declare module 'golem:api/oplog@1.5.0' {
   import * as golemApi150Context from 'golem:api/context@1.5.0';
   import * as golemApi150Host from 'golem:api/host@1.5.0';
+  import * as golemApi150Retry from 'golem:api/retry@1.5.0';
   import * as golemCore150Types from 'golem:core/types@1.5.0';
+  import * as wasiClocks023MonotonicClock from 'wasi:clocks/monotonic-clock@0.2.3';
   import * as wasiClocks023WallClock from 'wasi:clocks/wall-clock@0.2.3';
   /**
    * Enriches raw oplog entries into public oplog entries by resolving oplog payloads
@@ -30,14 +32,16 @@ declare module 'golem:api/oplog@1.5.0' {
   export type OplogIndex = golemApi150Host.OplogIndex;
   export type PersistenceLevel = golemApi150Host.PersistenceLevel;
   export type EnvironmentId = golemApi150Host.EnvironmentId;
-  export type RetryPolicy = golemApi150Host.RetryPolicy;
   export type Uuid = golemApi150Host.Uuid;
   export type AgentId = golemApi150Host.AgentId;
   export type Snapshot = golemApi150Host.Snapshot;
+  export type Duration = wasiClocks023MonotonicClock.Duration;
   export type Attribute = golemApi150Context.Attribute;
   export type AttributeValue = golemApi150Context.AttributeValue;
   export type SpanId = golemApi150Context.SpanId;
   export type TraceId = golemApi150Context.TraceId;
+  export type RetryPredicate = golemApi150Retry.RetryPredicate;
+  export type RetryPolicy = golemApi150Retry.RetryPolicy;
   export type EnvironmentPluginGrantId = {
     uuid: Uuid;
   };
@@ -137,6 +141,9 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     error: string;
     retryFrom: OplogIndex;
+    insideAtomicRegion: boolean;
+    /** Serialized retry policy state (JSON-encoded PublicRetryPolicyState) */
+    retryPolicyState?: Uint8Array;
   };
   export type OplogRegion = {
     start: OplogIndex;
@@ -146,9 +153,22 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     jump: OplogRegion;
   };
-  export type ChangeRetryPolicyParameters = {
+  /**
+   * Parameters for a set-retry-policy oplog entry.
+   */
+  export type SetRetryPolicyParameters = {
     timestamp: Datetime;
-    newPolicy: RetryPolicy;
+    name: string;
+    priority: number;
+    predicate: RetryPredicate;
+    policy: RetryPolicy;
+  };
+  /**
+   * Parameters for a remove-retry-policy oplog entry.
+   */
+  export type RemoveRetryPolicyParameters = {
+    timestamp: Datetime;
+    name: string;
   };
   export type EndAtomicRegionParameters = {
     timestamp: Datetime;
@@ -481,6 +501,8 @@ declare module 'golem:api/oplog@1.5.0' {
     error: WorkerError;
     retryFrom: OplogIndex;
     insideAtomicRegion: boolean;
+    /** Serialized retry policy state (JSON-encoded RetryPolicyState) */
+    retryPolicyState?: Uint8Array;
   };
   export type RawPendingAgentInvocationParameters = {
     timestamp: Datetime;
@@ -620,11 +642,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'exited'
     val: Timestamp
-  } |
-  /** Overrides the agent's retry policy */
-  {
-    tag: 'change-retry-policy'
-    val: ChangeRetryPolicyParameters
   } |
   /**
    * Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
@@ -781,6 +798,16 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'oplog-processor-checkpoint'
     val: RawOplogProcessorCheckpointParameters
+  } |
+  /** Sets or overwrites a named retry policy */
+  {
+    tag: 'set-retry-policy'
+    val: SetRetryPolicyParameters
+  } |
+  /** Removes a named retry policy by name */
+  {
+    tag: 'remove-retry-policy'
+    val: RemoveRetryPolicyParameters
   };
   export type PublicOplogEntry = 
   /** The initial agent oplog entry */
@@ -843,11 +870,6 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'exited'
     val: Timestamp
-  } |
-  /** Overrides the agent's retry policy */
-  {
-    tag: 'change-retry-policy'
-    val: ChangeRetryPolicyParameters
   } |
   /**
    * Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
@@ -1004,6 +1026,16 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'oplog-processor-checkpoint'
     val: OplogProcessorCheckpointParameters
+  } |
+  /** Sets or overwrites a named retry policy */
+  {
+    tag: 'set-retry-policy'
+    val: SetRetryPolicyParameters
+  } |
+  /** Removes a named retry policy by name */
+  {
+    tag: 'remove-retry-policy'
+    val: RemoveRetryPolicyParameters
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }
