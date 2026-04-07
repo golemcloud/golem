@@ -666,11 +666,54 @@ fn trait_methods(
 fn render_errors(method_name: &str, error_kind: &ErrorKind, errors: &MethodErrors) -> RustResult {
     let name = error_name(method_name, error_kind);
 
-    let code_cases = errors
+    let variant_cases = errors
         .codes
         .iter()
         .map(|(code, model)| {
             line(unit() + "Error" + code.to_string() + "(" + model.render_declaration(false) + "),")
+        })
+        .reduce(|acc, e| acc + e)
+        .unwrap_or_else(unit);
+
+    let status_cases = errors
+        .codes
+        .iter()
+        .map(|(code, _)| {
+            line(
+                unit()
+                    + name.clone()
+                    + "::Error"
+                    + code.to_string()
+                    + "(_) => "
+                    + code.to_string()
+                    + ",",
+            )
+        })
+        .reduce(|acc, e| acc + e)
+        .unwrap_or_else(unit);
+
+    let messages_cases = errors
+        .codes
+        .iter()
+        .map(|(code, model)| {
+            line(
+                unit()
+                    + name.clone()
+                    + "::Error"
+                    + code.to_string()
+                    + "(body) => "
+                    + render_error_body_to_messages(model)
+                    + ",",
+            )
+        })
+        .reduce(|acc, e| acc + e)
+        .unwrap_or_else(unit);
+
+    let code_cases = errors
+        .codes
+        .iter()
+        .map(|(code, _)| {
+            line(unit() + name.clone() + "::Error" + code.to_string() + "(_) => None,")
         })
         .reduce(|acc, e| acc + e)
         .unwrap_or_else(unit);
@@ -692,12 +735,30 @@ fn render_errors(method_name: &str, error_kind: &ErrorKind, errors: &MethodError
         .reduce(|acc, e| acc + e)
         .unwrap_or_else(unit);
 
+    let status_code_impl = if errors.codes.is_empty() {
+        line(unit() + "match *self {}")
+    } else {
+        line(unit() + "match self {") + indented(status_cases) + line("}")
+    };
+
+    let messages_impl = if errors.codes.is_empty() {
+        line(unit() + "match *self {}")
+    } else {
+        line(unit() + "match self {") + indented(messages_cases) + line("}")
+    };
+
+    let code_impl = if errors.codes.is_empty() {
+        line(unit() + "match *self {}")
+    } else {
+        line(unit() + "match self {") + indented(code_cases) + line("}")
+    };
+
     #[rustfmt::skip]
     let res = unit() +
         line(unit() + "#[derive(Debug)]") +
         line(unit() + "pub enum " + name.clone() + " {") +
         indented(
-            code_cases
+            variant_cases
         ) +
         line(unit() + "}") +
         line(unit() + "impl std::fmt::Display for " + name.clone() + " {") +
@@ -708,33 +769,62 @@ fn render_errors(method_name: &str, error_kind: &ErrorKind, errors: &MethodError
                          line(unit() + "match self {") +
                          indented(display_cases) +
                          line(unit() + "}")
-                       } else { line(unit() + indented(unit() + "write!(f, \"" + name + "\")")) }
+                       } else { line(unit() + indented(unit() + "write!(f, \"" + name.clone() + "\")")) }
                 ) +
                 line("}")
         ) +
-        line("}");
+        line("}") +
+        line(unit() + "impl " + rust_name("crate", "ErrorInfo") + " for " + name.clone() + " {") +
+        indented(
+            line(unit() + "fn status_code(&self) -> u16 {") +
+                indented(
+                    status_code_impl
+                ) +
+            line("}") +
+            line(unit() + "fn messages(&self) -> Vec<String> {") +
+                indented(
+                    messages_impl
+                ) +
+            line("}") +
+            line(unit() + "fn code(&self) -> Option<&str> {") +
+                indented(
+                    code_impl
+                ) +
+            line("}")
+        ) +
+        line("}") +
+        unit();
 
     Ok(res)
 }
 
 fn render_error_body_to_string(typ: &DataType) -> RustPrinter {
+    render_error_body_to_messages(typ) + ".join(\"\\n\")"
+}
+
+fn render_error_body_to_messages(typ: &DataType) -> RustPrinter {
     match typ {
-        DataType::Model(ModelType { name }) if name == "ErrorBody" => unit() + r#"&body.error"#,
+        DataType::Model(ModelType { name }) if name == "ErrorBody" => {
+            unit() + "vec![body.error.clone()]"
+        }
         DataType::Model(ModelType { name }) if name == "ErrorsBody" => {
-            unit() + r#"body.errors.clone().join(", ")"#
+            unit() + "body.errors.clone()"
+        }
+        DataType::Model(ModelType { name }) if name == "ErrorBodyWithOptionalWorkerError" => {
+            unit() + "vec![body.error.clone()]"
         }
         DataType::Model(ModelType { name }) if name == "WorkerServiceErrorsBody" => {
             unit()
                 + "match &body { WorkerServiceErrorsBody::Messages("
                 + rust_name("crate::model", "ErrorsBody")
-                + " { errors }) => { errors.join(\", \") }, WorkerServiceErrorsBody::Validation("
+                + " { errors }) => { errors.clone() }, WorkerServiceErrorsBody::Validation("
                 + rust_name("crate::model", "ErrorsBody")
-                + " { errors }) => { errors.join(\", \") }}"
+                + " { errors }) => { errors.clone() }}"
         }
         DataType::Model(ModelType { name }) if name == "GolemErrorBody" => {
-            unit() + r#"format!("{}", body.golem_error)"#
+            unit() + "vec![format!(\"{}\", body.golem_error)]"
         }
-        _ => unit() + r#"format!("{body:?}")"#,
+        _ => unit() + "vec![format!(\"{body:?}\")]",
     }
 }
 

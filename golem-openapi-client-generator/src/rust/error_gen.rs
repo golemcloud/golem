@@ -19,6 +19,15 @@ pub fn error_gen() -> Module {
     let code = indoc! { r#"
         use bytes::Bytes;
 
+        pub trait ErrorInfo {
+            fn status_code(&self) -> u16;
+            fn messages(&self) -> Vec<String>;
+            fn message(&self) -> String {
+                self.messages().join("\n")
+            }
+            fn code(&self) -> Option<&str>;
+        }
+
         #[derive(Debug, thiserror::Error)]
         pub enum Error<T> {
             #[error("{0}")]
@@ -41,6 +50,44 @@ pub fn error_gen() -> Module {
         impl<T> Error<T> {
             pub fn unexpected(code: u16, data: Bytes) -> Error<T> {
                 Error::Unexpected { code, data }
+            }
+
+            pub fn status_code(&self) -> Option<u16>
+            where
+                T: ErrorInfo,
+            {
+                match self {
+                    Error::Item(item) => Some(item.status_code()),
+                    Error::Unexpected { code, .. } => Some(*code),
+                    _ => None,
+                }
+            }
+
+            pub fn messages(&self) -> Option<Vec<String>>
+            where
+                T: ErrorInfo,
+            {
+                match self {
+                    Error::Item(item) => Some(item.messages()),
+                    _ => None,
+                }
+            }
+
+            pub fn message(&self) -> Option<String>
+            where
+                T: ErrorInfo,
+            {
+                self.messages().map(|messages| messages.join("\n"))
+            }
+
+            pub fn code(&self) -> Option<&str>
+            where
+                T: ErrorInfo,
+            {
+                match self {
+                    Error::Item(item) => item.code(),
+                    _ => None,
+                }
             }
         }
 
@@ -72,7 +119,7 @@ pub fn error_gen() -> Module {
     Module {
         def: ModuleDef {
             name: ModuleName::new("error"),
-            exports: vec!["Error".to_string()],
+            exports: vec!["ErrorInfo".to_string(), "Error".to_string()],
         },
         code: code.to_string(),
     }

@@ -70,7 +70,6 @@ pub mod service {
 
     use bytes::Bytes;
 
-    use crate::model::text::fmt::{format_stack, format_stderr};
     use golem_client::api::{
         AccountError, AgentError, AgentSecretsError, ApiDeploymentError, ApiDomainError,
         ApiSecurityError, ApplicationError, ComponentError, EnvironmentError,
@@ -80,7 +79,6 @@ pub mod service {
         WorkerError,
     };
     use golem_common::model::{AgentId, PromiseId};
-    use itertools::Itertools;
     use reqwest::StatusCode;
     use std::error::Error;
     use std::fmt::{Display, Formatter};
@@ -88,7 +86,18 @@ pub mod service {
     #[derive(Debug)]
     pub struct ServiceErrorResponse {
         pub status_code: u16,
-        pub message: String,
+        pub messages: Vec<String>,
+        pub code: Option<String>,
+    }
+
+    impl ServiceErrorResponse {
+        pub fn message(&self) -> String {
+            self.messages.join("\n")
+        }
+
+        fn first_message(&self) -> Option<&str> {
+            self.messages.first().map(String::as_str)
+        }
     }
 
     pub trait HasServiceName {
@@ -105,9 +114,15 @@ pub mod service {
         pub fn is_domain_is_not_registered(&self) -> bool {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
-                    (err.status_code == 409 || err.status_code == 404)
-                        && err.message.starts_with("Domain")
-                        && err.message.ends_with("is not registered")
+                    if err.code.as_deref() == Some("DOMAIN_NOT_REGISTERED") {
+                        true
+                    } else {
+                        (err.status_code == 409 || err.status_code == 404)
+                            && err.first_message().is_some_and(|message| {
+                                message.starts_with("Domain")
+                                    && message.ends_with("is not registered")
+                            })
+                    }
                 }
                 _ => false,
             }
@@ -142,7 +157,7 @@ pub mod service {
                         "{} - Error: {}, {}",
                         service_name,
                         format_status_code(response.status_code).log_color_error(),
-                        response.message.log_color_warn()
+                        response.message().log_color_warn()
                     )
                 }
                 ServiceErrorKind::ReqwestError(error) => {
@@ -217,14 +232,18 @@ pub mod service {
 
     impl<T> From<golem_client::Error<T>> for ServiceError
     where
-        T: Into<ServiceErrorResponse> + HasServiceName,
+        T: golem_client::ErrorInfo + HasServiceName,
     {
         fn from(error: golem_client::Error<T>) -> Self {
             ServiceError {
                 service_name: T::service_name(),
                 kind: match error {
                     golem_client::Error::Item(error) => {
-                        ServiceErrorKind::ErrorResponse(error.into())
+                        ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
+                            status_code: error.status_code(),
+                            messages: error.messages(),
+                            code: error.code().map(str::to_string),
+                        })
                     }
                     golem_client::Error::Reqwest(error) => ServiceErrorKind::ReqwestError(error),
                     golem_client::Error::Middleware(error) => {
@@ -283,79 +302,9 @@ pub mod service {
         }
     }
 
-    impl From<ApplicationError> for ServiceErrorResponse {
-        fn from(value: ApplicationError) -> Self {
-            match value {
-                ApplicationError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                ApplicationError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                ApplicationError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                ApplicationError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                ApplicationError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                ApplicationError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                ApplicationError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
     impl HasServiceName for EnvironmentError {
         fn service_name() -> &'static str {
             "Environment"
-        }
-    }
-
-    impl From<EnvironmentError> for ServiceErrorResponse {
-        fn from(value: EnvironmentError) -> Self {
-            match value {
-                EnvironmentError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                EnvironmentError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                EnvironmentError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                EnvironmentError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                EnvironmentError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                EnvironmentError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                EnvironmentError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
         }
     }
 
@@ -365,99 +314,9 @@ pub mod service {
         }
     }
 
-    impl From<ComponentError> for ServiceErrorResponse {
-        fn from(value: ComponentError) -> Self {
-            match value {
-                ComponentError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                ComponentError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                ComponentError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                ComponentError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                ComponentError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                ComponentError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                ComponentError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
     impl HasServiceName for AgentError {
         fn service_name() -> &'static str {
             "Agent"
-        }
-    }
-
-    impl From<AgentError> for ServiceErrorResponse {
-        fn from(value: AgentError) -> Self {
-            match value {
-                AgentError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                AgentError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                AgentError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                AgentError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                AgentError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                AgentError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                AgentError::Error500(error) => {
-                    let message = match error.worker_error {
-                        Some(worker_error) => {
-                            let error_logs = if !worker_error.stderr.is_empty() {
-                                format!("\n\nStderr:\n{}", format_stderr(&worker_error.stderr))
-                            } else {
-                                "".to_string()
-                            };
-
-                            format!(
-                                "{}:\n{}{}",
-                                error.error,
-                                format_stack(&worker_error.cause),
-                                error_logs
-                            )
-                        }
-                        _ => error.error,
-                    };
-
-                    ServiceErrorResponse {
-                        status_code: 500,
-                        message,
-                    }
-                }
-            }
         }
     }
 
@@ -467,99 +326,9 @@ pub mod service {
         }
     }
 
-    impl From<WorkerError> for ServiceErrorResponse {
-        fn from(value: WorkerError) -> Self {
-            match value {
-                WorkerError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                WorkerError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                WorkerError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                WorkerError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                WorkerError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                WorkerError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                WorkerError::Error500(error) => {
-                    let message = match error.worker_error {
-                        Some(worker_error) => {
-                            let error_logs = if !worker_error.stderr.is_empty() {
-                                format!("\n\nStderr:\n{}", format_stderr(&worker_error.stderr))
-                            } else {
-                                "".to_string()
-                            };
-
-                            format!(
-                                "{}:\n{}{}",
-                                error.error,
-                                format_stack(&worker_error.cause),
-                                error_logs
-                            )
-                        }
-                        _ => error.error,
-                    };
-
-                    ServiceErrorResponse {
-                        status_code: 500,
-                        message,
-                    }
-                }
-            }
-        }
-    }
-
     impl HasServiceName for PluginError {
         fn service_name() -> &'static str {
             "Plugin"
-        }
-    }
-
-    impl From<PluginError> for ServiceErrorResponse {
-        fn from(value: PluginError) -> Self {
-            match value {
-                PluginError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                PluginError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                PluginError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                PluginError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                PluginError::Error409(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                PluginError::Error422(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                PluginError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
         }
     }
 
@@ -569,79 +338,9 @@ pub mod service {
         }
     }
 
-    impl From<LoginLoginOauth2Error> for ServiceErrorResponse {
-        fn from(value: LoginLoginOauth2Error) -> Self {
-            match value {
-                LoginLoginOauth2Error::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                LoginLoginOauth2Error::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                LoginLoginOauth2Error::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                LoginLoginOauth2Error::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                LoginLoginOauth2Error::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                LoginLoginOauth2Error::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                LoginLoginOauth2Error::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
     impl HasServiceName for LoginCurrentLoginTokenError {
         fn service_name() -> &'static str {
             "Login"
-        }
-    }
-
-    impl From<LoginCurrentLoginTokenError> for ServiceErrorResponse {
-        fn from(value: LoginCurrentLoginTokenError) -> Self {
-            match value {
-                LoginCurrentLoginTokenError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                LoginCurrentLoginTokenError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                LoginCurrentLoginTokenError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                LoginCurrentLoginTokenError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                LoginCurrentLoginTokenError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                LoginCurrentLoginTokenError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                LoginCurrentLoginTokenError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
         }
     }
 
@@ -651,79 +350,9 @@ pub mod service {
         }
     }
 
-    impl From<LoginStartOauth2DeviceFlowError> for ServiceErrorResponse {
-        fn from(value: LoginStartOauth2DeviceFlowError) -> Self {
-            match value {
-                LoginStartOauth2DeviceFlowError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                LoginStartOauth2DeviceFlowError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                LoginStartOauth2DeviceFlowError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                LoginStartOauth2DeviceFlowError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                LoginStartOauth2DeviceFlowError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                LoginStartOauth2DeviceFlowError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                LoginStartOauth2DeviceFlowError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
     impl HasServiceName for LoginCompleteOauth2DeviceFlowError {
         fn service_name() -> &'static str {
             "Login"
-        }
-    }
-
-    impl From<LoginCompleteOauth2DeviceFlowError> for ServiceErrorResponse {
-        fn from(value: LoginCompleteOauth2DeviceFlowError) -> Self {
-            match value {
-                LoginCompleteOauth2DeviceFlowError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                LoginCompleteOauth2DeviceFlowError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                LoginCompleteOauth2DeviceFlowError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                LoginCompleteOauth2DeviceFlowError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                LoginCompleteOauth2DeviceFlowError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                LoginCompleteOauth2DeviceFlowError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                LoginCompleteOauth2DeviceFlowError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
         }
     }
 
@@ -733,83 +362,9 @@ pub mod service {
         }
     }
 
-    impl From<LoginStartOauth2WebflowError> for ServiceErrorResponse {
-        fn from(value: LoginStartOauth2WebflowError) -> Self {
-            match value {
-                LoginStartOauth2WebflowError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                LoginStartOauth2WebflowError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                LoginStartOauth2WebflowError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                LoginStartOauth2WebflowError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                LoginStartOauth2WebflowError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                LoginStartOauth2WebflowError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                LoginStartOauth2WebflowError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
     impl HasServiceName for LoginSubmitOauth2WebflowCallbackError {
         fn service_name() -> &'static str {
             "Login"
-        }
-    }
-
-    impl From<LoginSubmitOauth2WebflowCallbackError> for ServiceErrorResponse {
-        fn from(value: LoginSubmitOauth2WebflowCallbackError) -> Self {
-            match value {
-                LoginSubmitOauth2WebflowCallbackError::Error302(_) => ServiceErrorResponse {
-                    status_code: 302,
-                    message: "WebFlowCallbackSuccessResponse".to_string(),
-                },
-                LoginSubmitOauth2WebflowCallbackError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                LoginSubmitOauth2WebflowCallbackError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                LoginSubmitOauth2WebflowCallbackError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                LoginSubmitOauth2WebflowCallbackError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                LoginSubmitOauth2WebflowCallbackError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                LoginSubmitOauth2WebflowCallbackError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                LoginSubmitOauth2WebflowCallbackError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
         }
     }
 
@@ -819,83 +374,9 @@ pub mod service {
         }
     }
 
-    impl From<LoginPollOauth2WebflowError> for ServiceErrorResponse {
-        fn from(value: LoginPollOauth2WebflowError) -> Self {
-            match value {
-                LoginPollOauth2WebflowError::Error202(_) => ServiceErrorResponse {
-                    status_code: 202,
-                    message: "PendingFlowCompletionResponse".to_string(),
-                },
-                LoginPollOauth2WebflowError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                LoginPollOauth2WebflowError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                LoginPollOauth2WebflowError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                LoginPollOauth2WebflowError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                LoginPollOauth2WebflowError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                LoginPollOauth2WebflowError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                LoginPollOauth2WebflowError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
     impl HasServiceName for ApiDeploymentError {
         fn service_name() -> &'static str {
             "API Deployment"
-        }
-    }
-
-    impl From<ApiDeploymentError> for ServiceErrorResponse {
-        fn from(value: ApiDeploymentError) -> Self {
-            match value {
-                ApiDeploymentError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                ApiDeploymentError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                ApiDeploymentError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                ApiDeploymentError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                ApiDeploymentError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                ApiDeploymentError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                ApiDeploymentError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
         }
     }
 
@@ -905,79 +386,9 @@ pub mod service {
         }
     }
 
-    impl From<ApiSecurityError> for ServiceErrorResponse {
-        fn from(value: ApiSecurityError) -> Self {
-            match value {
-                ApiSecurityError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                ApiSecurityError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                ApiSecurityError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                ApiSecurityError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                ApiSecurityError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                ApiSecurityError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                ApiSecurityError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
     impl HasServiceName for TokenError {
         fn service_name() -> &'static str {
             "Token"
-        }
-    }
-
-    impl From<TokenError> for ServiceErrorResponse {
-        fn from(value: TokenError) -> Self {
-            match value {
-                TokenError::Error400(error) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: error.errors.iter().join("\n"),
-                },
-                TokenError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                TokenError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                TokenError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                TokenError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                TokenError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                TokenError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
         }
     }
 
@@ -987,79 +398,9 @@ pub mod service {
         }
     }
 
-    impl From<AccountError> for ServiceErrorResponse {
-        fn from(value: AccountError) -> Self {
-            match value {
-                AccountError::Error400(error) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: error.errors.iter().join("\n"),
-                },
-                AccountError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                AccountError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                AccountError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                AccountError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                AccountError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                AccountError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
     impl HasServiceName for ApiDomainError {
         fn service_name() -> &'static str {
             "API Domain"
-        }
-    }
-
-    impl From<ApiDomainError> for ServiceErrorResponse {
-        fn from(value: ApiDomainError) -> Self {
-            match value {
-                ApiDomainError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                ApiDomainError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                ApiDomainError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                ApiDomainError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                ApiDomainError::Error409(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                ApiDomainError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                ApiDomainError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
         }
     }
 
@@ -1069,79 +410,9 @@ pub mod service {
         }
     }
 
-    impl From<McpDeploymentError> for ServiceErrorResponse {
-        fn from(value: McpDeploymentError) -> Self {
-            match value {
-                McpDeploymentError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                McpDeploymentError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                McpDeploymentError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                McpDeploymentError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                McpDeploymentError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                McpDeploymentError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                McpDeploymentError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
     impl HasServiceName for AgentSecretsError {
         fn service_name() -> &'static str {
             "AgentSecrets"
-        }
-    }
-
-    impl From<AgentSecretsError> for ServiceErrorResponse {
-        fn from(value: AgentSecretsError) -> Self {
-            match value {
-                AgentSecretsError::Error400(error) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: error.errors.iter().join("\n"),
-                },
-                AgentSecretsError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                AgentSecretsError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                AgentSecretsError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                AgentSecretsError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                AgentSecretsError::Error422(error) => ServiceErrorResponse {
-                    status_code: 422,
-                    message: error.error,
-                },
-                AgentSecretsError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
         }
     }
 
