@@ -27,6 +27,24 @@ pub fn error_gen() -> Module {
                 self.messages().join("\n")
             }
             fn code(&self) -> Option<&str>;
+            fn is_status_code(&self, status_code: u16) -> bool {
+                self.status_code() == status_code
+            }
+            fn is_success(&self) -> bool {
+                (200..300).contains(&self.status_code())
+            }
+            fn is_client_error(&self) -> bool {
+                (400..500).contains(&self.status_code())
+            }
+            fn is_server_error(&self) -> bool {
+                (500..600).contains(&self.status_code())
+            }
+            fn is_not_found(&self) -> bool {
+                self.is_status_code(404)
+            }
+            fn has_code(&self, code: &str) -> bool {
+                self.code() == Some(code)
+            }
         }
 
         #[derive(Debug, thiserror::Error)]
@@ -89,6 +107,48 @@ pub fn error_gen() -> Module {
                     Error::Item(item) => item.code(),
                     _ => None,
                 }
+            }
+
+            pub fn is_status_code(&self, status_code: u16) -> bool
+            where
+                T: ErrorInfo,
+            {
+                self.status_code() == Some(status_code)
+            }
+
+            pub fn is_success(&self) -> bool
+            where
+                T: ErrorInfo,
+            {
+                self.status_code().is_some_and(|code| (200..300).contains(&code))
+            }
+
+            pub fn is_client_error(&self) -> bool
+            where
+                T: ErrorInfo,
+            {
+                self.status_code().is_some_and(|code| (400..500).contains(&code))
+            }
+
+            pub fn is_server_error(&self) -> bool
+            where
+                T: ErrorInfo,
+            {
+                self.status_code().is_some_and(|code| (500..600).contains(&code))
+            }
+
+            pub fn is_not_found(&self) -> bool
+            where
+                T: ErrorInfo,
+            {
+                self.is_status_code(404)
+            }
+
+            pub fn has_code(&self, code: &str) -> bool
+            where
+                T: ErrorInfo,
+            {
+                self.code() == Some(code)
             }
         }
 
