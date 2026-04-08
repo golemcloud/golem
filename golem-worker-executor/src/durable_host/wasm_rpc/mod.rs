@@ -482,6 +482,23 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let max_delay = self.durable_execution_state().max_in_function_retry_delay;
             let worker = self.public_state.worker();
 
+            let retry_params = if allow_retry {
+                Some(TaskRetryParams {
+                    environment_state_service,
+                    environment_id,
+                    default_retry_policy,
+                    agent_config_retry_policies,
+                    runtime_retry_policy_mutations,
+                    retry_properties,
+                    max_in_function_retry_delay: max_delay,
+                    worker,
+                    retry_point: begin_index,
+                    execution_status: self.execution_status.clone(),
+                })
+            } else {
+                None
+            };
+
             let handle = spawn_rpc_task_with_retry(
                 rpc,
                 remote_agent_id,
@@ -493,17 +510,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 env,
                 config_vars,
                 stack,
-                allow_retry,
-                environment_state_service,
-                environment_id,
-                default_retry_policy,
-                agent_config_retry_policies,
-                runtime_retry_policy_mutations,
-                retry_properties,
-                max_delay,
-                worker,
-                begin_index,
-                self.execution_status.clone(),
+                retry_params,
             );
 
             let fut = self.table().push(FutureInvokeResultEntry {
@@ -1182,6 +1189,19 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     Ok(entry)
 }
 
+struct TaskRetryParams<Ctx: WorkerCtx> {
+    environment_state_service: Arc<dyn EnvironmentStateService>,
+    environment_id: EnvironmentId,
+    default_retry_policy: NamedRetryPolicy,
+    agent_config_retry_policies: Vec<NamedRetryPolicy>,
+    runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
+    retry_properties: RetryProperties,
+    max_in_function_retry_delay: Duration,
+    worker: Arc<crate::worker::Worker<Ctx>>,
+    retry_point: OplogIndex,
+    execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
+}
+
 fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     rpc: Arc<dyn Rpc>,
     remote_agent_id: OwnedAgentId,
@@ -1193,17 +1213,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     env: Vec<(String, String)>,
     config_vars: BTreeMap<String, String>,
     stack: InvocationContextStack,
-    allow_retry: bool,
-    environment_state_service: Arc<dyn EnvironmentStateService>,
-    environment_id: EnvironmentId,
-    default_retry_policy: NamedRetryPolicy,
-    agent_config_retry_policies: Vec<NamedRetryPolicy>,
-    runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
-    retry_properties: RetryProperties,
-    max_in_function_retry_delay: Duration,
-    worker: Arc<crate::worker::Worker<Ctx>>,
-    retry_point: OplogIndex,
-    execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
+    retry_params: Option<TaskRetryParams<Ctx>>,
 ) -> AbortOnDropJoinHandle<Result<Result<UntypedDataValue, InternalRpcError>, Error>> {
     let invoke = move || {
         let rpc = rpc.clone();
@@ -1234,24 +1244,26 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
 
     wasmtime_wasi::runtime::spawn(
         async move {
-            let result = if allow_retry {
-                let current_retry_policy_state = worker
+            let result = if let Some(retry_params) = retry_params {
+                let execution_status = retry_params.execution_status;
+                let current_retry_policy_state = retry_params
+                    .worker
                     .get_non_detached_last_known_status()
                     .await
                     .current_retry_state
-                    .get(&retry_point)
+                    .get(&retry_params.retry_point)
                     .cloned();
                 let task_ctx = crate::durable_host::durability::TaskRetryContext {
-                    retry_point,
-                    environment_state_service,
-                    environment_id,
-                    default_retry_policy,
-                    agent_config_retry_policies,
-                    runtime_retry_policy_mutations,
-                    max_in_function_retry_delay,
+                    retry_point: retry_params.retry_point,
+                    environment_state_service: retry_params.environment_state_service,
+                    environment_id: retry_params.environment_id,
+                    default_retry_policy: retry_params.default_retry_policy,
+                    agent_config_retry_policies: retry_params.agent_config_retry_policies,
+                    runtime_retry_policy_mutations: retry_params.runtime_retry_policy_mutations,
+                    max_in_function_retry_delay: retry_params.max_in_function_retry_delay,
                     current_retry_policy_state,
-                    retry_properties,
-                    worker,
+                    retry_properties: retry_params.retry_properties,
+                    worker: retry_params.worker,
                 };
                 crate::durable_host::durability::in_task_retry_loop(
                     task_ctx,
@@ -1386,6 +1398,23 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         retry_properties.set("is-idempotent", PredicateValue::Boolean(assume_idempotence));
     }
 
+    let retry_params = if allow_retry {
+        Some(TaskRetryParams {
+            environment_state_service,
+            environment_id,
+            default_retry_policy,
+            agent_config_retry_policies,
+            runtime_retry_policy_mutations,
+            retry_properties,
+            max_in_function_retry_delay,
+            worker,
+            retry_point: begin_index,
+            execution_status,
+        })
+    } else {
+        None
+    };
+
     let handle = spawn_rpc_task_with_retry(
         rpc,
         remote_agent_id.clone(),
@@ -1397,17 +1426,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         env.clone(),
         config_vars.clone(),
         stack,
-        allow_retry,
-        environment_state_service,
-        environment_id,
-        default_retry_policy,
-        agent_config_retry_policies,
-        runtime_retry_policy_mutations,
-        retry_properties,
-        max_in_function_retry_delay,
-        worker,
-        begin_index,
-        execution_status,
+        retry_params,
     );
 
     let span_id = span_id.clone();
