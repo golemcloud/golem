@@ -43,9 +43,11 @@ sealed trait JsLocalAgentConfigEntry extends js.Object {
 
 @js.native
 sealed trait JsPluginInstallationDescription extends js.Object {
-  def name: String                                    = js.native
-  def version: String                                 = js.native
-  def parameters: js.Array[js.Tuple2[String, String]] = js.native
+  def environmentPluginGrantId: JsEnvironmentPluginGrantId = js.native
+  def pluginPriority: Int                                  = js.native
+  def pluginName: String                                   = js.native
+  def pluginVersion: String                                = js.native
+  def parameters: js.Array[js.Tuple2[String, String]]      = js.native
 }
 
 // --- CreateParameters ---
@@ -74,7 +76,7 @@ sealed trait JsHostCallParameters extends js.Object {
   def functionName: String                       = js.native
   def request: JsValueAndType                    = js.native
   def response: JsValueAndType                   = js.native
-  def wrappedFunctionType: JsWrappedFunctionType = js.native
+  def durableFunctionType: JsWrappedFunctionType = js.native
 }
 
 // --- SpanData  –  tagged union ---
@@ -150,11 +152,18 @@ sealed trait JsJumpParameters extends js.Object {
 
 @js.native
 sealed trait JsSetRetryPolicyParameters extends js.Object {
-  def timestamp: JsDatetime = js.native
-  def name: String          = js.native
-  def priority: Int         = js.native
-  def predicateJson: String = js.native
-  def policyJson: String    = js.native
+  def timestamp: JsDatetime             = js.native
+  def policy: JsNamedRetryPolicy        = js.native
+}
+
+// --- NamedRetryPolicy ---
+
+@js.native
+sealed trait JsNamedRetryPolicy extends js.Object {
+  def name: String     = js.native
+  def priority: Int    = js.native
+  def predicate: js.Any = js.native
+  def policy: js.Any    = js.native
 }
 
 // --- RemoveRetryPolicyParameters ---
@@ -319,7 +328,7 @@ sealed trait JsAgentInvocationStartedParameters extends js.Object {
 @js.native
 sealed trait JsAgentInvocationFinishedParameters extends js.Object {
   def timestamp: JsDatetime                     = js.native
-  def invocationResult: JsAgentInvocationResult = js.native
+  def result: JsAgentInvocationResult = js.native
   def consumedFuel: js.BigInt                   = js.native
   def componentRevision: js.BigInt              = js.native
 }
@@ -358,7 +367,7 @@ object JsUpdateDescription {
 sealed trait JsPendingUpdateParameters extends js.Object {
   def timestamp: JsDatetime                  = js.native
   def targetRevision: js.BigInt              = js.native
-  def updateDescription: JsUpdateDescription = js.native
+  def description: JsUpdateDescription = js.native
 }
 
 // --- SuccessfulUpdateParameters ---
@@ -393,7 +402,7 @@ sealed trait JsGrowMemoryParameters extends js.Object {
 @js.native
 sealed trait JsCreateResourceParameters extends js.Object {
   def timestamp: JsDatetime = js.native
-  def resourceId: js.BigInt = js.native
+  def id: js.BigInt         = js.native
   def name: String          = js.native
   def owner: String         = js.native
 }
@@ -403,7 +412,7 @@ sealed trait JsCreateResourceParameters extends js.Object {
 @js.native
 sealed trait JsDropResourceParameters extends js.Object {
   def timestamp: JsDatetime = js.native
-  def resourceId: js.BigInt = js.native
+  def id: js.BigInt         = js.native
   def name: String          = js.native
   def owner: String         = js.native
 }

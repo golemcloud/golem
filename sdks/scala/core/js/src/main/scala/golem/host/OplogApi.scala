@@ -568,8 +568,8 @@ object OplogApi {
 
   private def parsePluginInstallationDescription(raw: JsPluginInstallationDescription): PluginInstallationDescription =
     PluginInstallationDescription(
-      name = raw.name,
-      version = raw.version,
+      name = raw.pluginName,
+      version = raw.pluginVersion,
       parameters = raw.parameters.toSeq.map(t => t._1 -> t._2).toMap
     )
 
@@ -597,7 +597,7 @@ object OplogApi {
       functionName = raw.functionName,
       request = WitValueTypes.ValueAndType.fromJs(raw.request),
       response = WitValueTypes.ValueAndType.fromJs(raw.response),
-      wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.wrappedFunctionType)
+      wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType)
     )
 
   private def parseSpanData(raw: JsSpanData): SpanData =
@@ -704,7 +704,7 @@ object OplogApi {
   private def parseAgentInvocationFinishedParameters(
     raw: JsAgentInvocationFinishedParameters
   ): AgentInvocationFinishedParameters = {
-    val result   = raw.invocationResult
+    val result   = raw.result
     val response = result.tag match {
       case "agent-initialization" | "agent-method" =>
         val p =
@@ -732,14 +732,16 @@ object OplogApi {
       jump = OplogRegion(BigInt(raw.jump.start.toString), BigInt(raw.jump.end.toString))
     )
 
-  private def parseSetRetryPolicyParameters(raw: JsSetRetryPolicyParameters): SetRetryPolicyParameters =
+  private def parseSetRetryPolicyParameters(raw: JsSetRetryPolicyParameters): SetRetryPolicyParameters = {
+    val p = raw.policy
     SetRetryPolicyParameters(
       timestamp = parseDateTime(raw.timestamp),
-      name = raw.name,
-      priority = raw.priority,
-      predicateJson = raw.predicateJson,
-      policyJson = raw.policyJson
+      name = p.name,
+      priority = p.priority,
+      predicateJson = js.JSON.stringify(p.predicate.asInstanceOf[js.Any]),
+      policyJson = js.JSON.stringify(p.policy.asInstanceOf[js.Any])
     )
+  }
 
   private def parseRemoveRetryPolicyParameters(raw: JsRemoveRetryPolicyParameters): RemoveRetryPolicyParameters =
     RemoveRetryPolicyParameters(
@@ -804,7 +806,7 @@ object OplogApi {
   }
 
   private def parsePendingUpdateParameters(raw: JsPendingUpdateParameters): PendingUpdateParameters = {
-    val desc = raw.updateDescription
+    val desc = raw.description
     val ud   = desc.tag match {
       case "auto-update"    => UpdateDescription.AutoUpdate
       case "snapshot-based" =>
@@ -844,7 +846,7 @@ object OplogApi {
   private def parseCreateResourceParameters(raw: JsCreateResourceParameters): CreateResourceParameters =
     CreateResourceParameters(
       timestamp = parseDateTime(raw.timestamp),
-      resourceId = BigInt(raw.resourceId.toString),
+      resourceId = BigInt(raw.id.toString),
       name = raw.name,
       owner = raw.owner
     )
@@ -852,7 +854,7 @@ object OplogApi {
   private def parseDropResourceParameters(raw: JsDropResourceParameters): DropResourceParameters =
     DropResourceParameters(
       timestamp = parseDateTime(raw.timestamp),
-      resourceId = BigInt(raw.resourceId.toString),
+      resourceId = BigInt(raw.id.toString),
       name = raw.name,
       owner = raw.owner
     )
