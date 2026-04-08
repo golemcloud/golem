@@ -49,8 +49,8 @@ async fn get_live_lease_interest<'a, Ctx: WorkerCtx>(
     }
 
     let interest = match &entry.lease {
-        LeaseInterestHandle::Pending(p) => svc
-            .acquire(
+        LeaseInterestHandle::Pending(p) => {
+            svc.acquire(
                 p.environment_id,
                 p.resource_name.clone(),
                 p.expected_use,
@@ -58,7 +58,7 @@ async fn get_live_lease_interest<'a, Ctx: WorkerCtx>(
                 Some(p.last_credit_at),
             )
             .await
-            .map_err(|e| anyhow::anyhow!("quota acquire failed: {e}"))?,
+        }
         LeaseInterestHandle::Live(_) => unreachable!(),
     };
 
@@ -87,10 +87,7 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
 
         let token_entry = if durability.is_live() {
             let svc = self.state.quota_service.clone();
-            let interest = svc
-                .acquire(env_id, rn, expected_use, 0, None)
-                .await
-                .map_err(|e| anyhow::anyhow!("quota acquire failed: {e}"))?;
+            let interest = svc.acquire(env_id, rn, expected_use, 0, None).await;
 
             let credit_at_ms = interest.last_credit_value_at.timestamp_millis();
 

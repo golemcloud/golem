@@ -27,6 +27,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
+use tracing::warn;
 use tracing::{Instrument, info, info_span};
 
 type ResourceKey = (EnvironmentId, ResourceName);
@@ -201,7 +202,7 @@ pub trait QuotaService: Send + Sync {
         expected_use: u64,
         previous_credit: i64,
         previous_credit_at: Option<DateTime<Utc>>,
-    ) -> Result<LeaseInterest, QuotaError>;
+    ) -> LeaseInterest;
 
     /// Try to reserve `amount` units from the local allocation.
     ///
@@ -891,7 +892,7 @@ impl QuotaService for GrpcQuotaService {
         expected_use: u64,
         previous_credit: i64,
         previous_credit_at: Option<DateTime<Utc>>,
-    ) -> Result<LeaseInterest, QuotaError> {
+    ) -> LeaseInterest {
         debug!("acquiring lease for {}/{}", environment_id, resource_name);
 
         let key: ResourceKey = (environment_id, resource_name.clone());
@@ -926,37 +927,39 @@ impl QuotaService for GrpcQuotaService {
                     drop(occ);
                     if let Some(interest) = Self::try_reuse_slot(&slot_mutex, &make_interest).await
                     {
-                        return Ok(interest);
+                        return interest;
                     }
-                    // Dead entry — loop to insert a fresh placeholder.
+                    // Dead entry, loop to try inserting again
                     continue;
                 }
                 scc::hash_map::Entry::Vacant(vac) => {
                     // We are first — insert the prelocked placeholder and release
                     // the scc bucket lock before making the RPC.
                     vac.insert_entry(placeholder_mutex.clone());
+                    break;
                 }
             }
-
-            debug!("Acquiring new lease from shard manager");
-            return match self
-                .client
-                .acquire_quota_lease(environment_id, resource_name, self.port)
-                .await
-            {
-                Ok(new_lease) => {
-                    let interest = make_interest(arc.clone());
-                    slot.interest = Arc::downgrade(&arc);
-                    slot.lease = Self::from_quota_lease(&new_lease);
-                    Ok(interest)
-                }
-                Err(e) => {
-                    // Mark Lost so concurrent waiters unblock; renew_all will retry.
-                    slot.lease = TrackedLease::Lost;
-                    Err(e)
-                }
-            };
         }
+
+        debug!("Acquiring new lease from shard manager");
+
+        let acquire_result = self
+            .client
+            .acquire_quota_lease(environment_id, resource_name, self.port)
+            .await;
+
+        match acquire_result {
+            Ok(new_lease) => {
+                // it's fine if we failed to acquire a lease here. Either try_reserve or the
+                // background renew loop will fix it.
+                slot.lease = Self::from_quota_lease(&new_lease);
+            }
+            Err(e) => {
+                warn!("Failed to acquire new lease from shard manager: {e}")
+            }
+        };
+
+        make_interest(arc)
     }
 
     async fn try_reserve(&self, interest: &mut LeaseInterest, amount: u64) -> ReserveResult {
@@ -1075,9 +1078,9 @@ impl QuotaService for UnlimitedQuotaService {
         expected_use: u64,
         previous_credit: i64,
         previous_credit_at: Option<DateTime<Utc>>,
-    ) -> Result<LeaseInterest, QuotaError> {
+    ) -> LeaseInterest {
         let max_credit = max_credit_for(expected_use);
-        Ok(LeaseInterest {
+        LeaseInterest {
             environment_id,
             resource_name,
             expected_use,
@@ -1086,7 +1089,7 @@ impl QuotaService for UnlimitedQuotaService {
             credit_rate: expected_use as f64 * CREDIT_RATE_FACTOR,
             max_credit,
             _token: Arc::new(()),
-        })
+        }
     }
 
     async fn try_reserve(&self, _interest: &mut LeaseInterest, _amount: u64) -> ReserveResult {
@@ -1347,8 +1350,7 @@ mod tests {
 
         let interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
         assert_eq!(interest.resource_name, test_resource_name());
     }
 
@@ -1361,14 +1363,8 @@ mod tests {
         let env_id = test_env_id();
         let name = test_resource_name();
 
-        let mut interest1 = svc
-            .acquire(env_id, name.clone(), 100, 0, None)
-            .await
-            .unwrap();
-        let mut interest2 = svc
-            .acquire(env_id, name.clone(), 100, 0, None)
-            .await
-            .unwrap();
+        let mut interest1 = svc.acquire(env_id, name.clone(), 100, 0, None).await;
+        let mut interest2 = svc.acquire(env_id, name.clone(), 100, 0, None).await;
 
         let r1 = svc.try_reserve(&mut interest1, 50).await;
         assert_matches!(
@@ -1392,8 +1388,7 @@ mod tests {
 
         let mut interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
         let result = svc.try_reserve(&mut interest, 30).await;
         match result {
             ReserveResult::Ok(Reservation::Bounded {
@@ -1416,8 +1411,7 @@ mod tests {
         let svc = make_service(mock);
         let mut interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
         assert_matches!(
             svc.try_reserve(&mut interest, 999).await,
             ReserveResult::Ok(Reservation::Unlimited)
@@ -1442,8 +1436,7 @@ mod tests {
         );
         let mut interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         assert_matches!(
             svc.try_reserve(&mut interest, 40).await,
@@ -1502,8 +1495,7 @@ mod tests {
         );
         let interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         let svc2 = svc.clone();
         let mut interest2 = interest.clone();
@@ -1551,8 +1543,7 @@ mod tests {
 
         let interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         // Add a waiter for 10 units — possible at acquire time, rejected after renewal.
         let (tx, rx) = oneshot::channel::<WaiterOutcome>();
@@ -1595,8 +1586,7 @@ mod tests {
 
         let interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         // Enqueue two waiters directly to avoid ordering races.
         let (tx_a, mut rx_a) = oneshot::channel::<WaiterOutcome>();
@@ -1645,8 +1635,7 @@ mod tests {
 
         let interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         // Spawn try_reserve — it will block because allocation = 0.
         let svc2 = svc.clone();
@@ -1693,8 +1682,7 @@ mod tests {
 
         let interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         // Spawn try_reserve — enters the queue because allocation = 0.
         let svc2 = svc.clone();
@@ -1732,8 +1720,7 @@ mod tests {
         let svc = make_service(mock);
         let mut interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         // Drain the allocation.
         let big_reservation = match svc.try_reserve(&mut interest, 50).await {
@@ -1776,8 +1763,7 @@ mod tests {
         // expected_use=100 → credit_rate=10/ms, max_credit=10_000
         let mut interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 500, None)
-            .await
-            .unwrap();
+            .await;
 
         // Record credit before reserve.
         let credit_before = interest.current_credit();
@@ -1798,8 +1784,7 @@ mod tests {
 
         let mut interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         let reservation = match svc.try_reserve(&mut interest, 50).await {
             ReserveResult::Ok(r) => r,
@@ -1831,8 +1816,7 @@ mod tests {
 
         let mut interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         let reservation = match svc.try_reserve(&mut interest, 50).await {
             ReserveResult::Ok(r) => r,
@@ -1872,8 +1856,7 @@ mod tests {
 
         let interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         // Waiter A: high initial credit (1000), just arrived.
         let (tx_a, mut rx_a) = oneshot::channel::<WaiterOutcome>();
@@ -1938,8 +1921,7 @@ mod tests {
 
         let interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         let (tx, mut rx) = oneshot::channel::<WaiterOutcome>();
         {
@@ -1982,8 +1964,7 @@ mod tests {
 
         let interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         let (tx, rx) = oneshot::channel::<WaiterOutcome>();
         {
@@ -2016,8 +1997,7 @@ mod tests {
 
         let interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         let (tx, rx) = oneshot::channel::<WaiterOutcome>();
         {
@@ -2110,8 +2090,7 @@ mod tests {
 
         let mut interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
         // Consume some allocation so unused = 70 on release.
         let _ = svc.try_reserve(&mut interest, 30).await;
         drop(interest);
@@ -2142,8 +2121,7 @@ mod tests {
 
         let interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
         svc.renew_all().await;
 
         assert!(mock.releases().is_empty());
@@ -2166,8 +2144,7 @@ mod tests {
         let past = Utc::now() - ChronoDuration::milliseconds(1000);
         let interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, -100, Some(past))
-            .await
-            .unwrap();
+            .await;
 
         // Credit should reflect ~1000ms of accrual from the past baseline.
         let credit = interest.current_credit();
@@ -2201,8 +2178,7 @@ mod tests {
 
         let interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
-            .await
-            .unwrap();
+            .await;
 
         // Enqueue a waiter while the lease is still valid.
         let (tx, rx) = oneshot::channel::<WaiterOutcome>();
