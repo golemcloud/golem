@@ -298,6 +298,21 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         p.name == "default"
       )
     },
+    test("FilesystemStorageUsageUpdate from dynamic") {
+      val raw = wrapEntry(
+        "filesystem-storage-usage-update",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          delta = js.BigInt("4096")
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw)
+      val p      = parsed.asInstanceOf[OplogEntry.FilesystemStorageUsageUpdate].params
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.FilesystemStorageUsageUpdate],
+        p.delta == BigInt(4096)
+      )
+    },
     test("Log from dynamic") {
       val raw = wrapEntry(
         "log",

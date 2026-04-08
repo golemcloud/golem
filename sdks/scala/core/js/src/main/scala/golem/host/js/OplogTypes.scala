@@ -165,6 +165,14 @@ sealed trait JsRemoveRetryPolicyParameters extends js.Object {
   def name: String          = js.native
 }
 
+// --- FilesystemStorageUsageUpdateParameters ---
+
+@js.native
+sealed trait JsFilesystemStorageUsageUpdateParameters extends js.Object {
+  def timestamp: JsDatetime = js.native
+  def delta: js.BigInt      = js.native
+}
+
 // --- EndAtomicRegionParameters ---
 
 @js.native
