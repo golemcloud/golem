@@ -939,8 +939,8 @@ fn render_errors(
 
     let status_cases = errors
         .codes
-        .iter()
-        .map(|(code, _)| {
+        .keys()
+        .map(|code| {
             line(
                 unit()
                     + name.clone()

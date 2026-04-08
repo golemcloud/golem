@@ -14,9 +14,9 @@
 
 use crate::StartedComponents;
 use anyhow::Context;
+use golem_common::poem::CliClientInfoMiddleware;
 use poem::EndpointExt;
 use poem::listener::{Acceptor, Listener};
-use golem_common::poem::CliClientInfoMiddleware;
 use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, Tracing};
 use poem::{Route, Server};
 use std::net::Ipv4Addr;
