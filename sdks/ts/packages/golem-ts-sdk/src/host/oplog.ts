@@ -170,7 +170,6 @@ export type CreateParameters = {
   timestamp: Datetime;
   agentId: AgentId;
   componentRevision: ComponentRevision;
-  args: string[];
   env: [string, string][];
   createdBy: AccountId;
   environmentId: EnvironmentId;

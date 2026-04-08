@@ -333,7 +333,7 @@ declare module 'golem:api/host@1.5.0' {
    * Snapshot payload
    */
   export type Snapshot = {
-    data: Uint8Array;
+    payload: Uint8Array;
     mimeType: string;
   };
 }

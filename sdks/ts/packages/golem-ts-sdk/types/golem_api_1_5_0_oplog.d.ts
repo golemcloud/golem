@@ -42,6 +42,61 @@ declare module 'golem:api/oplog@1.5.0' {
   export type TraceId = golemApi150Context.TraceId;
   export type RetryPredicate = golemApi150Retry.RetryPredicate;
   export type RetryPolicy = golemApi150Retry.RetryPolicy;
+  export type NamedRetryPolicy = golemApi150Retry.NamedRetryPolicy;
+  /**
+   * Index into a retry-policy-state's node list
+   */
+  export type StateNodeIndex = number;
+  export type CountBoxState = {
+    attempts: number;
+    inner: StateNodeIndex;
+  };
+  export type AndThenState = {
+    left: StateNodeIndex;
+    right: StateNodeIndex;
+    onRight: boolean;
+  };
+  export type PairState = {
+    left: StateNodeIndex;
+    right: StateNodeIndex;
+  };
+  export type StateNode = 
+  /** Counter-based state (e.g. periodic, exponential, fibonacci). */
+  {
+    tag: 'counter'
+    val: number
+  } |
+  /** Terminal state — policy has given up. */
+  {
+    tag: 'terminal'
+  } |
+  /** Wrapper state delegating to an inner policy state. */
+  {
+    tag: 'wrapper'
+    val: StateNodeIndex
+  } |
+  /** Count-box state with attempt tracking. */
+  {
+    tag: 'count-box'
+    val: CountBoxState
+  } |
+  /** And-then sequential composition state. */
+  {
+    tag: 'and-then'
+    val: AndThenState
+  } |
+  /** Pair state for union/intersect composition. */
+  {
+    tag: 'pair'
+    val: PairState
+  };
+  /**
+   * Persistent state of a retry policy across retry attempts.
+   * Root is nodes[0]. Children referenced by state-node-index.
+   */
+  export type RetryPolicyState = {
+    nodes: StateNode[];
+  };
   export type EnvironmentPluginGrantId = {
     uuid: Uuid;
   };
@@ -82,8 +137,10 @@ declare module 'golem:api/oplog@1.5.0' {
     val: OplogIndex | undefined
   };
   export type PluginInstallationDescription = {
-    name: string;
-    version: string;
+    environmentPluginGrantId: EnvironmentPluginGrantId;
+    pluginPriority: number;
+    pluginName: string;
+    pluginVersion: string;
     parameters: [string, string][];
   };
   export type RawLocalAgentConfigEntry = {
@@ -98,7 +155,6 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     agentId: AgentId;
     componentRevision: ComponentRevision;
-    args: string[];
     env: [string, string][];
     createdBy: AccountId;
     environmentId: EnvironmentId;
@@ -108,13 +164,14 @@ declare module 'golem:api/oplog@1.5.0' {
     initialActivePlugins: PluginInstallationDescription[];
     configVars: [string, string][];
     localAgentConfig: LocalAgentConfigEntry[];
+    originalPhantomId?: Uuid;
   };
   export type HostCallParameters = {
     timestamp: Datetime;
     functionName: string;
     request: ValueAndType;
     response: ValueAndType;
-    wrappedFunctionType: WrappedFunctionType;
+    durableFunctionType: WrappedFunctionType;
   };
   export type LocalSpanData = {
     spanId: SpanId;
@@ -142,8 +199,8 @@ declare module 'golem:api/oplog@1.5.0' {
     error: string;
     retryFrom: OplogIndex;
     insideAtomicRegion: boolean;
-    /** Serialized retry policy state (JSON-encoded PublicRetryPolicyState) */
-    retryPolicyState?: Uint8Array;
+    /** Persistent retry policy state, if a semantic retry policy is active. */
+    retryPolicyState?: RetryPolicyState;
   };
   export type OplogRegion = {
     start: OplogIndex;
@@ -158,10 +215,7 @@ declare module 'golem:api/oplog@1.5.0' {
    */
   export type SetRetryPolicyParameters = {
     timestamp: Datetime;
-    name: string;
-    priority: number;
-    predicate: RetryPredicate;
-    policy: RetryPolicy;
+    policy: NamedRetryPolicy;
   };
   /**
    * Parameters for a remove-retry-policy oplog entry.
@@ -197,85 +251,17 @@ declare module 'golem:api/oplog@1.5.0' {
     traceStates: string[];
     invocationContext: SpanData[][];
   };
-  export type LoadSnapshotParameters = {
-    snapshot: Snapshot;
-  };
   export type ProcessOplogEntriesParameters = {
     idempotencyKey: string;
   };
   export type ManualUpdateParameters = {
     targetRevision: ComponentRevision;
   };
-  export type AgentInvocation = 
-  {
-    tag: 'agent-initialization'
-    val: AgentInitializationParameters
-  } |
-  {
-    tag: 'agent-method-invocation'
-    val: AgentMethodInvocationParameters
-  } |
-  {
-    tag: 'save-snapshot'
-  } |
-  {
-    tag: 'load-snapshot'
-    val: LoadSnapshotParameters
-  } |
-  {
-    tag: 'process-oplog-entries'
-    val: ProcessOplogEntriesParameters
-  } |
-  {
-    tag: 'manual-update'
-    val: ManualUpdateParameters
-  };
-  export type AgentInvocationStartedParameters = {
-    timestamp: Datetime;
-    invocation: AgentInvocation;
-  };
   export type AgentInvocationOutputParameters = {
     output: TypedDataValue;
   };
   export type FallibleResultParameters = {
     error?: string;
-  };
-  export type SaveSnapshotResultParameters = {
-    snapshot: Snapshot;
-  };
-  export type AgentInvocationResult = 
-  {
-    tag: 'agent-initialization'
-    val: AgentInvocationOutputParameters
-  } |
-  {
-    tag: 'agent-method'
-    val: AgentInvocationOutputParameters
-  } |
-  {
-    tag: 'manual-update'
-  } |
-  {
-    tag: 'load-snapshot'
-    val: FallibleResultParameters
-  } |
-  {
-    tag: 'save-snapshot'
-    val: SaveSnapshotResultParameters
-  } |
-  {
-    tag: 'process-oplog-entries'
-    val: FallibleResultParameters
-  };
-  export type AgentInvocationFinishedParameters = {
-    timestamp: Datetime;
-    invocationResult: AgentInvocationResult;
-    consumedFuel: bigint;
-    componentRevision: bigint;
-  };
-  export type PendingAgentInvocationParameters = {
-    timestamp: Datetime;
-    invocation: AgentInvocation;
   };
   export type UpdateDescription = 
   /** Automatic update by replaying the oplog on the new version */
@@ -290,7 +276,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type PendingUpdateParameters = {
     timestamp: Datetime;
     targetRevision: ComponentRevision;
-    updateDescription: UpdateDescription;
+    description: UpdateDescription;
   };
   export type SuccessfulUpdateParameters = {
     timestamp: Datetime;
@@ -314,13 +300,13 @@ declare module 'golem:api/oplog@1.5.0' {
   export type AgentResourceId = bigint;
   export type CreateResourceParameters = {
     timestamp: Datetime;
-    resourceId: AgentResourceId;
+    id: AgentResourceId;
     name: string;
     owner: string;
   };
   export type DropResourceParameters = {
     timestamp: Datetime;
-    resourceId: AgentResourceId;
+    id: AgentResourceId;
     name: string;
     owner: string;
   };
@@ -376,10 +362,81 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     beginIndex: OplogIndex;
   };
-  export type SnapshotParameters = {
-    timestamp: Datetime;
+  export type SnapshotData = {
     data: Uint8Array;
     mimeType: string;
+  };
+  export type LoadSnapshotParameters = {
+    snapshot: SnapshotData;
+  };
+  export type AgentInvocation = 
+  {
+    tag: 'agent-initialization'
+    val: AgentInitializationParameters
+  } |
+  {
+    tag: 'agent-method-invocation'
+    val: AgentMethodInvocationParameters
+  } |
+  {
+    tag: 'save-snapshot'
+  } |
+  {
+    tag: 'load-snapshot'
+    val: LoadSnapshotParameters
+  } |
+  {
+    tag: 'process-oplog-entries'
+    val: ProcessOplogEntriesParameters
+  } |
+  {
+    tag: 'manual-update'
+    val: ManualUpdateParameters
+  };
+  export type AgentInvocationStartedParameters = {
+    timestamp: Datetime;
+    invocation: AgentInvocation;
+  };
+  export type SaveSnapshotResultParameters = {
+    snapshot: SnapshotData;
+  };
+  export type AgentInvocationResult = 
+  {
+    tag: 'agent-initialization'
+    val: AgentInvocationOutputParameters
+  } |
+  {
+    tag: 'agent-method'
+    val: AgentInvocationOutputParameters
+  } |
+  {
+    tag: 'manual-update'
+  } |
+  {
+    tag: 'load-snapshot'
+    val: FallibleResultParameters
+  } |
+  {
+    tag: 'save-snapshot'
+    val: SaveSnapshotResultParameters
+  } |
+  {
+    tag: 'process-oplog-entries'
+    val: FallibleResultParameters
+  };
+  export type AgentInvocationFinishedParameters = {
+    timestamp: Datetime;
+    result: AgentInvocationResult;
+    consumedFuel: bigint;
+    componentRevision: bigint;
+  };
+  export type PendingAgentInvocationParameters = {
+    timestamp: Datetime;
+    invocation: AgentInvocation;
+  };
+  export type SnapshotParameters = {
+    timestamp: Datetime;
+    data: SnapshotData;
   };
   export type OplogProcessorCheckpointParameters = {
     timestamp: Datetime;
@@ -501,8 +558,8 @@ declare module 'golem:api/oplog@1.5.0' {
     error: WorkerError;
     retryFrom: OplogIndex;
     insideAtomicRegion: boolean;
-    /** Serialized retry policy state (JSON-encoded RetryPolicyState) */
-    retryPolicyState?: Uint8Array;
+    /** Persistent retry policy state, if a semantic retry policy is active. */
+    retryPolicyState?: RetryPolicyState;
   };
   export type RawPendingAgentInvocationParameters = {
     timestamp: Datetime;
