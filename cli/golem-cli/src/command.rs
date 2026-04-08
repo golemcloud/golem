@@ -1330,7 +1330,7 @@ pub mod api {
 
     pub mod retry_policy {
         use clap::Subcommand;
-        use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
+        use golem_common::model::retry_policy::RetryPolicyId;
 
         #[derive(Debug, Subcommand)]
         pub enum RetryPolicySubcommand {
@@ -1365,9 +1365,6 @@ pub mod api {
                 /// ID of the retry policy to update
                 #[arg(long)]
                 id: RetryPolicyId,
-                /// Current revision of the retry policy
-                #[arg(long)]
-                current_revision: RetryPolicyRevision,
                 /// New priority (optional)
                 #[arg(long)]
                 priority: Option<u32>,
@@ -1384,9 +1381,6 @@ pub mod api {
                 /// ID of the retry policy to delete
                 #[arg(long)]
                 id: RetryPolicyId,
-                /// Current revision of the retry policy
-                #[arg(long)]
-                current_revision: RetryPolicyRevision,
             },
         }
     }

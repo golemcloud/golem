@@ -55,7 +55,6 @@ sealed trait JsCreateParameters extends js.Object {
   def timestamp: JsDatetime                                           = js.native
   def agentId: JsAgentId                                              = js.native
   def componentRevision: js.BigInt                                    = js.native
-  def args: js.Array[String]                                          = js.native
   def env: js.Array[js.Tuple2[String, String]]                        = js.native
   def createdBy: JsAccountId                                          = js.native
   def environmentId: JsEnvironmentId                                  = js.native
@@ -496,13 +495,20 @@ sealed trait JsRemoteTransactionParameters extends js.Object {
   def beginIndex: js.BigInt = js.native
 }
 
+// --- SnapshotData ---
+
+@js.native
+sealed trait JsSnapshotData extends js.Object {
+  def data: Uint8Array = js.native
+  def mimeType: String = js.native
+}
+
 // --- SnapshotParameters ---
 
 @js.native
 sealed trait JsSnapshotParameters extends js.Object {
-  def timestamp: JsDatetime = js.native
-  def data: Uint8Array      = js.native
-  def mimeType: String      = js.native
+  def timestamp: JsDatetime  = js.native
+  def data: JsSnapshotData   = js.native
 }
 
 // --- OplogProcessorCheckpointParameters ---

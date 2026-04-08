@@ -75,13 +75,13 @@ object JsDatetime {
 
 @js.native
 sealed trait JsSnapshot extends js.Object {
-  def data: Uint8Array = js.native
-  def mimeType: String = js.native
+  def payload: Uint8Array = js.native
+  def mimeType: String    = js.native
 }
 
 object JsSnapshot {
-  def apply(data: Uint8Array, mimeType: String): JsSnapshot =
-    js.Dynamic.literal("data" -> data, "mimeType" -> mimeType).asInstanceOf[JsSnapshot]
+  def apply(payload: Uint8Array, mimeType: String): JsSnapshot =
+    js.Dynamic.literal("payload" -> payload, "mimeType" -> mimeType).asInstanceOf[JsSnapshot]
 }
 
 // --- PersistenceLevel  –  tagged union ---

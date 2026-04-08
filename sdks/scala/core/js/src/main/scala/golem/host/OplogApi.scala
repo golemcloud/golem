@@ -48,7 +48,6 @@ object OplogApi {
     timestamp: ContextApi.DateTime,
     agentId: AgentHostApi.AgentIdLiteral,
     componentRevision: BigInt,
-    args: List[String],
     env: Map[String, String],
     createdBy: String,
     environmentId: String,
@@ -521,8 +520,8 @@ object OplogApi {
           val sp = v.asInstanceOf[JsSnapshotParameters]
           Snapshot(
             ts = parseDateTime(sp.timestamp),
-            data = new scala.scalajs.js.typedarray.Int8Array(sp.data.buffer).toArray,
-            mimeType = sp.mimeType
+            data = new scala.scalajs.js.typedarray.Int8Array(sp.data.data.buffer).toArray,
+            mimeType = sp.data.mimeType
           )
         case "oplog-processor-checkpoint" =>
           val cp = v.asInstanceOf[JsOplogProcessorCheckpointParameters]
@@ -570,7 +569,6 @@ object OplogApi {
       timestamp = parseDateTime(raw.timestamp),
       agentId = parseAgentId(raw.agentId),
       componentRevision = BigInt(raw.componentRevision.toString),
-      args = raw.args.toList,
       env = raw.env.toSeq.map(t => t._1 -> t._2).toMap,
       createdBy = raw.createdBy.toString,
       environmentId = raw.environmentId.toString,
@@ -791,7 +789,7 @@ object OplogApi {
       case "auto-update"    => UpdateDescription.AutoUpdate
       case "snapshot-based" =>
         val snapshot = desc.asInstanceOf[JsUpdateDescriptionSnapshotBased].value
-        UpdateDescription.SnapshotBased(new scala.scalajs.js.typedarray.Int8Array(snapshot.data.buffer).toArray)
+        UpdateDescription.SnapshotBased(new scala.scalajs.js.typedarray.Int8Array(snapshot.payload.buffer).toArray)
       case other =>
         throw new IllegalArgumentException(s"Unknown UpdateDescription tag: $other")
     }

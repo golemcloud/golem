@@ -94,7 +94,6 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     agentId: AgentId;
     componentRevision: ComponentRevision;
-    args: string[];
     env: [string, string][];
     createdBy: AccountId;
     environmentId: EnvironmentId;

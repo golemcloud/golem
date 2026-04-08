@@ -21,9 +21,7 @@ use crate::model::text::retry_policy::{
     RetryPolicyCreateView, RetryPolicyDeleteView, RetryPolicyGetView, RetryPolicyUpdateView,
 };
 use golem_client::api::RetryPoliciesClient;
-use golem_common::model::retry_policy::{
-    RetryPolicyCreation, RetryPolicyId, RetryPolicyRevision, RetryPolicyUpdate,
-};
+use golem_common::model::retry_policy::{RetryPolicyCreation, RetryPolicyId, RetryPolicyUpdate};
 use std::sync::Arc;
 
 pub struct RetryPolicyCommandHandler {
@@ -50,18 +48,14 @@ impl RetryPolicyCommandHandler {
             RetryPolicySubcommand::Get { id } => self.cmd_get(id).await,
             RetryPolicySubcommand::Update {
                 id,
-                current_revision,
                 priority,
                 predicate_json,
                 policy_json,
             } => {
-                self.cmd_update(id, current_revision, priority, predicate_json, policy_json)
+                self.cmd_update(id, priority, predicate_json, policy_json)
                     .await
             }
-            RetryPolicySubcommand::Delete {
-                id,
-                current_revision,
-            } => self.cmd_delete(id, current_revision).await,
+            RetryPolicySubcommand::Delete { id } => self.cmd_delete(id).await,
         }
     }
 
@@ -139,19 +133,24 @@ impl RetryPolicyCommandHandler {
     async fn cmd_update(
         &self,
         id: RetryPolicyId,
-        current_revision: RetryPolicyRevision,
         priority: Option<u32>,
         predicate_json: Option<String>,
         policy_json: Option<String>,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 
+        let current = clients
+            .retry_policies
+            .get_retry_policy(&id.0)
+            .await
+            .map_service_error()?;
+
         let result = clients
             .retry_policies
             .update_retry_policy(
                 &id.0,
                 &RetryPolicyUpdate {
-                    current_revision,
+                    current_revision: current.revision,
                     priority,
                     predicate_json,
                     policy_json,
@@ -167,16 +166,18 @@ impl RetryPolicyCommandHandler {
         Ok(())
     }
 
-    async fn cmd_delete(
-        &self,
-        id: RetryPolicyId,
-        current_revision: RetryPolicyRevision,
-    ) -> anyhow::Result<()> {
+    async fn cmd_delete(&self, id: RetryPolicyId) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
+
+        let current = clients
+            .retry_policies
+            .get_retry_policy(&id.0)
+            .await
+            .map_service_error()?;
 
         let result = clients
             .retry_policies
-            .delete_retry_policy(&id.0, current_revision.into())
+            .delete_retry_policy(&id.0, current.revision.into())
             .await
             .map_service_error()?;
 

@@ -70,7 +70,7 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
     val ts = s"${e.timestamp.seconds}s"
     e match {
       case OplogApi.OplogEntry.Create(p) =>
-        s"CREATE @ $ts revision=${p.componentRevision} args=${p.args.mkString(",")}"
+        s"CREATE @ $ts revision=${p.componentRevision}"
 
       case OplogApi.OplogEntry.HostCall(p) =>
         val reqSummary = summarizeVat(p.request)

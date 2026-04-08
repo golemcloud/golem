@@ -136,7 +136,6 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           ts,
           mockAgentId,
           BigInt(1),
-          List("arg1"),
           Map("env" -> "val"),
           "golem",
           "test-env",
