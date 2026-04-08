@@ -993,6 +993,10 @@ where
                 return Err(err);
             }
             Err(err) => {
+                tracing::debug!(
+                    error = %err,
+                    "In-task retry loop: operation failed with transient error"
+                );
                 let decision = retry_state.decide_retry(&mut task_ctx, "in-task").await;
 
                 match decision {

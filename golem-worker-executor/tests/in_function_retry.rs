@@ -540,15 +540,25 @@ async fn start_failing_http_server(fail_count: usize) -> (u16, Arc<AtomicUsize>)
     spawn(
         async move {
             loop {
-                let (mut stream, _) = match listener.accept().await {
+                let (mut stream, peer) = match listener.accept().await {
                     Ok(conn) => conn,
                     Err(_) => break,
                 };
                 let n = counter_clone.fetch_add(1, Ordering::SeqCst);
                 if n < fail_count {
+                    tracing::info!(
+                        connection_index = n,
+                        peer = %peer,
+                        "Failing HTTP server: dropping connection (simulating failure)"
+                    );
                     // Immediately close the connection — produces ConnectionTerminated
                     drop(stream);
                 } else {
+                    tracing::info!(
+                        connection_index = n,
+                        peer = %peer,
+                        "Failing HTTP server: serving success response"
+                    );
                     let body = "response is test-header test-body";
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -618,16 +628,27 @@ async fn http_zone1_inline_retry_on_transient_connection_failure(
 
     assert_eq!(result, data_value!("200 response is test-header test-body"));
 
-    // Server received 2 failed + 1 successful = 3 total connections
+    // Server received at least 2 failed + 1 successful = 3 total connections.
+    // Under load (e.g. CI), the TCP RST from a dropped connection may race with
+    // the HTTP request being written, causing an additional connection attempt
+    // before the error propagates to the retry logic, so we allow more than 3.
     let total_connections = connection_counter.load(Ordering::SeqCst);
-    assert_eq!(
-        total_connections, 3,
-        "Expected 3 total connections (2 dropped + 1 successful)"
+    tracing::info!(
+        total_connections,
+        "Total TCP connections accepted by the failing HTTP server"
+    );
+    assert!(
+        total_connections >= 3,
+        "Expected at least 3 total connections (2 dropped + 1 successful), got {total_connections}"
     );
 
-    // Verify oplog contains 2 in-function retry error entries
+    // Verify oplog contains exactly 2 in-function retry error entries
     let retry_count =
         count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?;
+    tracing::info!(
+        retry_count,
+        "In-function retry error entries found in oplog"
+    );
     assert_eq!(
         retry_count, 2,
         "Expected 2 in-function retry error entries in oplog"
