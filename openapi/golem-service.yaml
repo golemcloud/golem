@@ -15573,28 +15573,7 @@ components:
       required:
       - fields
     Provider:
-      oneOf:
-      - type: string
-        enum:
-        - google
-        - facebook
-        - microsoft
-        - gitlab
-      - type: object
-        title: CustomProvider
-        required:
-        - type
-        - name
-        - issuerUrl
-        properties:
-          type:
-            type: string
-            enum:
-            - custom
-          name:
-            type: string
-          issuerUrl:
-            type: string
+      type: object
     QueryVariable:
       title: QueryVariable
       type: object
