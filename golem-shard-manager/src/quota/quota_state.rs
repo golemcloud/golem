@@ -227,33 +227,57 @@ impl QuotaState {
     /// Computes the allocation share for a single executor.
     ///
     /// When executors have reported pending reservations, the allocation is
-    /// weighted by each executor's pending demand.  Executors with more
-    /// waiters (higher total pending amount) get a proportionally larger
-    /// share.  When no executor has pending demand, the budget is split
-    /// evenly (respecting `min_executors`).
+    /// weighted by each executor's priority-weighted demand:
+    /// `score = Σ(amount_i * max(priority_i, 0))`.
+    /// This ensures higher-priority waiters drive proportionally more
+    /// allocation toward their executor.
+    ///
+    /// When no executor has pending demand, the budget is split evenly
+    /// (respecting `min_executors`).
     pub fn compute_allocation(&self, pod: &Pod, min_executors: u64) -> u64 {
         let active_count = self.leases.len() as u64;
         debug_assert!(active_count > 0);
         debug_assert!(min_executors > 0);
 
-        let pod_demand: u64 = self
+        /// Priority-weighted demand: amount × max(priority, ε).
+        /// We use a small epsilon (1.0) instead of 0 so that even
+        /// zero-credit waiters contribute demand signal and prevent the
+        /// min_executors floor from starving a single active executor.
+        fn priority_weighted_demand(reservations: &[PendingReservation]) -> f64 {
+            reservations
+                .iter()
+                .map(|r| r.amount as f64 * r.priority.max(1.0))
+                .sum()
+        }
+
+        let pod_has_demand = self
             .leases
             .get(pod)
-            .map(|l| l.pending_reservations.iter().map(|r| r.amount).sum())
-            .unwrap_or(0);
+            .map(|l| !l.pending_reservations.is_empty())
+            .unwrap_or(false);
 
-        let total_demand: u64 = self
+        let pod_score: f64 = self
+            .leases
+            .get(pod)
+            .map(|l| priority_weighted_demand(&l.pending_reservations))
+            .unwrap_or(0.0);
+
+        let total_score: f64 = self
             .leases
             .values()
-            .flat_map(|l| l.pending_reservations.iter().map(|r| r.amount))
+            .map(|l| priority_weighted_demand(&l.pending_reservations))
             .sum();
 
-        if total_demand > 0 && pod_demand > 0 {
-            // Weighted allocation: this pod's share of remaining is
-            // proportional to its fraction of total demand.
-            ((self.remaining as u128 * pod_demand as u128) / total_demand as u128) as u64
+        if total_score > 0.0 && pod_score > 0.0 {
+            // Priority-weighted proportional allocation.
+            // When this is the only executor with demand it gets all of remaining.
+            ((self.remaining as f64 * pod_score / total_score) as u64).min(self.remaining)
+        } else if pod_has_demand {
+            // This executor has demand but zero priority score — give it everything
+            // since no other executor is competing for this resource right now.
+            self.remaining
         } else {
-            // Even split when there's no demand information.
+            // No demand signals — even split respecting min_executors.
             let divisor = active_count.max(min_executors);
             self.remaining / divisor
         }

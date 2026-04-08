@@ -311,6 +311,26 @@ impl QuotaService {
         Ok(lease)
     }
 
+    /// Renew multiple leases in one call.  Results are in the same order as
+    /// the input entries.  Each entry is processed independently — failure of
+    /// one does not affect others.
+    pub async fn batch_renew_leases(
+        &self,
+        renewals: Vec<(
+            ResourceDefinitionId,
+            Pod,
+            LeaseEpoch,
+            u64,
+            Vec<PendingReservation>,
+        )>,
+    ) -> Vec<Result<QuotaLease, QuotaError>> {
+        let mut results = Vec::with_capacity(renewals.len());
+        for (rid, pod, epoch, unused, pending) in renewals {
+            results.push(self.renew_lease(rid, pod, epoch, unused, pending).await);
+        }
+        results
+    }
+
     pub async fn release_lease(
         &self,
         resource_definition_id: ResourceDefinitionId,

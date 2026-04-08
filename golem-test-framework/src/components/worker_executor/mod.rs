@@ -99,6 +99,8 @@ async fn env_vars(
             "GOLEM__AGENT_WEBHOOKS_SERVICE__USE_HTTPS_FOR_WEBHOOK_URL",
             "false",
         )
+        .with_str("GOLEM__QUOTA_SERVICE__INLINE_WAIT_THRESHOLD", "30s")
+        .with_str("GOLEM__QUOTA_SERVICE__RENEWAL_INTERVAL", "1s")
         .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with_optional_otlp("worker_executor", otlp)
