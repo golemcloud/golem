@@ -37,9 +37,11 @@ Worker executor tests, integration tests, and CLI integration tests may depend o
 | Core logic, utilities | `cargo make unit-tests` |
 | Worker executor functionality | `cargo make worker-executor-tests` |
 | Service integration | `cargo make integration-tests` |
-| CLI changes | `cargo make cli-tests` |
+| CLI changes | `cargo make cli-integration-tests` |
 
 For specific tests: `cargo test -p <crate> -- <test_name> --report-time`
+
+For CLI integration test reruns or isolation, use `cargo make cli-integration-tests-group1` through `cargo make cli-integration-tests-group6`.
 
 **Whenever tests are modified, always run the affected tests to verify they still pass before considering the task complete.**
 

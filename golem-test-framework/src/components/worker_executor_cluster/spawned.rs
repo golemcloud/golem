@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::redis::Redis;
+use crate::components::rdb::Rdb;
 use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::WorkerExecutor;
@@ -39,7 +39,7 @@ impl SpawnedWorkerExecutorCluster {
         working_directory: PathBuf,
         http_port: u16,
         grpc_port: u16,
-        redis: Arc<dyn Redis>,
+        rdb: Arc<dyn Rdb>,
         shard_manager: Arc<dyn ShardManager>,
         worker_service: Arc<dyn WorkerService>,
         verbosity: Level,
@@ -54,7 +54,7 @@ impl SpawnedWorkerExecutorCluster {
                 &working_directory,
                 http_port,
                 grpc_port,
-                redis,
+                rdb,
                 shard_manager,
                 worker_service,
                 verbosity,
@@ -73,7 +73,7 @@ impl SpawnedWorkerExecutorCluster {
         base_grpc_port: u16,
         executable: &Path,
         working_directory: &Path,
-        redis: Arc<dyn Redis>,
+        rdb: Arc<dyn Rdb>,
         shard_manager: Arc<dyn ShardManager>,
         worker_service: Arc<dyn WorkerService>,
         verbosity: Level,
@@ -83,19 +83,19 @@ impl SpawnedWorkerExecutorCluster {
         otlp: bool,
     ) -> Self {
         info!("Starting a cluster of golem-worker-executors of size {size}");
-        let mut worker_executors_joins = Vec::new();
+        let mut worker_executors = Vec::new();
 
         for i in 0..size {
             let http_port = base_http_port + i as u16;
             let grpc_port = base_grpc_port + i as u16;
 
-            let worker_executor_join = tokio::spawn(
+            worker_executors.push(
                 Self::make_worker_executor(
                     executable.to_path_buf(),
                     working_directory.to_path_buf(),
                     http_port,
                     grpc_port,
-                    redis.clone(),
+                    rdb.clone(),
                     shard_manager.clone(),
                     worker_service.clone(),
                     verbosity,
@@ -104,16 +104,9 @@ impl SpawnedWorkerExecutorCluster {
                     registry_service.clone(),
                     otlp,
                 )
-                .in_current_span(),
+                .in_current_span()
+                .await,
             );
-
-            worker_executors_joins.push(worker_executor_join);
-        }
-
-        let mut worker_executors = Vec::new();
-
-        for join in worker_executors_joins {
-            worker_executors.push(join.await.expect("Failed to join"));
         }
 
         info!("Waiting for shard manager to see all executors");

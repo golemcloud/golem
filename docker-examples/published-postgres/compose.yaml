@@ -88,11 +88,16 @@ services:
       GOLEM__HTTP_PORT: ${SHARD_MANAGER_HTTP_PORT}
       GOLEM__GRPC__PORT: ${SHARD_MANAGER_GRPC_PORT}
 
-      GOLEM__PERSISTENCE__TYPE: "Redis"
-      GOLEM__PERSISTENCE__CONFIG__HOST: redis
-      GOLEM__PERSISTENCE__CONFIG__PORT: 6379
+      GOLEM__DB__TYPE: "Postgres"
+      GOLEM__DB__CONFIG__DATABASE: golem_db
+      GOLEM__DB__CONFIG__MAX_CONNECTIONS: 10
+      GOLEM__DB__CONFIG__HOST: postgres
+      GOLEM__DB__CONFIG__PORT: 5432
+      GOLEM__DB__CONFIG__USERNAME: golem_user
+      GOLEM__DB__CONFIG__PASSWORD: golem_password
     depends_on:
-      - redis
+      postgres:
+        condition: service_healthy
 
   golem-worker-service:
     image: golemservices/golem-worker-service:${GOLEM_IMAGES_VERSION}
@@ -165,11 +170,23 @@ services:
       GOLEM__HTTP_PORT: ${WORKER_EXECUTOR_HTTP_PORT}
       GOLEM__GRPC__PORT: ${WORKER_EXECUTOR_GRPC_PORT}
 
-      GOLEM__KEY_VALUE_STORAGE__TYPE: "Redis"
-      GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST: redis
-      GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT: 6379
+      GOLEM__KEY_VALUE_STORAGE__TYPE: "Postgres"
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__DATABASE: golem_db
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__MAX_CONNECTIONS: 10
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST: postgres
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT: 5432
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__USERNAME: golem_user
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__PASSWORD: golem_password
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__SCHEMA: golem_worker_executor
 
-      GOLEM__INDEXED_STORAGE__TYPE: "KVStoreRedis"
+      GOLEM__INDEXED_STORAGE__TYPE: "Postgres"
+      GOLEM__INDEXED_STORAGE__CONFIG__DATABASE: golem_db
+      GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONNECTIONS: 10
+      GOLEM__INDEXED_STORAGE__CONFIG__HOST: postgres
+      GOLEM__INDEXED_STORAGE__CONFIG__PORT: 5432
+      GOLEM__INDEXED_STORAGE__CONFIG__USERNAME: golem_user
+      GOLEM__INDEXED_STORAGE__CONFIG__PASSWORD: golem_password
+      GOLEM__INDEXED_STORAGE__CONFIG__SCHEMA: golem_worker_executor_indexed
 
       GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
       GOLEM__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
@@ -189,7 +206,8 @@ services:
     volumes:
       - blob_storage:/blob_storage
     depends_on:
-      - redis
+      postgres:
+        condition: service_healthy
       - golem-shard-manager
       - golem-registry-service
 
@@ -206,11 +224,23 @@ services:
       GOLEM__COMPILED_COMPONENT_SERVICE__TYPE: "Enabled"
       GOLEM__HTTP_PORT: ${DEBUGGING_SERVICE_HTTP_PORT}
 
-      GOLEM__KEY_VALUE_STORAGE__TYPE: "Redis"
-      GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT: 6379
-      GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST: redis
+      GOLEM__KEY_VALUE_STORAGE__TYPE: "Postgres"
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__DATABASE: golem_db
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__MAX_CONNECTIONS: 10
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__HOST: postgres
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__PORT: 5432
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__USERNAME: golem_user
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__PASSWORD: golem_password
+      GOLEM__KEY_VALUE_STORAGE__CONFIG__SCHEMA: golem_worker_executor
 
-      GOLEM__INDEXED_STORAGE__TYPE: "KVStoreRedis"
+      GOLEM__INDEXED_STORAGE__TYPE: "Postgres"
+      GOLEM__INDEXED_STORAGE__CONFIG__DATABASE: golem_db
+      GOLEM__INDEXED_STORAGE__CONFIG__MAX_CONNECTIONS: 10
+      GOLEM__INDEXED_STORAGE__CONFIG__HOST: postgres
+      GOLEM__INDEXED_STORAGE__CONFIG__PORT: 5432
+      GOLEM__INDEXED_STORAGE__CONFIG__USERNAME: golem_user
+      GOLEM__INDEXED_STORAGE__CONFIG__PASSWORD: golem_password
+      GOLEM__INDEXED_STORAGE__CONFIG__SCHEMA: golem_worker_executor_indexed
 
       GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
       GOLEM__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
@@ -220,7 +250,8 @@ services:
     volumes:
       - blob_storage:/blob_storage
     depends_on:
-      - redis
+      postgres:
+        condition: service_healthy
       - golem-shard-manager
       - golem-registry-service
 

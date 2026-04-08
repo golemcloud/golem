@@ -59,7 +59,7 @@ impl<T: AllowedLanguages> UnstructuredText<T> {
         }
     }
 
-    #[cfg(any(feature = "host", feature = "stub"))]
+    #[cfg(any(feature = "host", feature = "guest"))]
     pub fn from_wit_value(value: crate::WitValue) -> Result<UnstructuredText<T>, String> {
         let value = crate::Value::from(value);
 

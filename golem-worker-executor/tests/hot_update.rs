@@ -178,7 +178,8 @@ async fn auto_update_on_running(
             Vec::new(),
         )
         .await?;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -211,7 +212,8 @@ async fn auto_update_on_running(
     let mut control2 = http_server.f1_control(110).await;
 
     control2.await_reached().await;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
     control2.resume();
 
     let result = fiber.await??;
@@ -255,7 +257,8 @@ async fn auto_update_on_idle(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -317,7 +320,8 @@ async fn failing_auto_update_on_idle(
             Vec::new(),
         )
         .await?;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -378,7 +382,8 @@ async fn auto_update_on_idle_with_non_diverging_history(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -449,7 +454,8 @@ async fn failing_auto_update_on_running(
             Vec::new(),
         )
         .await?;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -486,7 +492,8 @@ async fn failing_auto_update_on_running(
     let mut control2 = http_server.f1_control(110).await;
 
     control2.await_reached().await;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
     control2.resume();
 
     let result = fiber.await??;
@@ -542,7 +549,8 @@ async fn manual_update_on_idle(
             Vec::new(),
         )
         .await?;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v3_release")
@@ -616,7 +624,8 @@ async fn manual_update_on_idle_without_save_snapshot(
             Vec::new(),
         )
         .await?;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v3_release")
@@ -686,7 +695,8 @@ async fn auto_update_on_running_followed_by_manual(
             Vec::new(),
         )
         .await?;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let updated_component_1 = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -730,7 +740,8 @@ async fn auto_update_on_running_followed_by_manual(
 
     let mut control2 = http_server.f1_control(110).await;
     control2.await_reached().await;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
     control2.resume();
 
     let result1 = fiber.await??;
@@ -790,7 +801,8 @@ async fn manual_update_on_idle_with_failing_load(
             Vec::new(),
         )
         .await?;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v4_release")
@@ -859,7 +871,8 @@ async fn manual_update_on_idle_using_v11(
             Vec::new(),
         )
         .await?;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v3_release")
@@ -933,7 +946,8 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
             Vec::new(),
         )
         .await?;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v3_release")
@@ -997,7 +1011,8 @@ async fn auto_update_on_idle_to_non_existing(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -1173,7 +1188,8 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
             Vec::new(),
         )
         .await?;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     // Invoke f1 with a blocking control point so the worker stays Running
     let mut control = http_server.f1_control(100).await;
@@ -1267,7 +1283,8 @@ async fn agent_can_be_invoked_after_manual_snapshot_update_and_restart(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
-    executor.log_output(&worker_id).await?;
+    let mut _log_output_guards = Vec::new();
+    _log_output_guards.push(executor.log_output_scoped(&worker_id).await?);
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v3_release")

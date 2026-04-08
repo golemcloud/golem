@@ -15,6 +15,7 @@
 pub mod login;
 
 use self::login::LoginSystem;
+use crate::config::BuiltinPluginsConfig;
 use crate::config::RegistryServiceConfig;
 use crate::repo::account::{AccountRepo, DbAccountRepo};
 use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
@@ -70,6 +71,7 @@ use crate::services::token::TokenService;
 use anyhow::{Context, anyhow};
 use golem_common::IntoAnyhow;
 use golem_common::config::DbConfig;
+use golem_common::model::account::AccountId;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
@@ -114,6 +116,9 @@ pub struct Services {
     pub reports_service: Arc<ReportsService>,
     pub security_scheme_service: Arc<SecuritySchemeService>,
     pub token_service: Arc<TokenService>,
+    builtin_plugins_config: BuiltinPluginsConfig,
+    builtin_plugin_owner_account_id: AccountId,
+    plugin_repo: Arc<dyn PluginRepo>,
 }
 
 struct Repos {
@@ -361,23 +366,6 @@ impl Services {
             agent_secret_service.clone(),
         ));
 
-        if let Err(e) = crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
-            &config.builtin_plugins,
-            builtin_plugin_owner_account_id,
-            &repos.plugin_repo,
-            &application_service,
-            &environment_service,
-            &component_service,
-            &component_write_service,
-            &deployment_service,
-            &deployment_write_service,
-            &plugin_registration_service,
-        )
-        .await
-        {
-            tracing::warn!("Failed to provision built-in plugins: {e}");
-        }
-
         Ok(Self {
             account_service,
             account_usage_service,
@@ -408,7 +396,29 @@ impl Services {
             reports_service,
             security_scheme_service,
             token_service,
+            builtin_plugins_config: config.builtin_plugins.clone(),
+            builtin_plugin_owner_account_id,
+            plugin_repo: repos.plugin_repo,
         })
+    }
+
+    pub async fn provision_builtin_plugins(&self) {
+        if let Err(e) = crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
+            &self.builtin_plugins_config,
+            self.builtin_plugin_owner_account_id,
+            &self.plugin_repo,
+            &self.application_service,
+            &self.environment_service,
+            &self.component_service,
+            &self.component_write_service,
+            &self.deployment_service,
+            &self.deployment_write_service,
+            &self.plugin_registration_service,
+        )
+        .await
+        {
+            tracing::warn!("Failed to provision built-in plugins: {e}");
+        }
     }
 }
 

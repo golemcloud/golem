@@ -12,14 +12,197 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { PromiseId, getPromise, Uuid } from 'golem:api/host@1.5.0';
-import { parseUuid } from 'golem:core/types@1.5.0';
-import { AgentId } from '../agentId';
+import {
+  PromiseId,
+  getPromise,
+  generateIdempotencyKey as rawGenerateIdempotencyKey,
+  resolveComponentId as rawResolveComponentId,
+  fork as rawFork,
+  ForkResult as RawForkResult,
+  getSelfMetadata as rawGetSelfMetadata,
+  getAgentMetadata as rawGetAgentMetadata,
+  AgentMetadata as RawAgentMetadata,
+  AgentId as RawAgentId,
+  GetAgents as RawGetAgents,
+  AgentAnyFilter,
+} from 'golem:api/host@1.5.0';
+import { ComponentId as RawComponentId } from 'golem:core/types@1.5.0';
+import { ParsedAgentId } from '../agentId';
 import { awaitPollable } from '../internal/pollableUtils';
 import * as wasiEnv from 'wasi:cli/environment@0.2.3';
+import { Uuid } from '../uuid';
+import { ComponentId, EnvironmentId } from '../ids';
 
-// reexport golem host api
-export * from 'golem:api/host@1.5.0';
+// Re-export functions (pass-through — these don't return or accept UUID-containing types)
+export {
+  createPromise,
+  getPromise,
+  completePromise,
+  getOplogIndex,
+  setOplogIndex,
+  oplogCommit,
+  markBeginOperation,
+  markEndOperation,
+  getRetryPolicy,
+  setRetryPolicy,
+  getOplogPersistenceLevel,
+  setOplogPersistenceLevel,
+  getIdempotenceMode,
+  setIdempotenceMode,
+  updateAgent,
+  forkAgent,
+  revertAgent,
+  resolveAgentId,
+  resolveAgentIdStrict,
+} from 'golem:api/host@1.5.0';
+
+// Re-export classes (GetAgents is wrapped below)
+export { GetPromiseResult } from 'golem:api/host@1.5.0';
+
+// Re-export types (excluding those we shadow with rich classes or redefine)
+export type {
+  Duration,
+  ValueAndType,
+  PromiseId,
+  OplogIndex,
+  Pollable,
+  ComponentRevision,
+  RetryPolicy,
+  PersistenceLevel,
+  UpdateMode,
+  FilterComparator,
+  StringFilterComparator,
+  AgentStatus,
+  AgentNameFilter,
+  AgentStatusFilter,
+  AgentVersionFilter,
+  AgentCreatedAtFilter,
+  AgentEnvFilter,
+  AgentConfigVarsFilter,
+  AgentPropertyFilter,
+  AgentAllFilter,
+  AgentAnyFilter,
+  RevertAgentTarget,
+  Snapshot,
+} from 'golem:api/host@1.5.0';
+
+// Re-export rich types, shadowing raw WIT types
+export { Uuid } from '../uuid';
+export { ComponentId, AccountId, EnvironmentId } from '../ids';
+
+/**
+ * Represents a Golem agent, consisting of a component ID and the agent's string identifier.
+ */
+export type AgentId = {
+  componentId: ComponentId;
+  agentId: string;
+};
+
+/**
+ * Metadata about an agent.
+ */
+export type AgentMetadata = {
+  agentId: AgentId;
+  args: string[];
+  env: [string, string][];
+  configVars: [string, string][];
+  status: string;
+  componentRevision: bigint;
+  retryCount: bigint;
+  environmentId: EnvironmentId;
+};
+
+function wrapAgentId(raw: RawAgentId): AgentId {
+  return {
+    componentId: ComponentId.from(raw.componentId),
+    agentId: raw.agentId,
+  };
+}
+
+function wrapAgentMetadata(raw: RawAgentMetadata): AgentMetadata {
+  return {
+    agentId: wrapAgentId(raw.agentId),
+    args: raw.args,
+    env: raw.env,
+    configVars: raw.configVars,
+    status: raw.status,
+    componentRevision: raw.componentRevision,
+    retryCount: raw.retryCount,
+    environmentId: EnvironmentId.from(raw.environmentId),
+  };
+}
+
+/**
+ * Generates an idempotency key as a rich {@link Uuid}.
+ */
+export function generateIdempotencyKey(): Uuid {
+  return Uuid.from(rawGenerateIdempotencyKey());
+}
+
+/**
+ * Get the component-id for a given component reference.
+ * Returns undefined when no component with the specified reference exists.
+ */
+export function resolveComponentId(componentReference: string): ComponentId | undefined {
+  const raw = rawResolveComponentId(componentReference);
+  return raw ? ComponentId.from(raw) : undefined;
+}
+
+/**
+ * Get the current agent's metadata.
+ */
+export function getSelfMetadata(): AgentMetadata {
+  return wrapAgentMetadata(rawGetSelfMetadata());
+}
+
+/**
+ * Get agent metadata.
+ */
+export function getAgentMetadata(agentId: RawAgentId): AgentMetadata | undefined {
+  const raw = rawGetAgentMetadata(agentId);
+  return raw ? wrapAgentMetadata(raw) : undefined;
+}
+
+/**
+ * Agent enumeration with enriched metadata.
+ */
+export class GetAgents {
+  private readonly inner: RawGetAgents;
+
+  constructor(componentId: RawComponentId, filter: AgentAnyFilter | undefined, precise: boolean) {
+    this.inner = new RawGetAgents(componentId, filter, precise);
+  }
+
+  getNext(): AgentMetadata[] | undefined {
+    const raw = this.inner.getNext();
+    return raw ? raw.map(wrapAgentMetadata) : undefined;
+  }
+}
+
+/**
+ * Details about the fork result.
+ */
+export type ForkDetails = {
+  forkedPhantomId: Uuid;
+};
+
+/**
+ * Indicates which agent the code is running on after `fork`.
+ */
+export type ForkResult =
+  | { tag: 'original'; val: ForkDetails }
+  | { tag: 'forked'; val: ForkDetails };
+
+/**
+ * Forks the current agent. Returns enriched ForkResult with rich Uuid phantom IDs.
+ */
+export function fork(): ForkResult {
+  const raw: RawForkResult = rawFork();
+  return {
+    tag: raw.tag,
+    val: { forkedPhantomId: Uuid.from(raw.val.forkedPhantomId) },
+  };
+}
 
 export async function awaitPromise(promiseId: PromiseId): Promise<Uint8Array> {
   const promise = getPromise(promiseId);
@@ -44,21 +227,13 @@ export async function awaitAbortablePromise(
 }
 
 /**
- *  Generates a new random Golem Uuid
- */
-export function randomUuid(): Uuid {
-  const uuidString = crypto.randomUUID();
-  return parseUuid(uuidString);
-}
-
-/**
  * Returns the raw string agent ID of the current agent.
  */
-export function getRawSelfAgentId(): AgentId {
+export function getRawSelfAgentId(): ParsedAgentId {
   const env = wasiEnv.getEnvironment();
   const agentId: [string, string] | undefined = env.find(([key]) => key === 'GOLEM_AGENT_ID');
   if (!agentId) {
     throw new Error('GOLEM_AGENT_ID is not set');
   }
-  return new AgentId(agentId[1]);
+  return new ParsedAgentId(agentId[1]);
 }

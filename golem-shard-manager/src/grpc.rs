@@ -199,9 +199,21 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
         let epoch = golem_service_base::model::quota_lease::LeaseEpoch(request.epoch);
 
+        let pending_reservations = request
+            .pending_reservations
+            .into_iter()
+            .map(Into::into)
+            .collect();
+
         match self
             .quota_service
-            .renew_lease(resource_definition_id, pod, epoch, request.unused)
+            .renew_lease(
+                resource_definition_id,
+                pod,
+                epoch,
+                request.unused,
+                pending_reservations,
+            )
             .await
         {
             Ok(lease) => {

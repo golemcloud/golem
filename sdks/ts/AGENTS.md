@@ -96,8 +96,10 @@ This SDK is part of the main Golem repository but is **not built by `cargo make 
 
 ```shell
 # From repository root
-cargo make cli-tests  # Tests that use SDK features
+cargo make cli-integration-tests
 ```
+
+Use `cargo make cli-integration-tests-group1` through `cargo make cli-integration-tests-group6` to isolate failures or rerun only part of the CLI integration suite.
 
 ## Testing Local SDK Changes
 

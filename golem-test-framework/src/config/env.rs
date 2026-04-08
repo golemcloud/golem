@@ -278,6 +278,7 @@ impl EnvBasedTestDependencies {
         config: &EnvBasedTestDependenciesConfig,
         shard_manager: &Arc<dyn ShardManager>,
         rdb: &Arc<dyn Rdb>,
+        redis: &Arc<dyn Redis>,
         registry_service: &Arc<dyn RegistryService>,
     ) -> Arc<dyn WorkerService> {
         Arc::new(
@@ -289,6 +290,7 @@ impl EnvBasedTestDependencies {
                 9093,
                 shard_manager,
                 rdb,
+                redis,
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
@@ -304,7 +306,7 @@ impl EnvBasedTestDependencies {
         config: &EnvBasedTestDependenciesConfig,
         shard_manager: Arc<dyn ShardManager>,
         worker_service: Arc<dyn WorkerService>,
-        redis: Arc<dyn Redis>,
+        rdb: Arc<dyn Rdb>,
         registry_service: Arc<dyn RegistryService>,
     ) -> Arc<dyn WorkerExecutorCluster> {
         Arc::new(
@@ -314,7 +316,7 @@ impl EnvBasedTestDependencies {
                 9100,
                 &config.debug_targets_dirs().join("worker-executor"),
                 &config.golem_repo_root.join("golem-worker-executor"),
-                redis,
+                rdb,
                 shard_manager,
                 worker_service,
                 config.default_verbosity(),
@@ -358,13 +360,14 @@ impl EnvBasedTestDependencies {
             Self::make_shard_manager(&config, rdb.clone(), registry_service.clone()).await;
 
         let worker_service =
-            Self::make_worker_service(&config, &shard_manager, &rdb, &registry_service).await;
+            Self::make_worker_service(&config, &shard_manager, &rdb, &redis, &registry_service)
+                .await;
 
         let worker_executor_cluster = Self::make_worker_executor_cluster(
             &config,
             shard_manager.clone(),
             worker_service.clone(),
-            redis.clone(),
+            rdb.clone(),
             registry_service.clone(),
         )
         .await;
