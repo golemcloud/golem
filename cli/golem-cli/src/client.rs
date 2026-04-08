@@ -180,6 +180,12 @@ impl Middleware for StaticHeadersMiddleware {
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct GoneErrorBody {
+    error: Option<String>,
+    code: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct KillSwitchMiddleware;
 
@@ -194,10 +200,27 @@ impl Middleware for KillSwitchMiddleware {
         let response = next.run(req, extensions).await?;
 
         if response.status() == StatusCode::GONE {
+            let body = response
+                .bytes()
+                .await
+                .map_err(reqwest_middleware::Error::middleware)?;
+
+            let parsed: Option<GoneErrorBody> = serde_json::from_slice(&body).ok();
+
+            let code = parsed.as_ref().and_then(|b| b.code.as_deref());
+            let message = parsed
+                .as_ref()
+                .and_then(|b| b.error.as_deref())
+                .unwrap_or("To use the currently selected server you have to update your CLI!");
+
+            if code == Some(api::error_code::CLI_UPDATE_REQUIRED) {
+                return Err(reqwest_middleware::Error::middleware(
+                    std::io::Error::other(message.to_string()),
+                ));
+            }
+
             return Err(reqwest_middleware::Error::middleware(
-                std::io::Error::other(
-                    "To use the currently selected server you have to update your CLI!",
-                ),
+                std::io::Error::other(format!("Server returned 410 Gone: {message}")),
             ));
         }
 

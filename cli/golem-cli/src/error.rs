@@ -99,10 +99,6 @@ pub mod service {
         pub fn has_code(&self, code: &str) -> bool {
             self.code.as_deref() == Some(code)
         }
-
-        fn first_error(&self) -> Option<&str> {
-            self.errors.first().map(String::as_str)
-        }
     }
 
     #[derive(Debug)]
@@ -115,14 +111,7 @@ pub mod service {
         pub fn is_domain_is_not_registered(&self) -> bool {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
-                    if err.has_code(api::error_code::DOMAIN_NOT_REGISTERED) {
-                        true
-                    } else {
-                        (err.is_status_code(409) || err.is_not_found())
-                            && err.first_error().is_some_and(|error| {
-                                error.starts_with("Domain") && error.ends_with("is not registered")
-                            })
-                    }
+                    err.is_status_code(409) && err.has_code(api::error_code::DOMAIN_NOT_REGISTERED)
                 }
                 _ => false,
             }
