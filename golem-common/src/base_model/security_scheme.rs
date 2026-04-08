@@ -118,8 +118,7 @@ impl Provider {
     }
 
     pub fn custom(name: String, issuer_url: String) -> Result<Self, String> {
-        let url = url::Url::parse(&issuer_url)
-            .map_err(|e| format!("Invalid issuer URL: {e}"))?;
+        let url = url::Url::parse(&issuer_url).map_err(|e| format!("Invalid issuer URL: {e}"))?;
         if url.host_str().is_none() {
             return Err("Issuer URL must have a host".to_string());
         }
@@ -132,11 +131,11 @@ impl Provider {
     pub fn validate_issuer_url_strict(&self) -> Result<(), String> {
         match self {
             Provider::Custom { issuer_url, .. } => {
-                let url = url::Url::parse(issuer_url)
-                    .map_err(|e| format!("Invalid issuer URL: {e}"))?;
+                let url =
+                    url::Url::parse(issuer_url).map_err(|e| format!("Invalid issuer URL: {e}"))?;
                 if url.scheme() != "https" {
                     return Err(
-                        "Custom provider issuer URL must use https in production".to_string(),
+                        "Custom provider issuer URL must use https in production".to_string()
                     );
                 }
                 if url.query().is_some() {
@@ -146,12 +145,12 @@ impl Provider {
                 }
                 if url.fragment().is_some() {
                     return Err(
-                        "Custom provider issuer URL must not contain a fragment".to_string(),
+                        "Custom provider issuer URL must not contain a fragment".to_string()
                     );
                 }
                 if url.password().is_some() || !url.username().is_empty() {
                     return Err(
-                        "Custom provider issuer URL must not contain credentials".to_string(),
+                        "Custom provider issuer URL must not contain credentials".to_string()
                     );
                 }
                 let host = url.host_str().unwrap_or("");
@@ -161,7 +160,10 @@ impl Provider {
                     || host == "0.0.0.0"
                     || host == "169.254.169.254"
                 {
-                    return Err("Custom provider issuer URL must not point to a local or metadata address".to_string());
+                    return Err(
+                        "Custom provider issuer URL must not point to a local or metadata address"
+                            .to_string(),
+                    );
                 }
                 if let Ok(ip) = host.parse::<std::net::IpAddr>() {
                     match ip {

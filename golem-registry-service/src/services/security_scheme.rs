@@ -179,12 +179,12 @@ impl SecuritySchemeService {
         };
 
         security_scheme.revision = security_scheme.revision.next()?;
-        if let Some(ref provider_type) = update.provider_type {
-            if self.strict_issuer_url_validation {
-                provider_type
-                    .validate_issuer_url_strict()
-                    .map_err(SecuritySchemeError::InvalidCustomProviderIssuerUrl)?;
-            }
+        if let Some(ref provider_type) = update.provider_type
+            && self.strict_issuer_url_validation
+        {
+            provider_type
+                .validate_issuer_url_strict()
+                .map_err(SecuritySchemeError::InvalidCustomProviderIssuerUrl)?;
         }
         if let Some(provider_type) = update.provider_type {
             security_scheme.provider_type = provider_type;

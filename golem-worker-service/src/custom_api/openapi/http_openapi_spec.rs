@@ -89,10 +89,7 @@ fn create_base_openapi(security_schemes: &Vec<Arc<SecuritySchemeDetails>>) -> Op
             Ok(url) => url,
             Err(_) => continue,
         };
-        let openid_config_url = format!(
-            "{}/.well-known/openid-configuration",
-            issuer_url.url()
-        );
+        let openid_config_url = format!("{}/.well-known/openid-configuration", issuer_url.url());
 
         let scheme = SecurityScheme::OpenIDConnect {
             open_id_connect_url: openid_config_url,

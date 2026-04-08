@@ -691,12 +691,10 @@ impl TryFrom<DeploymentCompiledRouteWithSecuritySchemeRecord> for BoundCompiledR
                 let provider_type = if provider_type == "custom" {
                     let name = value
                         .security_scheme_custom_provider_name
-                        .ok_or_else(|| {
-                            anyhow!("Custom provider missing name")
-                        })?;
-                    let issuer_url = value.security_scheme_custom_issuer_url.ok_or_else(|| {
-                        anyhow!("Custom provider missing issuer URL")
-                    })?;
+                        .ok_or_else(|| anyhow!("Custom provider missing name"))?;
+                    let issuer_url = value
+                        .security_scheme_custom_issuer_url
+                        .ok_or_else(|| anyhow!("Custom provider missing issuer URL"))?;
                     Provider::Custom { name, issuer_url }
                 } else {
                     Provider::from_str(&provider_type)

@@ -21,8 +21,12 @@ pub use crate::base_model::security_scheme::*;
 impl Provider {
     pub fn issuer_url(&self) -> Result<IssuerUrl, String> {
         match self {
-            Provider::Google => Ok(IssuerUrl::new("https://accounts.google.com".to_string()).unwrap()),
-            Provider::Facebook => Ok(IssuerUrl::new("https://www.facebook.com".to_string()).unwrap()),
+            Provider::Google => {
+                Ok(IssuerUrl::new("https://accounts.google.com".to_string()).unwrap())
+            }
+            Provider::Facebook => {
+                Ok(IssuerUrl::new("https://www.facebook.com".to_string()).unwrap())
+            }
             Provider::Microsoft => {
                 Ok(IssuerUrl::new("https://login.microsoftonline.com".to_string()).unwrap())
             }
@@ -104,29 +108,47 @@ mod tests {
         let json = serde_json::to_value(&provider).unwrap();
         assert_eq!(json["type"], "custom");
         assert_eq!(json["name"], "my-keycloak");
-        assert_eq!(json["issuerUrl"], "https://keycloak.example.com/realms/myrealm");
+        assert_eq!(
+            json["issuerUrl"],
+            "https://keycloak.example.com/realms/myrealm"
+        );
     }
 
     #[test]
     fn provider_deserialize_known() {
         let json = r#"{"type": "google"}"#;
-        assert_eq!(serde_json::from_str::<Provider>(json).unwrap(), Provider::Google);
+        assert_eq!(
+            serde_json::from_str::<Provider>(json).unwrap(),
+            Provider::Google
+        );
         let json = r#"{"type": "facebook"}"#;
-        assert_eq!(serde_json::from_str::<Provider>(json).unwrap(), Provider::Facebook);
+        assert_eq!(
+            serde_json::from_str::<Provider>(json).unwrap(),
+            Provider::Facebook
+        );
         let json = r#"{"type": "microsoft"}"#;
-        assert_eq!(serde_json::from_str::<Provider>(json).unwrap(), Provider::Microsoft);
+        assert_eq!(
+            serde_json::from_str::<Provider>(json).unwrap(),
+            Provider::Microsoft
+        );
         let json = r#"{"type": "gitlab"}"#;
-        assert_eq!(serde_json::from_str::<Provider>(json).unwrap(), Provider::Gitlab);
+        assert_eq!(
+            serde_json::from_str::<Provider>(json).unwrap(),
+            Provider::Gitlab
+        );
     }
 
     #[test]
     fn provider_deserialize_custom() {
         let json = r#"{"type": "custom", "name": "my-keycloak", "issuerUrl": "https://keycloak.example.com/realms/myrealm"}"#;
         let provider = serde_json::from_str::<Provider>(json).unwrap();
-        assert_eq!(provider, Provider::Custom {
-            name: "my-keycloak".to_string(),
-            issuer_url: "https://keycloak.example.com/realms/myrealm".to_string(),
-        });
+        assert_eq!(
+            provider,
+            Provider::Custom {
+                name: "my-keycloak".to_string(),
+                issuer_url: "https://keycloak.example.com/realms/myrealm".to_string(),
+            }
+        );
     }
 
     #[test]
@@ -158,7 +180,13 @@ mod tests {
 
     #[test]
     fn provider_custom_validation_accepts_valid_url() {
-        assert!(Provider::custom("test".into(), "https://keycloak.example.com/realms/myrealm".into()).is_ok());
+        assert!(
+            Provider::custom(
+                "test".into(),
+                "https://keycloak.example.com/realms/myrealm".into()
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -175,7 +203,11 @@ mod tests {
 
     #[test]
     fn provider_strict_validation_accepts_valid_url() {
-        let provider = Provider::custom("test".into(), "https://keycloak.example.com/realms/test".into()).unwrap();
+        let provider = Provider::custom(
+            "test".into(),
+            "https://keycloak.example.com/realms/test".into(),
+        )
+        .unwrap();
         assert!(provider.validate_issuer_url_strict().is_ok());
     }
 
@@ -199,30 +231,46 @@ mod tests {
             issuer_url: "https://keycloak.example.com/realms/test".to_string(),
         };
         let url = provider.issuer_url().unwrap();
-        assert_eq!(url.url().as_str(), "https://keycloak.example.com/realms/test");
+        assert_eq!(
+            url.url().as_str(),
+            "https://keycloak.example.com/realms/test"
+        );
     }
 
     #[test]
     fn provider_display() {
         assert_eq!(Provider::Google.to_string(), "google");
-        assert_eq!(Provider::Custom {
-            name: "my-kc".to_string(),
-            issuer_url: "https://kc.example.com".to_string(),
-        }.to_string(), "custom:my-kc");
+        assert_eq!(
+            Provider::Custom {
+                name: "my-kc".to_string(),
+                issuer_url: "https://kc.example.com".to_string(),
+            }
+            .to_string(),
+            "custom:my-kc"
+        );
     }
 
     #[test]
     fn provider_kind_round_trip() {
         assert_eq!(Provider::Google.kind(), ProviderKind::Google);
-        assert_eq!(Provider::Custom {
-            name: "x".into(),
-            issuer_url: "https://x.com".into(),
-        }.kind(), ProviderKind::Custom);
+        assert_eq!(
+            Provider::Custom {
+                name: "x".into(),
+                issuer_url: "https://x.com".into(),
+            }
+            .kind(),
+            ProviderKind::Custom
+        );
     }
 
     #[test]
     fn provider_serde_round_trip() {
-        for provider in [Provider::Google, Provider::Facebook, Provider::Microsoft, Provider::Gitlab] {
+        for provider in [
+            Provider::Google,
+            Provider::Facebook,
+            Provider::Microsoft,
+            Provider::Gitlab,
+        ] {
             let json = serde_json::to_string(&provider).unwrap();
             let back: Provider = serde_json::from_str(&json).unwrap();
             assert_eq!(provider, back);
@@ -240,11 +288,11 @@ mod tests {
 
 mod protobuf {
     use super::Provider;
+    use golem_api_grpc::proto::golem::registry::SecuritySchemeProvider as GrpcProvider;
     use golem_api_grpc::proto::golem::registry::security_scheme_provider::Kind as GrpcProviderKind;
     use golem_api_grpc::proto::golem::registry::security_scheme_provider::{
         CustomProvider, Facebook, Gitlab, Google, Microsoft,
     };
-    use golem_api_grpc::proto::golem::registry::SecuritySchemeProvider as GrpcProvider;
 
     impl From<Provider> for GrpcProvider {
         fn from(value: Provider) -> Self {

@@ -91,9 +91,7 @@ impl ApiSecuritySchemeCommandHandler {
                     )
                 })?;
                 let issuer_url = custom_issuer_url.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "--custom-issuer-url is required when provider_type is custom"
-                    )
+                    anyhow::anyhow!("--custom-issuer-url is required when provider_type is custom")
                 })?;
                 Provider::custom(name, issuer_url).map_err(|e| anyhow::anyhow!(e))?
             }

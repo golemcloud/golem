@@ -133,12 +133,11 @@ impl DefaultIdentityProvider {
         let issuer_url = provider
             .issuer_url()
             .map_err(IdentityProviderError::FailedToDiscoverProviderMetadata)?;
-        let provider_metadata =
-            CoreProviderMetadata::discover_async(issuer_url, &http_client)
-                .await
-                .map_err(|err| {
-                    IdentityProviderError::FailedToDiscoverProviderMetadata(err.to_string())
-                })?;
+        let provider_metadata = CoreProviderMetadata::discover_async(issuer_url, &http_client)
+            .await
+            .map_err(|err| {
+                IdentityProviderError::FailedToDiscoverProviderMetadata(err.to_string())
+            })?;
 
         Ok(provider_metadata)
     }
