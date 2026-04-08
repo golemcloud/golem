@@ -60,7 +60,6 @@ use uuid::uuid;
 
 const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
 
-
 pub struct LaunchArgs {
     pub router_addr: String,
     pub router_port: u16,
