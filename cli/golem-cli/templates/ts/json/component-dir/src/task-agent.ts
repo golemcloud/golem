@@ -22,7 +22,7 @@ interface CreateTaskRequest {
   mount: '/task-agents/{name}',
   cors: [ "*" ]
 })
-export class TaskAgent extends BaseAgent {
+class TaskAgent extends BaseAgent {
     private tasks: Task[] = [];
     private nextId: number = 1;
 

@@ -352,7 +352,7 @@ fn try_merge(path: &Path, current: &str, new: &str) -> anyhow::Result<Option<Str
                 current,
                 new,
                 edit::main_ts::validate,
-                edit::main_ts::merge_reexports,
+                edit::main_ts::merge_imports,
             )?),
             "lib.rs" => Some(merge_with_validation(
                 current,

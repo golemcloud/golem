@@ -16,38 +16,38 @@ use anyhow::anyhow;
 use std::collections::BTreeSet;
 use tree_sitter::{Parser, Tree};
 
-pub fn add_reexport(source: &str, export_stmt: &str) -> anyhow::Result<String> {
+pub fn add_import(source: &str, import_stmt: &str) -> anyhow::Result<String> {
     let tree = parse_ts(source)?;
-    let insert_at = last_export_end(source, &tree);
-    let mut output = String::with_capacity(source.len() + export_stmt.len() + 2);
+    let insert_at = last_import_end(source, &tree);
+    let mut output = String::with_capacity(source.len() + import_stmt.len() + 2);
     output.push_str(&source[..insert_at]);
     if !source[..insert_at].ends_with('\n') {
         output.push('\n');
     }
-    output.push_str(export_stmt);
-    if !export_stmt.ends_with('\n') {
+    output.push_str(import_stmt);
+    if !import_stmt.ends_with('\n') {
         output.push('\n');
     }
     output.push_str(&source[insert_at..]);
     Ok(output)
 }
 
-pub fn merge_reexports(current: &str, update: &str) -> anyhow::Result<String> {
-    let current_exports = export_statements(current)?;
-    let update_exports = export_statements(update)?;
+pub fn merge_imports(current: &str, update: &str) -> anyhow::Result<String> {
+    let current_imports = import_statements(current)?;
+    let update_imports = import_statements(update)?;
 
     let mut existing = BTreeSet::new();
-    for export in current_exports {
-        existing.insert(export);
+    for import in current_imports {
+        existing.insert(import);
     }
 
     let mut merged = current.to_string();
-    for export in update_exports {
-        if export.is_empty() || existing.contains(&export) {
+    for import in update_imports {
+        if import.is_empty() || existing.contains(&import) {
             continue;
         }
-        merged = add_reexport(&merged, &export)?;
-        existing.insert(export);
+        merged = add_import(&merged, &import)?;
+        existing.insert(import);
     }
 
     Ok(merged)
@@ -71,34 +71,34 @@ fn parse_ts(source: &str) -> anyhow::Result<Tree> {
     Ok(tree)
 }
 
-fn export_statements(source: &str) -> anyhow::Result<Vec<String>> {
+fn import_statements(source: &str) -> anyhow::Result<Vec<String>> {
     let tree = parse_ts(source)?;
     let root = tree.root_node();
     let mut cursor = root.walk();
     let mut stack = vec![root];
-    let mut exports = Vec::new();
+    let mut imports = Vec::new();
     while let Some(node) = stack.pop() {
-        if node.kind() == "export_statement" {
+        if node.kind() == "import_statement" {
             let text = source[node.start_byte()..node.end_byte()]
                 .trim()
                 .to_string();
-            exports.push((node.start_byte(), text));
+            imports.push((node.start_byte(), text));
         }
         for child in node.named_children(&mut cursor) {
             stack.push(child);
         }
     }
-    exports.sort_by_key(|(start, _)| *start);
-    Ok(exports.into_iter().map(|(_, text)| text).collect())
+    imports.sort_by_key(|(start, _)| *start);
+    Ok(imports.into_iter().map(|(_, text)| text).collect())
 }
 
-fn last_export_end(source: &str, tree: &Tree) -> usize {
+fn last_import_end(source: &str, tree: &Tree) -> usize {
     let root = tree.root_node();
     let mut cursor = root.walk();
     let mut last_end = None;
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        if node.kind() == "export_statement" {
+        if node.kind() == "import_statement" {
             let end = node.end_byte();
             if last_end.map(|value| end > value).unwrap_or(true) {
                 last_end = Some(end);

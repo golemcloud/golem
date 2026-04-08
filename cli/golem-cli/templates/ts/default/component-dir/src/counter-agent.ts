@@ -9,7 +9,7 @@ import {
 @agent({
   mount: "/counters/{name}"
 })
-export class CounterAgent extends BaseAgent {
+class CounterAgent extends BaseAgent {
     private readonly name: string;
     private value: number = 0;
 

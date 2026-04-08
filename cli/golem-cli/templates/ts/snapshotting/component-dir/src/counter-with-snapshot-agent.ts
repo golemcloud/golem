@@ -9,7 +9,7 @@ import {
 @agent({
   mount: "/snapshot-counters/{name}"
 })
-export class CounterWithSnapshotAgent extends BaseAgent {
+class CounterWithSnapshotAgent extends BaseAgent {
     private readonly name: string;
     private value: number = 0;
 
