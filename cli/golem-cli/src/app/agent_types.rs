@@ -77,6 +77,8 @@ impl AgentTypeRegistry {
     ) -> anyhow::Result<Vec<AgentType>> {
         let normalized = AgentType::normalized_vec(agent_types);
 
+        self.cache.remove(component_name).await;
+
         let agent_types = self
             .cache
             .get_or_insert_simple(component_name, async || Ok(normalized))
