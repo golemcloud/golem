@@ -20,12 +20,12 @@ use crate::config::QuotaServiceConfig;
 use async_trait::async_trait;
 use golem_common::model::Pod;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::resource_definition::{
+use golem_common::model::quota::LeaseEpoch;
+use golem_common::model::quota::{
     EnforcementAction, ResourceCapacityLimit, ResourceConcurrencyLimit, ResourceDefinition,
     ResourceDefinitionId, ResourceDefinitionRevision, ResourceLimit, ResourceName,
     ResourceRateLimit, TimePeriod,
 };
-use golem_service_base::model::quota_lease::LeaseEpoch;
 use sqlx::types::Json;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};

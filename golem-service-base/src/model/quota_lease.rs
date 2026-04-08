@@ -14,31 +14,8 @@
 
 use chrono::{DateTime, Utc};
 use golem_common::model::Pod;
-use golem_common::model::resource_definition::{
-    EnforcementAction, ResourceDefinitionId, ResourceLimit,
-};
-use std::fmt;
-
-/// Monotonically increasing identifier for a lease on a (resource, pod) pair.
-/// Used for fencing: an executor must reject operations from a stale epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LeaseEpoch(pub u64);
-
-impl LeaseEpoch {
-    pub fn initial() -> Self {
-        Self(0)
-    }
-
-    pub fn next(self) -> Self {
-        Self(self.0.checked_add(1).expect("LeaseEpoch overflow"))
-    }
-}
-
-impl fmt::Display for LeaseEpoch {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+use golem_common::model::quota::LeaseEpoch;
+use golem_common::model::quota::{EnforcementAction, ResourceDefinitionId, ResourceLimit};
 
 /// A lease granted by the shard manager to a worker executor.
 #[derive(Debug, Clone, PartialEq)]
