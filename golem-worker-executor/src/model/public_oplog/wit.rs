@@ -31,10 +31,12 @@ use golem_common::model::oplog::public_oplog_entry::{
     WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
-    AgentInvocationOutputParameters, FallibleResultParameters, JsonSnapshotData, MultipartPartData,
-    MultipartSnapshotData, PublicOplogEntry, PublicSnapshotData, PublicUpdateDescription,
-    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
+    AgentInvocationOutputParameters, AgentTerminatedByQuotaError, FallibleResultParameters,
+    JsonSnapshotData, MultipartPartData, MultipartSnapshotData, PublicOplogEntry,
+    PublicSnapshotData, PublicUpdateDescription, RawSnapshotData, SaveSnapshotResultParameters,
+    SnapshotBasedUpdateParameters,
 };
+use golem_common::model::quota::ResourceName;
 use golem_common::model::{Empty, Timestamp};
 use std::time::Duration;
 
@@ -688,6 +690,12 @@ impl From<oplog::WorkerError> for golem_common::model::oplog::AgentError {
             oplog::WorkerError::NodeOutOfFilesystemStorage => Self::NodeOutOfFilesystemStorage,
             oplog::WorkerError::AgentExceededFilesystemStorageLimit => {
                 Self::AgentExceededFilesystemStorageLimit
+            }
+            oplog::WorkerError::AgentTerminatedByQuota(inner) => {
+                Self::AgentTerminatedByQuota(AgentTerminatedByQuotaError {
+                    environment_id: EnvironmentId(inner.environment_id.uuid.into()),
+                    resource_name: ResourceName(inner.resource_name),
+                })
             }
         }
     }

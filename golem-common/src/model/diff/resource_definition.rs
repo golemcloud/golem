@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::diff::{Diffable, Hash, Hashable, hash_from_serialized_value};
-use crate::model::resource_definition::{EnforcementAction, TimePeriod};
+use crate::model::quota::{EnforcementAction, TimePeriod};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -59,9 +59,9 @@ pub struct ResourceLimit {
     pub max: Option<u64>,
 }
 
-impl From<crate::model::resource_definition::ResourceLimit> for ResourceLimit {
-    fn from(value: crate::model::resource_definition::ResourceLimit) -> Self {
-        use crate::model::resource_definition::ResourceLimit as DomainResourceLimit;
+impl From<crate::model::quota::ResourceLimit> for ResourceLimit {
+    fn from(value: crate::model::quota::ResourceLimit) -> Self {
+        use crate::model::quota::ResourceLimit as DomainResourceLimit;
 
         match value {
             DomainResourceLimit::Rate(inner) => ResourceLimit {

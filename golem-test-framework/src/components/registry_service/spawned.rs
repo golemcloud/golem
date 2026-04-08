@@ -67,7 +67,7 @@ impl SpawnedRegistryService {
 
         let admin_plan_id = PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63"));
         let admin_account_id = AccountId(uuid!("e71a6160-4144-4720-9e34-e5943458d129"));
-        let admin_account_email = AccountEmail("admin@golem.cloud".to_string());
+        let admin_account_email = AccountEmail::new("admin@golem.cloud");
         let admin_account_token =
             TokenSecret::trusted("lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28".to_string());
         let default_plan_id = PlanId(uuid!("8e3e354a-e45e-4e30-bae4-27c30c74d9ee"));

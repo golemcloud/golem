@@ -160,31 +160,27 @@ object GolemServer {
 
         val idPattern: Regex   = """"id"\s*:\s*"([^"]+)"""".r
         val pathPattern: Regex = """"path"\s*:\s*\[([^\]]*)\]""".r
-        val revPattern: Regex  = """"revision"\s*:\s*(\d+)""".r
 
         // Parse each secret block from the JSON array
         val secretBlocks = listResult.output.split("""\{""").tail.map("{" + _)
         ZIO.foreachDiscard(secretBlocks) { block =>
-          val idOpt   = idPattern.findFirstMatchIn(block).map(_.group(1))
-          val pathOpt = pathPattern.findFirstMatchIn(block).map(_.group(1))
-          val revOpt  = revPattern.findFirstMatchIn(block).map(_.group(1))
+         val idOpt   = idPattern.findFirstMatchIn(block).map(_.group(1))
+         val pathOpt = pathPattern.findFirstMatchIn(block).map(_.group(1))
 
-          (idOpt, pathOpt, revOpt) match {
-            case (Some(id), Some(pathStr), Some(rev)) =>
-              val normalizedPath = pathStr.replaceAll(""""|\s""", "").split(",").mkString(".")
-              secretValues.get(normalizedPath) match {
-                case Some(value) =>
-                  runGolemCmd(
-                    dir,
-                    30L,
-                    "agent-secret",
-                    "update-value",
-                    "--id",
-                    id,
-                    "--current-revision",
-                    rev,
-                    "--secret-value",
-                    value
+         (idOpt, pathOpt) match {
+           case (Some(id), Some(pathStr)) =>
+             val normalizedPath = pathStr.replaceAll(""""|\s""", "").split(",").mkString(".")
+             secretValues.get(normalizedPath) match {
+               case Some(value) =>
+                 runGolemCmd(
+                   dir,
+                   30L,
+                   "agent-secret",
+                   "update-value",
+                   "--id",
+                   id,
+                   "--secret-value",
+                   value
                   ).flatMap { result =>
                     if (result.exitCode == 0) ZIO.unit
                     else

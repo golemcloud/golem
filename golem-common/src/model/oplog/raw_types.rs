@@ -15,8 +15,10 @@
 use crate::base_model::OplogIndex;
 use crate::model::Timestamp;
 use crate::model::component::ComponentRevision;
+use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use crate::model::oplog::OplogPayload;
+use crate::model::quota::ResourceName;
 use desert_rust::BinaryCodec;
 use golem_wasm_derive::{FromValue, IntoValue};
 use nonempty_collections::NEVec;
@@ -342,6 +344,17 @@ pub enum DurableFunctionType {
     WriteRemoteTransaction(Option<OplogIndex>),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+#[wit(
+    name = "agent-terminated-by-quota-error",
+    owner = "golem:api@1.5.0/oplog"
+)]
+pub struct AgentTerminatedByQuotaError {
+    pub environment_id: EnvironmentId,
+    pub resource_name: ResourceName,
+}
+
 /// Describes the error that occurred in the worker
 #[derive(Clone, Debug, PartialEq, Eq, Hash, BinaryCodec, IntoValue, FromValue)]
 #[wit(name = "worker-error", owner = "golem:api@1.5.0/oplog")]
@@ -366,6 +379,8 @@ pub enum AgentError {
     NodeOutOfFilesystemStorage,
     // The worker tried to use more storage than allowed by its plan (permanent)
     AgentExceededFilesystemStorageLimit,
+    // The agent was terminated by a quota with the terminae enforcement action (permanent)
+    AgentTerminatedByQuota(AgentTerminatedByQuotaError),
 }
 
 impl AgentError {
@@ -385,6 +400,7 @@ impl AgentError {
             Self::ExceededRpcCallLimit => "Exceeded per-invocation RPC call limit",
             Self::NodeOutOfFilesystemStorage => "Out of storage space",
             Self::AgentExceededFilesystemStorageLimit => "Exceeded plan storage limit",
+            Self::AgentTerminatedByQuota(_) => "Terminated by quota",
         }
     }
 

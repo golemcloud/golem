@@ -197,7 +197,7 @@ async fn invoke_agent_in_shared_environment(deps: &EnvBasedTestDependencies) -> 
                 schedule_at: None,
                 idempotency_key: None,
                 deployment_revision: None,
-                owner_account_email: Some(owner.account_email.0.clone()),
+                owner_account_email: Some(owner.account_email.as_str().to_owned()),
             },
         )
         .await?;
@@ -219,7 +219,7 @@ async fn invoke_agent_in_shared_environment(deps: &EnvBasedTestDependencies) -> 
                 schedule_at: None,
                 idempotency_key: None,
                 deployment_revision: None,
-                owner_account_email: Some(owner.account_email.0.clone()),
+                owner_account_email: Some(owner.account_email.as_str().to_owned()),
             },
         )
         .await?;
@@ -295,7 +295,7 @@ async fn invoke_agent_in_shared_environment_fails_without_share(
                 schedule_at: None,
                 idempotency_key: None,
                 deployment_revision: None,
-                owner_account_email: Some(owner.account_email.0.clone()),
+                owner_account_email: Some(owner.account_email.as_str().to_owned()),
             },
         )
         .await;

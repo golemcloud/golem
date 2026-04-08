@@ -360,6 +360,14 @@ impl SchedulerServiceDefault {
                         );
                     };
                 }
+                ScheduledAction::Resume {
+                    agent_created_by,
+                    owned_agent_id,
+                } => {
+                    self.worker_access
+                        .activate_worker(agent_created_by, &owned_agent_id)
+                        .await;
+                }
             }
 
             // We are completely done with the action, purge it from the queue
