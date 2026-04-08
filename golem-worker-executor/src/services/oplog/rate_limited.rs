@@ -549,9 +549,7 @@ mod tests {
         );
 
         // Switch to unlimited at runtime.
-        entry.set_oplog_writes_per_second(
-            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
-        );
+        entry.set_oplog_writes_per_second(AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND);
 
         // 100 writes at unlimited — should be fast.
         let start = Instant::now();
