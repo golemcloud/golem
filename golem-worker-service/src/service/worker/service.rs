@@ -21,7 +21,6 @@ use crate::api::agents::{
 use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
-use crate::service::limit::LimitService;
 use bytes::Bytes;
 use futures::Stream;
 use golem_api_grpc::proto::golem::worker::InvocationContext;
@@ -50,7 +49,6 @@ use std::{collections::HashMap, sync::Arc};
 pub struct WorkerService {
     component_service: Arc<dyn ComponentService>,
     auth_service: Arc<dyn AuthService>,
-    limit_service: Arc<dyn LimitService>,
     worker_client: Arc<dyn WorkerClient>,
     agent_resolution_cache: Arc<AgentResolutionCache>,
 }
@@ -59,14 +57,12 @@ impl WorkerService {
     pub fn new(
         component_service: Arc<dyn ComponentService>,
         auth_service: Arc<dyn AuthService>,
-        limit_service: Arc<dyn LimitService>,
         worker_client: Arc<dyn WorkerClient>,
         agent_resolution_cache: Arc<AgentResolutionCache>,
     ) -> Self {
         Self {
             component_service,
             auth_service,
-            limit_service,
             worker_client,
             agent_resolution_cache,
         }
@@ -126,8 +122,7 @@ impl WorkerService {
             )
             .await?;
 
-        let created = self
-            .worker_client
+        self.worker_client
             .create(
                 agent_id,
                 environment_variables,
@@ -141,16 +136,6 @@ impl WorkerService {
                 principal,
             )
             .await?;
-
-        if created {
-            self.limit_service
-                .update_worker_limit(
-                    environment_auth_details.account_id_owning_environment,
-                    agent_id,
-                    true,
-                )
-                .await?;
-        }
 
         Ok(component.revision)
     }
@@ -184,20 +169,7 @@ impl WorkerService {
             )
             .await?;
 
-        self.limit_service
-            .update_worker_connection_limit(
-                environment_auth_details.account_id_owning_environment,
-                agent_id,
-                true,
-            )
-            .await?;
-
-        Ok(ConnectWorkerStream::new(
-            stream,
-            agent_id.clone(),
-            environment_auth_details.account_id_owning_environment,
-            self.limit_service.clone(),
-        ))
+        Ok(ConnectWorkerStream::new(stream))
     }
 
     pub async fn delete(&self, agent_id: &AgentId, auth_ctx: AuthCtx) -> WorkerResult<()> {
@@ -206,8 +178,7 @@ impl WorkerService {
             .get_latest_by_id(agent_id.component_id)
             .await?;
 
-        let environment_auth_details = self
-            .auth_service
+        self.auth_service
             .authorize_environment_actions(
                 component.environment_id,
                 EnvironmentAction::DeleteWorker,
@@ -217,14 +188,6 @@ impl WorkerService {
 
         self.worker_client
             .delete(agent_id, component.environment_id, auth_ctx)
-            .await?;
-
-        self.limit_service
-            .update_worker_limit(
-                environment_auth_details.account_id_owning_environment,
-                agent_id,
-                false,
-            )
             .await?;
 
         Ok(())

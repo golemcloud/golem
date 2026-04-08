@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::agent_webhooks::AgentWebhooksService;
-use super::direct_invocation_auth::{DirectInvocationAuthService, WorkerLimitService};
+use super::direct_invocation_auth::DirectInvocationAuthService;
 use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
 use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasWebSocketConnectionPool};
@@ -379,7 +379,6 @@ fn caller_agent_principal(self_agent_id: &AgentId) -> Principal {
 pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     remote_rpc: Arc<RemoteInvocationRpc>,
     direct_invocation_auth: Arc<dyn DirectInvocationAuthService>,
-    worker_limit_service: Arc<dyn WorkerLimitService>,
     active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -420,7 +419,6 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
         Self {
             remote_rpc: self.remote_rpc.clone(),
             direct_invocation_auth: self.direct_invocation_auth.clone(),
-            worker_limit_service: self.worker_limit_service.clone(),
             active_workers: self.active_workers.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
@@ -665,7 +663,6 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     pub fn new(
         remote_rpc: Arc<RemoteInvocationRpc>,
         direct_invocation_auth: Arc<dyn DirectInvocationAuthService>,
-        worker_limit_service: Arc<dyn WorkerLimitService>,
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -704,7 +701,6 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         Self {
             remote_rpc,
             direct_invocation_auth,
-            worker_limit_service,
             active_workers,
             engine,
             linker,
@@ -760,19 +756,13 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             debug!(target_agent_id = %owned_agent_id, "Ensuring local target worker exists");
 
-            let env_owner = self
-                .direct_invocation_auth
+            self.direct_invocation_auth
                 .check(
                     self_created_by,
                     owned_agent_id.environment_id,
                     EnvironmentAction::CreateWorker,
                 )
                 .await?;
-
-            // Best-effort parity with remote worker-limit behavior: only increment when the
-            // worker appears to be newly created. This pre-check can still race under concurrent
-            // first-touch create-demand calls, but it avoids unconditional overcounting.
-            let created = self.worker_service().get(owned_agent_id).await.is_none();
 
             let _worker = Worker::get_or_create_running(
                 self,
@@ -789,12 +779,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 }),
             )
             .await?;
-
-            if created {
-                self.worker_limit_service
-                    .update_worker_limit(env_owner.into(), &owned_agent_id.agent_id, true)
-                    .await?;
-            }
 
             let demand = LoggingDemand::new(owned_agent_id.agent_id());
             Ok(Box::new(demand))

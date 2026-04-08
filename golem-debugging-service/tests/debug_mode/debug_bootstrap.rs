@@ -16,9 +16,7 @@ use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
-use golem_worker_executor::services::direct_invocation_auth::{
-    DirectInvocationAuthService, WorkerLimitService,
-};
+use golem_worker_executor::services::direct_invocation_auth::DirectInvocationAuthService;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
@@ -144,7 +142,6 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
-        worker_limit_service: Arc<dyn WorkerLimitService>,
         active_workers: Arc<ActiveWorkers<DebugContext>>,
         engine: Arc<Engine>,
         linker: Arc<Linker<DebugContext>>,
@@ -180,7 +177,6 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
     ) -> anyhow::Result<All<DebugContext>> {
         create_debugging_service_services(
             direct_invocation_auth_service,
-            worker_limit_service,
             active_workers,
             engine,
             linker,

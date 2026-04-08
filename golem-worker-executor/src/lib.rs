@@ -31,8 +31,7 @@ test_r::enable!();
 use self::durable_host::{DurableWorkerCtx, DurableWorkerCtxView};
 use self::services::agent_webhooks::AgentWebhooksService;
 use self::services::direct_invocation_auth::{
-    DefaultDirectInvocationAuthService, DirectInvocationAuthService, RegistryWorkerLimitService,
-    WorkerLimitService,
+    DefaultDirectInvocationAuthService, DirectInvocationAuthService,
 };
 use self::services::environment_state::EnvironmentStateService;
 use self::services::golem_config::EnvironmentStateServiceConfig;
@@ -249,13 +248,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         ))
     }
 
-    fn create_worker_limit_service(
-        &self,
-        registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn WorkerLimitService> {
-        Arc::new(RegistryWorkerLimitService::new(registry_service))
-    }
-
     fn create_rdbms_service(
         &self,
         golem_config: &GolemConfig,
@@ -274,7 +266,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
-        worker_limit_service: Arc<dyn WorkerLimitService>,
         active_workers: Arc<ActiveWorkers<Ctx>>,
         engine: Arc<Engine>,
         linker: Arc<Linker<Ctx>>,
@@ -353,7 +344,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 shard_service.clone(),
             )),
             direct_invocation_auth_service,
-            worker_limit_service,
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
@@ -852,7 +842,6 @@ pub async fn create_worker_executor_impl<
 
     let direct_invocation_auth_service =
         bootstrap.create_direct_invocation_auth_service(registry_service.clone(), &golem_config);
-    let worker_limit_service = bootstrap.create_worker_limit_service(registry_service.clone());
 
     let rdbms_service = bootstrap.create_rdbms_service(&golem_config, &additional_deps);
 
@@ -861,7 +850,6 @@ pub async fn create_worker_executor_impl<
     let all = bootstrap
         .create_services(
             direct_invocation_auth_service,
-            worker_limit_service,
             active_workers,
             engine,
             linker,

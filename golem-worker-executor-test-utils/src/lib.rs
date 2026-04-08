@@ -85,8 +85,7 @@ use golem_worker_executor::services::blob_store::{
 };
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::{
-    DirectInvocationAuthService, NoOpDirectInvocationAuthService, NoOpWorkerLimitService,
-    WorkerLimitService,
+    DirectInvocationAuthService, NoOpDirectInvocationAuthService,
 };
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::file_loader::FileLoader;
@@ -1357,13 +1356,6 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         Arc::new(NoOpDirectInvocationAuthService)
     }
 
-    fn create_worker_limit_service(
-        &self,
-        _registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn WorkerLimitService> {
-        Arc::new(NoOpWorkerLimitService)
-    }
-
     fn create_key_value_service(
         &self,
         key_value_storage: &Arc<dyn KeyValueStorage + Send + Sync>,
@@ -1486,13 +1478,6 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         _golem_config: &GolemConfig,
     ) -> Arc<dyn DirectInvocationAuthService> {
         Arc::new(NoOpDirectInvocationAuthService)
-    }
-
-    fn create_worker_limit_service(
-        &self,
-        _registry_service: Arc<dyn RegistryService>,
-    ) -> Arc<dyn WorkerLimitService> {
-        Arc::new(NoOpWorkerLimitService)
     }
 }
 

@@ -131,13 +131,9 @@ message CreateWorkerRequest {
 
 message CreateWorkerResponse {
   oneof result {
-    CreateWorkerSuccess success = 1;
+    golem.common.Empty success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
   }
-}
-
-message CreateWorkerSuccess {
-  bool created = 1;
 }
 
 

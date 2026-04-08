@@ -71,7 +71,7 @@ pub trait WorkerClient: Send + Sync {
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
-    ) -> WorkerResult<bool>;
+    ) -> WorkerResult<AgentId>;
 
     async fn connect(
         &self,
@@ -411,7 +411,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
-    ) -> WorkerResult<bool> {
+    ) -> WorkerResult<AgentId> {
         let agent_id_clone = agent_id.clone();
         let account_id_clone = account_id;
         self.call_worker_executor(
@@ -440,9 +440,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             },
             |response| match response.into_inner() {
                 workerexecutor::v1::CreateWorkerResponse {
-                    result:
-                        Some(workerexecutor::v1::create_worker_response::Result::Success(success)),
-                } => Ok(success.created),
+                    result: Some(workerexecutor::v1::create_worker_response::Result::Success(_)),
+                } => Ok(()),
                 workerexecutor::v1::CreateWorkerResponse {
                     result: Some(workerexecutor::v1::create_worker_response::Result::Failure(err)),
                 } => Err(err.into()),
@@ -450,7 +449,9 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             },
             WorkerServiceError::InternalCallError,
         )
-        .await
+        .await?;
+
+        Ok(agent_id.clone())
     }
 
     async fn connect(
