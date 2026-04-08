@@ -187,6 +187,11 @@ impl Oplog for RateLimitedOplog {
 /// A thin [`OplogService`] wrapper that rate-limits [`Oplog::add`] calls on every oplog
 /// instance it creates or opens.
 ///
+/// This service sits **above** the forwarding layer so that both worker writes and
+/// plugin-produced checkpoint writes are rate-limited together. The agent's execution pace
+/// is controlled end-to-end: the token bucket is charged on every `add`, and plugins only
+/// receive entries that have already been permitted through it.
+///
 /// `create` and `open` delegate to the inner service, then wrap the returned oplog in a
 /// [`RateLimitedOplog`] that holds the per-account [`AtomicResourceEntry`] resolved from
 /// [`ResourceLimits`]. The entry is shared with the background sync loop that refreshes plan

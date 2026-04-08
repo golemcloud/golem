@@ -789,23 +789,22 @@ pub async fn create_worker_executor_impl<
         shutdown_token.clone(),
     );
 
-    let pre_forwarding_oplog_service: Arc<dyn OplogService> =
-        if golem_config.oplog.oplog_rate_limit_enabled {
-            Arc::new(RateLimitedOplogService::new(
-                base_oplog_service,
-                resource_limits.clone(),
-            ))
-        } else {
-            base_oplog_service
-        };
-
-    let oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
-        pre_forwarding_oplog_service,
+    let forwarding_oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
+        base_oplog_service,
         oplog_processor_plugin.clone(),
         component_service.clone(),
         golem_config.oplog.plugin_max_commit_count,
         golem_config.oplog.plugin_max_elapsed_time,
     ));
+
+    let oplog_service: Arc<dyn OplogService> = if golem_config.oplog.oplog_rate_limit_enabled {
+        Arc::new(RateLimitedOplogService::new(
+            forwarding_oplog_service,
+            resource_limits.clone(),
+        ))
+    } else {
+        forwarding_oplog_service
+    };
 
     let worker_service = Arc::new(DefaultWorkerService::new(
         key_value_storage.clone(),
