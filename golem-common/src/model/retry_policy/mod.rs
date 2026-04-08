@@ -870,6 +870,19 @@ impl NamedRetryPolicy {
 
         Ok(None)
     }
+
+    /// Creates a default catch-all retry policy from a legacy `RetryConfig`.
+    ///
+    /// This policy uses `Predicate::True` (matches everything) with priority 0,
+    /// so any user-defined policy with a higher priority will take precedence.
+    pub fn default_from_config(config: &RetryConfig) -> Self {
+        Self {
+            name: "default".to_string(),
+            priority: 0,
+            predicate: Predicate::True,
+            policy: RetryPolicy::from(config.clone()),
+        }
+    }
 }
 
 impl From<RetryConfig> for RetryPolicy {

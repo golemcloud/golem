@@ -20,7 +20,7 @@ use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use desert_rust::BinaryCodec;
-use golem_common::model::ScheduleId;
+use golem_common::model::{NamedRetryPolicy, ScheduleId};
 use golem_common::model::oplog::host_functions::{
     HttpTypesFutureIncomingResponseGet, HttpTypesFutureTrailersGet,
 };
@@ -1067,6 +1067,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             {
                 let environment_state_service = self.state.environment_state_service.clone();
                 let environment_id = self.state.owned_agent_id.environment_id;
+                let default_retry_policy =
+                    NamedRetryPolicy::default_from_config(&self.state.config.retry);
                 let agent_config_retry_policies = self.state.agent_config_retry_policies();
                 let runtime_retry_policy_mutations =
                     self.state.runtime_retry_policy_mutations.clone();
@@ -1083,6 +1085,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     self.public_state.worker(),
                     environment_state_service,
                     environment_id,
+                    default_retry_policy,
                     agent_config_retry_policies,
                     runtime_retry_policy_mutations,
                     retry_properties,

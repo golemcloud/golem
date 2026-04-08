@@ -690,6 +690,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     worker: Arc<crate::worker::Worker<Ctx>>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     environment_id: EnvironmentId,
+    default_retry_policy: NamedRetryPolicy,
     agent_config_retry_policies: Vec<NamedRetryPolicy>,
     runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
     retry_properties: RetryProperties,
@@ -735,6 +736,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                         retry_point: begin_index,
                         environment_state_service,
                         environment_id,
+                        default_retry_policy,
                         agent_config_retry_policies,
                         runtime_retry_policy_mutations,
                         max_in_function_retry_delay: max_delay,
@@ -934,6 +936,8 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
         if let HostFutureIncomingResponse::Pending(handle) = rebuilt.future {
             let environment_state_service = ctx.state.environment_state_service.clone();
             let environment_id = ctx.state.owned_agent_id.environment_id;
+            let default_retry_policy =
+                NamedRetryPolicy::default_from_config(&ctx.state.config.retry);
             let agent_config_retry_policies = ctx.state.agent_config_retry_policies();
             let runtime_retry_policy_mutations = ctx.state.runtime_retry_policy_mutations.clone();
             let mut retry_properties = golem_common::model::RetryContext::http(
@@ -949,6 +953,7 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 ctx.public_state.worker(),
                 environment_state_service,
                 environment_id,
+                default_retry_policy,
                 agent_config_retry_policies,
                 runtime_retry_policy_mutations,
                 retry_properties,

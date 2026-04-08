@@ -1101,6 +1101,8 @@ pub struct TaskRetryContext<Ctx: WorkerCtx> {
     pub environment_state_service: Arc<dyn EnvironmentStateService>,
     /// Environment ID for policy lookup
     pub environment_id: EnvironmentId,
+    /// Default catch-all retry policy derived from GolemConfig (priority 0, Predicate::True)
+    pub default_retry_policy: NamedRetryPolicy,
     /// Cached agent-config-derived retry policies (cheap, already computed)
     pub agent_config_retry_policies: Vec<NamedRetryPolicy>,
     /// Runtime overlay mutations (set/remove via guest API)
@@ -1138,6 +1140,10 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
             });
 
         let mut deduped = BTreeMap::new();
+        deduped.insert(
+            self.default_retry_policy.name.clone(),
+            self.default_retry_policy.clone(),
+        );
         for policy in &self.agent_config_retry_policies {
             deduped.insert(policy.name.clone(), policy.clone());
         }

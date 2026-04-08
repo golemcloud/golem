@@ -22,7 +22,7 @@ use crate::workerctx::{InvocationContextManagement, InvocationManagement, Worker
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::types::SerializableHttpMethod;
 use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest, PersistenceLevel};
-use golem_common::model::{IdempotencyKey, RetryContext};
+use golem_common::model::{IdempotencyKey, NamedRetryPolicy, RetryContext};
 use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
@@ -79,6 +79,7 @@ pub(crate) async fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
 
     let environment_state_service = ctx.state.environment_state_service.clone();
     let environment_id = ctx.state.owned_agent_id.environment_id;
+    let default_retry_policy = NamedRetryPolicy::default_from_config(&ctx.state.config.retry);
     let agent_config_retry_policies = ctx.state.agent_config_retry_policies();
     let runtime_retry_policy_mutations = ctx.state.runtime_retry_policy_mutations.clone();
 
@@ -98,6 +99,7 @@ pub(crate) async fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
             ctx.public_state.worker(),
             environment_state_service,
             environment_id,
+            default_retry_policy,
             agent_config_retry_policies,
             runtime_retry_policy_mutations,
             retry_properties,

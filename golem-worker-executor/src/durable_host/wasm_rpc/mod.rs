@@ -472,6 +472,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let allow_retry = !in_atomic_region;
             let environment_state_service = self.state.environment_state_service.clone();
             let environment_id = self.state.owned_agent_id.environment_id;
+            let default_retry_policy =
+                NamedRetryPolicy::default_from_config(&self.state.config.retry);
             let agent_config_retry_policies = self.state.agent_config_retry_policies();
             let runtime_retry_policy_mutations = self.state.runtime_retry_policy_mutations.clone();
             let mut retry_properties =
@@ -494,6 +496,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 allow_retry,
                 environment_state_service,
                 environment_id,
+                default_retry_policy,
                 agent_config_retry_policies,
                 runtime_retry_policy_mutations,
                 retry_properties,
@@ -704,6 +707,8 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
             let allow_retry = !in_atomic_region;
             let environment_state_service = self.state.environment_state_service.clone();
             let environment_id = self.state.owned_agent_id.environment_id;
+            let default_retry_policy =
+                NamedRetryPolicy::default_from_config(&self.state.config.retry);
             let agent_config_retry_policies = self.state.agent_config_retry_policies();
             let runtime_retry_policy_mutations = self.state.runtime_retry_policy_mutations.clone();
             let max_delay = self.durable_execution_state().max_in_function_retry_delay;
@@ -796,6 +801,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         allow_retry,
                         environment_state_service,
                         environment_id,
+                        default_retry_policy,
                         agent_config_retry_policies,
                         runtime_retry_policy_mutations,
                         enrichment,
@@ -1190,6 +1196,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     allow_retry: bool,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     environment_id: EnvironmentId,
+    default_retry_policy: NamedRetryPolicy,
     agent_config_retry_policies: Vec<NamedRetryPolicy>,
     runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
     retry_properties: RetryProperties,
@@ -1238,6 +1245,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                     retry_point,
                     environment_state_service,
                     environment_id,
+                    default_retry_policy,
                     agent_config_retry_policies,
                     runtime_retry_policy_mutations,
                     max_in_function_retry_delay,
@@ -1330,6 +1338,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
     allow_retry: bool,
     environment_state_service: Arc<dyn EnvironmentStateService>,
     environment_id: EnvironmentId,
+    default_retry_policy: NamedRetryPolicy,
     agent_config_retry_policies: Vec<NamedRetryPolicy>,
     runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
     enrichment: Option<(&ParsedAgentId, bool)>,
@@ -1391,6 +1400,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         allow_retry,
         environment_state_service,
         environment_id,
+        default_retry_policy,
         agent_config_retry_policies,
         runtime_retry_policy_mutations,
         retry_properties,

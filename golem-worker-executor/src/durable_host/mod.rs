@@ -3699,9 +3699,13 @@ impl PrivateDurableWorkerState {
         }
     }
 
-    /// Returns the named retry policies derived from agent config, environment-level policies
-    /// (fetched dynamically via EnvironmentStateService), and runtime overlay.
+    /// Returns the named retry policies derived from the default config-based catch-all,
+    /// agent config, environment-level policies (fetched dynamically via EnvironmentStateService),
+    /// and runtime overlay.
     pub async fn named_retry_policies(&mut self) -> Vec<NamedRetryPolicy> {
+        // Tier 0: default catch-all policy from GolemConfig (priority 0, Predicate::True)
+        let default_policy = NamedRetryPolicy::default_from_config(&self.config.retry);
+
         // Tier 1: agent_config policies (cached; invalidated on component update)
         let agent_config_policies =
             if let Some(ref cached) = self.cached_agent_config_retry_policies {
@@ -3724,6 +3728,7 @@ impl PrivateDurableWorkerState {
 
         // Tier 3: runtime overlay (highest precedence)
         let mut deduped = std::collections::BTreeMap::new();
+        deduped.insert(default_policy.name.clone(), default_policy);
         for policy in agent_config_policies {
             deduped.insert(policy.name.clone(), policy);
         }
