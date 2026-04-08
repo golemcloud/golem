@@ -96,6 +96,7 @@ monthly_gas_limit = 1000000000000000000
 monthly_http_call_limit = 1000000000000000000
 monthly_rpc_call_limit = 1000000000000000000
 monthly_upload_limit = 1000000000
+oplog_writes_per_second = 1000000000000000000
 per_invocation_http_call_limit = 1000000000000000000
 per_invocation_rpc_call_limit = 1000000000000000000
 plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
