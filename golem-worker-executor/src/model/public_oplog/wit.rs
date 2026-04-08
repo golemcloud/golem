@@ -868,7 +868,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 inside_atomic_region: params.inside_atomic_region,
                 retry_policy_state: params.retry_policy_state.map(|s| {
                     let internal: golem_common::model::RetryPolicyState = s.into();
-                    internal.into()
+                    internal
                 }),
             }),
             oplog::OplogEntry::NoOp(ts) => Ok(Self::NoOp {
