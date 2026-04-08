@@ -428,7 +428,6 @@ async fn acquire_and_drop_does_not_panic(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-#[ignore = "liveness issue. 2 executors can get allocated 5 each, preventing progress"]
 async fn shared_quota_across_two_agents(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -713,7 +712,7 @@ async fn rate_limit_throttle_two_agents(
 
     let total = received.load(Ordering::SeqCst);
 
-    assert!(total <= 4);
+    assert_eq!(total, 4);
 
     Ok(())
 }
