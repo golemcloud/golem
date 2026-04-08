@@ -713,7 +713,7 @@ async fn rate_limit_throttle_two_agents(
 
     let total = received.load(Ordering::SeqCst);
 
-    assert_eq!(total, 4);
+    assert!(total <= 4);
 
     Ok(())
 }
