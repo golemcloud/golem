@@ -19,7 +19,7 @@ use golem_common::model::Page;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::poem::NoContentResponse;
-use golem_common::model::resource_definition::{
+use golem_common::model::quota::{
     ResourceDefinition, ResourceDefinitionCreation, ResourceDefinitionId,
     ResourceDefinitionRevision, ResourceDefinitionUpdate, ResourceName,
 };

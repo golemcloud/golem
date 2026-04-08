@@ -247,6 +247,19 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "PluginRegistrationDto",
                 "golem_common::model::plugin_registration::PluginRegistrationDto",
             ),
+            // quotas
+            (
+                "ResourceDefinition",
+                "golem_common::model::quota::ResourceDefinition",
+            ),
+            (
+                "ResourceDefinitionCreation",
+                "golem_common::model::quota::ResourceDefinitionCreation",
+            ),
+            (
+                "ResourceDefinitionUpdate",
+                "golem_common::model::quota::ResourceDefinitionUpdate",
+            ),
             // reports
             (
                 "AccountCountsReport",
@@ -255,19 +268,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "AccountSummaryReport",
                 "golem_common::model::reports::AccountSummaryReport",
-            ),
-            // domain_registration
-            (
-                "ResourceDefinition",
-                "golem_common::model::resource_definition::ResourceDefinition",
-            ),
-            (
-                "ResourceDefinitionCreation",
-                "golem_common::model::resource_definition::ResourceDefinitionCreation",
-            ),
-            (
-                "ResourceDefinitionUpdate",
-                "golem_common::model::resource_definition::ResourceDefinitionUpdate",
             ),
             // security_scheme
             (

@@ -530,7 +530,15 @@ async fn in_function_retry_transitions_from_inline_to_trap_based(
 
 /// Starts a raw TCP server that drops the first `fail_count` connections (producing
 /// ConnectionTerminated errors), then serves a valid HTTP 200 response on subsequent
-/// connections. Returns `(port, connection_counter)`.
+/// connections.
+///
+/// On the success path the server reads the full HTTP request before responding.
+/// This avoids a race in hyper's HTTP/1 client dispatcher where a response that
+/// arrives before `send_request` registers the callback is rejected with
+/// `Canceled(UnexpectedMessage)`, causing spurious extra retries on busy CI
+/// machines.
+///
+/// Returns `(port, connection_counter)`.
 async fn start_failing_http_server(fail_count: usize) -> (u16, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -549,6 +557,40 @@ async fn start_failing_http_server(fail_count: usize) -> (u16, Arc<AtomicUsize>)
                     // Immediately close the connection — produces ConnectionTerminated
                     drop(stream);
                 } else {
+                    // Read the full HTTP request before responding to avoid a
+                    // hyper dispatcher race (see doc comment above).
+                    let mut data = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        match stream.read(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(n) => data.extend_from_slice(&buf[..n]),
+                            Err(_) => break,
+                        }
+                        let data_str = String::from_utf8_lossy(&data);
+                        if let Some(header_end) = data_str.find("\r\n\r\n") {
+                            let headers = &data_str[..header_end];
+                            if let Some(cl_line) = headers
+                                .lines()
+                                .find(|l| l.to_lowercase().starts_with("content-length:"))
+                            {
+                                let cl: usize = cl_line
+                                    .split(':')
+                                    .nth(1)
+                                    .unwrap()
+                                    .trim()
+                                    .parse()
+                                    .unwrap_or(0);
+                                let body_start = header_end + 4;
+                                if data.len() >= body_start + cl {
+                                    break;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+
                     let body = "response is test-header test-body";
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
