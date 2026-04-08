@@ -282,6 +282,9 @@ fn registry_service_config(
             accounts
         },
         builtin_plugins: BuiltinPluginsConfig::Enabled(Empty {}),
+        security_scheme: golem_registry_service::config::SecuritySchemeConfig {
+            strict_issuer_url_validation: false,
+        },
         ..Default::default()
     })
 }

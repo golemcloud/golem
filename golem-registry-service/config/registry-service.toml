@@ -117,6 +117,9 @@ private_key = "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
 public_key = "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg="
 webflow_state_expiry = "5m"
 
+[security_scheme]
+strict_issuer_url_validation = true
+
 [tracing]
 console = false
 dtor_friendly = false

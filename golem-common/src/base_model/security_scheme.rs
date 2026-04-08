@@ -83,10 +83,157 @@ declare_structs! {
 }
 
 declare_enums! {
-    pub enum Provider {
+    pub enum ProviderKind {
         Google,
         Facebook,
         Microsoft,
         Gitlab,
+        Custom,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum Provider {
+    Google,
+    Facebook,
+    Microsoft,
+    Gitlab,
+    #[serde(rename_all = "camelCase")]
+    Custom {
+        name: String,
+        issuer_url: String,
+    },
+}
+
+impl Provider {
+    pub fn kind(&self) -> ProviderKind {
+        match self {
+            Provider::Google => ProviderKind::Google,
+            Provider::Facebook => ProviderKind::Facebook,
+            Provider::Microsoft => ProviderKind::Microsoft,
+            Provider::Gitlab => ProviderKind::Gitlab,
+            Provider::Custom { .. } => ProviderKind::Custom,
+        }
+    }
+
+    pub fn custom(name: String, issuer_url: String) -> Result<Self, String> {
+        let url = url::Url::parse(&issuer_url)
+            .map_err(|e| format!("Invalid issuer URL: {e}"))?;
+        if url.host_str().is_none() {
+            return Err("Issuer URL must have a host".to_string());
+        }
+        if url.scheme() != "https" && url.scheme() != "http" {
+            return Err("Issuer URL must use http or https scheme".to_string());
+        }
+        Ok(Provider::Custom { name, issuer_url })
+    }
+
+    pub fn validate_issuer_url_strict(&self) -> Result<(), String> {
+        match self {
+            Provider::Custom { issuer_url, .. } => {
+                let url = url::Url::parse(issuer_url)
+                    .map_err(|e| format!("Invalid issuer URL: {e}"))?;
+                if url.scheme() != "https" {
+                    return Err(
+                        "Custom provider issuer URL must use https in production".to_string(),
+                    );
+                }
+                if url.query().is_some() {
+                    return Err(
+                        "Custom provider issuer URL must not contain query parameters".to_string(),
+                    );
+                }
+                if url.fragment().is_some() {
+                    return Err(
+                        "Custom provider issuer URL must not contain a fragment".to_string(),
+                    );
+                }
+                if url.password().is_some() || !url.username().is_empty() {
+                    return Err(
+                        "Custom provider issuer URL must not contain credentials".to_string(),
+                    );
+                }
+                let host = url.host_str().unwrap_or("");
+                if host == "localhost"
+                    || host == "127.0.0.1"
+                    || host == "::1"
+                    || host == "0.0.0.0"
+                    || host == "169.254.169.254"
+                {
+                    return Err("Custom provider issuer URL must not point to a local or metadata address".to_string());
+                }
+                if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                    match ip {
+                        std::net::IpAddr::V4(v4) => {
+                            if v4.is_loopback()
+                                || v4.is_private()
+                                || v4.is_link_local()
+                                || v4.is_unspecified()
+                            {
+                                return Err("Custom provider issuer URL must not point to a private or local address".to_string());
+                            }
+                        }
+                        std::net::IpAddr::V6(v6) => {
+                            if v6.is_loopback() || v6.is_unspecified() {
+                                return Err("Custom provider issuer URL must not point to a private or local address".to_string());
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+mod provider_poem_openapi {
+    use super::Provider;
+    use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
+    use poem_openapi::types::{ParseError, ParseFromJSON, ParseResult, ToJSON, Type};
+
+    impl Type for Provider {
+        const IS_REQUIRED: bool = true;
+
+        type RawValueType = Self;
+        type RawElementValueType = Self;
+
+        fn name() -> std::borrow::Cow<'static, str> {
+            "Provider".into()
+        }
+
+        fn schema_ref() -> MetaSchemaRef {
+            MetaSchemaRef::Reference(Self::name().to_string())
+        }
+
+        fn register(registry: &mut Registry) {
+            let schema = MetaSchema::new("object");
+            registry.create_schema::<Self, _>(Self::name().to_string(), |_| schema);
+        }
+
+        fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+            Some(self)
+        }
+
+        fn raw_element_iter<'a>(
+            &'a self,
+        ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+            Box::new(self.as_raw_value().into_iter())
+        }
+    }
+
+    impl ParseFromJSON for Provider {
+        fn parse_from_json(value: Option<serde_json::Value>) -> ParseResult<Self> {
+            let value = value.ok_or_else(ParseError::expected_input)?;
+            serde_json::from_value(value).map_err(|e| ParseError::custom(e.to_string()))
+        }
+    }
+
+    impl ToJSON for Provider {
+        fn to_json(&self) -> Option<serde_json::Value> {
+            serde_json::to_value(self).ok()
+        }
     }
 }

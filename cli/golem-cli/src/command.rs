@@ -1324,7 +1324,7 @@ pub mod api {
 
     pub mod security_scheme {
         use clap::Subcommand;
-        use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
+        use golem_common::model::security_scheme::{ProviderKind, SecuritySchemeName};
 
         #[derive(Debug, Subcommand)]
         pub enum ApiSecuritySchemeSubcommand {
@@ -1332,9 +1332,15 @@ pub mod api {
             Create {
                 /// Security Scheme name
                 security_scheme_name: SecuritySchemeName,
-                /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft)
+                /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft, Custom)
                 #[arg(long)]
-                provider_type: Provider,
+                provider_type: ProviderKind,
+                /// Custom provider display name (required when provider_type is custom)
+                #[arg(long, required_if_eq("provider_type", "custom"))]
+                custom_provider_name: Option<String>,
+                /// Custom provider OIDC issuer URL (required when provider_type is custom)
+                #[arg(long, required_if_eq("provider_type", "custom"))]
+                custom_issuer_url: Option<String>,
                 /// Security Scheme client ID
                 #[arg(long)]
                 client_id: String,

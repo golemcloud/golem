@@ -85,9 +85,13 @@ fn create_base_openapi(security_schemes: &Vec<Arc<SecuritySchemeDetails>>) -> Op
 
     let mut components = Components::default();
     for security_scheme in security_schemes {
+        let issuer_url = match security_scheme.provider_type.issuer_url() {
+            Ok(url) => url,
+            Err(_) => continue,
+        };
         let openid_config_url = format!(
             "{}/.well-known/openid-configuration",
-            security_scheme.provider_type.issuer_url().url()
+            issuer_url.url()
         );
 
         let scheme = SecurityScheme::OpenIDConnect {

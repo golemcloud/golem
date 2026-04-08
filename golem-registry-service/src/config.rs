@@ -50,6 +50,8 @@ pub struct RegistryServiceConfig {
     pub builtin_plugins: BuiltinPluginsConfig,
     #[serde(default)]
     pub deployment_events: DeploymentEventsConfig,
+    #[serde(default)]
+    pub security_scheme: SecuritySchemeConfig,
 }
 
 impl SafeDisplay for RegistryServiceConfig {
@@ -109,6 +111,12 @@ impl SafeDisplay for RegistryServiceConfig {
             &mut result,
             "  cleanup_interval: {:?}",
             self.deployment_events.cleanup_interval
+        );
+
+        let _ = writeln!(
+            &mut result,
+            "security scheme: strict_issuer_url_validation={}",
+            self.security_scheme.strict_issuer_url_validation
         );
 
         result
@@ -200,6 +208,7 @@ impl Default for RegistryServiceConfig {
             initial_plans,
             builtin_plugins: BuiltinPluginsConfig::default(),
             deployment_events: DeploymentEventsConfig::default(),
+            security_scheme: SecuritySchemeConfig::default(),
         }
     }
 }
@@ -489,6 +498,19 @@ fn default_max_disk_space_per_worker() -> u64 {
 
 fn default_unlimited() -> u64 {
     1_000_000_000_000_000_000 // 10^18, fits in i64 (TOML max), safe for SQLite REAL
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecuritySchemeConfig {
+    pub strict_issuer_url_validation: bool,
+}
+
+impl Default for SecuritySchemeConfig {
+    fn default() -> Self {
+        Self {
+            strict_issuer_url_validation: true,
+        }
+    }
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {

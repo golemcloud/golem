@@ -919,6 +919,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         sr.client_secret AS security_scheme_client_secret,
                         sr.redirect_url AS security_scheme_redirect_url,
                         sr.scopes AS security_scheme_scopes,
+                        sr.custom_provider_name AS security_scheme_custom_provider_name,
+                        sr.custom_issuer_url AS security_scheme_custom_issuer_url,
                         r.compiled_route
 
                     FROM deployment_compiled_routes r
@@ -987,6 +989,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         sr.client_secret AS security_scheme_client_secret,
                         sr.redirect_url AS security_scheme_redirect_url,
                         sr.scopes AS security_scheme_scopes,
+                        sr.custom_provider_name AS security_scheme_custom_provider_name,
+                        sr.custom_issuer_url AS security_scheme_custom_issuer_url,
                         r.compiled_route
 
                     FROM deployment_compiled_routes r

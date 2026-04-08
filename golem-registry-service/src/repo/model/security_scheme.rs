@@ -62,6 +62,8 @@ pub struct SecuritySchemeRevisionRecord {
     pub client_secret: String,
     pub redirect_url: String,
     pub scopes: String,
+    pub custom_provider_name: Option<String>,
+    pub custom_issuer_url: Option<String>,
 
     #[sqlx(flatten)]
     pub audit: DeletableRevisionAuditFields,
@@ -80,14 +82,26 @@ impl SecuritySchemeRevisionRecord {
         let redirect_url: String = serde_json::to_string(&redirect_url).unwrap();
         let scopes: String = serde_json::to_string(&scopes).unwrap();
 
+        let (custom_provider_name, custom_issuer_url) = match &provider_type {
+            Provider::Custom { name, issuer_url } => {
+                (Some(name.clone()), Some(issuer_url.clone()))
+            }
+            _ => (None, None),
+        };
+
         Self {
             security_scheme_id: security_scheme_id.0,
             revision_id: SecuritySchemeRevision::INITIAL.into(),
-            provider_type: provider_type.to_string(),
+            provider_type: match &provider_type {
+                Provider::Custom { .. } => "custom".to_string(),
+                other => other.to_string(),
+            },
             client_id,
             client_secret,
             redirect_url,
             scopes,
+            custom_provider_name,
+            custom_issuer_url,
             audit: DeletableRevisionAuditFields::new(actor.0),
         }
     }
@@ -96,14 +110,26 @@ impl SecuritySchemeRevisionRecord {
         let redirect_url: String = serde_json::to_string(&value.redirect_url).unwrap();
         let scopes: String = serde_json::to_string(&value.scopes).unwrap();
 
+        let (custom_provider_name, custom_issuer_url) = match &value.provider_type {
+            Provider::Custom { name, issuer_url } => {
+                (Some(name.clone()), Some(issuer_url.clone()))
+            }
+            _ => (None, None),
+        };
+
         Self {
             security_scheme_id: value.id.0,
             revision_id: value.revision.into(),
-            provider_type: value.provider_type.to_string(),
+            provider_type: match &value.provider_type {
+                Provider::Custom { .. } => "custom".to_string(),
+                other => other.to_string(),
+            },
             client_id: value.client_id.into(),
             client_secret: value.client_secret.secret().clone(),
             redirect_url,
             scopes,
+            custom_provider_name,
+            custom_issuer_url,
             audit,
         }
     }
@@ -127,8 +153,20 @@ impl TryFrom<SecuritySchemeExtRevisionRecord> for SecurityScheme {
             .map_err(|e| anyhow::Error::from(e).context("Failed parsing scopes"))?;
         let redirect_url: RedirectUrl = serde_json::from_str(&value.revision.redirect_url)
             .map_err(|e| anyhow::Error::from(e).context("Failed parsing redirect_url"))?;
-        let provider_type = Provider::from_str(&value.revision.provider_type)
-            .map_err(|e| anyhow!("Failed parsing provider type: {e}"))?;
+        let provider_type = if value.revision.provider_type == "custom" {
+            let name = value
+                .revision
+                .custom_provider_name
+                .ok_or_else(|| anyhow!("Custom provider missing name in database"))?;
+            let issuer_url = value
+                .revision
+                .custom_issuer_url
+                .ok_or_else(|| anyhow!("Custom provider missing issuer URL in database"))?;
+            Provider::Custom { name, issuer_url }
+        } else {
+            Provider::from_str(&value.revision.provider_type)
+                .map_err(|e| anyhow!("Failed parsing provider type: {e}"))?
+        };
         let client_id = ClientId::new(value.revision.client_id);
         let client_secret = ClientSecret::new(value.revision.client_secret);
 
