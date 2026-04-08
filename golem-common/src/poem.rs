@@ -66,14 +66,18 @@ impl<E: Endpoint> Endpoint for CliClientInfoEndpoint<E> {
         if has_client_headers
             && let Some(message) = self.middleware.should_reject_client(&client_info)
         {
-            return Err(poem::Error::from_string(
-                serde_json::to_string(&ErrorBody {
-                    error: message,
-                    code: api::error_code::CLI_UPDATE_REQUIRED.to_string(),
-                    cause: None,
-                })
-                .unwrap_or_default(),
-                StatusCode::GONE,
+            return Err(poem::Error::from_response(
+                poem::Response::builder()
+                    .status(StatusCode::GONE)
+                    .content_type("application/json")
+                    .body(
+                        serde_json::to_string(&ErrorBody {
+                            error: message,
+                            code: api::error_code::CLI_UPDATE_REQUIRED.to_string(),
+                            cause: None,
+                        })
+                        .unwrap_or_default(),
+                    ),
             ));
         }
 
