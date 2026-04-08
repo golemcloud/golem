@@ -44,6 +44,10 @@ fn make_limiter(per_second: u32) -> DefaultDirectRateLimiter {
 
 /// A wrapper around an [`Oplog`] that rate-limits calls to [`Oplog::add`].
 ///
+/// Each agent (worker) receives its own `RateLimitedOplog` with an independent
+/// token bucket, so the limit is enforced **per agent** — analogous to
+/// `max_memory_per_worker` or `per_invocation_http_call_limit`.
+///
 /// The rate limit (writes per second) is read dynamically from the supplied
 /// [`AtomicResourceEntry`] on every `add` call. When the value changes the governor
 /// token bucket is rebuilt atomically behind an [`ArcSwap`] so the hot path
@@ -99,20 +103,29 @@ impl Oplog for RateLimitedOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
         let rate = self.resource_entry.oplog_writes_per_second();
 
-        if rate < AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND {
+        if rate > 0 && rate < AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND {
             // Detect rate change and atomically swap in a new limiter if needed.
+            // compare_exchange ensures only one concurrent caller rebuilds
+            // the limiter; losers simply proceed with the current one.
             let cached = self.cached_rate.load(Ordering::Acquire);
-            if cached != rate {
+            if cached != rate
+                && self
+                    .cached_rate
+                    .compare_exchange(cached, rate, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+            {
                 self.limiter.store(limiter_for_rate(rate));
-                self.cached_rate.store(rate, Ordering::Release);
             }
 
             let limiter = self.limiter.load();
+            // until_ready returns immediately when a token is available,
+            // otherwise sleeps until one is. We only log/record the metric
+            // when we actually had to wait.
             if limiter.check().is_err() {
                 debug!("RateLimitedOplog: back-pressure applied (rate={rate} writes/sec)");
                 record_oplog_rate_limited();
-                limiter.until_ready().await;
             }
+            limiter.until_ready().await;
         }
 
         self.inner.add(entry).await
@@ -359,7 +372,7 @@ mod tests {
         }
     }
 
-    fn resource_limits_with_rate(writes_per_second: u64) -> Arc<dyn ResourceLimits> {
+    fn make_entry(writes_per_second: u64) -> Arc<AtomicResourceEntry> {
         let entry = Arc::new(AtomicResourceEntry::new(
             u64::MAX,
             usize::MAX,
@@ -368,6 +381,16 @@ mod tests {
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         ));
         entry.set_oplog_writes_per_second(writes_per_second);
+        entry
+    }
+
+    fn resource_limits_with_rate(writes_per_second: u64) -> Arc<dyn ResourceLimits> {
+        Arc::new(FixedResourceLimits {
+            entry: make_entry(writes_per_second),
+        })
+    }
+
+    fn resource_limits_with_entry(entry: Arc<AtomicResourceEntry>) -> Arc<dyn ResourceLimits> {
         Arc::new(FixedResourceLimits { entry })
     }
 
@@ -453,6 +476,92 @@ mod tests {
         assert!(
             elapsed < Duration::from_millis(100),
             "Expected unlimited writes to complete in under 100ms, got {elapsed:?}"
+        );
+    }
+
+    // A rate of 0 is treated as unlimited (same as the proto3 default
+    // normalisation) — writes must complete with no meaningful delay.
+    #[test]
+    async fn zero_rate_is_treated_as_unlimited() {
+        let oplog = make_oplog(resource_limits_with_rate(0)).await;
+
+        let start = Instant::now();
+        for _ in 0..100 {
+            oplog.add(dummy_entry()).await;
+        }
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "Expected rate=0 (unlimited) writes to complete in under 100ms, got {elapsed:?}"
+        );
+    }
+
+    // Lowering the rate at runtime (unlimited -> 5/sec) takes effect on
+    // subsequent `add` calls: the governor is rebuilt and back-pressure kicks in.
+    #[test]
+    async fn dynamic_rate_change_from_unlimited_to_limited() {
+        let entry = make_entry(AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND);
+        let oplog = make_oplog(resource_limits_with_entry(entry.clone())).await;
+
+        // Unlimited — should be fast.
+        let start = Instant::now();
+        for _ in 0..20 {
+            oplog.add(dummy_entry()).await;
+        }
+        let fast_elapsed = start.elapsed();
+        assert!(
+            fast_elapsed < Duration::from_millis(100),
+            "Expected unlimited writes to be fast, got {fast_elapsed:?}"
+        );
+
+        // Switch to 5/sec at runtime.
+        entry.set_oplog_writes_per_second(5);
+
+        // 15 writes at 5/sec (burst=5) must take >= 1.5 s.
+        let start = Instant::now();
+        for _ in 0..15 {
+            oplog.add(dummy_entry()).await;
+        }
+        let slow_elapsed = start.elapsed();
+        assert!(
+            slow_elapsed >= Duration::from_millis(1500),
+            "Expected at least 1.5s after lowering rate to 5/sec, got {slow_elapsed:?}"
+        );
+    }
+
+    // Raising the rate at runtime (5/sec -> unlimited) takes effect on
+    // subsequent `add` calls: the governor is bypassed and writes fly through.
+    #[test]
+    async fn dynamic_rate_change_from_limited_to_unlimited() {
+        let entry = make_entry(5);
+        let oplog = make_oplog(resource_limits_with_entry(entry.clone())).await;
+
+        // 15 writes at 5/sec — must be slow.
+        let start = Instant::now();
+        for _ in 0..15 {
+            oplog.add(dummy_entry()).await;
+        }
+        let slow_elapsed = start.elapsed();
+        assert!(
+            slow_elapsed >= Duration::from_millis(1500),
+            "Expected at least 1.5s at 5/sec, got {slow_elapsed:?}"
+        );
+
+        // Switch to unlimited at runtime.
+        entry.set_oplog_writes_per_second(
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+        );
+
+        // 100 writes at unlimited — should be fast.
+        let start = Instant::now();
+        for _ in 0..100 {
+            oplog.add(dummy_entry()).await;
+        }
+        let fast_elapsed = start.elapsed();
+        assert!(
+            fast_elapsed < Duration::from_millis(100),
+            "Expected unlimited writes to be fast after raising rate, got {fast_elapsed:?}"
         );
     }
 }
