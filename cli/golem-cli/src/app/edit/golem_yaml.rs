@@ -615,12 +615,27 @@ fn reindent_block(source: &str, start: usize, end: usize, new_indent: usize) -> 
 }
 
 fn normalize_block_text(source: &str, start: usize, end: usize) -> String {
-    source[start..end]
-        .trim()
-        .replace(['\r', '\n'], " ")
-        .split_whitespace()
+    let text = &source[start..end];
+    let lines: Vec<&str> = text.lines().collect();
+    let min_indent = lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .min()
+        .unwrap_or(0);
+    lines
+        .iter()
+        .map(|l| {
+            if l.len() >= min_indent {
+                l[min_indent..].trim_end()
+            } else {
+                l.trim()
+            }
+        })
         .collect::<Vec<_>>()
-        .join(" ")
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 fn line_indent_at(source: &str, pos: usize) -> String {
