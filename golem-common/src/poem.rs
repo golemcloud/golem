@@ -1,5 +1,7 @@
 use crate::base_model::api;
+use crate::model::error::ErrorBody;
 use poem::endpoint::EitherEndpoint;
+use poem::http::StatusCode;
 use poem::{Endpoint, IntoEndpoint, Middleware, Request, Result};
 use tracing::Instrument;
 
@@ -9,12 +11,23 @@ pub struct CliClientInfo {
     pub client_platform: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CliClientInfoMiddleware;
+#[derive(Debug, Clone, Default)]
+pub struct CliClientInfoMiddleware {
+    // Placeholder: future fields for version/platform policy configuration.
+    // e.g. min_version: Option<semver::Version>, denied_platforms: Vec<String>
+}
 
 impl CliClientInfoMiddleware {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Decides whether to reject the client with a 410 Gone response.
+    ///
+    /// Returns `Some(message)` to reject, `None` to allow through.
+    /// Currently always returns `None` — placeholder for future policy.
+    fn should_reject_client(&self, _client_info: &CliClientInfo) -> Option<String> {
+        None
     }
 }
 
@@ -22,11 +35,15 @@ impl<E: Endpoint> Middleware<E> for CliClientInfoMiddleware {
     type Output = CliClientInfoEndpoint<E>;
 
     fn transform(&self, next: E) -> Self::Output {
-        CliClientInfoEndpoint { next }
+        CliClientInfoEndpoint {
+            middleware: self.clone(),
+            next,
+        }
     }
 }
 
 pub struct CliClientInfoEndpoint<E> {
+    middleware: CliClientInfoMiddleware,
     next: E,
 }
 
@@ -45,6 +62,20 @@ impl<E: Endpoint> Endpoint for CliClientInfoEndpoint<E> {
 
         let has_client_headers =
             client_info.client_version.is_some() || client_info.client_platform.is_some();
+
+        if has_client_headers
+            && let Some(message) = self.middleware.should_reject_client(&client_info)
+        {
+            return Err(poem::Error::from_string(
+                serde_json::to_string(&ErrorBody {
+                    error: message,
+                    code: api::error_code::CLI_UPDATE_REQUIRED.to_string(),
+                    cause: None,
+                })
+                .unwrap_or_default(),
+                StatusCode::GONE,
+            ));
+        }
 
         req.set_data(client_info.clone());
 

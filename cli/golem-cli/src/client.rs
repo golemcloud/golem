@@ -180,6 +180,26 @@ impl Middleware for StaticHeadersMiddleware {
     }
 }
 
+struct RetryIfCloneableMiddleware<T: Middleware> {
+    inner: T,
+}
+
+#[async_trait::async_trait]
+impl<T: Middleware> Middleware for RetryIfCloneableMiddleware<T> {
+    async fn handle(
+        &self,
+        req: Request,
+        extensions: &mut Extensions,
+        next: Next<'_>,
+    ) -> reqwest_middleware::Result<Response> {
+        if req.try_clone().is_some() {
+            self.inner.handle(req, extensions, next).await
+        } else {
+            next.run(req, extensions).await
+        }
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct GoneErrorBody {
     error: Option<String>,
@@ -416,18 +436,18 @@ pub fn new_reqwest_client(
             .build_with_max_retries(retry_config.max_retries);
 
         builder = match retry_config.profile {
-            RetryProfile::ServiceDefault => {
-                builder.with(RetryTransientMiddleware::new_with_policy_and_strategy(
+            RetryProfile::ServiceDefault => builder.with(RetryIfCloneableMiddleware {
+                inner: RetryTransientMiddleware::new_with_policy_and_strategy(
                     retry_policy,
                     ServiceRetryStrategy,
-                ))
-            }
-            RetryProfile::InvokeConservative => {
-                builder.with(RetryTransientMiddleware::new_with_policy_and_strategy(
+                ),
+            }),
+            RetryProfile::InvokeConservative => builder.with(RetryIfCloneableMiddleware {
+                inner: RetryTransientMiddleware::new_with_policy_and_strategy(
                     retry_policy,
                     InvokeRetryStrategy,
-                ))
-            }
+                ),
+            }),
         };
     }
 

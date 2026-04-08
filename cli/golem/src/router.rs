@@ -16,6 +16,7 @@ use crate::StartedComponents;
 use anyhow::Context;
 use poem::EndpointExt;
 use poem::listener::{Acceptor, Listener};
+use golem_common::poem::CliClientInfoMiddleware;
 use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, Tracing};
 use poem::{Route, Server};
 use std::net::Ipv4Addr;
@@ -137,6 +138,7 @@ pub async fn start_router(
         .at("*", registry_service_api.clone())
         .with(CookieJarManager::new())
         .with(Cors::new().allow_origin_regex(".*").allow_credentials(true))
+        .with(CliClientInfoMiddleware::new())
         .with(OpenTelemetryMetrics::new())
         .with(Tracing);
 
