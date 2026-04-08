@@ -623,6 +623,29 @@ impl GrpcQuotaService {
         }
     }
 
+    /// Try to reuse an existing slot entry by upgrading its interest Arc or
+    /// reviving a dead-but-not-lost entry.  Returns `Some(interest)` on success,
+    /// `None` if the entry is completely dead (Lost) and must be re-acquired.
+    async fn try_reuse_slot<F>(
+        slot_mutex: &Arc<Mutex<LeaseEntry>>,
+        make_interest: &F,
+    ) -> Option<LeaseInterest>
+    where
+        F: Fn(Arc<()>) -> LeaseInterest,
+    {
+        let mut slot = slot_mutex.lock().await;
+        if let Some(arc) = slot.interest.upgrade() {
+            return Some(make_interest(arc));
+        }
+        // Interest is dead but lease is still valid — revive it.
+        if !matches!(slot.lease, TrackedLease::Lost) {
+            let arc = Arc::new(());
+            slot.interest = Arc::downgrade(&arc);
+            return Some(make_interest(arc));
+        }
+        None
+    }
+
     async fn renew_all(&self) {
         info!("running renew_all loop");
 
@@ -882,97 +905,53 @@ impl QuotaService for GrpcQuotaService {
             _token: arc,
         };
 
-        // fast path: existing live entry -> reuse the lease with fresh credit state
-        if let Some(slot_mutex) = self.get_slot(&key).await {
-            debug!("Reusing existing lease");
-            let mut slot = slot_mutex.lock().await;
-            if let Some(arc) = slot.interest.upgrade() {
-                return Ok(make_interest(arc));
-            }
-
-            // interest is dead, but the lease has not been collected yet. We are holding the lock, so we can revive it and prevent
-            // a pointless reacquire
-            if !matches!(slot.lease, TrackedLease::Lost) {
-                let arc = Arc::new(());
-                slot.interest = Arc::downgrade(&arc);
-                return Ok(make_interest(arc));
-            }
-
-            // entry is completely dead; fall through to re-acquire
-        }
-
-        // Slow path: acquire from shard manager.
-        debug!("Acquiring new lease from shard manager");
-
+        // Create a prelocked placeholder so concurrent acquires for the
+        // same key block on its mutex rather than firing another RPC.
         let arc = Arc::new(());
         let placeholder_mutex = Arc::new(Mutex::new(LeaseEntry {
             interest: Arc::downgrade(&arc),
             waiters: Vec::new(),
             lease: TrackedLease::Lost, // filled in below
         }));
-
-        // Lock the entry before inserting so concurrent waiters block on the mutex.
         let mut slot = placeholder_mutex.lock().await;
 
-        match self.state.entry_async(key.clone()).await {
-            scc::hash_map::Entry::Occupied(occ) => {
-                // Another concurrent acquire inserted first — drop our placeholder
-                // and reuse theirs.
-                drop(slot);
-                debug!("Concurrent acquire raced — reusing existing entry");
-                let slot_mutex = occ.get().clone();
-                // Release the scc bucket lock before locking the per-entry mutex.
-                drop(occ);
-                let mut slot = slot_mutex.lock().await;
-                if let Some(existing_arc) = slot.interest.upgrade() {
-                    return Ok(make_interest(existing_arc));
+        loop {
+            match self.state.entry_async(key.clone()).await {
+                scc::hash_map::Entry::Occupied(occ) => {
+                    let slot_mutex = occ.get().clone();
+                    drop(occ);
+                    if let Some(interest) = Self::try_reuse_slot(&slot_mutex, &make_interest).await
+                    {
+                        return Ok(interest);
+                    }
+                    // Dead entry — loop to insert a fresh placeholder.
+                    continue;
                 }
-                if !matches!(slot.lease, TrackedLease::Lost) {
-                    let new_arc = Arc::new(());
-                    slot.interest = Arc::downgrade(&new_arc);
-                    return Ok(make_interest(new_arc));
+                scc::hash_map::Entry::Vacant(vac) => {
+                    // We are first — insert the prelocked placeholder and release
+                    // the scc bucket lock before making the RPC.
+                    vac.insert_entry(placeholder_mutex.clone());
                 }
-                // Entry is lost — proceed with our own acquire below,
-                // but we need to re-insert.  Use the existing slot_mutex.
-                let new_lease = self
-                    .client
-                    .acquire_quota_lease(environment_id, resource_name, self.port)
-                    .await?;
-                let new_arc = Arc::new(());
-                let interest = make_interest(new_arc.clone());
-                slot.interest = Arc::downgrade(&new_arc);
-                slot.lease = Self::from_quota_lease(&new_lease);
-                return Ok(interest);
             }
-            scc::hash_map::Entry::Vacant(vac) => {
-                // We are the first — insert the prelocked placeholder, then
-                // release the scc bucket lock before making the RPC.
-                vac.insert_entry(placeholder_mutex.clone());
-                // scc bucket lock released here as `vac` is dropped.
-            }
-        }
 
-        // Make the RPC without holding any scc lock.
-        let rpc_result = self
-            .client
-            .acquire_quota_lease(environment_id, resource_name, self.port)
-            .await;
-
-        match rpc_result {
-            Ok(new_lease) => {
-                let interest = make_interest(arc.clone());
-                slot.interest = Arc::downgrade(&arc);
-                slot.lease = Self::from_quota_lease(&new_lease);
-                Ok(interest)
-            }
-            Err(e) => {
-                // RPC failed — mark the placeholder as Lost so concurrent
-                // waiters don't spin forever, then remove the entry.
-                slot.lease = TrackedLease::Lost;
-                drop(slot);
-                self.state.remove_async(&key).await;
-                Err(e)
-            }
+            debug!("Acquiring new lease from shard manager");
+            return match self
+                .client
+                .acquire_quota_lease(environment_id, resource_name, self.port)
+                .await
+            {
+                Ok(new_lease) => {
+                    let interest = make_interest(arc.clone());
+                    slot.interest = Arc::downgrade(&arc);
+                    slot.lease = Self::from_quota_lease(&new_lease);
+                    Ok(interest)
+                }
+                Err(e) => {
+                    // Mark Lost so concurrent waiters unblock; renew_all will retry.
+                    slot.lease = TrackedLease::Lost;
+                    Err(e)
+                }
+            };
         }
     }
 
