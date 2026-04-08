@@ -29,7 +29,6 @@ use crate::model::Empty;
 use crate::model::agent::DataValue;
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
-use crate::model::oplog::PersistenceLevel;
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
@@ -43,6 +42,8 @@ use crate::model::oplog::public_oplog_entry::{
     RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
     StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
+use crate::model::oplog::{AgentTerminatedByQuotaError, PersistenceLevel};
+use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
 use crate::model::worker::ParsedWorkerAgentConfigEntry;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
@@ -110,6 +111,15 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentError> for AgentError {
             Error::AgentExceededFilesystemStorageLimit(_) => {
                 Ok(Self::AgentExceededFilesystemStorageLimit)
             }
+            Error::AgentTerminatedByQuota(inner) => {
+                Ok(Self::AgentTerminatedByQuota(AgentTerminatedByQuotaError {
+                    environment_id: inner
+                        .environment_id
+                        .ok_or("no environment_id field")?
+                        .try_into()?,
+                    resource_name: ResourceName(inner.resource_name),
+                }))
+            }
         }
     }
 }
@@ -158,6 +168,12 @@ impl From<AgentError> for golem_api_grpc::proto::golem::worker::AgentError {
                 Error::AgentExceededFilesystemStorageLimit(
                     grpc_worker::AgentExceededFilesystemStorageLimit {},
                 )
+            }
+            AgentError::AgentTerminatedByQuota(details) => {
+                Error::AgentTerminatedByQuota(grpc_worker::AgentTerminatedByQuota {
+                    environment_id: Some(details.environment_id.into()),
+                    resource_name: details.resource_name.0,
+                })
             }
         };
         Self { error: Some(error) }

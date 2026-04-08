@@ -123,7 +123,7 @@ impl Default for RegistryServiceConfig {
             PrecreatedAccount {
                 id: AccountId(uuid!("e71a6160-4144-4720-9e34-e5943458d129")),
                 name: "Initial User".to_string(),
-                email: AccountEmail("initial@user".to_string()),
+                email: AccountEmail::new("initial@user"),
                 token: Some(TokenSecret::trusted(
                     "lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28".to_string(),
                 )),
@@ -136,7 +136,7 @@ impl Default for RegistryServiceConfig {
             PrecreatedAccount {
                 id: AccountId(uuid!("0e8a0431-94b9-4644-89ca-fbf403edb6e7")),
                 name: "Marketing User".to_string(),
-                email: AccountEmail("marketing@user".to_string()),
+                email: AccountEmail::new("marketing@user"),
                 token: Some(TokenSecret::trusted(
                     "2dwnjEdx8a_bw8TTN7r6yqcvLY2jAQuoD1N6U3uRy9I".to_string(),
                 )),
@@ -149,7 +149,7 @@ impl Default for RegistryServiceConfig {
             PrecreatedAccount {
                 id: AccountId(uuid!("adb2694f-cd9f-425d-905d-ca2888c9c5de")),
                 name: "Builtin Plugin Owner".to_string(),
-                email: AccountEmail("builtin-plugin-owner@golem.cloud".to_string()),
+                email: AccountEmail::new("builtin-plugin-owner@golem.cloud"),
                 token: None,
                 role: AccountRole::BuiltinPluginOwner,
                 plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),

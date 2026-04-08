@@ -41,7 +41,7 @@ use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::mcp_deployment::McpDeployment;
-use golem_common::model::resource_definition::{ResourceDefinitionCreation, ResourceDefinitionId};
+use golem_common::model::quota::{ResourceDefinitionCreation, ResourceDefinitionId};
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
