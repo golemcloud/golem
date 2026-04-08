@@ -20,7 +20,6 @@ use crate::services::HasWorker;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use desert_rust::BinaryCodec;
-use golem_common::model::{NamedRetryPolicy, ScheduleId};
 use golem_common::model::oplog::host_functions::{
     HttpTypesFutureIncomingResponseGet, HttpTypesFutureTrailersGet,
 };
@@ -29,6 +28,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse,
     HostResponseHttpFutureTrailersGet, HostResponseHttpResponse, OplogEntry, PersistenceLevel,
 };
+use golem_common::model::{NamedRetryPolicy, ScheduleId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_derive::{FromValue, IntoValue};
 use http::{HeaderName, HeaderValue};
