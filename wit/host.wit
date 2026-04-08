@@ -22,4 +22,5 @@ world golem {
   import golem:rdbms/postgres@1.5.0;
   import golem:rdbms/types@1.5.0;
   import golem:websocket/client@1.5.0;
+  import golem:quota/host@1.5.0;
 }

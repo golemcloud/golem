@@ -20,7 +20,7 @@ use crate::repo::model::resource_definition::{
 };
 use crate::repo::resource_definition::ResourceDefinitionRepo;
 use golem_common::model::environment::{Environment, EnvironmentId};
-use golem_common::model::resource_definition::{
+use golem_common::model::quota::{
     ResourceDefinition, ResourceDefinitionCreation, ResourceDefinitionId,
     ResourceDefinitionRevision, ResourceDefinitionUpdate, ResourceLimit, ResourceName,
 };
