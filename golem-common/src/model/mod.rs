@@ -39,9 +39,9 @@ pub mod plan;
 pub mod plugin_registration;
 pub mod poem;
 pub mod protobuf;
+pub mod quota;
 pub mod regions;
 pub mod reports;
-pub mod resource_definition;
 pub mod security_scheme;
 #[cfg(test)]
 mod tests;
@@ -334,6 +334,11 @@ pub enum ScheduledAction {
         owned_agent_id: OwnedAgentId,
         invocation: Box<AgentInvocation>,
     },
+    /// Resume the agent
+    Resume {
+        agent_created_by: AccountId,
+        owned_agent_id: OwnedAgentId,
+    },
 }
 
 impl ScheduledAction {
@@ -346,6 +351,7 @@ impl ScheduledAction {
             } => OwnedAgentId::new(*environment_id, &promise_id.agent_id),
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => owned_agent_id.clone(),
             ScheduledAction::Invoke { owned_agent_id, .. } => owned_agent_id.clone(),
+            ScheduledAction::Resume { owned_agent_id, .. } => owned_agent_id.clone(),
         }
     }
 }
@@ -360,6 +366,7 @@ impl Display for ScheduledAction {
                 write!(f, "archive[{owned_agent_id}]")
             }
             ScheduledAction::Invoke { owned_agent_id, .. } => write!(f, "invoke[{owned_agent_id}]"),
+            ScheduledAction::Resume { owned_agent_id, .. } => write!(f, "resume[{owned_agent_id}]"),
         }
     }
 }

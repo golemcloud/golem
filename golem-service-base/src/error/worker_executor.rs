@@ -17,7 +17,9 @@ use golem_api_grpc::proto::golem;
 use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::AgentError;
+use golem_common::model::quota::ResourceName;
 use golem_common::model::{AgentId, PromiseId, ShardId, Timestamp};
 use golem_wasm::wasmtime::EncodingError;
 use golem_wasm_derive::{FromValue, IntoValue};
@@ -905,6 +907,15 @@ pub enum GolemSpecificWasmTrap {
     WorkerAgentExceededFilesystemStorageLimit,
     WorkerMonthlyHttpCallBudgetExhausted,
     WorkerMonthlyRpcCallBudgetExhausted,
+    AgentTerminatedByQuota {
+        environment_id: EnvironmentId,
+        resource_name: ResourceName,
+    },
+    AgentThrottledByQuota {
+        environment_id: EnvironmentId,
+        resource_name: ResourceName,
+        timestamp: Timestamp,
+    },
 }
 
 impl Display for GolemSpecificWasmTrap {
@@ -932,6 +943,25 @@ impl Display for GolemSpecificWasmTrap {
             }
             Self::WorkerMonthlyRpcCallBudgetExhausted => {
                 write!(f, "Worker exhausted monthly RPC call budget")
+            }
+            Self::AgentTerminatedByQuota {
+                environment_id,
+                resource_name,
+            } => {
+                write!(
+                    f,
+                    "Agent was stopped by quota {environment_id}/{resource_name} with terminate enforcement action"
+                )
+            }
+            Self::AgentThrottledByQuota {
+                environment_id,
+                resource_name,
+                ..
+            } => {
+                write!(
+                    f,
+                    "Agent was throttled by quota {environment_id}/{resource_name} with throttle enforcement action"
+                )
             }
         }
     }

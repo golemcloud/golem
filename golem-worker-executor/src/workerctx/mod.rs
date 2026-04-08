@@ -28,6 +28,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::promise::PromiseService;
+use crate::services::quota::QuotaService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
@@ -126,6 +127,7 @@ pub trait WorkerCtx:
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
+        quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
         active_workers: Arc<ActiveWorkers<Self>>,
         oplog_service: Arc<dyn OplogService>,

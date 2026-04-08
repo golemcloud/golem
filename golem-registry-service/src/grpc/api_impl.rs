@@ -71,7 +71,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-use golem_common::model::resource_definition::{ResourceDefinitionId, ResourceName};
+use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
 use std::collections::HashMap;

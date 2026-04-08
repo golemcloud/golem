@@ -87,7 +87,7 @@ impl AccountRevisionRecord {
             account_id: value.id.0,
             revision_id: value.revision.into(),
             name: value.name,
-            email: value.email.0,
+            email: value.email.into_inner(),
             plan_id: value.plan_id.0,
             roles: roles_to_bit_vector(&value.roles),
             audit,
@@ -110,7 +110,7 @@ impl TryFrom<AccountExtRevisionRecord> for Account {
             id: AccountId(value.revision.account_id),
             revision: value.revision.revision_id.try_into()?,
             name: value.revision.name,
-            email: AccountEmail(value.revision.email),
+            email: AccountEmail::new(value.revision.email),
             plan_id: PlanId(value.revision.plan_id),
             roles: roles_from_bit_vector(value.revision.roles),
         })

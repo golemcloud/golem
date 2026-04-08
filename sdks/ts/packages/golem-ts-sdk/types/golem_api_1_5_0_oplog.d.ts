@@ -388,6 +388,10 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'external'
     val: OplogExternalPayload
   };
+  export type AgentTerminatedByQuotaError = {
+    environmentId: EnvironmentId;
+    resourceName: string;
+  };
   /**
    * Describes the error that occurred in the agent
    */
@@ -439,6 +443,10 @@ declare module 'golem:api/oplog@1.5.0' {
   } |
   {
     tag: 'agent-exceeded-filesystem-storage-limit'
+  } |
+  {
+    tag: 'agent-terminated-by-quota'
+    val: AgentTerminatedByQuotaError
   };
   export type RawCreateParameters = {
     timestamp: Datetime;

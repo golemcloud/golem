@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package golem.worker;
 
+import "golem/common/environment.proto";
+
 message AgentError {
   oneof error {
     StackOverflow stack_overflow = 1;
@@ -18,6 +20,7 @@ message AgentError {
     AgentExceededFilesystemStorageLimit agent_exceeded_filesystem_storage_limit = 12;
     ExceededHttpCallLimit exceeded_http_call_limit = 13;
     ExceededRpcCallLimit exceeded_rpc_call_limit = 14;
+    AgentTerminatedByQuota agent_terminated_by_quota = 15;
   }
 }
 
@@ -60,3 +63,8 @@ message ExceededRpcCallLimit {}
 message NodeOutOfFilesystemStorage {}
 
 message AgentExceededFilesystemStorageLimit {}
+
+message AgentTerminatedByQuota {
+  golem.common.EnvironmentId environment_id = 1;
+  string resource_name = 2;
+}

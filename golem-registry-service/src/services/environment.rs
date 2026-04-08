@@ -385,7 +385,7 @@ impl EnvironmentService {
         self.environment_repo
             .list_visible_to_account(
                 auth.account_id().0,
-                account_email.map(|ae| ae.0.as_str()),
+                account_email.map(|ae| ae.as_str()),
                 app_name.map(|an| an.0.as_str()),
                 env_name.map(|en| en.0.as_str()),
             )

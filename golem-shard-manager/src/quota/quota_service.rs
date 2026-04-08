@@ -22,8 +22,9 @@ use chrono::Utc;
 use golem_common::SafeDisplay;
 use golem_common::model::Pod;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::resource_definition::{ResourceDefinitionId, ResourceName};
-use golem_service_base::model::quota_lease::{LeaseEpoch, PendingReservation};
+use golem_common::model::quota::LeaseEpoch;
+use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
+use golem_service_base::model::quota_lease::PendingReservation;
 use sqlx::types::Json;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -464,10 +465,7 @@ impl QuotaService {
         Some(handle)
     }
 
-    async fn ensure_entry(
-        &self,
-        definition: &golem_common::model::resource_definition::ResourceDefinition,
-    ) {
+    async fn ensure_entry(&self, definition: &golem_common::model::quota::ResourceDefinition) {
         let _ = self
             .entries
             .entry_async(definition.id)
