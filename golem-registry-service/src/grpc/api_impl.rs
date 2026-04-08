@@ -1067,6 +1067,7 @@ fn internal_error(error: &str) -> RegistryServiceError {
         error: Some(registry_service_error::Error::InternalError(
             golem_api_grpc::proto::golem::common::ErrorBody {
                 error: error.to_string(),
+                code: golem_common::base_model::api::error_code::INTERNAL_UNKNOWN.to_string(),
             },
         )),
     }

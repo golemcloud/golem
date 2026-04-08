@@ -19,13 +19,53 @@ pub fn error_gen() -> Module {
     let code = indoc! { r#"
         use bytes::Bytes;
 
+        #[derive(Debug, Clone, Copy)]
+        pub enum ErrorMessages<'a> {
+            None,
+            One(&'a str),
+            Many(&'a [String]),
+        }
+
+        pub enum ErrorMessagesIter<'a> {
+            None,
+            One(std::option::IntoIter<&'a str>),
+            Many(std::slice::Iter<'a, String>),
+        }
+
+        impl<'a> Iterator for ErrorMessagesIter<'a> {
+            type Item = &'a str;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                match self {
+                    ErrorMessagesIter::None => None,
+                    ErrorMessagesIter::One(iter) => iter.next(),
+                    ErrorMessagesIter::Many(iter) => iter.next().map(String::as_str),
+                }
+            }
+        }
+
+        impl<'a> ErrorMessages<'a> {
+            pub fn iter(self) -> ErrorMessagesIter<'a> {
+                match self {
+                    ErrorMessages::None => ErrorMessagesIter::None,
+                    ErrorMessages::One(message) => ErrorMessagesIter::One(Some(message).into_iter()),
+                    ErrorMessages::Many(messages) => ErrorMessagesIter::Many(messages.iter()),
+                }
+            }
+
+            pub fn join(self, separator: &str) -> String {
+                self.iter().collect::<Vec<_>>().join(separator)
+            }
+
+            pub fn to_vec(self) -> Vec<String> {
+                self.iter().map(str::to_string).collect()
+            }
+        }
+
         pub trait ErrorInfo {
             fn service_name() -> &'static str;
             fn status_code(&self) -> u16;
-            fn messages(&self) -> Vec<String>;
-            fn message(&self) -> String {
-                self.messages().join("\n")
-            }
+            fn errors(&self) -> ErrorMessages<'_>;
             fn code(&self) -> Option<&str>;
             fn is_status_code(&self, status_code: u16) -> bool {
                 self.status_code() == status_code
@@ -71,6 +111,13 @@ pub fn error_gen() -> Module {
                 Error::Unexpected { code, data }
             }
 
+            pub fn service_name(&self) -> &'static str
+            where
+                T: ErrorInfo,
+            {
+                T::service_name()
+            }
+
             pub fn status_code(&self) -> Option<u16>
             where
                 T: ErrorInfo,
@@ -82,21 +129,14 @@ pub fn error_gen() -> Module {
                 }
             }
 
-            pub fn messages(&self) -> Option<Vec<String>>
+            pub fn errors(&self) -> ErrorMessages<'_>
             where
                 T: ErrorInfo,
             {
                 match self {
-                    Error::Item(item) => Some(item.messages()),
-                    _ => None,
+                    Error::Item(item) => item.errors(),
+                    _ => ErrorMessages::None,
                 }
-            }
-
-            pub fn message(&self) -> Option<String>
-            where
-                T: ErrorInfo,
-            {
-                self.messages().map(|messages| messages.join("\n"))
             }
 
             pub fn code(&self) -> Option<&str>
@@ -180,7 +220,11 @@ pub fn error_gen() -> Module {
     Module {
         def: ModuleDef {
             name: ModuleName::new("error"),
-            exports: vec!["ErrorInfo".to_string(), "Error".to_string()],
+            exports: vec![
+                "ErrorInfo".to_string(),
+                "ErrorMessages".to_string(),
+                "Error".to_string(),
+            ],
         },
         code: code.to_string(),
     }

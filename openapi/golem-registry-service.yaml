@@ -9376,16 +9376,22 @@ components:
       type: object
       title: ErrorBody
       required:
+      - code
       - error
       properties:
+        code:
+          type: string
         error:
           type: string
     ErrorsBody:
       type: object
       title: ErrorsBody
       required:
+      - code
       - errors
       properties:
+        code:
+          type: string
         errors:
           type: array
           items:

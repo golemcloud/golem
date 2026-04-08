@@ -70,6 +70,7 @@ pub mod service {
 
     use bytes::Bytes;
 
+    use golem_common::base_model::api;
     use golem_common::model::{AgentId, PromiseId};
     use reqwest::StatusCode;
     use std::error::Error;
@@ -78,13 +79,13 @@ pub mod service {
     #[derive(Debug)]
     pub struct ServiceErrorResponse {
         pub status_code: u16,
-        pub messages: Vec<String>,
+        pub errors: Vec<String>,
         pub code: Option<String>,
     }
 
     impl ServiceErrorResponse {
-        pub fn message(&self) -> String {
-            self.messages.join("\n")
+        pub fn error(&self) -> String {
+            self.errors.join("\n")
         }
 
         pub fn is_status_code(&self, status_code: u16) -> bool {
@@ -99,8 +100,8 @@ pub mod service {
             self.code.as_deref() == Some(code)
         }
 
-        fn first_message(&self) -> Option<&str> {
-            self.messages.first().map(String::as_str)
+        fn first_error(&self) -> Option<&str> {
+            self.errors.first().map(String::as_str)
         }
     }
 
@@ -114,13 +115,12 @@ pub mod service {
         pub fn is_domain_is_not_registered(&self) -> bool {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
-                    if err.has_code("DOMAIN_NOT_REGISTERED") {
+                    if err.has_code(api::error_code::DOMAIN_NOT_REGISTERED) {
                         true
                     } else {
                         (err.is_status_code(409) || err.is_not_found())
-                            && err.first_message().is_some_and(|message| {
-                                message.starts_with("Domain")
-                                    && message.ends_with("is not registered")
+                            && err.first_error().is_some_and(|error| {
+                                error.starts_with("Domain") && error.ends_with("is not registered")
                             })
                     }
                 }
@@ -147,7 +147,7 @@ pub mod service {
                 golem_client::Error::Item(error) => {
                     ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
                         status_code: error.status_code(),
-                        messages: error.messages(),
+                        errors: error.errors().to_vec(),
                         code: error.code().map(str::to_string),
                     })
                 }
@@ -205,7 +205,7 @@ pub mod service {
                         "{} - Error: {}, {}",
                         service_name,
                         display_status_code(response.status_code).log_color_error(),
-                        response.message().log_color_warn()
+                        response.error().log_color_warn()
                     )
                 }
                 ServiceErrorKind::ReqwestError(error) => {
@@ -250,8 +250,10 @@ pub mod service {
         T: golem_client::ErrorInfo,
     {
         fn from(error: golem_client::Error<T>) -> Self {
+            let service_name = error.service_name();
+
             ServiceError {
-                service_name: T::service_name(),
+                service_name,
                 kind: ServiceErrorKind::from_golem_client_error(error),
             }
         }

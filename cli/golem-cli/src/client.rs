@@ -23,6 +23,7 @@ use golem_client::api::{
     TokenClientLive, WorkerClientLive,
 };
 use golem_client::{Context as ClientContext, Security};
+use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
 use http::Extensions;
@@ -165,12 +166,12 @@ impl Middleware for StaticHeadersMiddleware {
     ) -> reqwest_middleware::Result<Response> {
         let mut req = req;
         req.headers_mut().insert(
-            HeaderName::from_static("x-golem-cli-version"),
+            HeaderName::from_static(api::header::GOLEM_CLI_VERSION),
             HeaderValue::from_str(&self.cli_version)
                 .map_err(reqwest_middleware::Error::middleware)?,
         );
         req.headers_mut().insert(
-            HeaderName::from_static("x-golem-cli-platform"),
+            HeaderName::from_static(api::header::GOLEM_CLI_PLATFORM),
             HeaderValue::from_str(&self.cli_platform)
                 .map_err(reqwest_middleware::Error::middleware)?,
         );

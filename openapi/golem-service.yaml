@@ -10626,29 +10626,38 @@ components:
       title: ErrorBody
       type: object
       properties:
+        code:
+          type: string
         error:
           type: string
       required:
+      - code
       - error
     ErrorBodyWithOptionalWorkerError:
       title: ErrorBodyWithOptionalWorkerError
       type: object
       properties:
+        code:
+          type: string
         error:
           type: string
         workerError:
           $ref: '#/components/schemas/WorkerErrorDetails'
       required:
+      - code
       - error
     ErrorsBody:
       title: ErrorsBody
       type: object
       properties:
+        code:
+          type: string
         errors:
           type: array
           items:
             type: string
       required:
+      - code
       - errors
     ExportedResourceMetadata:
       title: ExportedResourceMetadata
