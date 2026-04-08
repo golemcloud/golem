@@ -308,7 +308,7 @@ impl AccountService {
         let record = AccountRevisionRecord::new(
             id,
             account.name,
-            account.email.0,
+            account.email.into_inner(),
             plan_id,
             roles,
             auth.account_id(),

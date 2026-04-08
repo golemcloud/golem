@@ -263,7 +263,7 @@ fn registry_service_config(
                 PrecreatedAccount {
                     id: AccountId(uuid!("51de7d7d-f286-49aa-b79a-96022f7e2df9")),
                     name: "Initial User".to_string(),
-                    email: AccountEmail("initial@user".to_string()),
+                    email: AccountEmail::new("initial@user"),
                     token: TokenSecret::trusted(ADMIN_TOKEN.to_string()),
                     plan_id,
                     role: AccountRole::Admin,
@@ -274,7 +274,7 @@ fn registry_service_config(
                 PrecreatedAccount {
                     id: AccountId(uuid!("b0a654af-d67f-4d73-a824-cf75e122bfc0")),
                     name: "Builtin Plugin Owner".to_string(),
-                    email: AccountEmail("builtin-plugin-owner@golem.cloud".to_string()),
+                    email: AccountEmail::new("builtin-plugin-owner@golem.cloud"),
                     token: TokenSecret::trusted(BUILTIN_PLUGIN_OWNER_TOKEN.to_string()),
                     plan_id,
                     role: AccountRole::BuiltinPluginOwner,

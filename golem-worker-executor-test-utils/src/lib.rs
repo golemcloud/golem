@@ -96,6 +96,7 @@ use golem_worker_executor::services::golem_config::{
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
 use golem_worker_executor::services::promise::PromiseService;
+use golem_worker_executor::services::quota::QuotaService;
 use golem_worker_executor::services::rdbms::ignite::IgniteType;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
@@ -943,6 +944,7 @@ impl WorkerCtx for TestWorkerCtx {
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn rdbms::RdbmsService>,
+        quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
         _active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
         oplog_service: Arc<dyn OplogService>,
@@ -990,6 +992,7 @@ impl WorkerCtx for TestWorkerCtx {
             key_value_service,
             blob_store_service,
             rdbms_service,
+            quota_service,
             event_service,
             oplog_service,
             oplog,

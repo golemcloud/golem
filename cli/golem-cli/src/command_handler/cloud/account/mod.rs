@@ -85,7 +85,7 @@ impl CloudAccountCommandHandler {
                 &AccountUpdate {
                     current_revision: account.revision,
                     name: account_name,
-                    email: account_email.map(AccountEmail),
+                    email: account_email.map(AccountEmail::new),
                 },
             )
             .await
@@ -104,7 +104,7 @@ impl CloudAccountCommandHandler {
             .account
             .create_account(&AccountCreation {
                 name: account_name,
-                email: AccountEmail(account_email),
+                email: AccountEmail::new(account_email),
             })
             .await
             .map_service_error()?;

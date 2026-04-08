@@ -684,9 +684,7 @@ mod tests {
     use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-    use golem_common::model::resource_definition::{
-        ResourceDefinition, ResourceDefinitionId, ResourceName,
-    };
+    use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
     use golem_service_base::custom_api::CompiledRoutes;
     use golem_service_base::mcp::CompiledMcp;
