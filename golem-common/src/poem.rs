@@ -1,7 +1,7 @@
 use crate::base_model::api;
 use poem::endpoint::EitherEndpoint;
 use poem::{Endpoint, IntoEndpoint, Middleware, Request, Result};
-use tracing::info;
+use tracing::Instrument;
 
 #[derive(Debug, Clone, Default)]
 pub struct CliClientInfo {
@@ -43,16 +43,21 @@ impl<E: Endpoint> Endpoint for CliClientInfoEndpoint<E> {
                 .map(ToString::to_string),
         };
 
-        if client_info.client_version.is_some() || client_info.client_platform.is_some() {
-            info!(
-                client_version = client_info.client_version.as_deref(),
-                client_platform = client_info.client_platform.as_deref(),
-                "OpenAPI client headers detected"
-            );
-        }
+        let has_client_headers =
+            client_info.client_version.is_some() || client_info.client_platform.is_some();
 
-        req.set_data(client_info);
-        self.next.call(req).await
+        req.set_data(client_info.clone());
+
+        if has_client_headers {
+            let span = tracing::info_span!(
+                "cli_client",
+                client_version = client_info.client_version.as_deref().unwrap_or(""),
+                client_platform = client_info.client_platform.as_deref().unwrap_or(""),
+            );
+            self.next.call(req).instrument(span).await
+        } else {
+            self.next.call(req).await
+        }
     }
 }
 
