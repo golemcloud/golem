@@ -480,6 +480,11 @@ pub struct OplogConfig {
     /// entries to oplog processor plugins.
     #[serde(with = "humantime_serde")]
     pub plugin_max_elapsed_time: Duration,
+    /// When true, wraps the oplog service with a per-account rate-limiting layer that
+    /// throttles `add` calls according to each account's plan limit
+    /// (`oplog_writes_per_second`). Defaults to false (disabled).
+    #[serde(default)]
+    pub oplog_rate_limit_enabled: bool,
 }
 
 impl SafeDisplay for OplogConfig {
@@ -529,6 +534,11 @@ impl SafeDisplay for OplogConfig {
             &mut result,
             "plugin max elapsed time: {:?}",
             self.plugin_max_elapsed_time
+        );
+        let _ = writeln!(
+            &mut result,
+            "oplog rate limit enabled: {}",
+            self.oplog_rate_limit_enabled
         );
         result
     }
@@ -1269,6 +1279,7 @@ impl Default for OplogConfig {
             oplog_processor_snapshotting: SnapshotPolicy::EveryNInvocation { count: 10 },
             plugin_max_commit_count: 3,
             plugin_max_elapsed_time: Duration::from_secs(5),
+            oplog_rate_limit_enabled: false,
         }
     }
 }

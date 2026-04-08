@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::oplog::record_oplog_rate_limited;
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{CommitLevel, Oplog, OplogService};
-use crate::services::resource_limits::AtomicResourceEntry;
+use crate::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
@@ -108,6 +110,7 @@ impl Oplog for RateLimitedOplog {
             let limiter = self.limiter.load();
             if limiter.check().is_err() {
                 debug!("RateLimitedOplog: back-pressure applied (rate={rate} writes/sec)");
+                record_oplog_rate_limited();
                 limiter.until_ready().await;
             }
         }
@@ -172,20 +175,44 @@ impl Oplog for RateLimitedOplog {
 /// instance it creates or opens.
 ///
 /// `create` and `open` delegate to the inner service, then wrap the returned oplog in a
-/// [`RateLimitedOplog`] backed by the provided [`AtomicResourceEntry`]. All other service
-/// methods are pure delegation.
-#[derive(Debug)]
+/// [`RateLimitedOplog`] that holds the per-account [`AtomicResourceEntry`] resolved from
+/// [`ResourceLimits`]. The entry is shared with the background sync loop that refreshes plan
+/// limits every ~60 seconds, so rate limit changes take effect automatically without reopening
+/// the oplog. All other service methods are pure delegation.
 pub struct RateLimitedOplogService {
     inner: Arc<dyn OplogService>,
-    resource_entry: Arc<AtomicResourceEntry>,
+    resource_limits: Arc<dyn ResourceLimits>,
 }
 
 impl RateLimitedOplogService {
-    pub fn new(inner: Arc<dyn OplogService>, resource_entry: Arc<AtomicResourceEntry>) -> Self {
+    pub fn new(inner: Arc<dyn OplogService>, resource_limits: Arc<dyn ResourceLimits>) -> Self {
         Self {
             inner,
-            resource_entry,
+            resource_limits,
         }
+    }
+
+    async fn entry_for(&self, account_id: AccountId) -> Arc<AtomicResourceEntry> {
+        self.resource_limits
+            .initialize_account(account_id)
+            .await
+            .unwrap_or_else(|_| {
+                // On registry error fall back to unlimited so a transient outage
+                // never blocks oplog writes entirely.
+                Arc::new(AtomicResourceEntry::new(
+                    u64::MAX,
+                    usize::MAX,
+                    usize::MAX,
+                    u64::MAX,
+                    AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+                ))
+            })
+    }
+}
+
+impl std::fmt::Debug for RateLimitedOplogService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RateLimitedOplogService").finish()
     }
 }
 
@@ -199,6 +226,7 @@ impl OplogService for RateLimitedOplogService {
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
+        let resource_entry = self.entry_for(initial_worker_metadata.created_by).await;
         let inner_oplog = self
             .inner
             .create(
@@ -209,10 +237,7 @@ impl OplogService for RateLimitedOplogService {
                 execution_status,
             )
             .await;
-        Arc::new(RateLimitedOplog::new(
-            inner_oplog,
-            self.resource_entry.clone(),
-        ))
+        Arc::new(RateLimitedOplog::new(inner_oplog, resource_entry))
     }
 
     async fn open(
@@ -223,6 +248,7 @@ impl OplogService for RateLimitedOplogService {
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
+        let resource_entry = self.entry_for(initial_worker_metadata.created_by).await;
         let inner_oplog = self
             .inner
             .open(
@@ -233,10 +259,7 @@ impl OplogService for RateLimitedOplogService {
                 execution_status,
             )
             .await;
-        Arc::new(RateLimitedOplog::new(
-            inner_oplog,
-            self.resource_entry.clone(),
-        ))
+        Arc::new(RateLimitedOplog::new(inner_oplog, resource_entry))
     }
 
     async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
@@ -301,7 +324,9 @@ mod tests {
     use super::*;
     use crate::model::ExecutionStatus;
     use crate::services::oplog::PrimaryOplogService;
+    use crate::services::resource_limits::ResourceLimits;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
+    use async_trait::async_trait;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::AgentMode;
     use golem_common::model::component::ComponentId;
@@ -309,6 +334,7 @@ mod tests {
     use golem_common::model::regions::OplogRegion;
     use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, Timestamp};
     use golem_common::read_only_lock;
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use std::sync::RwLock;
     use std::time::Instant;
@@ -317,7 +343,23 @@ mod tests {
 
     test_r::enable!();
 
-    fn resource_entry_with_rate(writes_per_second: u64) -> Arc<AtomicResourceEntry> {
+    /// [`ResourceLimits`] stub that always returns the same pre-seeded entry
+    /// regardless of account. Allows tests to inject a specific rate directly.
+    struct FixedResourceLimits {
+        entry: Arc<AtomicResourceEntry>,
+    }
+
+    #[async_trait]
+    impl ResourceLimits for FixedResourceLimits {
+        async fn initialize_account(
+            &self,
+            _account_id: AccountId,
+        ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError> {
+            Ok(self.entry.clone())
+        }
+    }
+
+    fn resource_limits_with_rate(writes_per_second: u64) -> Arc<dyn ResourceLimits> {
         let entry = Arc::new(AtomicResourceEntry::new(
             u64::MAX,
             usize::MAX,
@@ -326,15 +368,15 @@ mod tests {
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
         ));
         entry.set_oplog_writes_per_second(writes_per_second);
-        entry
+        Arc::new(FixedResourceLimits { entry })
     }
 
-    async fn make_oplog(resource_entry: Arc<AtomicResourceEntry>) -> Arc<dyn Oplog> {
+    async fn make_oplog(resource_limits: Arc<dyn ResourceLimits>) -> Arc<dyn Oplog> {
         let indexed = Arc::new(InMemoryIndexedStorage::new());
         let blob = Arc::new(InMemoryBlobStorage::new());
         let service = RateLimitedOplogService::new(
             Arc::new(PrimaryOplogService::new(indexed, blob, 1, 1, 4096).await),
-            resource_entry,
+            resource_limits,
         );
 
         let account_id = AccountId::new();
@@ -379,8 +421,7 @@ mod tests {
     // the remaining 10. Total elapsed must be >= 1.5 s (conservative bound).
     #[test]
     async fn rate_limit_slows_down_writes_that_exceed_the_quota() {
-        let entry = resource_entry_with_rate(5);
-        let oplog = make_oplog(entry).await;
+        let oplog = make_oplog(resource_limits_with_rate(5)).await;
 
         let start = Instant::now();
         for _ in 0..15 {
@@ -398,9 +439,10 @@ mod tests {
     // no meaningful delay — well under 100 ms for 100 entries.
     #[test]
     async fn unlimited_rate_has_no_meaningful_delay() {
-        let entry =
-            resource_entry_with_rate(AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND);
-        let oplog = make_oplog(entry).await;
+        let oplog = make_oplog(resource_limits_with_rate(
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
+        ))
+        .await;
 
         let start = Instant::now();
         for _ in 0..100 {
