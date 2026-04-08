@@ -502,22 +502,16 @@ mod tests {
 
         async fn get_resource_definition_by_id(
             &self,
-            _resource_definition_id: golem_common::model::resource_definition::ResourceDefinitionId,
-        ) -> Result<
-            golem_common::model::resource_definition::ResourceDefinition,
-            RegistryServiceError,
-        > {
+            _resource_definition_id: golem_common::model::quota::ResourceDefinitionId,
+        ) -> Result<golem_common::model::quota::ResourceDefinition, RegistryServiceError> {
             unimplemented!()
         }
 
         async fn get_resource_definition_by_name(
             &self,
             _environment_id: EnvironmentId,
-            _resource_name: golem_common::model::resource_definition::ResourceName,
-        ) -> Result<
-            golem_common::model::resource_definition::ResourceDefinition,
-            RegistryServiceError,
-        > {
+            _resource_name: golem_common::model::quota::ResourceName,
+        ) -> Result<golem_common::model::quota::ResourceDefinition, RegistryServiceError> {
             unimplemented!()
         }
 
