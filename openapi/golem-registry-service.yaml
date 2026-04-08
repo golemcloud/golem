@@ -10140,6 +10140,7 @@ components:
       - monthlyHttpCallLimit
       - monthlyRpcCallLimit
       - maxConcurrentAgentsPerExecutor
+      - oplogWritesPerSecond
       properties:
         planId:
           type: string
@@ -10192,6 +10193,9 @@ components:
           type: integer
           format: uint64
         maxConcurrentAgentsPerExecutor:
+          type: integer
+          format: uint64
+        oplogWritesPerSecond:
           type: integer
           format: uint64
     PluginInstallation:
