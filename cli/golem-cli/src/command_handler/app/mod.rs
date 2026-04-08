@@ -53,6 +53,7 @@ use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::text::server::ToFormattedServerContext;
 use crate::model::worker::AgentUpdateMode;
 use anyhow::{anyhow, bail};
+use applying::Apply;
 use colored::Colorize;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
@@ -1471,18 +1472,23 @@ impl AppCommandHandler {
         &self,
         deploy_diff: &DeployDiff,
     ) -> anyhow::Result<CurrentDeployment> {
-        let (agent_secret_defaults, retry_policy_defaults) = {
-            let app_ctx = self.ctx.app_context_lock().await;
-            let defaults = app_ctx
-                .some_or_err()?
-                .application()
-                .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name);
-            let app = app_ctx.some_or_err()?.application();
-            (
-                resolve_secret_defaults(defaults)?,
-                app.deployment_retry_policy_defaults(&deploy_diff.environment.environment_name),
-            )
-        };
+        let app_ctx = self.ctx.app_context_lock().await;
+
+        let agent_secret_defaults = app_ctx
+            .some_or_err()?
+            .application()
+            .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name)
+            .apply(resolve_secret_defaults)?;
+
+        let retry_policy_defaults = app_ctx
+            .some_or_err()?
+            .application()
+            .deployment_retry_policy_defaults(&deploy_diff.environment.environment_name);
+
+        let quota_resource_defaults = app_ctx
+            .some_or_err()?
+            .application()
+            .resource_definition_defaults(&deploy_diff.environment.environment_name);
 
         let clients = self.ctx.golem_clients().await?;
 
@@ -1497,8 +1503,7 @@ impl AppCommandHandler {
                     expected_deployment_hash: deploy_diff.local_deployment_hash,
                     version: DeploymentVersion("".to_string()), // TODO: atomic
                     agent_secret_defaults,
-                    // TODO (quota)
-                    quota_resource_defaults: Vec::new(),
+                    quota_resource_defaults,
                     retry_policy_defaults,
                 },
             )

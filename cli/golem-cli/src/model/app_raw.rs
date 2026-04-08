@@ -24,6 +24,7 @@ use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions
 use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::quota::ResourceDefinitionCreation;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -121,6 +122,7 @@ pub struct Application {
     pub secret_defaults: IndexMap<EnvironmentName, Vec<EnvironmentAgentSecret>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub retry_policy_defaults: IndexMap<EnvironmentName, Vec<EnvironmentRetryPolicyDefault>>,
+    pub resource_defaults: IndexMap<EnvironmentName, Vec<ResourceDefinitionCreation>>,
 }
 
 #[derive(Debug)]
