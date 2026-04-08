@@ -1709,7 +1709,7 @@ mod tests {
                 value: PredicateValue::Text("invoke".to_string()),
             },
             policy: RetryPolicy::TimeBox {
-                limit: Duration::from_secs(60),
+                limit: Duration::ZERO,
                 inner: Box::new(RetryPolicy::Immediate),
             },
         }];
