@@ -339,7 +339,7 @@ impl OAuth2Service {
                 "No user email from OAuth2 Provider for login {}",
                 external_login.external_id
             ))?
-            .pipe(AccountEmail);
+            .pipe(AccountEmail::new);
 
         let name = external_login
             .name

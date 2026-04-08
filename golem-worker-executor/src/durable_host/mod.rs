@@ -26,6 +26,7 @@ pub mod http;
 pub mod io;
 pub mod keyvalue;
 mod logging;
+pub mod quota;
 mod random;
 pub mod rdbms;
 mod replay_state;
@@ -55,6 +56,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::promise::PromiseService;
+use crate::services::quota::QuotaService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::rpc::Rpc;
@@ -205,6 +207,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
+        quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
@@ -360,6 +363,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 key_value_service,
                 blob_store_service,
                 rdbms_service,
+                quota_service,
                 component_service,
                 agent_types_service,
                 environment_state_service,
@@ -713,6 +717,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } => RetryDecision::ReacquirePermits,
             TrapType::Error {
                 error: AgentError::AgentExceededFilesystemStorageLimit,
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::AgentTerminatedByQuota(_),
                 ..
             } => RetryDecision::None,
             TrapType::Error {
@@ -3296,6 +3304,7 @@ struct PrivateDurableWorkerState {
     key_value_service: Arc<dyn KeyValueService>,
     blob_store_service: Arc<dyn BlobStoreService>,
     rdbms_service: Arc<dyn RdbmsService>,
+    quota_service: Arc<dyn QuotaService>,
     component_service: Arc<dyn ComponentService>,
     agent_types_service: Arc<dyn AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
@@ -3425,6 +3434,7 @@ impl PrivateDurableWorkerState {
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
+        quota_service: Arc<dyn QuotaService>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
@@ -3486,6 +3496,7 @@ impl PrivateDurableWorkerState {
             key_value_service,
             blob_store_service,
             rdbms_service,
+            quota_service,
             component_service,
             agent_types_service,
             environment_state_service,

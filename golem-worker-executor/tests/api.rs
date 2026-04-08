@@ -1218,6 +1218,40 @@ async fn delete_worker(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+async fn delete_nonexistent_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let counter_id = agent_id!("Counter", "delete-nonexistent-1");
+    let worker_id = AgentId {
+        component_id: component.id,
+        agent_id: counter_id.to_string(),
+    };
+
+    let result = executor.delete_worker(&worker_id).await;
+
+    let err = result.expect_err("Deleting a non-existent worker should fail");
+    let err_msg = format!("{err:?}");
+    assert!(
+        err_msg.contains("AgentNotFound"),
+        "Expected AgentNotFound error, got: {err_msg}"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
 async fn get_workers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

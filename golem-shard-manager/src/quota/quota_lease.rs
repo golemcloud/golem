@@ -14,10 +14,9 @@
 
 use chrono::{DateTime, Utc};
 use golem_common::model::Pod;
-use golem_common::model::resource_definition::{
-    EnforcementAction, ResourceDefinitionId, ResourceLimit,
+use golem_common::model::quota::{
+    EnforcementAction, LeaseEpoch, ResourceDefinitionId, ResourceLimit,
 };
-use golem_service_base::model::quota_lease::LeaseEpoch;
 use std::time::SystemTime;
 
 #[derive(Debug, Clone)]

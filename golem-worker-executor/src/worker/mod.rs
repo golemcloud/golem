@@ -36,8 +36,8 @@ use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasAgentWebhooksService, HasAll,
     HasBlobStoreService, HasComponentService, HasConfig, HasEnvironmentStateService, HasEvents,
     HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService, HasOplog,
-    HasOplogService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
-    HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool,
+    HasOplogService, HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits,
+    HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool,
     HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
     UsesAllDeps,
 };
@@ -2506,6 +2506,7 @@ impl RunningWorker {
             parent.key_value_service(),
             parent.blob_store_service(),
             parent.rdbms_service(),
+            parent.quota_service(),
             parent.worker_event_service.clone(),
             parent.active_workers(),
             parent.oplog_service(),
