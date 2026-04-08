@@ -30,6 +30,6 @@ jobs:
       - uses: mitchellh/vouch/action/check-issue@main
         with:
           issue-number: ${{ github.event.issue.number }}
-          auto-close: true
+          auto-close: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
