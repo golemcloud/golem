@@ -709,10 +709,6 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
 
                 // Transient HTTP error: enter retry loop
                 Ok(Err(initial_error)) => {
-                    tracing::debug!(
-                        ?initial_error,
-                        "HTTP background retry: initial request failed with transient error"
-                    );
                     let oplog = worker.oplog();
                     let mut base_retry_count =
                         crate::durable_host::durability::count_oplog_errors_for(
@@ -753,7 +749,6 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                             let oplog = oplog.clone();
                             let request = request.clone();
                             async move {
-                                tracing::debug!("HTTP background retry: sending retry attempt");
                                 // Reconstruct body chunks from oplog
                                 let body_chunks =
                                     reconstruct_outgoing_body_chunks(&oplog, begin_index)

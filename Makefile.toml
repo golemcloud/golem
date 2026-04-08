@@ -421,8 +421,7 @@ cargo-test-r run --package golem-worker-executor --test integration :tag:ignite_
 [tasks.worker-executor-tests-group1]
 dependencies = ["wit"]
 description = "Runs worker executor tests only (group 1/3)"
-# TODO: temporarily set to debug for in_function_retry and inline_retry to diagnose flaky test
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info,integration::in_function_retry=debug,golem_worker_executor::durable_host::http::inline_retry=debug,golem_worker_executor::durable_host::durability=debug", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
 cargo-test-r run --package golem-worker-executor --test integration :tag:group1 -- --report-time --nocapture $WORKER_TEST_THREAD_OPTS $JUNIT_OPTS
 '''
