@@ -20,7 +20,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::diff;
 use golem_common::model::diff::Hashable;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::resource_definition::{
+use golem_common::model::quota::{
     EnforcementAction, ResourceCapacityLimit, ResourceConcurrencyLimit, ResourceDefinition,
     ResourceDefinitionId, ResourceDefinitionRevision, ResourceLimit, ResourceName,
     ResourceRateLimit, TimePeriod,

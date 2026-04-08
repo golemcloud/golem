@@ -36,9 +36,7 @@ use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
-use golem_common::model::resource_definition::{
-    ResourceDefinition, ResourceDefinitionCreation, ResourceName,
-};
+use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation, ResourceName};
 use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_service_base::custom_api::SecuritySchemeDetails;

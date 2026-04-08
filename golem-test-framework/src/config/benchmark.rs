@@ -481,7 +481,7 @@ impl BenchmarkTestDependencies {
                         *registry_service_http_port,
                         *registry_service_grpc_port,
                         AccountId(*registry_service_admin_account_id),
-                        AccountEmail(registry_service_admin_account_email.clone()),
+                        AccountEmail::new(registry_service_admin_account_email.clone()),
                         TokenSecret::trusted(registry_service_admin_account_token.clone()),
                         PlanId(*registry_service_default_plan_id),
                         PlanId(*registry_service_low_fuel_plan_id),

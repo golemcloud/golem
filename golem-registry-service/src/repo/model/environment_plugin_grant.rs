@@ -150,7 +150,7 @@ impl TryFrom<EnvironmentPluginGrantWithDetailsRecord> for EnvironmentPluginGrant
             plugin_account: AccountSummary {
                 id: AccountId(value.plugin_account_id),
                 name: value.plugin_account_name,
-                email: AccountEmail(value.plugin_account_email),
+                email: AccountEmail::new(value.plugin_account_email),
             },
         })
     }

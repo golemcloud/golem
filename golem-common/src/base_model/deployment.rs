@@ -19,7 +19,7 @@ use super::domain_registration::Domain;
 use super::environment::EnvironmentId;
 use super::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
 use super::mcp_deployment::{McpDeploymentId, McpDeploymentRevision};
-use super::resource_definition::ResourceDefinitionCreation;
+use super::quota::ResourceDefinitionCreation;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes};
 use derive_more::Display;
 

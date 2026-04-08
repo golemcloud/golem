@@ -1034,6 +1034,7 @@ fn is_worker_error_retriable(
         AgentError::ExceededRpcCallLimit => false,
         AgentError::NodeOutOfFilesystemStorage => true,
         AgentError::AgentExceededFilesystemStorageLimit => false,
+        AgentError::AgentTerminatedByQuota(_) => false,
     }
 }
 

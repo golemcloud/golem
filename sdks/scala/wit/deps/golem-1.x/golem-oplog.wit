@@ -418,6 +418,11 @@ interface oplog {
         md5-hash: list<u8>
     }
 
+    record agent-terminated-by-quota-error {
+        environment-id: environment-id,
+        resource-name: string
+    }
+
     /// Describes the error that occurred in the agent
     variant worker-error {
         unknown(string),
@@ -434,6 +439,7 @@ interface oplog {
         exceeded-rpc-call-limit,
         node-out-of-filesystem-storage,
         agent-exceeded-filesystem-storage-limit,
+        agent-terminated-by-quota(agent-terminated-by-quota-error)
     }
 
     record raw-create-parameters {

@@ -52,9 +52,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-use golem_common::model::resource_definition::{
-    ResourceDefinition, ResourceDefinitionId, ResourceName,
-};
+use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::{Deserialize, Serialize};
@@ -1240,9 +1238,7 @@ fn proto_registry_event_to_model(
                     event_id,
                     environment_id,
                     resource_definition_id,
-                    resource_name: golem_common::model::resource_definition::ResourceName(
-                        rdc.resource_name,
-                    ),
+                    resource_name: golem_common::model::quota::ResourceName(rdc.resource_name),
                 },
             )
         }

@@ -17,7 +17,7 @@ use golem_client::api::{
     RegistryServiceDeployEnvironmentError, RegistryServiceGetResourceError,
     RegistryServiceUpdateResourceError,
 };
-use golem_common::model::resource_definition::{
+use golem_common::model::quota::{
     EnforcementAction, ResourceCapacityLimit, ResourceConcurrencyLimit, ResourceDefinitionCreation,
     ResourceDefinitionRevision, ResourceDefinitionUpdate, ResourceLimit, ResourceName,
 };

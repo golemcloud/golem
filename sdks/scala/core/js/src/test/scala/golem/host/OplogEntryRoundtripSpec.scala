@@ -584,7 +584,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           targetRevision = js.BigInt("5"),
           updateDescription = js.Dynamic.literal(
             tag = "snapshot-based",
-            `val` = js.Dynamic.literal(data = snapshotData, mimeType = "application/octet-stream")
+            `val` = js.Dynamic.literal(payload = snapshotData, mimeType = "application/octet-stream")
           )
         )
       )

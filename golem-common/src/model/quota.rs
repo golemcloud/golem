@@ -1,6 +1,6 @@
 // Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.1 (the "License");
+// Licensed under the Golem Source Available License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -13,8 +13,12 @@
 // limitations under the License.
 
 use crate::model::diff;
+use crate::model::environment::EnvironmentId;
+use desert_rust::BinaryCodec;
+use golem_wasm_derive::{FromValue, IntoValue};
 
-pub use crate::base_model::resource_definition::*;
+pub use crate::base_model::quota::*;
+use std::fmt::Display;
 
 impl ResourceDefinition {
     pub fn to_diffable(&self) -> diff::ResourceDefinition {
@@ -25,6 +29,77 @@ impl ResourceDefinition {
             units: self.units.clone(),
         }
     }
+}
+
+/// Monotonically increasing identifier for a lease on a (resource, pod) pair.
+/// Used for fencing: an executor must reject operations from a stale epoch.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    IntoValue,
+    FromValue,
+    BinaryCodec,
+)]
+#[desert(transparent)]
+pub struct LeaseEpoch(pub u64);
+
+impl LeaseEpoch {
+    pub fn initial() -> Self {
+        Self(0)
+    }
+
+    pub fn next(self) -> Self {
+        Self(self.0.checked_add(1).expect("LeaseEpoch overflow"))
+    }
+}
+
+impl Display for LeaseEpoch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// A granted reservation of capacity for a bounded resource, or an unlimited
+/// token for an unconstrained resource.
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, IntoValue, FromValue, BinaryCodec,
+)]
+#[desert(evolution())]
+pub enum Reservation {
+    Unlimited,
+    Bounded {
+        environment_id: EnvironmentId,
+        resource_name: ResourceName,
+        resource_definition_id: ResourceDefinitionId,
+        epoch: LeaseEpoch,
+        reserved: u64,
+    },
+}
+
+/// Result of a `reserve` call on a quota token.
+#[derive(
+    Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, IntoValue, FromValue, BinaryCodec,
+)]
+#[desert(evolution())]
+pub enum ReserveResult {
+    /// Reservation granted.
+    Ok(Reservation),
+    /// The requested amount cannot be satisfied.
+    ///
+    /// `estimated_wait_nanos` is the estimated nanoseconds until enough capacity
+    /// becomes available. `None` for capacity/concurrency resources (no refill).
+    InsufficientAllocation {
+        enforcement_action: EnforcementAction,
+        estimated_wait_nanos: Option<u64>,
+    },
 }
 
 mod protobuf {

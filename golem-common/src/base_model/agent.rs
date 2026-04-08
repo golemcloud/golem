@@ -164,8 +164,8 @@ pub enum RegistryInvalidationEvent {
     ResourceDefinitionChanged {
         event_id: u64,
         environment_id: EnvironmentId,
-        resource_definition_id: crate::base_model::resource_definition::ResourceDefinitionId,
-        resource_name: crate::base_model::resource_definition::ResourceName,
+        resource_definition_id: crate::base_model::quota::ResourceDefinitionId,
+        resource_name: crate::base_model::quota::ResourceName,
     },
 }
 
