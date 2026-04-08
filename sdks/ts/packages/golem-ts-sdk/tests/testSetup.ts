@@ -92,6 +92,8 @@ vi.mock('golem:api/oplog@1.5.0', () => ({
   enrichOplogEntries: vi.fn(),
 }));
 
+vi.mock('golem:quota/host@1.5.0', () => ({}));
+
 (globalThis as any).currentAgentId = 'foo-agent(123)';
 
 vi.mock('wasi:cli/environment@0.2.3', () => ({
