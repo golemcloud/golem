@@ -35,7 +35,7 @@ runs:
     - name: Install wasm-rquickjs
       if: inputs.install-wasm-rquickjs == 'true'
       shell: bash
-      run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag ${{ inputs.wasm-rquickjs-version }}
+      run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --branch ${{ inputs.wasm-rquickjs-version }}
 
     - name: Install cargo-component
       if: inputs.install-cargo-component == 'true'

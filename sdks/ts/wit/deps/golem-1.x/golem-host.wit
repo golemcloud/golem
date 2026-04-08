@@ -285,7 +285,7 @@ interface host {
 
     /// Snapshot payload
     record snapshot {
-        data: list<u8>,
+        payload: list<u8>,
         mime-type: string
     }
 }

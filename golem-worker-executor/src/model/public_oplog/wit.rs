@@ -54,12 +54,11 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 initial_active_plugins,
                 config_vars,
                 local_agent_config,
-                original_phantom_id: _,
+                original_phantom_id,
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: agent_id.into(),
                 component_revision: component_revision.into(),
-                args: vec![],
                 env: env.into_iter().collect(),
                 created_by: created_by.into(),
                 environment_id: environment_id.into(),
@@ -78,6 +77,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                         value: lac.value.into(),
                     })
                     .collect(),
+                original_phantom_id: original_phantom_id.map(|id| id.into()),
             }),
             PublicOplogEntry::HostCall(HostCallParams {
                 timestamp,
@@ -90,7 +90,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 function_name,
                 request: request.into(),
                 response: response.into(),
-                wrapped_function_type: wrapped_function_type.into(),
+                durable_function_type: wrapped_function_type.into(),
             }),
             PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                 timestamp,
@@ -106,7 +106,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 component_revision,
             }) => Self::AgentInvocationFinished(oplog::AgentInvocationFinishedParameters {
                 timestamp: timestamp.into(),
-                invocation_result: result.into(),
+                result: result.into(),
                 consumed_fuel,
                 component_revision: component_revision.get(),
             }),
@@ -124,7 +124,10 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 error: error.to_string(),
                 retry_from: retry_from.into(),
                 inside_atomic_region,
-                retry_policy_state: retry_policy_state.and_then(|s| serde_json::to_vec(&s).ok()),
+                retry_policy_state: retry_policy_state.map(|s| {
+                    let internal: golem_common::model::RetryPolicyState = s.into();
+                    internal.into()
+                }),
             }),
             PublicOplogEntry::NoOp(NoOpParams { timestamp }) => Self::NoOp(timestamp.into()),
             PublicOplogEntry::Jump(JumpParams { timestamp, jump }) => {
@@ -174,7 +177,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
             }) => Self::PendingUpdate(oplog::PendingUpdateParameters {
                 timestamp: timestamp.into(),
                 target_revision: target_revision.into(),
-                update_description: description.into(),
+                description: description.into(),
             }),
             PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
                 timestamp,
@@ -217,7 +220,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 owner,
             }) => Self::CreateResource(oplog::CreateResourceParameters {
                 timestamp: timestamp.into(),
-                resource_id: id.0,
+                id: id.0,
                 name,
                 owner,
             }),
@@ -228,7 +231,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 owner,
             }) => Self::DropResource(oplog::DropResourceParameters {
                 timestamp: timestamp.into(),
-                resource_id: id.0,
+                id: id.0,
                 name,
                 owner,
             }),
@@ -368,8 +371,10 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 };
                 Self::Snapshot(oplog::SnapshotParameters {
                     timestamp: timestamp.into(),
-                    data: snapshot_bytes,
-                    mime_type,
+                    data: oplog::SnapshotData {
+                        data: snapshot_bytes,
+                        mime_type,
+                    },
                 })
             }
             PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
@@ -392,10 +397,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 let wit_named: golem_common::model::agent::bindings::golem::api::retry::NamedRetryPolicy = named.into();
                 Self::SetRetryPolicy(oplog::SetRetryPolicyParameters {
                     timestamp: timestamp.into(),
-                    name: wit_named.name,
-                    priority: wit_named.priority,
-                    predicate: wit_named.predicate,
-                    policy: wit_named.policy,
+                    policy: wit_named,
                 })
             }
             PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams { timestamp, name }) => {
@@ -433,7 +435,7 @@ impl From<PublicUpdateDescription> for oplog::UpdateDescription {
                 payload,
                 mime_type,
             }) => Self::SnapshotBased(crate::preview2::golem_api_1_x::host::Snapshot {
-                data: payload,
+                payload,
                 mime_type,
             }),
         }
@@ -506,7 +508,7 @@ impl From<PublicAgentInvocation> for oplog::AgentInvocation {
                     PublicSnapshotData::Multipart(multipart) => multipart_to_raw(multipart),
                 };
                 Self::LoadSnapshot(oplog::LoadSnapshotParameters {
-                    snapshot: crate::preview2::golem_api_1_x::host::Snapshot { data, mime_type },
+                    snapshot: oplog::SnapshotData { data, mime_type },
                 })
             }
             PublicAgentInvocation::ProcessOplogEntries(params) => {
@@ -566,7 +568,7 @@ impl From<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
                     PublicSnapshotData::Multipart(multipart) => multipart_to_raw(multipart),
                 };
                 Self::SaveSnapshot(oplog::SaveSnapshotResultParameters {
-                    snapshot: crate::preview2::golem_api_1_x::host::Snapshot {
+                    snapshot: oplog::SnapshotData {
                         data: snapshot_bytes,
                         mime_type,
                     },
@@ -584,8 +586,12 @@ impl From<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
 impl From<PluginInstallationDescription> for oplog::PluginInstallationDescription {
     fn from(value: PluginInstallationDescription) -> Self {
         Self {
-            name: value.plugin_name,
-            version: value.plugin_version,
+            environment_plugin_grant_id: oplog::EnvironmentPluginGrantId {
+                uuid: value.environment_plugin_grant_id.0.into(),
+            },
+            plugin_priority: value.plugin_priority.0,
+            plugin_name: value.plugin_name,
+            plugin_version: value.plugin_version,
             parameters: value.parameters.into_iter().collect(),
         }
     }
@@ -860,9 +866,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 error: params.error.into(),
                 retry_from: golem_common::model::OplogIndex::from_u64(params.retry_from),
                 inside_atomic_region: params.inside_atomic_region,
-                retry_policy_state: params
-                    .retry_policy_state
-                    .and_then(|bytes| serde_json::from_slice(&bytes).ok()),
+                retry_policy_state: params.retry_policy_state.map(|s| {
+                    let internal: golem_common::model::RetryPolicyState = s.into();
+                    internal.into()
+                }),
             }),
             oplog::OplogEntry::NoOp(ts) => Ok(Self::NoOp {
                 timestamp: timestamp_from_datetime(ts.timestamp),
@@ -1104,13 +1111,8 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 })
             }
             oplog::OplogEntry::SetRetryPolicy(params) => {
-                let wit_named = golem_common::model::agent::bindings::golem::api::retry::NamedRetryPolicy {
-                    name: params.name,
-                    priority: params.priority,
-                    predicate: params.predicate,
-                    policy: params.policy,
-                };
-                let named: golem_common::model::retry_policy::NamedRetryPolicy = wit_named.into();
+                let named: golem_common::model::retry_policy::NamedRetryPolicy =
+                    params.policy.into();
                 Ok(Self::SetRetryPolicy {
                     timestamp: timestamp_from_datetime(params.timestamp),
                     policy: named,
@@ -1159,4 +1161,104 @@ fn multipart_to_raw(multipart: MultipartSnapshotData) -> (Vec<u8>, String) {
     }
     output.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
     (output, multipart.mime_type)
+}
+
+impl From<golem_common::model::RetryPolicyState> for oplog::RetryPolicyState {
+    fn from(state: golem_common::model::RetryPolicyState) -> Self {
+        let mut nodes = Vec::new();
+        push_wit_state_node(state, &mut nodes);
+        Self { nodes }
+    }
+}
+
+impl From<oplog::RetryPolicyState> for golem_common::model::RetryPolicyState {
+    fn from(wit: oplog::RetryPolicyState) -> Self {
+        build_wit_state_from_index(&wit.nodes, 0).unwrap_or(Self::Terminal)
+    }
+}
+
+fn push_wit_state_node(
+    state: golem_common::model::RetryPolicyState,
+    nodes: &mut Vec<oplog::StateNode>,
+) -> i32 {
+    use golem_common::model::RetryPolicyState;
+    let index = nodes.len() as i32;
+    nodes.push(oplog::StateNode::Terminal);
+
+    let node = match state {
+        RetryPolicyState::Counter(n) => oplog::StateNode::Counter(n),
+        RetryPolicyState::Terminal => oplog::StateNode::Terminal,
+        RetryPolicyState::Wrapper(inner) => {
+            let inner_idx = push_wit_state_node(*inner, nodes);
+            oplog::StateNode::Wrapper(inner_idx)
+        }
+        RetryPolicyState::CountBox { attempts, inner } => {
+            let inner_idx = push_wit_state_node(*inner, nodes);
+            oplog::StateNode::CountBox(oplog::CountBoxState {
+                attempts,
+                inner: inner_idx,
+            })
+        }
+        RetryPolicyState::AndThen {
+            left,
+            right,
+            on_right,
+        } => {
+            let left_idx = push_wit_state_node(*left, nodes);
+            let right_idx = push_wit_state_node(*right, nodes);
+            oplog::StateNode::AndThen(oplog::AndThenState {
+                left: left_idx,
+                right: right_idx,
+                on_right,
+            })
+        }
+        RetryPolicyState::Pair(left, right) => {
+            let left_idx = push_wit_state_node(*left, nodes);
+            let right_idx = push_wit_state_node(*right, nodes);
+            oplog::StateNode::Pair(oplog::PairState {
+                left: left_idx,
+                right: right_idx,
+            })
+        }
+    };
+
+    nodes[index as usize] = node;
+    index
+}
+
+fn build_wit_state_from_index(
+    nodes: &[oplog::StateNode],
+    index: i32,
+) -> Option<golem_common::model::RetryPolicyState> {
+    use golem_common::model::RetryPolicyState;
+    if index < 0 || (index as usize) >= nodes.len() {
+        return None;
+    }
+
+    match &nodes[index as usize] {
+        oplog::StateNode::Counter(n) => Some(RetryPolicyState::Counter(*n)),
+        oplog::StateNode::Terminal => Some(RetryPolicyState::Terminal),
+        oplog::StateNode::Wrapper(inner) => Some(RetryPolicyState::Wrapper(Box::new(
+            build_wit_state_from_index(nodes, *inner)?,
+        ))),
+        oplog::StateNode::CountBox(oplog::CountBoxState { attempts, inner }) => {
+            Some(RetryPolicyState::CountBox {
+                attempts: *attempts,
+                inner: Box::new(build_wit_state_from_index(nodes, *inner)?),
+            })
+        }
+        oplog::StateNode::AndThen(oplog::AndThenState {
+            left,
+            right,
+            on_right,
+        }) => Some(RetryPolicyState::AndThen {
+            left: Box::new(build_wit_state_from_index(nodes, *left)?),
+            right: Box::new(build_wit_state_from_index(nodes, *right)?),
+            on_right: *on_right,
+        }),
+        oplog::StateNode::Pair(oplog::PairState { left, right }) => Some(RetryPolicyState::Pair(
+            Box::new(build_wit_state_from_index(nodes, *left)?),
+            Box::new(build_wit_state_from_index(nodes, *right)?),
+        )),
+    }
 }

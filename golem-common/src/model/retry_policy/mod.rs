@@ -204,7 +204,7 @@ pub struct NamedRetryPolicy {
 ///
 /// Each variant mirrors the structure of the corresponding [`RetryPolicy`] variant
 /// and carries the mutable counters / sub-states needed to compute the next delay.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec, IntoValue, FromValue)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, BinaryCodec)]
 #[desert(evolution())]
 pub enum RetryPolicyState {
     /// Tracks the number of attempts for counter-based policies (e.g. `Periodic`, `Exponential`).
@@ -936,6 +936,173 @@ impl FromValue for RetryPolicy {
         let flattened = FlattenedRetryPolicy::from_value(value)?;
         flattened.try_into()
     }
+}
+
+const OPLOG_WIT_OWNER: &str = "golem:api@1.5.0/oplog";
+
+impl IntoValue for RetryPolicyState {
+    fn into_value(self) -> Value {
+        FlattenedRetryPolicyState::from(self).into_value()
+    }
+
+    fn get_type() -> AnalysedType {
+        FlattenedRetryPolicyState::get_type()
+            .named("retry-policy-state")
+            .owned(OPLOG_WIT_OWNER)
+    }
+}
+
+impl FromValue for RetryPolicyState {
+    fn from_value(value: Value) -> Result<Self, String> {
+        let flattened = FlattenedRetryPolicyState::from_value(value)?;
+        flattened.try_into()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, IntoValue, FromValue)]
+#[wit(name = "retry-policy-state", owner = "golem:api@1.5.0/oplog")]
+struct FlattenedRetryPolicyState {
+    nodes: Vec<FlattenedStateNode>,
+}
+
+#[derive(Clone, Debug, PartialEq, IntoValue, FromValue)]
+#[wit(name = "state-node", owner = "golem:api@1.5.0/oplog")]
+enum FlattenedStateNode {
+    Counter(u32),
+    Terminal,
+    Wrapper(i32),
+    CountBox(FlattenedCountBoxState),
+    AndThen(FlattenedAndThenState),
+    Pair(FlattenedPairState),
+}
+
+#[derive(Clone, Debug, PartialEq, IntoValue, FromValue)]
+#[wit(name = "count-box-state", owner = "golem:api@1.5.0/oplog")]
+struct FlattenedCountBoxState {
+    attempts: u32,
+    inner: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, IntoValue, FromValue)]
+#[wit(name = "and-then-state", owner = "golem:api@1.5.0/oplog")]
+struct FlattenedAndThenState {
+    left: i32,
+    right: i32,
+    on_right: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, IntoValue, FromValue)]
+#[wit(name = "pair-state", owner = "golem:api@1.5.0/oplog")]
+struct FlattenedPairState {
+    left: i32,
+    right: i32,
+}
+
+impl From<RetryPolicyState> for FlattenedRetryPolicyState {
+    fn from(state: RetryPolicyState) -> Self {
+        let mut nodes = Vec::new();
+        push_state_node(state, &mut nodes);
+        Self { nodes }
+    }
+}
+
+impl TryFrom<FlattenedRetryPolicyState> for RetryPolicyState {
+    type Error = String;
+
+    fn try_from(value: FlattenedRetryPolicyState) -> Result<Self, Self::Error> {
+        if value.nodes.is_empty() {
+            return Err("retry-policy-state requires at least one node".to_string());
+        }
+        build_state_from_index(&value.nodes, 0, &mut HashSet::new())
+    }
+}
+
+fn push_state_node(state: RetryPolicyState, nodes: &mut Vec<FlattenedStateNode>) -> i32 {
+    let index = nodes.len() as i32;
+    nodes.push(FlattenedStateNode::Terminal);
+
+    let node = match state {
+        RetryPolicyState::Counter(n) => FlattenedStateNode::Counter(n),
+        RetryPolicyState::Terminal => FlattenedStateNode::Terminal,
+        RetryPolicyState::Wrapper(inner) => {
+            let inner_index = push_state_node(*inner, nodes);
+            FlattenedStateNode::Wrapper(inner_index)
+        }
+        RetryPolicyState::CountBox { attempts, inner } => {
+            let inner_index = push_state_node(*inner, nodes);
+            FlattenedStateNode::CountBox(FlattenedCountBoxState {
+                attempts,
+                inner: inner_index,
+            })
+        }
+        RetryPolicyState::AndThen {
+            left,
+            right,
+            on_right,
+        } => {
+            let left_index = push_state_node(*left, nodes);
+            let right_index = push_state_node(*right, nodes);
+            FlattenedStateNode::AndThen(FlattenedAndThenState {
+                left: left_index,
+                right: right_index,
+                on_right,
+            })
+        }
+        RetryPolicyState::Pair(left, right) => {
+            let left_index = push_state_node(*left, nodes);
+            let right_index = push_state_node(*right, nodes);
+            FlattenedStateNode::Pair(FlattenedPairState {
+                left: left_index,
+                right: right_index,
+            })
+        }
+    };
+
+    nodes[index as usize] = node;
+    index
+}
+
+fn build_state_from_index(
+    nodes: &[FlattenedStateNode],
+    index: i32,
+    visiting: &mut HashSet<i32>,
+) -> Result<RetryPolicyState, String> {
+    if index < 0 || (index as usize) >= nodes.len() {
+        return Err(format!("State node index out of range: {index}"));
+    }
+    if !visiting.insert(index) {
+        return Err(format!("Cycle detected in state nodes at index {index}"));
+    }
+
+    let result = match &nodes[index as usize] {
+        FlattenedStateNode::Counter(n) => RetryPolicyState::Counter(*n),
+        FlattenedStateNode::Terminal => RetryPolicyState::Terminal,
+        FlattenedStateNode::Wrapper(inner) => {
+            RetryPolicyState::Wrapper(Box::new(build_state_from_index(nodes, *inner, visiting)?))
+        }
+        FlattenedStateNode::CountBox(FlattenedCountBoxState { attempts, inner }) => {
+            RetryPolicyState::CountBox {
+                attempts: *attempts,
+                inner: Box::new(build_state_from_index(nodes, *inner, visiting)?),
+            }
+        }
+        FlattenedStateNode::AndThen(FlattenedAndThenState {
+            left,
+            right,
+            on_right,
+        }) => RetryPolicyState::AndThen {
+            left: Box::new(build_state_from_index(nodes, *left, visiting)?),
+            right: Box::new(build_state_from_index(nodes, *right, visiting)?),
+            on_right: *on_right,
+        },
+        FlattenedStateNode::Pair(FlattenedPairState { left, right }) => RetryPolicyState::Pair(
+            Box::new(build_state_from_index(nodes, *left, visiting)?),
+            Box::new(build_state_from_index(nodes, *right, visiting)?),
+        ),
+    };
+
+    visiting.remove(&index);
+    Ok(result)
 }
 
 #[derive(Clone, Debug, PartialEq, IntoValue, FromValue)]

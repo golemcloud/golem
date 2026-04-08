@@ -920,3 +920,29 @@ fn oplog_entry_type_matches_wit() {
         "OplogEntry::get_type() does not match the WIT oplog-entry definition"
     );
 }
+
+#[test]
+fn public_oplog_entry_type_matches_wit() {
+    use golem_wasm::IntoValue;
+    use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
+    use std::path::PathBuf;
+
+    let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
+    let mut resolver =
+        AnalysedTypeResolve::from_wit_directory(&wit_dir).expect("Failed to parse WIT");
+
+    let wit_type = resolver
+        .analysed_type(&TypeName {
+            package: Some("golem:api@1.5.0".to_string()),
+            owner: TypeOwner::Interface("oplog".to_string()),
+            name: Some("public-oplog-entry".to_string()),
+        })
+        .expect("Failed to find public-oplog-entry type in WIT");
+
+    let rust_type = PublicOplogEntry::get_type();
+
+    assert_eq!(
+        rust_type, wit_type,
+        "PublicOplogEntry::get_type() does not match the WIT public-oplog-entry definition"
+    );
+}
