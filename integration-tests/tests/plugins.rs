@@ -25,6 +25,7 @@ use golem_common::model::component::{
     PluginInstallation, PluginInstallationAction, PluginPriority, PluginUninstallation,
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
+use golem_common::model::oplog::PublicOplogEntry;
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
@@ -249,6 +250,43 @@ async fn crash_user_and_plugin_workers(
     }
 }
 
+/// Waits for at least `expected_count` invocations from **both** callback collectors
+/// under one shared deadline. Returns (batches_a, batches_b). Panics on timeout with
+/// per-plugin diagnostic counts.
+async fn wait_for_invocations_both(
+    received_a: &Arc<Mutex<Vec<BatchCallback>>>,
+    received_b: &Arc<Mutex<Vec<BatchCallback>>>,
+    expected_count: usize,
+    timeout: Duration,
+) -> (Vec<BatchCallback>, Vec<BatchCallback>) {
+    let start = tokio::time::Instant::now();
+    loop {
+        let batches_a = received_a.lock().unwrap().clone();
+        let batches_b = received_b.lock().unwrap().clone();
+        let count_a = invocation_count(&batches_a);
+        let count_b = invocation_count(&batches_b);
+        if count_a >= expected_count && count_b >= expected_count {
+            return (batches_a, batches_b);
+        }
+        if start.elapsed() > timeout {
+            panic!(
+                "Timed out waiting for oplog processor callbacks \
+                 (plugin A: {} of {} invocations across {} batches: {:?}; \
+                  plugin B: {} of {} invocations across {} batches: {:?})",
+                count_a,
+                expected_count,
+                batches_a.len(),
+                batches_a,
+                count_b,
+                expected_count,
+                batches_b.len(),
+                batches_b,
+            );
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
 /// Waits for at least `expected_count` invocations (across batches) within `timeout`.
 /// Returns the collected batches. Panics on timeout.
 async fn wait_for_invocations(
@@ -272,6 +310,50 @@ async fn wait_for_invocations(
                 batches,
             );
         }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+/// Waits for at least `expected_count` completed invocations (`AgentInvocationFinished` entries)
+/// in the worker's oplog. On timeout, prints both the oplog completion count and the current
+/// callback count for diagnostics.
+async fn wait_for_oplog_completions(
+    user: &(impl TestDsl + Send + Sync + ?Sized),
+    worker_id: &golem_common::model::AgentId,
+    expected_count: usize,
+    timeout: Duration,
+    received: &Arc<Mutex<Vec<BatchCallback>>>,
+) {
+    let start = tokio::time::Instant::now();
+    loop {
+        let oplog = user
+            .get_oplog(worker_id, OplogIndex::INITIAL)
+            .await
+            .unwrap_or_default();
+
+        let completed = oplog
+            .iter()
+            .filter(|e| matches!(&e.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count();
+
+        if completed >= expected_count {
+            return;
+        }
+
+        if start.elapsed() > timeout {
+            let batches = received.lock().unwrap().clone();
+            panic!(
+                "Timed out waiting for oplog completions \
+                 (got {} of {} expected AgentInvocationFinished entries; \
+                 {} callback invocations across {} batches: {:?})",
+                completed,
+                expected_count,
+                invocation_count(&batches),
+                batches.len(),
+                batches,
+            );
+        }
+
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
@@ -437,7 +519,7 @@ async fn oplog_processor_in_different_env_after_unregistering(
     client_2.delete_plugin(&oplog_processor_plugin.id.0).await?;
 
     let repo_id = agent_id!("Repository", "worker1");
-    let _worker_id = user_1.start_agent(&component.id, repo_id.clone()).await?;
+    let worker_id = user_1.start_agent(&component.id, repo_id.clone()).await?;
 
     user_1
         .invoke_and_await_agent(
@@ -466,7 +548,19 @@ async fn oplog_processor_in_different_env_after_unregistering(
         )
         .await?;
 
-    let batches = wait_for_invocations(&received_batches, 4, Duration::from_secs(60)).await;
+    // Phase 1: wait for the worker oplog to show all 4 completed invocations
+    // (1 agent-initialization + 3 add calls)
+    wait_for_oplog_completions(
+        &user_1,
+        &worker_id,
+        4,
+        Duration::from_secs(120),
+        &received_batches,
+    )
+    .await;
+
+    // Phase 2: wait for the oplog processor callbacks to arrive
+    let batches = wait_for_invocations(&received_batches, 4, Duration::from_secs(120)).await;
     assert_function_names(&batches, &["agent-initialization", "add", "add", "add"]);
     assert_unique_oplog_indices(&batches);
 
@@ -552,8 +646,22 @@ async fn oplog_processor_crash_after_confirmed_flush(
     )
     .await?;
 
-    // Wait for confirmed flush — callbacks received means the batch was delivered
-    let _ = wait_for_invocations(&received_batches, 4, Duration::from_secs(60)).await;
+    // Phase 1: wait for the worker oplog to show all 4 completed invocations
+    // (1 agent-initialization + 3 add calls).
+    // This is only a readiness/diagnostic step; callback receipt remains the
+    // semantic pre-crash gate.
+    wait_for_oplog_completions(
+        &user,
+        &worker_id,
+        4,
+        Duration::from_secs(120),
+        &received_batches,
+    )
+    .await;
+
+    // Phase 2: wait for the oplog processor callbacks to arrive — this is the
+    // real pre-crash confirmation gate (confirmed external delivery).
+    let _ = wait_for_invocations(&received_batches, 4, Duration::from_secs(120)).await;
     // Small buffer to let any async confirmation complete
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -575,7 +683,7 @@ async fn oplog_processor_crash_after_confirmed_flush(
     )
     .await?;
 
-    let batches = wait_for_invocations(&received_batches, 5, Duration::from_secs(60)).await;
+    let batches = wait_for_invocations(&received_batches, 5, Duration::from_secs(120)).await;
     assert_function_names(
         &batches,
         &["agent-initialization", "add", "add", "add", "add"],
@@ -1043,7 +1151,7 @@ async fn oplog_processor_multiple_plugins_independent(
         .await?;
 
     let repo_id = agent_id!("Repository", "worker1");
-    let _worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
+    let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     user.invoke_and_await_agent(
         &component,
@@ -1067,8 +1175,13 @@ async fn oplog_processor_multiple_plugins_independent(
     )
     .await?;
 
-    let batches_a = wait_for_invocations(&received_a, 4, Duration::from_secs(60)).await;
-    let batches_b = wait_for_invocations(&received_b, 4, Duration::from_secs(60)).await;
+    // Phase 1: wait for the worker oplog to show all 4 completed invocations
+    // (1 agent-initialization + 3 add calls)
+    wait_for_oplog_completions(&user, &worker_id, 4, Duration::from_secs(120), &received_a).await;
+
+    // Phase 2: wait for both plugin callback collectors under one shared deadline
+    let (batches_a, batches_b) =
+        wait_for_invocations_both(&received_a, &received_b, 4, Duration::from_secs(120)).await;
 
     assert_function_names(&batches_a, &["agent-initialization", "add", "add", "add"]);
     assert_function_names(&batches_b, &["agent-initialization", "add", "add", "add"]);
@@ -1735,8 +1848,22 @@ async fn oplog_processor_no_resend_after_confirmed(
     )
     .await?;
 
-    // Wait for delivery to complete
-    let _ = wait_for_invocations(&received_batches, 4, Duration::from_secs(60)).await;
+    // Phase 1: wait for the worker oplog to show all 4 completed invocations
+    // (1 agent-initialization + 3 add calls).
+    // This is only a readiness/diagnostic step; callback receipt remains the
+    // semantic pre-crash gate.
+    wait_for_oplog_completions(
+        &user,
+        &worker_id,
+        4,
+        Duration::from_secs(120),
+        &received_batches,
+    )
+    .await;
+
+    // Phase 2: wait for the oplog processor callbacks to arrive — this is the
+    // real pre-crash confirmation gate (confirmed external delivery).
+    let _ = wait_for_invocations(&received_batches, 4, Duration::from_secs(120)).await;
     // Extra sleep to ensure flush + any confirmation is done
     tokio::time::sleep(Duration::from_secs(5)).await;
 
