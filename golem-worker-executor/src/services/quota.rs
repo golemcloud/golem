@@ -714,10 +714,19 @@ impl GrpcQuotaService {
         }
 
         // Batch-renew all bounded leases in one RPC.
+        // Lock all slots first, hold the locks across the RPC, then apply
+        // results. This prevents concurrent try_reserve/commit/notify_demand
+        // from modifying state between when we snapshot it and when we write
+        // the new allocation back.
         if !bounded_to_renew.is_empty() {
-            let mut batch: Vec<BatchRenewalEntry> = Vec::with_capacity(bounded_to_renew.len());
-            for (_, slot_mutex) in &bounded_to_renew {
-                let slot = slot_mutex.inner.lock().await;
+            let mut locked: Vec<(ResourceKey, tokio::sync::MutexGuard<LeaseInner>)> =
+                Vec::with_capacity(bounded_to_renew.len());
+            for (key, entry) in &bounded_to_renew {
+                locked.push((key.clone(), entry.inner.lock().await));
+            }
+
+            let mut batch: Vec<BatchRenewalEntry> = Vec::with_capacity(locked.len());
+            for (_, slot) in &locked {
                 if let TrackedLease::Bounded(b) = &slot.lease {
                     batch.push(BatchRenewalEntry {
                         resource_definition_id: b.resource_definition_id,
@@ -735,22 +744,17 @@ impl GrpcQuotaService {
                 }
             }
 
-            match self.client.batch_renew_quota_leases(self.port, batch).await {
+            let rpc_result = self.client.batch_renew_quota_leases(self.port, batch).await;
+
+            match rpc_result {
                 Ok(results) => {
-                    for ((key, slot_mutex), result) in
-                        bounded_to_renew.iter().zip(results.into_iter())
-                    {
-                        let mut slot = slot_mutex.inner.lock().await;
-                        let expires_at = if let TrackedLease::Bounded(b) = &slot.lease {
-                            b.expires_at
-                        } else {
-                            continue;
-                        };
-                        let resource_definition_id = if let TrackedLease::Bounded(b) = &slot.lease {
-                            b.resource_definition_id
-                        } else {
-                            continue;
-                        };
+                    for ((key, mut slot), result) in locked.into_iter().zip(results.into_iter()) {
+                        let (expires_at, resource_definition_id) =
+                            if let TrackedLease::Bounded(b) = &slot.lease {
+                                (b.expires_at, b.resource_definition_id)
+                            } else {
+                                continue;
+                            };
                         match result {
                             Ok(new_lease) => {
                                 if let QuotaLease::Bounded {
@@ -768,7 +772,7 @@ impl GrpcQuotaService {
                                     );
                                 }
                                 slot.lease = Self::from_quota_lease(&new_lease);
-                                self.process_waiters(&mut slot, key);
+                                self.process_waiters(&mut slot, &key);
                             }
                             Err(QuotaError::LeaseNotFound(_) | QuotaError::StaleEpoch(_)) => {
                                 tracing::warn!(
