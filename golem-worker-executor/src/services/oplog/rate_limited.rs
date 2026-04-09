@@ -83,24 +83,36 @@ pub struct RateLimitedOplog {
     resource_entry: Arc<AtomicResourceEntry>,
     /// Current rate + governor, swapped atomically when the rate changes.
     state: ArcSwap<RateLimiterState>,
+    account_id: AccountId,
+    environment_id: EnvironmentId,
 }
 
 impl RateLimitedOplog {
-    pub fn new(inner: Arc<dyn Oplog>, resource_entry: Arc<AtomicResourceEntry>) -> Self {
+    pub fn new(
+        inner: Arc<dyn Oplog>,
+        resource_entry: Arc<AtomicResourceEntry>,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+    ) -> Self {
         let initial_rate = resource_entry.oplog_writes_per_second();
         Self {
             inner,
             resource_entry,
             state: ArcSwap::from(Arc::new(RateLimiterState::new(initial_rate))),
+            account_id,
+            environment_id,
         }
     }
 
     /// Waits for the rate limiter to grant a token, logging and recording a
     /// metric when back-pressure is actually applied.
-    async fn apply_back_pressure(limiter: &DefaultDirectRateLimiter, rate: u64) {
+    async fn apply_back_pressure(&self, limiter: &DefaultDirectRateLimiter, rate: u64) {
         if limiter.check().is_err() {
             debug!("RateLimitedOplog: back-pressure applied (rate={rate} writes/sec)");
-            record_oplog_rate_limited();
+            record_oplog_rate_limited(
+                &self.account_id.to_string(),
+                &self.environment_id.to_string(),
+            );
         }
         limiter.until_ready().await;
     }
@@ -129,9 +141,9 @@ impl Oplog for RateLimitedOplog {
                         Arc::new(RateLimiterState::new(rate))
                     }
                 });
-                Self::apply_back_pressure(&updated.limiter, rate).await;
+                self.apply_back_pressure(&updated.limiter, rate).await;
             } else {
-                Self::apply_back_pressure(&current.limiter, rate).await;
+                self.apply_back_pressure(&current.limiter, rate).await;
             }
         }
 
@@ -253,7 +265,9 @@ impl OplogService for RateLimitedOplogService {
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
-        let resource_entry = self.entry_for(initial_worker_metadata.created_by).await;
+        let account_id = initial_worker_metadata.created_by;
+        let environment_id = owned_agent_id.environment_id;
+        let resource_entry = self.entry_for(account_id).await;
         let inner_oplog = self
             .inner
             .create(
@@ -264,7 +278,12 @@ impl OplogService for RateLimitedOplogService {
                 execution_status,
             )
             .await;
-        Arc::new(RateLimitedOplog::new(inner_oplog, resource_entry))
+        Arc::new(RateLimitedOplog::new(
+            inner_oplog,
+            resource_entry,
+            account_id,
+            environment_id,
+        ))
     }
 
     async fn open(
@@ -275,7 +294,9 @@ impl OplogService for RateLimitedOplogService {
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
-        let resource_entry = self.entry_for(initial_worker_metadata.created_by).await;
+        let account_id = initial_worker_metadata.created_by;
+        let environment_id = owned_agent_id.environment_id;
+        let resource_entry = self.entry_for(account_id).await;
         let inner_oplog = self
             .inner
             .open(
@@ -286,7 +307,12 @@ impl OplogService for RateLimitedOplogService {
                 execution_status,
             )
             .await;
-        Arc::new(RateLimitedOplog::new(inner_oplog, resource_entry))
+        Arc::new(RateLimitedOplog::new(
+            inner_oplog,
+            resource_entry,
+            account_id,
+            environment_id,
+        ))
     }
 
     async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {

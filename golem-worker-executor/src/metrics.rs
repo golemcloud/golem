@@ -297,9 +297,10 @@ pub mod oplog {
             golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
         )
         .unwrap();
-        static ref OPLOG_RATE_LIMITED_TOTAL: Counter = register_counter!(
+        static ref OPLOG_RATE_LIMITED_TOTAL: CounterVec = register_counter_vec!(
             "oplog_rate_limited_total",
-            "Number of oplog add calls that were delayed by the rate limiter"
+            "Number of oplog add calls that were delayed by the rate limiter",
+            &["account_id", "environment_id"]
         )
         .unwrap();
     }
@@ -308,8 +309,10 @@ pub mod oplog {
         OPLOG_SVC_CALL_TOTAL.with_label_values(&[api_name]).inc();
     }
 
-    pub fn record_oplog_rate_limited() {
-        OPLOG_RATE_LIMITED_TOTAL.inc();
+    pub fn record_oplog_rate_limited(account_id: &str, environment_id: &str) {
+        OPLOG_RATE_LIMITED_TOTAL
+            .with_label_values(&[account_id, environment_id])
+            .inc();
     }
 
     pub fn record_scheduled_archive(duration: std::time::Duration, has_more: bool) {
