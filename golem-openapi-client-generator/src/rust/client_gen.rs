@@ -998,8 +998,8 @@ fn render_errors(
 
     let display_cases = errors
         .codes
-        .iter()
-        .map(|(code, _model)| {
+        .keys()
+        .map(|code| {
             line(
                 unit()
                     + name.clone()
