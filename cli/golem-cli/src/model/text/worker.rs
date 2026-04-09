@@ -332,7 +332,7 @@ impl TruncatableTextView for AgentsMetadataResponseView {
         let term_width = terminal_width();
         let table_str = Self::format_table_wide(&self.agents, term_width, colorize, true);
 
-        let mut out = truncate_rendered(table_str, available_for_table, "agents");
+        let mut out = truncate_rendered(table_str, available_for_table);
 
         if !self.cursors.is_empty() {
             out.push('\n');

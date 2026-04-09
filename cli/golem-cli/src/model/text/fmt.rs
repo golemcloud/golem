@@ -43,8 +43,8 @@ pub trait TruncatableTextView: TextView {
 }
 
 /// Truncates a pre-rendered string to `max_lines` terminal lines.
-/// If truncated, appends a notice: `... N more {more_label} (resize terminal to see all)`.
-pub fn truncate_rendered(rendered: String, max_lines: usize, more_label: &str) -> String {
+/// If truncated, appends a notice: `... N more lines (resize terminal to see all)`.
+pub fn truncate_rendered(rendered: String, max_lines: usize) -> String {
     let lines: Vec<&str> = rendered.lines().collect();
     if lines.len() <= max_lines {
         rendered
@@ -53,7 +53,7 @@ pub fn truncate_rendered(rendered: String, max_lines: usize, more_label: &str) -
         let mut out = lines[..shown].join("\n");
         out.push('\n');
         out.push_str(&format!(
-            "... {} more {more_label} (resize terminal to see all)",
+            "... {} more lines (resize terminal to see all)",
             lines.len() - shown
         ));
         out

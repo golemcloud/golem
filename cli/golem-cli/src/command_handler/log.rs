@@ -20,7 +20,6 @@ use crate::model::text::fmt::{
     truncate_rendered,
 };
 use serde::Serialize;
-use std::io::Write;
 use std::sync::Arc;
 
 pub struct LogHandler {
@@ -122,20 +121,9 @@ impl LogHandler {
                     }
                     Format::Text => unreachable!(),
                 };
-                truncate_rendered(rendered, max_lines, "lines")
+                truncate_rendered(rendered, max_lines)
             }
         }
-    }
-
-    pub fn log_view_truncated<View: TruncatableTextView + Serialize>(
-        &self,
-        view: &View,
-        max_lines: usize,
-    ) {
-        let output = self.render_view_truncated(view, max_lines);
-        let mut stdout = std::io::stdout();
-        writeln!(stdout, "{output}").unwrap();
-        stdout.flush().unwrap();
     }
 
     pub fn decorated_indent_primary(&self) -> DecoratedIndent {
