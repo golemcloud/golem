@@ -22,8 +22,6 @@ use golem_common::model::plugin_registration::PluginRegistrationCreation;
 include!(concat!(env!("OUT_DIR"), "/src/lib.rs"));
 
 pub const LOCAL_WELL_KNOWN_TOKEN: &str = "5c832d93-ff85-4a8f-9803-513950fdfdb1";
-pub const LOCAL_WELL_KNOWN_BUILTIN_PLUGIN_OWNER_TOKEN: &str =
-    "32d6072d-64e9-4a4a-b8f9-fadf68bb446b";
 
 #[cfg(test)]
 test_r::enable!();
