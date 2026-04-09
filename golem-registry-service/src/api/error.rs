@@ -725,11 +725,12 @@ impl From<SecuritySchemeError> for ApiError {
                 Self::not_found(api::error_code::SECURITY_SCHEME_NOT_FOUND, error)
             }
 
-            SecuritySchemeError::InvalidRedirectUrl => Self::BadRequest(Json(ErrorsBody {
-                errors: vec![error],
-                code: api::error_code::INVALID_REDIRECT_URL.to_string(),
-                cause: None,
-            })),
+            SecuritySchemeError::InvalidRedirectUrl => {
+                Self::bad_request(api::error_code::INVALID_REDIRECT_URL, error)
+            }
+            SecuritySchemeError::InvalidCustomProviderIssuerUrl(_) => {
+                Self::bad_request(api::error_code::INVALID_CUSTOM_PROVIDER_ISSUER_URL, error)
+            }
 
             SecuritySchemeError::SecuritySchemeWithNameAlreadyExists(_) => {
                 Self::conflict(api::error_code::SECURITY_SCHEME_ALREADY_EXISTS, error)

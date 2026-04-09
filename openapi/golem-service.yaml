@@ -14020,6 +14020,17 @@ components:
           type: string
       required:
       - value
+    CustomProvider:
+      title: CustomProvider
+      type: object
+      properties:
+        name:
+          type: string
+        issuerUrl:
+          type: string
+      required:
+      - name
+      - issuerUrl
     DataSchema:
       discriminator:
         propertyName: type
@@ -15582,12 +15593,45 @@ components:
       required:
       - fields
     Provider:
-      type: string
-      enum:
-      - google
-      - facebook
-      - microsoft
-      - gitlab
+      discriminator:
+        propertyName: type
+        mapping:
+          Google: '#/components/schemas/Provider_Empty'
+          Facebook: '#/components/schemas/Provider_Empty'
+          Microsoft: '#/components/schemas/Provider_Empty'
+          Gitlab: '#/components/schemas/Provider_Empty'
+          Custom: '#/components/schemas/Provider_CustomProvider'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/Provider_Empty'
+      - $ref: '#/components/schemas/Provider_Empty'
+      - $ref: '#/components/schemas/Provider_Empty'
+      - $ref: '#/components/schemas/Provider_Empty'
+      - $ref: '#/components/schemas/Provider_CustomProvider'
+    Provider_CustomProvider:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Custom
+            type: string
+            enum:
+            - Custom
+        required:
+        - type
+      - $ref: '#/components/schemas/CustomProvider'
+    Provider_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Gitlab
+            type: string
+            enum:
+            - Gitlab
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
     QueryVariable:
       title: QueryVariable
       type: object
