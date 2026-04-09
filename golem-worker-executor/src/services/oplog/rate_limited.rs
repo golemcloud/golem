@@ -33,13 +33,35 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tracing::debug;
 
 fn make_limiter(per_second: u32) -> DefaultDirectRateLimiter {
     let quota = Quota::per_second(NonZeroU32::new(per_second).unwrap_or(nonzero!(1u32)));
     RateLimiter::direct(quota)
+}
+
+/// Pairs a governor rate limiter with the rate it was built for, so both can
+/// be swapped atomically via a single [`ArcSwap`].
+struct RateLimiterState {
+    rate: u64,
+    limiter: DefaultDirectRateLimiter,
+}
+
+impl RateLimiterState {
+    fn new(rate: u64) -> Self {
+        let clamped = if rate >= AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND || rate == 0
+        {
+            // Placeholder — never consulted for unlimited / zero rates.
+            1
+        } else {
+            rate.min(u32::MAX as u64) as u32
+        };
+        Self {
+            rate,
+            limiter: make_limiter(clamped),
+        }
+    }
 }
 
 /// A wrapper around an [`Oplog`] that rate-limits calls to [`Oplog::add`].
@@ -49,51 +71,45 @@ fn make_limiter(per_second: u32) -> DefaultDirectRateLimiter {
 /// `max_memory_per_worker` or `per_invocation_http_call_limit`.
 ///
 /// The rate limit (writes per second) is read dynamically from the supplied
-/// [`AtomicResourceEntry`] on every `add` call. When the value changes the governor
-/// token bucket is rebuilt atomically behind an [`ArcSwap`] so the hot path
-/// remains lock-free. When the entry reports
-/// [`AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND`] the governor is bypassed entirely.
+/// [`AtomicResourceEntry`] on every `add` call. When the value changes the
+/// [`RateLimiterState`] (rate + governor) is rebuilt and swapped atomically
+/// via [`ArcSwap::rcu`] so the two are always consistent. When the entry
+/// reports [`AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND`] the
+/// governor is bypassed entirely.
 ///
 /// All other [`Oplog`] methods are pure delegation to the inner oplog.
 pub struct RateLimitedOplog {
     inner: Arc<dyn Oplog>,
     resource_entry: Arc<AtomicResourceEntry>,
-    /// Current governor rate limiter. Swapped atomically when the rate changes.
-    limiter: ArcSwap<DefaultDirectRateLimiter>,
-    /// Last rate value used to build the current limiter. Used to detect changes.
-    cached_rate: AtomicU64,
+    /// Current rate + governor, swapped atomically when the rate changes.
+    state: ArcSwap<RateLimiterState>,
 }
 
 impl RateLimitedOplog {
     pub fn new(inner: Arc<dyn Oplog>, resource_entry: Arc<AtomicResourceEntry>) -> Self {
         let initial_rate = resource_entry.oplog_writes_per_second();
-        let initial_limiter = limiter_for_rate(initial_rate);
         Self {
             inner,
             resource_entry,
-            limiter: ArcSwap::from(initial_limiter),
-            cached_rate: AtomicU64::new(initial_rate),
+            state: ArcSwap::from(Arc::new(RateLimiterState::new(initial_rate))),
         }
     }
-}
 
-/// Returns an `Arc<DefaultDirectRateLimiter>` for the given rate, or a placeholder
-/// limiter that is never consulted when the rate is
-/// [`AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND`].
-fn limiter_for_rate(rate: u64) -> Arc<DefaultDirectRateLimiter> {
-    if rate >= AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND || rate == 0 {
-        // Placeholder — never consulted for unlimited rates.
-        Arc::new(make_limiter(1))
-    } else {
-        let clamped = rate.min(u32::MAX as u64) as u32;
-        Arc::new(make_limiter(clamped))
+    /// Waits for the rate limiter to grant a token, logging and recording a
+    /// metric when back-pressure is actually applied.
+    async fn apply_back_pressure(limiter: &DefaultDirectRateLimiter, rate: u64) {
+        if limiter.check().is_err() {
+            debug!("RateLimitedOplog: back-pressure applied (rate={rate} writes/sec)");
+            record_oplog_rate_limited();
+        }
+        limiter.until_ready().await;
     }
 }
 
 impl Debug for RateLimitedOplog {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RateLimitedOplog")
-            .field("rate", &self.cached_rate.load(Ordering::Relaxed))
+            .field("rate", &self.state.load().rate)
             .finish()
     }
 }
@@ -104,28 +120,19 @@ impl Oplog for RateLimitedOplog {
         let rate = self.resource_entry.oplog_writes_per_second();
 
         if rate > 0 && rate < AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND {
-            // Detect rate change and atomically swap in a new limiter if needed.
-            // compare_exchange ensures only one concurrent caller rebuilds
-            // the limiter; losers simply proceed with the current one.
-            let cached = self.cached_rate.load(Ordering::Acquire);
-            if cached != rate
-                && self
-                    .cached_rate
-                    .compare_exchange(cached, rate, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok()
-            {
-                self.limiter.store(limiter_for_rate(rate));
+            let current = self.state.load();
+            if current.rate != rate {
+                let updated = self.state.rcu(|current| {
+                    if current.rate == rate {
+                        Arc::clone(current)
+                    } else {
+                        Arc::new(RateLimiterState::new(rate))
+                    }
+                });
+                Self::apply_back_pressure(&updated.limiter, rate).await;
+            } else {
+                Self::apply_back_pressure(&current.limiter, rate).await;
             }
-
-            let limiter = self.limiter.load();
-            // until_ready returns immediately when a token is available,
-            // otherwise sleeps until one is. We only log/record the metric
-            // when we actually had to wait.
-            if limiter.check().is_err() {
-                debug!("RateLimitedOplog: back-pressure applied (rate={rate} writes/sec)");
-                record_oplog_rate_limited();
-            }
-            limiter.until_ready().await;
         }
 
         self.inner.add(entry).await
@@ -187,10 +194,12 @@ impl Oplog for RateLimitedOplog {
 /// A thin [`OplogService`] wrapper that rate-limits [`Oplog::add`] calls on every oplog
 /// instance it creates or opens.
 ///
-/// This service sits **above** the forwarding layer so that both worker writes and
-/// plugin-produced checkpoint writes are rate-limited together. The agent's execution pace
-/// is controlled end-to-end: the token bucket is charged on every `add`, and plugins only
-/// receive entries that have already been permitted through it.
+/// This service sits **above** the `ForwardingOplogService` (plugin) layer. Only direct
+/// worker `add` calls are throttled — checkpoint entries written by plugins inside the
+/// forwarding layer use the inner oplog directly and are not counted against the rate
+/// limit. However, because the rate limiter's potential sleep happens before the call
+/// reaches the forwarding layer, oplog entry forwarding to plugins is correctly paced
+/// by the rate limit.
 ///
 /// `create` and `open` delegate to the inner service, then wrap the returned oplog in a
 /// [`RateLimitedOplog`] that holds the per-account [`AtomicResourceEntry`] resolved from
