@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind, InFunctionRetryHost};
+use crate::durable_host::http::inline_retry::take_http_background_retry_fallback;
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
@@ -825,6 +826,28 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             let mut response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
 
+            // Background retry may decide that the next delay must escape to the
+            // outer retry/replay machinery. Convert that marker trap back into the
+            // same transient host failure path used by non-background HTTP calls.
+            if let Err(err) = &response
+                && let Some(error_code) = take_http_background_retry_fallback(err)
+            {
+                self.state.current_retry_point = begin_index;
+                let failure = anyhow::Error::new(ClassifiedHostError {
+                    kind: HostFailureKind::Transient,
+                    message: error_code.to_string(),
+                });
+                let mut properties = golem_common::model::RetryProperties::new();
+                properties.set(
+                    "error-type",
+                    golem_common::model::PredicateValue::Text("transient".to_string()),
+                );
+                self.try_trigger_retry(failure, properties)
+                    .await
+                    .map_err(wasmtime::Error::from_anyhow)?;
+                response = Ok(Some(Ok(Err(error_code))));
+            }
+
             let mut classified = classify_http_response(self.table(), &response)?;
 
             if let Err(err) = &classified.1 {
@@ -832,9 +855,9 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     HttpFailure::ErrorCode(code) => classify_http_error_code(code),
                     HttpFailure::Other(_) => HostFailureKind::Transient,
                 };
-                // Only trigger trap+replay for transient errors when the request does NOT
-                // have background inline retry. When background retry is active, a transient
-                // error reaching get() means retries were exhausted — persist and return it.
+                // Only try an extra awaiting-response inline retry when background retry is not
+                // already managing this request. Background retry either succeeded, exhausted,
+                // or already requested trap+replay in the block above.
                 let has_background_retry = self
                     .state
                     .open_http_requests
