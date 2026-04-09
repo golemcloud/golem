@@ -42,7 +42,9 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::mcp_deployment::McpDeployment;
 use golem_common::model::quota::{ResourceDefinitionCreation, ResourceDefinitionId};
-use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
+use golem_common::model::security_scheme::{
+    CustomProvider, Provider, SecuritySchemeId, SecuritySchemeName,
+};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::model::component::Component;
@@ -650,6 +652,8 @@ pub struct DeploymentCompiledRouteWithSecuritySchemeRecord {
     pub security_scheme_client_secret: Option<String>,
     pub security_scheme_redirect_url: Option<String>,
     pub security_scheme_scopes: Option<String>,
+    pub security_scheme_custom_provider_name: Option<String>,
+    pub security_scheme_custom_issuer_url: Option<String>,
 
     pub compiled_route: Blob<UnboundCompiledRoute>,
 }
@@ -686,8 +690,18 @@ impl TryFrom<DeploymentCompiledRouteWithSecuritySchemeRecord> for BoundCompiledR
                     .map_err(|e| anyhow::Error::from(e).context("Failed parsing scopes"))?;
                 let redirect_url: RedirectUrl = serde_json::from_str(&redirect_url)
                     .map_err(|e| anyhow::Error::from(e).context("Failed parsing redirect_url"))?;
-                let provider_type = Provider::from_str(&provider_type)
-                    .map_err(|e| anyhow!("Failed parsing provider type: {e}"))?;
+                let provider_type = if provider_type == "custom" {
+                    let name = value
+                        .security_scheme_custom_provider_name
+                        .ok_or_else(|| anyhow!("Custom provider missing name"))?;
+                    let issuer_url = value
+                        .security_scheme_custom_issuer_url
+                        .ok_or_else(|| anyhow!("Custom provider missing issuer URL"))?;
+                    Provider::Custom(CustomProvider { name, issuer_url })
+                } else {
+                    Provider::from_str(&provider_type)
+                        .map_err(|e| anyhow!("Failed parsing provider type: {e}"))?
+                };
                 let client_id = ClientId::new(client_id);
                 let client_secret = ClientSecret::new(client_secret);
 

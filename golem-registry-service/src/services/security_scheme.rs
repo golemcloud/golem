@@ -38,6 +38,8 @@ pub enum SecuritySchemeError {
     SecuritySchemeWithNameAlreadyExists(SecuritySchemeName),
     #[error("Invalid redirect url provided")]
     InvalidRedirectUrl,
+    #[error("Invalid custom provider issuer URL: {0}")]
+    InvalidCustomProviderIssuerUrl(String),
     #[error("Environment {0} not found")]
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Security scheme {0} not found")]
@@ -56,6 +58,7 @@ impl SafeDisplay for SecuritySchemeError {
     fn to_safe_string(&self) -> String {
         match self {
             Self::InvalidRedirectUrl => self.to_string(),
+            Self::InvalidCustomProviderIssuerUrl(_) => self.to_string(),
             Self::SecuritySchemeWithNameAlreadyExists(_) => self.to_string(),
             Self::SecuritySchemeForNameNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
@@ -77,6 +80,7 @@ pub struct SecuritySchemeService {
     security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
     environment_service: Arc<EnvironmentService>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    strict_issuer_url_validation: bool,
 }
 
 impl SecuritySchemeService {
@@ -84,11 +88,13 @@ impl SecuritySchemeService {
         security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
         environment_service: Arc<EnvironmentService>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+        strict_issuer_url_validation: bool,
     ) -> Self {
         Self {
             security_scheme_repo,
             environment_service,
             registry_change_notifier,
+            strict_issuer_url_validation,
         }
     }
 
@@ -114,6 +120,12 @@ impl SecuritySchemeService {
             &environment.roles_from_active_shares,
             EnvironmentAction::CreateSecurityScheme,
         )?;
+
+        if self.strict_issuer_url_validation {
+            data.provider_type
+                .validate_issuer_url_strict()
+                .map_err(SecuritySchemeError::InvalidCustomProviderIssuerUrl)?;
+        }
 
         let id = SecuritySchemeId::new();
 
@@ -167,6 +179,13 @@ impl SecuritySchemeService {
         };
 
         security_scheme.revision = security_scheme.revision.next()?;
+        if let Some(ref provider_type) = update.provider_type
+            && self.strict_issuer_url_validation
+        {
+            provider_type
+                .validate_issuer_url_strict()
+                .map_err(SecuritySchemeError::InvalidCustomProviderIssuerUrl)?;
+        }
         if let Some(provider_type) = update.provider_type {
             security_scheme.provider_type = provider_type;
         };

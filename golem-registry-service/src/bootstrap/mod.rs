@@ -314,6 +314,7 @@ impl Services {
             repos.security_scheme_repo.clone(),
             environment_service.clone(),
             registry_change_notifier.clone(),
+            config.security_scheme.strict_issuer_url_validation,
         ));
 
         let http_api_deployment_service = Arc::new(HttpApiDeploymentService::new(

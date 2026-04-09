@@ -214,9 +214,9 @@ impl DbSecuritySchemeRepo<PostgresPool> {
             .fetch_one_as(
                 sqlx::query_as(indoc! { r#"
                     INSERT INTO security_scheme_revisions
-                    (security_scheme_id, revision_id, provider_type, client_id, client_secret, redirect_url, scopes, created_at, created_by, deleted)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                    RETURNING security_scheme_id, revision_id, provider_type, client_id, client_secret, redirect_url, scopes, created_at, created_by, deleted
+                    (security_scheme_id, revision_id, provider_type, client_id, client_secret, redirect_url, scopes, custom_provider_name, custom_issuer_url, created_at, created_by, deleted)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    RETURNING security_scheme_id, revision_id, provider_type, client_id, client_secret, redirect_url, scopes, custom_provider_name, custom_issuer_url, created_at, created_by, deleted
                 "# })
                 .bind(revision.security_scheme_id)
                 .bind(revision.revision_id)
@@ -225,6 +225,8 @@ impl DbSecuritySchemeRepo<PostgresPool> {
                 .bind(revision.client_secret)
                 .bind(revision.redirect_url)
                 .bind(revision.scopes)
+                .bind(revision.custom_provider_name)
+                .bind(revision.custom_issuer_url)
                 .bind_deletable_revision_audit(revision.audit),
             )
             .await
@@ -391,7 +393,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
         let result: Option<SecuritySchemeExtRevisionRecord> = self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT ss.environment_id, ss.name, ss.created_at AS entity_created_at, ssr.security_scheme_id, ssr.revision_id, ssr.provider_type, ssr.client_id, ssr.client_secret, ssr.redirect_url, ssr.scopes, ssr.created_at, ssr.created_by, ssr.deleted
+                    SELECT ss.environment_id, ss.name, ss.created_at AS entity_created_at, ssr.security_scheme_id, ssr.revision_id, ssr.provider_type, ssr.client_id, ssr.client_secret, ssr.redirect_url, ssr.scopes, ssr.custom_provider_name, ssr.custom_issuer_url, ssr.created_at, ssr.created_by, ssr.deleted
                     FROM security_schemes ss
                     JOIN security_scheme_revisions ssr ON ssr.security_scheme_id = ss.security_scheme_id AND ssr.revision_id = ss.current_revision_id
                     WHERE ss.security_scheme_id = $1 AND ss.deleted_at IS NULL
@@ -410,7 +412,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
         let results: Vec<SecuritySchemeExtRevisionRecord> = self.with_ro("get_for_environment")
             .fetch_all_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT ss.environment_id, ss.name, ss.created_at AS entity_created_at, ssr.security_scheme_id, ssr.revision_id, ssr.provider_type, ssr.client_id, ssr.client_secret, ssr.redirect_url, ssr.scopes, ssr.created_at, ssr.created_by, ssr.deleted
+                    SELECT ss.environment_id, ss.name, ss.created_at AS entity_created_at, ssr.security_scheme_id, ssr.revision_id, ssr.provider_type, ssr.client_id, ssr.client_secret, ssr.redirect_url, ssr.scopes, ssr.custom_provider_name, ssr.custom_issuer_url, ssr.created_at, ssr.created_by, ssr.deleted
                     FROM security_schemes ss
                     JOIN security_scheme_revisions ssr ON ssr.security_scheme_id = ss.security_scheme_id AND ssr.revision_id = ss.current_revision_id
                     WHERE ss.environment_id = $1 AND ss.deleted_at IS NULL
@@ -430,7 +432,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<PostgresPool> {
         let result: Option<SecuritySchemeExtRevisionRecord> = self.with_ro("get_for_environment_and_name")
             .fetch_optional_as(
                 sqlx::query_as(indoc! {r#"
-                    SELECT ss.environment_id, ss.name, ss.created_at AS entity_created_at, ssr.security_scheme_id, ssr.revision_id, ssr.provider_type, ssr.client_id, ssr.client_secret, ssr.redirect_url, ssr.scopes, ssr.created_at, ssr.created_by, ssr.deleted
+                    SELECT ss.environment_id, ss.name, ss.created_at AS entity_created_at, ssr.security_scheme_id, ssr.revision_id, ssr.provider_type, ssr.client_id, ssr.client_secret, ssr.redirect_url, ssr.scopes, ssr.custom_provider_name, ssr.custom_issuer_url, ssr.created_at, ssr.created_by, ssr.deleted
                     FROM security_schemes ss
                     JOIN security_scheme_revisions ssr ON ssr.security_scheme_id = ss.security_scheme_id AND ssr.revision_id = ss.current_revision_id
                     WHERE ss.environment_id = $1 AND ss.name = $2 AND ss.deleted_at IS NULL

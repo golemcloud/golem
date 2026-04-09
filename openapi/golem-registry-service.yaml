@@ -8790,6 +8790,17 @@ components:
       properties:
         value:
           type: string
+    CustomProvider:
+      type: object
+      title: CustomProvider
+      required:
+      - name
+      - issuerUrl
+      properties:
+        name:
+          type: string
+        issuerUrl:
+          type: string
     DataSchema:
       type: object
       oneOf:
@@ -10394,12 +10405,45 @@ components:
           items:
             $ref: '#/components/schemas/ProducerField'
     Provider:
-      type: string
-      enum:
-      - google
-      - facebook
-      - microsoft
-      - gitlab
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/Provider_Empty'
+      - $ref: '#/components/schemas/Provider_Empty'
+      - $ref: '#/components/schemas/Provider_Empty'
+      - $ref: '#/components/schemas/Provider_Empty'
+      - $ref: '#/components/schemas/Provider_CustomProvider'
+      discriminator:
+        propertyName: type
+        mapping:
+          Google: '#/components/schemas/Provider_Empty'
+          Facebook: '#/components/schemas/Provider_Empty'
+          Microsoft: '#/components/schemas/Provider_Empty'
+          Gitlab: '#/components/schemas/Provider_Empty'
+          Custom: '#/components/schemas/Provider_CustomProvider'
+    Provider_CustomProvider:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Custom
+            example: Custom
+      - $ref: '#/components/schemas/CustomProvider'
+    Provider_Empty:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Gitlab
+            example: Gitlab
+      - $ref: '#/components/schemas/Empty'
     QueryVariable:
       type: object
       title: QueryVariable
