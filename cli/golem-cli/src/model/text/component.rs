@@ -119,23 +119,6 @@ impl MessageWithFields for ComponentGetView {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ComponentReplStartedView(pub ComponentView);
-
-impl MessageWithFields for ComponentReplStartedView {
-    fn message(&self) -> String {
-        format!(
-            "Started Rib REPL for component {} using revision {}",
-            format_message_highlight(&self.0.component_name),
-            format_message_highlight(&self.0.component_revision),
-        )
-    }
-
-    fn fields(&self) -> Vec<(String, String)> {
-        component_view_fields(&self.0)
-    }
-}
-
 const SENSITIVE_ENV_VAR_NAME_PATTERNS: &[&str] = &[
     "CREDENTIAL",
     "CREDENTIALS",

@@ -316,17 +316,6 @@ impl InteractiveHandler {
         .prompt()?)
     }
 
-    pub fn select_component_for_repl(
-        &self,
-        component_names: Vec<ComponentName>,
-    ) -> anyhow::Result<ComponentName> {
-        Ok(Select::new(
-            "Select a component to be used in Rib REPL:",
-            component_names,
-        )
-        .prompt()?)
-    }
-
     pub fn select_new_app_name(
         &self,
         placeholder: Option<&str>,

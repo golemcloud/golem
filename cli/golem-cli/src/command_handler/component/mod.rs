@@ -132,7 +132,7 @@ impl ComponentCommandHandler {
                         .await?
                         .values
                         .into_iter()
-                        .map(|component| ComponentView::new_wit_style(show_sensitive, component))
+                        .map(|component| ComponentView::new(show_sensitive, component))
                         .collect::<Vec<_>>())
                 },
             )
@@ -182,10 +182,7 @@ impl ComponentCommandHandler {
                 )
                 .await?;
             if let Some(component) = component {
-                component_views.push(ComponentView::new_wit_style(
-                    self.ctx.show_sensitive(),
-                    component,
-                ));
+                component_views.push(ComponentView::new(self.ctx.show_sensitive(), component));
             }
         }
 

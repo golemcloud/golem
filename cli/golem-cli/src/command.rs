@@ -634,7 +634,7 @@ pub enum GolemCliSubcommand {
         #[clap(long)]
         output_dir: Option<PathBuf>,
     },
-    /// Start Rib REPL for a selected component
+    /// Start REPL for a selected component
     Repl {
         /// Select the language for the REPL, defaults to the component's language
         #[arg(long)]
