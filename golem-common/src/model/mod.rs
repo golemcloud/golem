@@ -50,7 +50,7 @@ pub mod worker;
 pub use crate::base_model::*;
 
 use self::component::ComponentId;
-use self::component::{ComponentFilePermissions, ComponentRevision};
+use self::component::{AgentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
 use self::worker::ParsedWorkerAgentConfigEntry;
 use crate::base_model::agent::ParsedAgentId;

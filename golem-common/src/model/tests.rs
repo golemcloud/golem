@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::{ComponentFilePath, ComponentRevision};
+use crate::model::component::{CanonicalFilePath, ComponentRevision};
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
 use crate::model::{
@@ -361,13 +361,13 @@ fn derived_idempotency_key() {
 }
 
 #[test]
-fn initial_component_file_path_from_absolute() {
-    let path = ComponentFilePath::from_abs_str("/a/b/c").unwrap();
+fn canonical_file_path_from_absolute() {
+    let path = CanonicalFilePath::from_abs_str("/a/b/c").unwrap();
     assert_eq!(path.to_string(), "/a/b/c");
 }
 
 #[test]
-fn initial_component_file_path_from_relative() {
-    let path = ComponentFilePath::from_abs_str("a/b/c");
+fn canonical_file_path_from_relative_is_error() {
+    let path = CanonicalFilePath::from_abs_str("a/b/c");
     assert!(path.is_err());
 }

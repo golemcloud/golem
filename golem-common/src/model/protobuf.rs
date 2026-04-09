@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use super::{AgentConfigVarsFilter, AgentResourceDescription, InvocationStatus, diff};
-use crate::model::component::{ComponentFileContentHash, ComponentFilePath, InitialComponentFile};
+use crate::base_model::agent::AgentFileContentHash;
+use crate::model::component::{AgentFilePath, InitialAgentFile};
 use crate::model::oplog::{AgentResourceId, OplogIndex};
 use crate::model::{
-    AgentCreatedAtFilter, AgentEnvFilter, AgentEvent, AgentFilter, AgentId, AgentNameFilter,
-    AgentNotFilter, AgentRevisionFilter, AgentStatus, AgentStatusFilter, ComponentFilePermissions,
+    AgentCreatedAtFilter, AgentEnvFilter, AgentEvent, AgentFilePermissions, AgentFilter, AgentId,
+    AgentNameFilter, AgentNotFilter, AgentRevisionFilter, AgentStatus, AgentStatusFilter,
     FilterComparator, IdempotencyKey, LogLevel, NumberOfShards, Pod, PromiseId, RoutingTable,
     RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, Timestamp,
 };
@@ -628,61 +629,53 @@ impl TryFrom<AgentEvent> for golem::worker::LogEvent {
     }
 }
 
-impl From<golem::component::ComponentFilePermissions> for ComponentFilePermissions {
-    fn from(value: golem::component::ComponentFilePermissions) -> Self {
+impl From<golem::component::AgentFilePermissions> for AgentFilePermissions {
+    fn from(value: golem::component::AgentFilePermissions) -> Self {
         match value {
-            golem::component::ComponentFilePermissions::ReadOnly => {
-                ComponentFilePermissions::ReadOnly
-            }
-            golem::component::ComponentFilePermissions::ReadWrite => {
-                ComponentFilePermissions::ReadWrite
-            }
+            golem::component::AgentFilePermissions::ReadOnly => AgentFilePermissions::ReadOnly,
+            golem::component::AgentFilePermissions::ReadWrite => AgentFilePermissions::ReadWrite,
         }
     }
 }
 
-impl From<ComponentFilePermissions> for golem::component::ComponentFilePermissions {
-    fn from(value: ComponentFilePermissions) -> Self {
+impl From<AgentFilePermissions> for golem::component::AgentFilePermissions {
+    fn from(value: AgentFilePermissions) -> Self {
         match value {
-            ComponentFilePermissions::ReadOnly => {
-                golem::component::ComponentFilePermissions::ReadOnly
-            }
-            ComponentFilePermissions::ReadWrite => {
-                golem::component::ComponentFilePermissions::ReadWrite
-            }
+            AgentFilePermissions::ReadOnly => golem::component::AgentFilePermissions::ReadOnly,
+            AgentFilePermissions::ReadWrite => golem::component::AgentFilePermissions::ReadWrite,
         }
     }
 }
 
-impl From<InitialComponentFile> for golem::component::InitialComponentFile {
-    fn from(value: InitialComponentFile) -> Self {
-        let permissions: golem::component::ComponentFilePermissions = value.permissions.into();
+impl From<InitialAgentFile> for golem::component::InitialAgentFile {
+    fn from(value: InitialAgentFile) -> Self {
+        let permissions: golem::component::AgentFilePermissions = value.permissions.into();
         Self {
             content_hash: Some(value.content_hash.0.into()),
-            path: value.path.to_string(),
+            path: value.path.to_abs_string(),
             permissions: permissions.into(),
             size: value.size,
         }
     }
 }
 
-impl TryFrom<golem::component::InitialComponentFile> for InitialComponentFile {
+impl TryFrom<golem::component::InitialAgentFile> for InitialAgentFile {
     type Error = String;
 
-    fn try_from(value: golem::component::InitialComponentFile) -> Result<Self, Self::Error> {
-        let permissions: golem::component::ComponentFilePermissions = value
+    fn try_from(value: golem::component::InitialAgentFile) -> Result<Self, Self::Error> {
+        let permissions: golem::component::AgentFilePermissions = value
             .permissions
             .try_into()
             .map_err(|e| format!("Failed converting permissions {e}"))?;
-        let permissions: ComponentFilePermissions = permissions.into();
-        let path = ComponentFilePath::from_abs_str(&value.path).map_err(|e| e.to_string())?;
+        let permissions: AgentFilePermissions = permissions.into();
+        let path = AgentFilePath::from_abs_str(&value.path).map_err(|e| e.to_string())?;
         let content_hash: diff::Hash = value
             .content_hash
             .ok_or("Missing content_hash field")?
             .try_into()?;
 
         Ok(Self {
-            content_hash: ComponentFileContentHash(content_hash),
+            content_hash: AgentFileContentHash(content_hash),
             path,
             permissions,
             size: value.size,
