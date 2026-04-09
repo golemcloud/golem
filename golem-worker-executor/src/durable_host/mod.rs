@@ -26,6 +26,7 @@ pub mod http;
 pub mod io;
 pub mod keyvalue;
 mod logging;
+pub mod quota;
 mod random;
 pub mod rdbms;
 mod replay_state;
@@ -36,6 +37,9 @@ pub mod websocket;
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
+use crate::metrics::storage::{
+    STORAGE_TYPE_FILESYSTEM, record_storage_bytes_deleted, record_storage_bytes_written,
+};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
@@ -52,6 +56,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::promise::PromiseService;
+use crate::services::quota::QuotaService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::rpc::Rpc;
@@ -202,6 +207,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
+        quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
@@ -357,6 +363,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 key_value_service,
                 blob_store_service,
                 rdbms_service,
+                quota_service,
                 component_service,
                 agent_types_service,
                 environment_state_service,
@@ -598,6 +605,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             ))
             .await;
         self.state.current_filesystem_storage_usage += new_bytes;
+        let account_id = self.created_by().to_string();
+        let environment_id = self.state.owned_agent_id.environment_id().to_string();
+        record_storage_bytes_written(
+            STORAGE_TYPE_FILESYSTEM,
+            &account_id,
+            &environment_id,
+            new_bytes,
+        );
         Ok(())
     }
 
@@ -623,6 +638,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .release_filesystem_storage_space(freed_bytes)
             .await;
         self.state.current_filesystem_storage_usage -= freed_bytes;
+        let account_id = self.created_by().to_string();
+        let environment_id = self.state.owned_agent_id.environment_id().to_string();
+        record_storage_bytes_deleted(
+            STORAGE_TYPE_FILESYSTEM,
+            &account_id,
+            &environment_id,
+            freed_bytes,
+        );
     }
 
     /// Check the per-agent storage quota and acquire permits from the
@@ -694,6 +717,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } => RetryDecision::ReacquirePermits,
             TrapType::Error {
                 error: AgentError::AgentExceededFilesystemStorageLimit,
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::AgentTerminatedByQuota(_),
                 ..
             } => RetryDecision::None,
             TrapType::Error {
@@ -831,7 +858,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } else {
                 let (begin_index, _) =
                     crate::get_oplog_entry!(self.state.replay_state, OplogEntry::BeginRemoteWrite)?;
-                if !self.state.assume_idempotence {
+                if !self.state.assume_idempotence
+                    && !matches!(
+                        *function_type,
+                        DurableFunctionType::WriteRemoteBatched(None)
+                    )
+                {
                     let end_index = self
                         .state
                         .replay_state
@@ -879,7 +911,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
-                        } => {
+                        } if self.state.assume_idempotence => {
                             // We need to jump to the end of the oplog
                             self.state.replay_state.switch_to_live().await;
 
@@ -899,6 +931,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             // TODO: this recomputation should not be necessary.
                             self.public_state.worker().reattach_worker_status().await;
                             Ok(begin_index)
+                        }
+                        OplogEntryLookupResult::NotFound { .. } => {
+                            // assume_idempotence is false and the operation was not completed —
+                            // we cannot safely retry a non-idempotent batched write.
+                            self.state.replay_state.switch_to_live().await;
+                            Err(WorkerExecutorError::runtime(
+                                "Non-idempotent remote write operation was not completed, cannot retry",
+                            ))
                         }
                     }
                 } else {
@@ -1586,6 +1626,31 @@ enum SnapshotRecoveryResult {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(crate) fn register_open_websocket(
+        &mut self,
+        rep: u32,
+        url: String,
+        headers: Option<Vec<(String, String)>>,
+    ) {
+        self.state
+            .open_websocket_connections
+            .insert(rep, WebSocketConnectionState { url, headers });
+    }
+
+    pub(crate) fn unregister_open_websocket(&mut self, rep: u32) {
+        self.state.open_websocket_connections.remove(&rep);
+    }
+
+    pub(crate) fn websocket_connection_info(&self, rep: u32) -> Option<WebSocketConnectionInfo> {
+        self.state
+            .open_websocket_connections
+            .get(&rep)
+            .map(|state| WebSocketConnectionInfo {
+                url: state.url.clone(),
+                headers: state.headers.clone(),
+            })
+    }
+
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
         let replay_events = self.state.replay_state.take_new_replay_events().await;
         if !replay_events.is_empty() {
@@ -1604,7 +1669,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
-
                     let pending_update = self.state.pending_update.lock().await.take();
 
                     let pending_update = if let Some(pending_update) = pending_update {
@@ -3108,9 +3172,45 @@ pub(crate) enum HttpRequestCloseOwner {
     FutureTrailersDrop,
 }
 
+/// Tracks conditions that affect whether an HTTP request is eligible for
+/// transparent inline retry. Each flag records an event during the request
+/// lifecycle that disqualifies one or more retry zones.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HttpRetryEligibility {
+    /// Whether this request has an in-task retry loop running in the background.
+    /// When true, transient errors that reach `get()` are the final result and
+    /// should not trigger trap+replay.
+    pub has_background_retry: bool,
+    /// Set to true when splice()/blocking_splice() is called on the outgoing body stream.
+    /// When true, body bytes cannot be fully reconstructed from the oplog.
+    pub has_unreconstructable_body: bool,
+    /// Set to true when subscribe() is called on the outgoing body output stream.
+    /// When true, output stream inline retry is disabled because the pollable
+    /// would become stale after resource replacement.
+    pub output_stream_subscribed: bool,
+    /// Set to true when skip()/blocking_skip() is called on the response body.
+    /// When true, resuming-response-body inline retry is disabled because we
+    /// cannot verify
+    /// the skipped bytes against the retry response.
+    pub had_body_skip: bool,
+    /// Set to true when OutgoingBody::finish() is called with Some(trailers).
+    /// When true, inline retry is disabled because trailers are not persisted
+    /// in the oplog and cannot be reconstructed.
+    pub has_outgoing_trailers: bool,
+    /// Set to true when OutgoingBody::finish() is called.
+    /// Awaiting-response retry requires the body to be fully finished before
+    /// retrying.
+    pub body_finished: bool,
+    /// Set to true when outgoing body stream writes are replayed from oplog
+    /// (rather than executed live). When true, the actual body pipe does NOT
+    /// contain the replayed bytes, so the request must be rebuilt from oplog
+    /// before finishing the body.
+    pub replayed_body_writes: bool,
+}
+
 /// State associated with ongoing http requests, on top of the underlying wasi-http implementation
 #[derive(Debug, Clone)]
-struct HttpRequestState {
+pub(crate) struct HttpRequestState {
     /// Who is responsible for calling end_function and removing entries from the table
     pub close_owner: HttpRequestCloseOwner,
     /// The BeginRemoteWrite entry's index
@@ -3123,18 +3223,41 @@ struct HttpRequestState {
     /// this records the IncomingBody handle so that on stream close we can transfer
     /// tracking back to the body (enabling finish() to then transfer to FutureTrailers).
     pub body_handle: Option<u32>,
+    /// The original response status observed by the guest before body consumption.
+    /// Response-body resumption only swaps the body stream, so inline retry must
+    /// not resume from a retried response that changes the status code visible via
+    /// IncomingResponse.
+    pub response_status: Option<u16>,
     /// The outgoing body resource handle associated with this request, set when
     /// outgoing_handler::handle() resolves the pending body mapping.
     pub outgoing_body_rep: Option<u32>,
     /// The outgoing body output stream resource handle, set when outgoing_body::write()
     /// creates the stream from the outgoing body.
     pub output_stream_rep: Option<u32>,
+    pub use_tls: bool,
+    pub connect_timeout: std::time::Duration,
+    pub first_byte_timeout: std::time::Duration,
+    pub between_bytes_timeout: std::time::Duration,
+    /// Retry eligibility flags tracked during the request lifecycle.
+    pub retry: HttpRetryEligibility,
+}
+
+impl HttpRequestState {
+    pub fn outgoing_request_config(&self) -> OutgoingRequestConfig {
+        OutgoingRequestConfig {
+            use_tls: self.use_tls,
+            connect_timeout: self.connect_timeout,
+            first_byte_timeout: self.first_byte_timeout,
+            between_bytes_timeout: self.between_bytes_timeout,
+        }
+    }
 }
 
 /// Extracted view of the begin_index and request from an HttpRequestState,
 /// used when processing outgoing body output stream operations.
 #[derive(Debug, Clone)]
 pub(crate) struct HttpOutputStreamState {
+    pub request_handle: u32,
     pub begin_index: OplogIndex,
     pub request: HostRequestHttpRequest,
 }
@@ -3158,6 +3281,18 @@ pub(crate) struct PendingFilesystemReservation {
     pub reserved_growth: u64,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct WebSocketConnectionState {
+    pub url: String,
+    pub headers: Option<Vec<(String, String)>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WebSocketConnectionInfo {
+    pub url: String,
+    pub headers: Option<Vec<(String, String)>>,
+}
+
 struct PrivateDurableWorkerState {
     // IMPORTANT: commits to the oplog must go via self.public_state.worker().commit_oplog_and_update_state
     oplog_service: Arc<dyn OplogService>,
@@ -3169,6 +3304,7 @@ struct PrivateDurableWorkerState {
     key_value_service: Arc<dyn KeyValueService>,
     blob_store_service: Arc<dyn BlobStoreService>,
     rdbms_service: Arc<dyn RdbmsService>,
+    quota_service: Arc<dyn QuotaService>,
     component_service: Arc<dyn ComponentService>,
     agent_types_service: Arc<dyn AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
@@ -3190,6 +3326,9 @@ struct PrivateDurableWorkerState {
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
     open_http_requests: HashMap<u32, HttpRequestState>,
 
+    /// WebSocket connection state indexed by websocket resource rep.
+    open_websocket_connections: HashMap<u32, WebSocketConnectionState>,
+
     /// Maps outgoing request rep → outgoing body rep, set during outgoing_request::body()
     /// before outgoing_handler::handle() is called and the HttpRequestState is created.
     pending_http_outgoing_request_body: HashMap<u32, u32>,
@@ -3197,6 +3336,15 @@ struct PrivateDurableWorkerState {
     /// Tracks file-backed wasi output streams so quota charging can be based on
     /// actual file growth instead of requested write size.
     open_filesystem_output_streams: HashMap<u32, FilesystemOutputStreamState>,
+
+    /// Maps outgoing body rep → output stream rep, set during outgoing_body::write()
+    /// before outgoing_handler::handle() is called. Used by handle() to populate
+    /// output_stream_rep in HttpRequestState for streams created before dispatch.
+    pending_http_outgoing_body_stream: HashMap<u32, u32>,
+
+    /// Retry eligibility flags accumulated before outgoing_handler::handle() creates
+    /// the HttpRequestState. Keyed by outgoing request rep.
+    pending_http_retry_eligibility: HashMap<u32, HttpRetryEligibility>,
 
     snapshotting_mode: Option<PersistenceLevel>,
 
@@ -3286,6 +3434,7 @@ impl PrivateDurableWorkerState {
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
+        quota_service: Arc<dyn QuotaService>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
@@ -3347,6 +3496,7 @@ impl PrivateDurableWorkerState {
             key_value_service,
             blob_store_service,
             rdbms_service,
+            quota_service,
             component_service,
             agent_types_service,
             environment_state_service,
@@ -3362,7 +3512,10 @@ impl PrivateDurableWorkerState {
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
+            open_websocket_connections: HashMap::new(),
             pending_http_outgoing_request_body: HashMap::new(),
+            pending_http_outgoing_body_stream: HashMap::new(),
+            pending_http_retry_eligibility: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
             snapshotting_mode: None,
             component_metadata,
@@ -3422,6 +3575,28 @@ impl PrivateDurableWorkerState {
             .iter()
             .find(|(_, state)| state.output_stream_rep == Some(stream_rep))
             .map(|(&handle, _)| handle)
+    }
+
+    /// Find the pending outgoing request rep for a given outgoing body rep.
+    fn find_pending_request_rep_by_outgoing_body(&self, body_rep: u32) -> Option<u32> {
+        self.pending_http_outgoing_request_body
+            .iter()
+            .find(|(_, pending_body_rep)| **pending_body_rep == body_rep)
+            .map(|(&request_rep, _)| request_rep)
+    }
+
+    /// Find the pending outgoing body rep for a given output stream rep.
+    fn find_pending_body_rep_by_output_stream(&self, stream_rep: u32) -> Option<u32> {
+        self.pending_http_outgoing_body_stream
+            .iter()
+            .find(|(_, pending_stream_rep)| **pending_stream_rep == stream_rep)
+            .map(|(&body_rep, _)| body_rep)
+    }
+
+    /// Find the pending outgoing request rep for a given output stream rep.
+    fn find_pending_request_rep_by_output_stream(&self, stream_rep: u32) -> Option<u32> {
+        let body_rep = self.find_pending_body_rep_by_output_stream(stream_rep)?;
+        self.find_pending_request_rep_by_outgoing_body(body_rep)
     }
 
     /// In live mode it returns the last oplog index (index of the entry last added).

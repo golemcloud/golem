@@ -71,7 +71,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-use golem_common::model::resource_definition::{ResourceDefinitionId, ResourceName};
+use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
 use std::collections::HashMap;
@@ -1067,6 +1067,7 @@ fn internal_error(error: &str) -> RegistryServiceError {
         error: Some(registry_service_error::Error::InternalError(
             golem_api_grpc::proto::golem::common::ErrorBody {
                 error: error.to_string(),
+                code: golem_common::base_model::api::error_code::INTERNAL_UNKNOWN.to_string(),
             },
         )),
     }

@@ -14,7 +14,7 @@
 
 use crate::app::context::ApplicationContext;
 use crate::app::template::AppTemplateRepo;
-use crate::client::{GolemClients, new_reqwest_client};
+use crate::client::{GolemClients, new_raw_reqwest_client};
 use crate::command::GolemCliGlobalFlags;
 use crate::command::shared_args::PostDeployArgs;
 use crate::command_handler::interactive::InteractiveHandler;
@@ -270,7 +270,7 @@ impl Context {
             None => ClientConfig::from(&profile.profile),
         };
         let file_download_client =
-            new_reqwest_client(&client_config.file_download_http_client_config)?;
+            new_raw_reqwest_client(&client_config.file_download_http_client_config)?;
 
         let app_context_config = manifest_environment
             .as_ref()

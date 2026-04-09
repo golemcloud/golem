@@ -18,6 +18,7 @@ use crate::{
     newtype_uuid,
 };
 use derive_more::Display;
+use std::time::Duration;
 
 newtype_uuid!(
     ResourceDefinitionId,
@@ -28,7 +29,7 @@ declare_revision!(ResourceDefinitionRevision);
 
 declare_transparent_newtypes! {
     #[derive(Display, Eq, Hash, PartialOrd, Ord)]
-    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, golem_wasm_derive::IntoValue, golem_wasm_derive::FromValue))]
     #[cfg_attr(feature = "full", desert(transparent))]
     pub struct ResourceName(pub String);
 }
@@ -79,7 +80,7 @@ declare_structs! {
     pub struct ResourceRateLimit {
         pub value: u64,
         pub period: TimePeriod,
-        /// Maximum burst capacity. Defaults to `value` if not specified.
+        /// Maximum burst capacity
         pub max: u64
     }
 
@@ -104,7 +105,8 @@ declare_unions! {
 }
 
 declare_enums! {
-    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, golem_wasm_derive::IntoValue, golem_wasm_derive::FromValue))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
     pub enum EnforcementAction {
         Reject,
         Throttle,
@@ -119,5 +121,18 @@ declare_enums! {
         Day,
         Month,
         Year
+    }
+}
+
+impl TimePeriod {
+    pub fn duration(self) -> Duration {
+        match self {
+            TimePeriod::Second => Duration::from_secs(1),
+            TimePeriod::Minute => Duration::from_mins(1),
+            TimePeriod::Hour => Duration::from_hours(1),
+            TimePeriod::Day => Duration::from_hours(24),
+            TimePeriod::Month => Duration::from_hours(24 * 30),
+            TimePeriod::Year => Duration::from_hours(24 * 365),
+        }
     }
 }

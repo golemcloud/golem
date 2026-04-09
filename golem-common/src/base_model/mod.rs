@@ -15,6 +15,7 @@
 pub mod account;
 pub mod agent;
 pub mod agent_secret;
+pub mod api;
 pub mod application;
 pub mod auth;
 pub mod base64;
@@ -37,9 +38,9 @@ pub mod oplog;
 pub mod optional_field_update;
 pub mod plan;
 pub mod plugin_registration;
+pub mod quota;
 pub mod regions;
 pub mod reports;
-pub mod resource_definition;
 pub mod security_scheme;
 pub mod worker;
 pub mod worker_filter;

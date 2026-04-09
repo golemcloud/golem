@@ -10,7 +10,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  WASM_RQUICKJS_VERSION: "v0.1.5"
+  WASM_RQUICKJS_VERSION: "v0.2.0"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 
@@ -24,32 +24,23 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup-rust
         with:
-          node-version: "lts/*"
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip1 wasm32-wasip2'
+          install-cargo-make: 'false'
+          install-cargo-binstall: 'true'
+
+      - uses: ./.github/actions/setup-js-wasm-tools
+        with:
           registry-url: "https://registry.npmjs.org"
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          install-cargo-component: 'true'
 
       - name: Update npm
         run: npm install -g npm@latest
-
-      - uses: pnpm/action-setup@v2
-        with:
-          version: latest
-
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip1 wasm32-wasip2
-
-      - name: Install WASI SDK
-        run: |
-          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
-          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
-
-      - name: Install wasm-rquickjs
-        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
-
-      - uses: cargo-bins/cargo-binstall@main
-      - name: Install cargo-component
-        run: cargo binstall --force cargo-component@0.21.1
 
       - name: Extract version from tag
         id: get_version

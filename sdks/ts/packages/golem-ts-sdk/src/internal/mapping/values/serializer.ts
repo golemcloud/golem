@@ -242,7 +242,7 @@ export function matchesType(value: any, type: AnalysedType): boolean {
       const nameAndOptions = type.value.cases;
 
       // There are two cases, if they are tagged types, or not
-      if (valueType === 'object') {
+      if (valueType === 'object' && type.taggedTypes.length > 0) {
         const keys = Object.keys(value);
 
         if (keys.includes('tag')) {
@@ -258,14 +258,25 @@ export function matchesType(value: any, type: AnalysedType): boolean {
             }
 
             const caseType = matchedCase.typ;
+            const taggedMetadata = type.taggedTypes.find(
+              (entry) => entry.tagLiteralName === tagValue,
+            );
 
-            if (!caseType) {
+            if (!taggedMetadata) {
+              return false;
+            }
+
+            if (!taggedMetadata.valueType) {
               return keys.length === 1;
             }
 
-            const valueKey = keys.find((k) => k !== 'tag');
+            if (!caseType) {
+              return false;
+            }
 
-            if (!valueKey) {
+            const valueKey = taggedMetadata.valueType[0];
+
+            if (!Object.prototype.hasOwnProperty.call(value, valueKey)) {
               return false;
             }
 
@@ -742,7 +753,7 @@ function serializeUnionToWitNodes(
   builder: WitNodeBuilder,
 ): number {
   if (taggedTypes.length > 0) {
-    return serializeTaggedUnionToWitNodes(tsValue, nameOptionTypePairs, builder);
+    return serializeTaggedUnionToWitNodes(tsValue, taggedTypes, nameOptionTypePairs, builder);
   }
 
   for (let idx = 0; idx < nameOptionTypePairs.length; idx++) {
@@ -768,6 +779,7 @@ function serializeUnionToWitNodes(
 
 function serializeTaggedUnionToWitNodes(
   tsValue: any,
+  taggedTypes: TaggedTypeMetadata[],
   nameOptionTypePairs: NameOptionTypePair[],
   builder: WitNodeBuilder,
 ): number {
@@ -787,13 +799,31 @@ function serializeTaggedUnionToWitNodes(
     const typeOption = nameOptionTypePair.typ;
 
     if (tsValue['tag'] === typeName) {
-      if (!typeOption) {
+      const taggedMetadata = taggedTypes.find((entry) => entry.tagLiteralName === typeName);
+
+      if (!taggedMetadata) {
+        throw new Error(customSerializationError(`Missing tagged metadata for case ${typeName}`));
+      }
+
+      if (!taggedMetadata.valueType) {
+        if (typeOption) {
+          throw new Error(
+            customSerializationError(`Unexpected payload type for tagged unit case ${typeName}`),
+          );
+        }
+
         return builder.variantUnit(caseIdx);
       }
 
-      const valueKey = keys.find((k) => k !== 'tag');
-      if (!valueKey) {
-        throw new Error(`Missing value correspond to the tag ${typeName}`);
+      if (!typeOption) {
+        throw new Error(
+          customSerializationError(`Missing payload type for tagged case ${typeName}`),
+        );
+      }
+
+      const valueKey = taggedMetadata.valueType[0];
+      if (!Object.prototype.hasOwnProperty.call(tsValue, valueKey)) {
+        throw new Error(missingObjectKey(valueKey, tsValue));
       }
 
       const varIdx = builder.addVariant(caseIdx);

@@ -192,7 +192,7 @@ impl InteractiveHandler {
             format!(
                 "Are you sure you want to delete the requested account? ({}, {})",
                 account.name.log_color_highlight(),
-                account.email.0.log_color_highlight()
+                account.email.as_str().log_color_highlight()
             ),
             None,
         )

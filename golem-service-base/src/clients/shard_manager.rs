@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
-use crate::model::quota_lease::QuotaLease;
+use crate::model::quota_lease::{PendingReservation, QuotaLease};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_api_grpc::proto::golem::shardmanager::v1::{
@@ -23,7 +23,7 @@ use golem_api_grpc::proto::golem::shardmanager::v1::{
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::resource_definition::{ResourceDefinitionId, ResourceName};
+use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::model::{RetryConfig, RoutingTable};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::with_retries;
@@ -62,6 +62,7 @@ pub trait ShardManager: Send + Sync {
         port: u16,
         epoch: u64,
         unused: u64,
+        pending_reservations: Vec<PendingReservation>,
     ) -> Result<QuotaLease, QuotaError>;
 
     /// Releases a lease, returning any unused allocation.
@@ -236,6 +237,7 @@ impl ShardManager for GrpcShardManager {
         port: u16,
         epoch: u64,
         unused: u64,
+        pending_reservations: Vec<PendingReservation>,
     ) -> Result<QuotaLease, QuotaError> {
         let response = self
             .client
@@ -245,6 +247,11 @@ impl ShardManager for GrpcShardManager {
                     port: port as i32,
                     epoch,
                     unused,
+                    pending_reservations: pending_reservations
+                        .iter()
+                        .cloned()
+                        .map(Into::into)
+                        .collect(),
                 };
                 Box::pin(client.renew_quota_lease(request))
             })

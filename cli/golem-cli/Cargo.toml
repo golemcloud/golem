@@ -59,6 +59,7 @@ futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
 gag = { workspace = true }
 heck = { workspace = true }
+http = { workspace = true }
 humansize = { workspace = true }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
@@ -77,6 +78,7 @@ quote = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }
+reqwest-retry = { workspace = true }
 rustyline = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }

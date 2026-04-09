@@ -120,10 +120,12 @@ impl OidcHandler {
             .store_authenticated_session(&session_id, session)
             .await?;
 
+        let is_https = scheme.redirect_url.url().scheme() == "https";
+
         let cookie = Cookie::build((GOLEM_SESSION_ID_COOKIE_NAME, session_id.0.to_string()))
             .path("/")
             .http_only(true)
-            .secure(true)
+            .secure(is_https)
             .same_site(cookie::SameSite::Lax)
             .max_age(cookie::time::Duration::seconds(
                 OIDC_SESSION_EXPIRY.num_seconds(),

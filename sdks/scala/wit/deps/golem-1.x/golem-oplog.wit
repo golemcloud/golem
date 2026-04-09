@@ -359,6 +359,11 @@ interface oplog {
         md5-hash: list<u8>
     }
 
+    record agent-terminated-by-quota-error {
+        environment-id: environment-id,
+        resource-name: string
+    }
+
     /// Describes the error that occurred in the agent
     variant worker-error {
         unknown(string),
@@ -367,11 +372,15 @@ interface oplog {
         out-of-memory,
         exceeded-memory-limit,
         internal-error(string),
+        deterministic-trap(string),
+        transient-error(string),
+        permanent-error(string),
         exceeded-table-limit,
         exceeded-http-call-limit,
         exceeded-rpc-call-limit,
         node-out-of-filesystem-storage,
         agent-exceeded-filesystem-storage-limit,
+        agent-terminated-by-quota(agent-terminated-by-quota-error)
     }
 
     record raw-create-parameters {
@@ -417,7 +426,8 @@ interface oplog {
     record raw-error-parameters {
         timestamp: datetime,
         error: worker-error,
-        retry-from: oplog-index
+        retry-from: oplog-index,
+        inside-atomic-region: bool,
     }
 
     record raw-pending-agent-invocation-parameters {

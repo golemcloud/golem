@@ -14,10 +14,9 @@
 
 use chrono::{DateTime, Utc};
 use golem_common::model::Pod;
-use golem_common::model::resource_definition::{
-    EnforcementAction, ResourceDefinitionId, ResourceLimit,
+use golem_common::model::quota::{
+    EnforcementAction, LeaseEpoch, ResourceDefinitionId, ResourceLimit,
 };
-use golem_service_base::model::quota_lease::{LeaseEpoch, QuotaAllocation};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
@@ -26,10 +25,11 @@ pub enum QuotaLease {
         resource_definition_id: ResourceDefinitionId,
         pod: Pod,
         epoch: LeaseEpoch,
-        allocation: QuotaAllocation,
+        allocated_amount: u64,
         expires_at: DateTime<Utc>,
         resource_limit: ResourceLimit,
         enforcement_action: EnforcementAction,
+        total_available_amount: u64,
     },
     Unlimited {
         pod: Pod,
@@ -37,56 +37,47 @@ pub enum QuotaLease {
     },
 }
 
+impl QuotaLease {
+    pub fn allocation(&self) -> u64 {
+        match self {
+            QuotaLease::Bounded {
+                allocated_amount, ..
+            } => *allocated_amount,
+            QuotaLease::Unlimited { .. } => 0,
+        }
+    }
+}
+
 impl From<QuotaLease> for golem_api_grpc::proto::golem::common::QuotaLease {
     fn from(value: QuotaLease) -> Self {
-        use golem_api_grpc::proto::golem::common::{quota_allocation, quota_lease};
+        use golem_api_grpc::proto::golem::common::quota_lease;
 
         match value {
             QuotaLease::Bounded {
                 resource_definition_id,
                 pod,
                 epoch,
-                allocation,
+                allocated_amount,
                 expires_at,
                 resource_limit,
                 enforcement_action,
-            } => {
-                let grpc_allocation = match allocation {
-                    QuotaAllocation::Budget { amount } => {
-                        golem_api_grpc::proto::golem::common::QuotaAllocation {
-                            kind: Some(quota_allocation::Kind::Budget(quota_allocation::Budget {
-                                amount,
-                            })),
-                        }
-                    }
-                    QuotaAllocation::Exhausted { retry_after } => {
-                        golem_api_grpc::proto::golem::common::QuotaAllocation {
-                            kind: Some(quota_allocation::Kind::Exhausted(
-                                quota_allocation::Exhausted {
-                                    retry_after_nanos: retry_after.as_nanos() as u64,
-                                },
-                            )),
-                        }
-                    }
-                };
-                Self {
-                    kind: Some(quota_lease::Kind::Bounded(quota_lease::Bounded {
-                        resource_definition_id: Some(resource_definition_id.into()),
-                        pod: Some(pod.into()),
-                        epoch: epoch.0,
-                        allocation: Some(grpc_allocation),
-                        expires_at: Some(prost_types::Timestamp::from(SystemTime::from(
-                            expires_at,
-                        ))),
-                        resource_limit: Some(resource_limit.into()),
-                        enforcement_action:
-                            golem_api_grpc::proto::golem::common::EnforcementAction::from(
-                                enforcement_action,
-                            )
-                            .into(),
-                    })),
-                }
-            }
+                total_available_amount,
+            } => Self {
+                kind: Some(quota_lease::Kind::Bounded(quota_lease::Bounded {
+                    resource_definition_id: Some(resource_definition_id.into()),
+                    pod: Some(pod.into()),
+                    epoch: epoch.0,
+                    allocation: allocated_amount,
+                    expires_at: Some(prost_types::Timestamp::from(SystemTime::from(expires_at))),
+                    resource_limit: Some(resource_limit.into()),
+                    enforcement_action:
+                        golem_api_grpc::proto::golem::common::EnforcementAction::from(
+                            enforcement_action,
+                        )
+                        .into(),
+                    total_available_amount,
+                })),
+            },
             QuotaLease::Unlimited { pod, expires_at } => Self {
                 kind: Some(quota_lease::Kind::Unlimited(quota_lease::Unlimited {
                     pod: Some(pod.into()),

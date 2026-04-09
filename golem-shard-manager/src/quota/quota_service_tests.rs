@@ -20,12 +20,12 @@ use crate::config::QuotaServiceConfig;
 use async_trait::async_trait;
 use golem_common::model::Pod;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::resource_definition::{
+use golem_common::model::quota::LeaseEpoch;
+use golem_common::model::quota::{
     EnforcementAction, ResourceCapacityLimit, ResourceConcurrencyLimit, ResourceDefinition,
     ResourceDefinitionId, ResourceDefinitionRevision, ResourceLimit, ResourceName,
     ResourceRateLimit, TimePeriod,
 };
-use golem_service_base::model::quota_lease::{LeaseEpoch, QuotaAllocation};
 use sqlx::types::Json;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
@@ -92,7 +92,6 @@ fn test_config() -> QuotaServiceConfig {
         lease_duration: Duration::from_secs(60),
         definition_staleness_ttl: Duration::from_secs(300),
         min_executors: 2,
-        exhausted_retry_after: Duration::from_secs(30),
     }
 }
 
@@ -209,10 +208,12 @@ impl QuotaLease {
         }
     }
 
-    fn allocation(&self) -> &QuotaAllocation {
+    fn allocated_amount(&self) -> u64 {
         match self {
-            QuotaLease::Bounded { allocation, .. } => allocation,
-            QuotaLease::Unlimited { .. } => panic!("allocation() called on Unlimited lease"),
+            QuotaLease::Bounded {
+                allocated_amount, ..
+            } => *allocated_amount,
+            QuotaLease::Unlimited { .. } => panic!("allocated_amount() called on Unlimited lease"),
         }
     }
 }
@@ -330,7 +331,10 @@ async fn renew_lease_succeeds_with_correct_epoch() {
         .await
         .unwrap();
 
-    let l2 = svc.renew_lease(id, pod, l1.epoch(), 0).await.unwrap();
+    let l2 = svc
+        .renew_lease(id, pod, l1.epoch(), 0, vec![])
+        .await
+        .unwrap();
 
     assert_eq!(l2.id(), id);
     assert_eq!(l2.epoch(), l1.epoch().next());
@@ -351,12 +355,18 @@ async fn renew_lease_rejects_stale_epoch() {
         .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
-    let l2 = svc.renew_lease(id, pod, l1.epoch(), 0).await.unwrap();
+    let l2 = svc
+        .renew_lease(id, pod, l1.epoch(), 0, vec![])
+        .await
+        .unwrap();
 
-    let result = svc.renew_lease(id, pod, l1.epoch(), 0).await;
+    let result = svc.renew_lease(id, pod, l1.epoch(), 0, vec![]).await;
     assert!(matches!(result, Err(QuotaError::StaleEpoch { .. })));
 
-    let l3 = svc.renew_lease(id, pod, l2.epoch(), 0).await.unwrap();
+    let l3 = svc
+        .renew_lease(id, pod, l2.epoch(), 0, vec![])
+        .await
+        .unwrap();
     assert_eq!(l3.epoch(), l2.epoch().next());
 }
 
@@ -375,7 +385,7 @@ async fn renew_lease_fails_for_unknown_pod() {
         .unwrap();
 
     let result = svc
-        .renew_lease(id, test_pod_2(), LeaseEpoch::initial(), 0)
+        .renew_lease(id, test_pod_2(), LeaseEpoch::initial(), 0, vec![])
         .await;
     assert!(matches!(result, Err(QuotaError::LeaseNotFound { .. })));
 }
@@ -403,6 +413,7 @@ async fn renew_lease_fails_for_unknown_resource() {
             test_pod(),
             LeaseEpoch::initial(),
             0,
+            vec![],
         )
         .await;
     assert!(matches!(result, Err(QuotaError::LeaseNotFound { .. })));
@@ -428,7 +439,7 @@ async fn renew_lease_fails_for_deleted_resource() {
     fetcher.remove(env, "tokens").await;
     svc.on_resource_definition_changed(id).await;
 
-    let result = svc.renew_lease(id, pod, l1.epoch(), 0).await;
+    let result = svc.renew_lease(id, pod, l1.epoch(), 0, vec![]).await;
     assert!(matches!(result, Err(QuotaError::LeaseNotFound { .. })));
 }
 
@@ -515,7 +526,7 @@ async fn release_lease_removes_pod_from_leases() {
 
     svc.release_lease(id, pod, l1.epoch(), 0).await.unwrap();
 
-    let result = svc.renew_lease(id, pod, l1.epoch(), 0).await;
+    let result = svc.renew_lease(id, pod, l1.epoch(), 0, vec![]).await;
     assert!(matches!(result, Err(QuotaError::LeaseNotFound { .. })));
 }
 
@@ -534,7 +545,10 @@ async fn release_lease_rejects_stale_epoch() {
         .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
-    let l2 = svc.renew_lease(id, pod, l1.epoch(), 0).await.unwrap();
+    let l2 = svc
+        .renew_lease(id, pod, l1.epoch(), 0, vec![])
+        .await
+        .unwrap();
 
     let result = svc.release_lease(id, pod, l1.epoch(), 0).await;
     assert!(matches!(result, Err(QuotaError::StaleEpoch { .. })));
@@ -700,7 +714,7 @@ async fn single_pod_gets_fair_share_not_full_budget() {
         .await
         .unwrap();
 
-    assert_eq!(*lease.allocation(), QuotaAllocation::Budget { amount: 50 });
+    assert_eq!(lease.allocated_amount(), 50);
 }
 
 #[test]
@@ -718,14 +732,14 @@ async fn two_pods_each_get_fair_share() {
         .await
         .unwrap();
     // First pod: 100 / max(1, 2) = 50.
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 50 });
+    assert_eq!(l1.allocated_amount(), 50);
 
     let l2 = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod_2())
         .await
         .unwrap();
     // Second pod: 50 remaining / max(2, 2) = 25.
-    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 25 });
+    assert_eq!(l2.allocated_amount(), 25);
 }
 
 #[test]
@@ -742,16 +756,16 @@ async fn renew_returns_unused_and_reallocates() {
         .await
         .unwrap();
     // Gets 50 (100 / min_executors=2).
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 50 });
+    assert_eq!(l1.allocated_amount(), 50);
 
     // Pod used 10, returning 40 unused.
     let l2 = svc
-        .renew_lease(l1.id(), test_pod(), l1.epoch(), 40)
+        .renew_lease(l1.id(), test_pod(), l1.epoch(), 40, vec![])
         .await
         .unwrap();
 
     // Remaining was 50, +40 returned = 90. Single pod: 90 / max(1,2) = 45.
-    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 45 });
+    assert_eq!(l2.allocated_amount(), 45);
 }
 
 #[test]
@@ -768,7 +782,7 @@ async fn release_returns_unused_to_pool() {
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
         .await
         .unwrap();
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 50 });
+    assert_eq!(l1.allocated_amount(), 50);
 
     // Release with 30 unused.
     svc.release_lease(id, test_pod(), l1.epoch(), 30)
@@ -780,7 +794,7 @@ async fn release_returns_unused_to_pool() {
         .acquire_lease(env, ResourceName("tokens".into()), test_pod_2())
         .await
         .unwrap();
-    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 40 });
+    assert_eq!(l2.allocated_amount(), 40);
 }
 
 #[test]
@@ -796,15 +810,15 @@ async fn unused_capped_at_allocated() {
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
         .await
         .unwrap();
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 50 });
+    assert_eq!(l1.allocated_amount(), 50);
 
     // Executor claims 200 unused — capped at allocated (50).
     // Remaining was 50, +50 returned = 100. 100 / max(1,2) = 50.
     let l2 = svc
-        .renew_lease(l1.id(), test_pod(), l1.epoch(), 200)
+        .renew_lease(l1.id(), test_pod(), l1.epoch(), 200, vec![])
         .await
         .unwrap();
-    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 50 });
+    assert_eq!(l2.allocated_amount(), 50);
 }
 
 #[test]
@@ -825,13 +839,13 @@ async fn exhausted_when_no_remaining_budget() {
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
         .await
         .unwrap();
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 100 });
+    assert_eq!(l1.allocated_amount(), 100);
 
     let l2 = svc
         .acquire_lease(env, ResourceName("tokens".into()), test_pod_2())
         .await
         .unwrap();
-    assert!(matches!(l2.allocation(), QuotaAllocation::Exhausted { .. }));
+    assert_eq!(l2.allocated_amount(), 0);
 }
 
 fn make_concurrency_definition(
@@ -870,7 +884,7 @@ async fn concurrency_expired_lease_returns_slots() {
         .acquire_lease(env, ResourceName("workers".into()), pod)
         .await
         .unwrap();
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 10 });
+    assert_eq!(l1.allocated_amount(), 10);
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -879,7 +893,7 @@ async fn concurrency_expired_lease_returns_slots() {
         .acquire_lease(env, ResourceName("workers".into()), test_pod_2())
         .await
         .unwrap();
-    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 10 });
+    assert_eq!(l2.allocated_amount(), 10);
 }
 
 #[test]
@@ -900,7 +914,7 @@ async fn concurrency_release_returns_all_slots() {
         .acquire_lease(env, ResourceName("workers".into()), test_pod())
         .await
         .unwrap();
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 10 });
+    assert_eq!(l1.allocated_amount(), 10);
 
     // Release with unused=0 — but concurrency always returns all slots.
     svc.release_lease(id, test_pod(), l1.epoch(), 0)
@@ -911,7 +925,7 @@ async fn concurrency_release_returns_all_slots() {
         .acquire_lease(env, ResourceName("workers".into()), test_pod_2())
         .await
         .unwrap();
-    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 10 });
+    assert_eq!(l2.allocated_amount(), 10);
 }
 
 #[test]
@@ -932,7 +946,7 @@ async fn capacity_expired_lease_loses_budget() {
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
         .await
         .unwrap();
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 100 });
+    assert_eq!(l1.allocated_amount(), 100);
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -941,7 +955,7 @@ async fn capacity_expired_lease_loses_budget() {
         .acquire_lease(env, ResourceName("tokens".into()), test_pod_2())
         .await
         .unwrap();
-    assert!(matches!(l2.allocation(), QuotaAllocation::Exhausted { .. }));
+    assert_eq!(l2.allocated_amount(), 0);
 }
 
 #[test]
@@ -962,7 +976,7 @@ async fn capacity_release_returns_only_reported_unused() {
         .acquire_lease(env, ResourceName("tokens".into()), test_pod())
         .await
         .unwrap();
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 100 });
+    assert_eq!(l1.allocated_amount(), 100);
 
     // Executor consumed 60, returning 40 unused.
     svc.release_lease(id, test_pod(), l1.epoch(), 40)
@@ -974,7 +988,7 @@ async fn capacity_release_returns_only_reported_unused() {
         .await
         .unwrap();
     // Only the 40 unused was returned, not the full 100.
-    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 40 });
+    assert_eq!(l2.allocated_amount(), 40);
 }
 
 fn make_rate_definition(
@@ -1014,7 +1028,7 @@ async fn rate_limit_allocates_from_pool() {
         .acquire_lease(env, ResourceName("api-calls".into()), test_pod())
         .await
         .unwrap();
-    assert_eq!(*lease.allocation(), QuotaAllocation::Budget { amount: 100 });
+    assert_eq!(lease.allocated_amount(), 100);
 }
 
 #[test]
@@ -1031,14 +1045,14 @@ async fn rate_limit_divides_pool_across_executors() {
         .acquire_lease(env, ResourceName("api-calls".into()), test_pod())
         .await
         .unwrap();
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 50 });
+    assert_eq!(l1.allocated_amount(), 50);
 
     let l2 = svc
         .acquire_lease(env, ResourceName("api-calls".into()), test_pod_2())
         .await
         .unwrap();
     // Remaining 50 / max(2, 2) = 25.
-    assert_eq!(*l2.allocation(), QuotaAllocation::Budget { amount: 25 });
+    assert_eq!(l2.allocated_amount(), 25);
 }
 
 #[test]
@@ -1059,25 +1073,22 @@ async fn rate_limit_renew_returns_unused_to_pool() {
         .acquire_lease(env, ResourceName("api-calls".into()), test_pod())
         .await
         .unwrap();
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 90 });
+    assert_eq!(l1.allocated_amount(), 90);
 
     // Pod 2 acquires — pool is 0, gets Exhausted.
     let l2 = svc
         .acquire_lease(env, ResourceName("api-calls".into()), test_pod_2())
         .await
         .unwrap();
-    assert!(matches!(l2.allocation(), QuotaAllocation::Exhausted { .. }));
+    assert_eq!(l2.allocated_amount(), 0);
 
     // Pod 1 renews returning 45 unused. Pool refills from rate + returned.
     // 45 returned, remaining = 45, divided by 2 active = 22.
     let l1_renewed = svc
-        .renew_lease(l1.id(), test_pod(), l1.epoch(), 45)
+        .renew_lease(l1.id(), test_pod(), l1.epoch(), 45, vec![])
         .await
         .unwrap();
-    assert_eq!(
-        *l1_renewed.allocation(),
-        QuotaAllocation::Budget { amount: 22 }
-    );
+    assert_eq!(l1_renewed.allocated_amount(), 22);
 }
 
 #[test]
@@ -1098,25 +1109,25 @@ async fn rate_limit_refills_after_full_period() {
         .acquire_lease(env, ResourceName("api-calls".into()), test_pod())
         .await
         .unwrap();
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 100 });
+    assert_eq!(l1.allocated_amount(), 100);
 
     // Consume all tokens, wait less than a full period — no refill.
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let l2 = svc
-        .renew_lease(l1.id(), test_pod(), l1.epoch(), 0)
+        .renew_lease(l1.id(), test_pod(), l1.epoch(), 0, vec![])
         .await
         .unwrap();
-    assert!(matches!(l2.allocation(), QuotaAllocation::Exhausted { .. }));
+    assert_eq!(l2.allocated_amount(), 0);
 
     // Wait for a full period to elapse from the start.
     tokio::time::sleep(Duration::from_millis(600)).await;
 
     let l3 = svc
-        .renew_lease(l1.id(), test_pod(), l2.epoch(), 0)
+        .renew_lease(l1.id(), test_pod(), l2.epoch(), 0, vec![])
         .await
         .unwrap();
-    assert_eq!(*l3.allocation(), QuotaAllocation::Budget { amount: 100 });
+    assert_eq!(l3.allocated_amount(), 100);
 }
 
 #[test]
@@ -1137,56 +1148,16 @@ async fn rate_limit_no_partial_refill() {
         .acquire_lease(env, ResourceName("api-calls".into()), test_pod())
         .await
         .unwrap();
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 1000 });
+    assert_eq!(l1.allocated_amount(), 1000);
 
     // Wait 500ms — less than 1 full period. Should get nothing.
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let l2 = svc
-        .renew_lease(l1.id(), test_pod(), l1.epoch(), 0)
+        .renew_lease(l1.id(), test_pod(), l1.epoch(), 0, vec![])
         .await
         .unwrap();
-    // retry_after should hint at the time remaining until next full period (~500ms).
-    match l2.allocation() {
-        QuotaAllocation::Exhausted { retry_after } => {
-            assert!(
-                *retry_after >= Duration::from_millis(400)
-                    && *retry_after <= Duration::from_millis(600),
-                "expected retry_after ~500ms, got {retry_after:?}"
-            );
-        }
-        other => panic!("expected Exhausted, got {other:?}"),
-    }
-}
-
-#[test]
-async fn rate_limit_exhausted_retry_after_uses_config_fallback_not_period() {
-    let fetcher = Arc::new(InMemoryFetcher::new());
-    let env = env_id();
-    let def = make_definition(env, "tokens");
-    fetcher.put(def).await;
-
-    // Capacity limit — no time-based refill, uses config fallback.
-    let config = QuotaServiceConfig {
-        min_executors: 1,
-        exhausted_retry_after: Duration::from_secs(42),
-        ..test_config()
-    };
-    let svc = QuotaService::new(config, fetcher, test_repo());
-    let pod = test_pod();
-
-    let l1 = svc
-        .acquire_lease(env, ResourceName("tokens".into()), pod)
-        .await
-        .unwrap();
-
-    let l2 = svc.renew_lease(l1.id(), pod, l1.epoch(), 0).await.unwrap();
-    match l2.allocation() {
-        QuotaAllocation::Exhausted { retry_after } => {
-            assert_eq!(*retry_after, Duration::from_secs(42));
-        }
-        other => panic!("expected Exhausted, got {other:?}"),
-    }
+    assert_eq!(l2.allocated_amount(), 0);
 }
 
 #[test]
@@ -1207,11 +1178,14 @@ async fn capacity_limit_does_not_refill() {
         .acquire_lease(env, ResourceName("tokens".into()), pod)
         .await
         .unwrap();
-    assert_eq!(*l1.allocation(), QuotaAllocation::Budget { amount: 100 });
+    assert_eq!(l1.allocated_amount(), 100);
 
     // Wait and renew with 0 unused — capacity does not refill.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let l2 = svc.renew_lease(l1.id(), pod, l1.epoch(), 0).await.unwrap();
-    assert!(matches!(l2.allocation(), QuotaAllocation::Exhausted { .. }));
+    let l2 = svc
+        .renew_lease(l1.id(), pod, l1.epoch(), 0, vec![])
+        .await
+        .unwrap();
+    assert_eq!(l2.allocated_amount(), 0);
 }

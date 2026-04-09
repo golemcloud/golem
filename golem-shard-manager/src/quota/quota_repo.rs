@@ -16,10 +16,11 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use golem_common::error_forwarding;
-use golem_common::model::resource_definition::{ResourceDefinition, ResourceDefinitionId};
+use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, Pool};
+use golem_service_base::model::quota_lease::PendingReservation;
 use golem_service_base::repo::{Blob, NumericU64, RepoError, SqlDateTime};
 use indoc::indoc;
 use sqlx::types::Json;
@@ -59,6 +60,7 @@ pub struct QuotaLeaseRecord {
     pub allocated: NumericU64,
     pub granted_at: SqlDateTime,
     pub expires_at: SqlDateTime,
+    pub pending_reservations: Blob<Vec<PendingReservation>>,
 }
 
 #[async_trait]
@@ -331,7 +333,8 @@ impl QuotaRepo for DbQuotaRepo<PostgresPool> {
             .with_ro(SVC_NAME, "get_all_leases")
             .fetch_all_as(sqlx::query_as(indoc! { r#"
                 SELECT resource_definition_id, pod_ip, pod_port,
-                       epoch, allocated, granted_at, expires_at
+                       epoch, allocated, granted_at, expires_at,
+                       pending_reservations
                 FROM quota_leases
             "#}))
             .await?;
@@ -403,14 +406,16 @@ impl DbQuotaRepo<PostgresPool> {
             sqlx::query(indoc! { r#"
                 INSERT INTO quota_leases
                     (resource_definition_id, pod_ip, pod_port,
-                     epoch, allocated, granted_at, expires_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     epoch, allocated, granted_at, expires_at,
+                     pending_reservations)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 ON CONFLICT (resource_definition_id, pod_ip, pod_port)
                 DO UPDATE SET
                     epoch = $4,
                     allocated = $5,
                     granted_at = $6,
-                    expires_at = $7
+                    expires_at = $7,
+                    pending_reservations = $8
             "#})
             .bind(record.resource_definition_id)
             .bind(record.pod_ip)
@@ -418,7 +423,8 @@ impl DbQuotaRepo<PostgresPool> {
             .bind(record.epoch)
             .bind(record.allocated)
             .bind(record.granted_at.clone())
-            .bind(record.expires_at.clone()),
+            .bind(record.expires_at.clone())
+            .bind(&record.pending_reservations),
         )
         .await?;
         Ok(())

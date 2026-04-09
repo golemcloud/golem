@@ -146,7 +146,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
         let pod = make_pod(source_ip, request.port)?;
 
-        let name = golem_common::model::resource_definition::ResourceName(request.resource_name);
+        let name = golem_common::model::quota::ResourceName(request.resource_name);
 
         match self
             .quota_service
@@ -197,11 +197,23 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
         let pod = make_pod(source_ip, request.port)?;
 
-        let epoch = golem_service_base::model::quota_lease::LeaseEpoch(request.epoch);
+        let epoch = golem_common::model::quota::LeaseEpoch(request.epoch);
+
+        let pending_reservations = request
+            .pending_reservations
+            .into_iter()
+            .map(Into::into)
+            .collect();
 
         match self
             .quota_service
-            .renew_lease(resource_definition_id, pod, epoch, request.unused)
+            .renew_lease(
+                resource_definition_id,
+                pod,
+                epoch,
+                request.unused,
+                pending_reservations,
+            )
             .await
         {
             Ok(lease) => {
@@ -248,7 +260,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
         let pod = make_pod(source_ip, request.port)?;
 
-        let epoch = golem_service_base::model::quota_lease::LeaseEpoch(request.epoch);
+        let epoch = golem_common::model::quota::LeaseEpoch(request.epoch);
 
         match self
             .quota_service

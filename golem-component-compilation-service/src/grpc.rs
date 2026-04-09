@@ -22,6 +22,7 @@ use golem_api_grpc::proto::golem::componentcompilation::v1::{
     ComponentCompilationError, ComponentCompilationRequest, ComponentCompilationResponse,
     component_compilation_error, component_compilation_response,
 };
+use golem_common::base_model::api;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::ComponentId;
 use golem_common::recorded_grpc_api_request;
@@ -117,19 +118,31 @@ impl CompileGrpcService {
 
 impl From<crate::model::CompilationError> for ComponentCompilationError {
     fn from(value: crate::model::CompilationError) -> Self {
-        let body = ErrorBody {
-            error: value.to_string(),
-        };
-
         let error = match value {
             crate::model::CompilationError::ComponentNotFound(_) => {
-                component_compilation_error::Error::NotFound(body)
+                component_compilation_error::Error::NotFound(ErrorBody {
+                    error: value.to_string(),
+                    code: api::error_code::COMPONENT_NOT_FOUND.to_string(),
+                })
             }
-            crate::model::CompilationError::CompileFailure(_)
-            | crate::model::CompilationError::ComponentDownloadFailed(_)
-            | crate::model::CompilationError::ComponentUploadFailed(_)
+            crate::model::CompilationError::CompileFailure(_) => {
+                component_compilation_error::Error::InternalError(ErrorBody {
+                    error: value.to_string(),
+                    code: api::error_code::INTERNAL_COMPONENT_PARSE_FAILED.to_string(),
+                })
+            }
+            crate::model::CompilationError::ComponentDownloadFailed(_) => {
+                component_compilation_error::Error::InternalError(ErrorBody {
+                    error: value.to_string(),
+                    code: api::error_code::INTERNAL_COMPONENT_DOWNLOAD_FAILED.to_string(),
+                })
+            }
+            crate::model::CompilationError::ComponentUploadFailed(_)
             | crate::model::CompilationError::Unexpected(_) => {
-                component_compilation_error::Error::InternalError(body)
+                component_compilation_error::Error::InternalError(ErrorBody {
+                    error: value.to_string(),
+                    code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                })
             }
         };
 
@@ -161,6 +174,7 @@ fn bad_request_error(error: impl Into<String>) -> ComponentCompilationError {
     ComponentCompilationError {
         error: Some(component_compilation_error::Error::BadRequest(ErrorsBody {
             errors: vec![error.into()],
+            code: api::error_code::VALIDATION_ERROR.to_string(),
         })),
     }
 }

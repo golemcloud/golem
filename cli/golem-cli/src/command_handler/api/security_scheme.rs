@@ -20,12 +20,14 @@ use crate::error::service::AnyhowMapServiceError;
 use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::text::http_api_security::{
-    HttpSecuritySchemeCreateView, HttpSecuritySchemeGetView,
+    HttpSecuritySchemeCreateView, HttpSecuritySchemeDeleteView, HttpSecuritySchemeGetView,
+    HttpSecuritySchemeUpdateView,
 };
 use anyhow::bail;
 use golem_client::api::ApiSecurityClient;
-use golem_client::model::SecuritySchemeCreation;
-use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
+use golem_client::model::{SecuritySchemeCreation, SecuritySchemeDto, SecuritySchemeUpdate};
+use golem_common::model::Empty;
+use golem_common::model::security_scheme::{Provider, ProviderKind, SecuritySchemeName};
 use std::sync::Arc;
 
 pub struct ApiSecuritySchemeCommandHandler {
@@ -42,6 +44,8 @@ impl ApiSecuritySchemeCommandHandler {
             ApiSecuritySchemeSubcommand::Create {
                 security_scheme_name,
                 provider_type,
+                custom_provider_name,
+                custom_issuer_url,
                 client_id,
                 client_secret,
                 scope,
@@ -50,6 +54,8 @@ impl ApiSecuritySchemeCommandHandler {
                 self.cmd_create(
                     security_scheme_name,
                     provider_type,
+                    custom_provider_name,
+                    custom_issuer_url,
                     client_id,
                     client_secret,
                     scope,
@@ -60,6 +66,51 @@ impl ApiSecuritySchemeCommandHandler {
             ApiSecuritySchemeSubcommand::Get {
                 security_scheme_name,
             } => self.cmd_get(security_scheme_name).await,
+            ApiSecuritySchemeSubcommand::Update {
+                security_scheme_name,
+                provider_type,
+                custom_provider_name,
+                custom_issuer_url,
+                client_id,
+                client_secret,
+                scope,
+                redirect_url,
+            } => {
+                let provider = match provider_type {
+                    Some(kind) => Some(match kind {
+                        ProviderKind::Google => Provider::Google(Empty {}),
+                        ProviderKind::Facebook => Provider::Facebook(Empty {}),
+                        ProviderKind::Microsoft => Provider::Microsoft(Empty {}),
+                        ProviderKind::Gitlab => Provider::Gitlab(Empty {}),
+                        ProviderKind::Custom => {
+                            let name = custom_provider_name.ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "--custom-provider-name is required when provider_type is custom"
+                                )
+                            })?;
+                            let issuer_url = custom_issuer_url.ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "--custom-issuer-url is required when provider_type is custom"
+                                )
+                            })?;
+                            Provider::custom(name, issuer_url).map_err(|e| anyhow::anyhow!(e))?
+                        }
+                    }),
+                    None => None,
+                };
+                self.cmd_update(
+                    security_scheme_name,
+                    provider,
+                    client_id,
+                    client_secret,
+                    scope,
+                    redirect_url,
+                )
+                .await
+            }
+            ApiSecuritySchemeSubcommand::Delete {
+                security_scheme_name,
+            } => self.cmd_delete(security_scheme_name).await,
             ApiSecuritySchemeSubcommand::List => self.cmd_list().await,
         }
     }
@@ -67,12 +118,32 @@ impl ApiSecuritySchemeCommandHandler {
     async fn cmd_create(
         &self,
         security_scheme_name: SecuritySchemeName,
-        provider_type: Provider,
+        provider_kind: ProviderKind,
+        custom_provider_name: Option<String>,
+        custom_issuer_url: Option<String>,
         client_id: String,
         client_secret: String,
         scopes: Vec<String>,
         redirect_url: String,
     ) -> anyhow::Result<()> {
+        let provider_type = match provider_kind {
+            ProviderKind::Google => Provider::Google(Empty {}),
+            ProviderKind::Facebook => Provider::Facebook(Empty {}),
+            ProviderKind::Microsoft => Provider::Microsoft(Empty {}),
+            ProviderKind::Gitlab => Provider::Gitlab(Empty {}),
+            ProviderKind::Custom => {
+                let name = custom_provider_name.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--custom-provider-name is required when provider_type is custom"
+                    )
+                })?;
+                let issuer_url = custom_issuer_url.ok_or_else(|| {
+                    anyhow::anyhow!("--custom-issuer-url is required when provider_type is custom")
+                })?;
+                Provider::custom(name, issuer_url).map_err(|e| anyhow::anyhow!(e))?
+            }
+        };
+
         let environment = self
             .ctx
             .environment_handler()
@@ -104,7 +175,10 @@ impl ApiSecuritySchemeCommandHandler {
         Ok(())
     }
 
-    async fn cmd_get(&self, security_scheme_name: SecuritySchemeName) -> anyhow::Result<()> {
+    async fn resolve_scheme_by_name(
+        &self,
+        security_scheme_name: &SecuritySchemeName,
+    ) -> anyhow::Result<SecuritySchemeDto> {
         let environment = self
             .ctx
             .environment_handler()
@@ -121,7 +195,7 @@ impl ApiSecuritySchemeCommandHandler {
             .map_service_error()?
             .values
             .into_iter()
-            .find(|s| s.name == security_scheme_name)
+            .find(|s| s.name == *security_scheme_name)
         else {
             log_error(format!(
                 "HTTP API Security Scheme {} not found.",
@@ -130,9 +204,69 @@ impl ApiSecuritySchemeCommandHandler {
             bail!(NonSuccessfulExit);
         };
 
+        Ok(result)
+    }
+
+    async fn cmd_get(&self, security_scheme_name: SecuritySchemeName) -> anyhow::Result<()> {
+        let result = self.resolve_scheme_by_name(&security_scheme_name).await?;
+
         self.ctx
             .log_handler()
             .log_view(&HttpSecuritySchemeGetView(result));
+
+        Ok(())
+    }
+
+    async fn cmd_update(
+        &self,
+        security_scheme_name: SecuritySchemeName,
+        provider_type: Option<Provider>,
+        client_id: Option<String>,
+        client_secret: Option<String>,
+        scopes: Option<Vec<String>>,
+        redirect_url: Option<String>,
+    ) -> anyhow::Result<()> {
+        let scheme = self.resolve_scheme_by_name(&security_scheme_name).await?;
+
+        let clients = self.ctx.golem_clients().await?;
+
+        let result = clients
+            .api_security
+            .update_security_scheme(
+                &scheme.id.0,
+                &SecuritySchemeUpdate {
+                    current_revision: scheme.revision,
+                    provider_type,
+                    client_id,
+                    client_secret,
+                    redirect_url,
+                    scopes,
+                },
+            )
+            .await
+            .map_service_error()?;
+
+        self.ctx
+            .log_handler()
+            .log_view(&HttpSecuritySchemeUpdateView(result));
+
+        Ok(())
+    }
+
+    async fn cmd_delete(&self, security_scheme_name: SecuritySchemeName) -> anyhow::Result<()> {
+        let scheme = self.resolve_scheme_by_name(&security_scheme_name).await?;
+
+        let clients = self.ctx.golem_clients().await?;
+
+        let result = clients
+            .api_security
+            .delete_security_scheme(&scheme.id.0, scheme.revision.get())
+            .await
+            .map_service_error()?;
+
+        self.ctx
+            .log_handler()
+            .log_view(&HttpSecuritySchemeDeleteView(result));
 
         Ok(())
     }

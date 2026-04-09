@@ -49,6 +49,38 @@ impl MessageWithFields for HttpSecuritySchemeGetView {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpSecuritySchemeUpdateView(pub SecuritySchemeDto);
+
+impl MessageWithFields for HttpSecuritySchemeUpdateView {
+    fn message(&self) -> String {
+        format!(
+            "Updated HTTP API Security scheme {}",
+            format_message_highlight(&self.0.name),
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        security_scheme_view_fields(&self.0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpSecuritySchemeDeleteView(pub SecuritySchemeDto);
+
+impl MessageWithFields for HttpSecuritySchemeDeleteView {
+    fn message(&self) -> String {
+        format!(
+            "Deleted HTTP API Security scheme {}",
+            format_message_highlight(&self.0.name),
+        )
+    }
+
+    fn fields(&self) -> Vec<(String, String)> {
+        security_scheme_view_fields(&self.0)
+    }
+}
+
 fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)> {
     let mut fields = FieldsBuilder::new();
 

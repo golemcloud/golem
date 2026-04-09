@@ -175,9 +175,6 @@ pub struct QuotaServiceConfig {
     /// Minimum number of executors to plan for when dividing budget.
     /// Prevents the first executor from taking the entire quota.
     pub min_executors: u64,
-    /// Suggested retry delay when no capacity is available.
-    #[serde(with = "humantime_serde")]
-    pub exhausted_retry_after: Duration,
 }
 
 impl SafeDisplay for QuotaServiceConfig {
@@ -190,11 +187,6 @@ impl SafeDisplay for QuotaServiceConfig {
             self.definition_staleness_ttl
         );
         let _ = writeln!(&mut result, "min executors: {}", self.min_executors);
-        let _ = writeln!(
-            &mut result,
-            "exhausted retry after: {:?}",
-            self.exhausted_retry_after
-        );
         result
     }
 }
@@ -205,7 +197,6 @@ impl Default for QuotaServiceConfig {
             lease_duration: Duration::from_secs(60),
             definition_staleness_ttl: Duration::from_secs(5 * 60),
             min_executors: 2,
-            exhausted_retry_after: Duration::from_secs(30),
         }
     }
 }

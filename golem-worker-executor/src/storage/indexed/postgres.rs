@@ -118,7 +118,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         _svc_name: &'static str,
         _api_name: &'static str,
     ) -> Result<u8, String> {
-        Ok(1)
+        Ok(0)
     }
 
     async fn wait_for_replicas(
@@ -128,7 +128,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         _replicas: u8,
         _timeout: Duration,
     ) -> Result<u8, String> {
-        Ok(1)
+        Ok(0)
     }
 
     async fn exists(

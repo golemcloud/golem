@@ -30,7 +30,6 @@ type = "Grpc"
 
 [quota]
 definition_staleness_ttl = "5m"
-exhausted_retry_after = "30s"
 lease_duration = "1m"
 min_executors = 2
 
@@ -171,7 +170,6 @@ type = "Disabled"
 # 
 # [quota]
 # definition_staleness_ttl = "5m"
-# exhausted_retry_after = "30s"
 # lease_duration = "1m"
 # min_executors = 2
 # 
