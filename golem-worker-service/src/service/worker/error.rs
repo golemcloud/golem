@@ -14,6 +14,7 @@
 
 use crate::service::auth::AuthServiceError;
 use crate::service::component::ComponentServiceError;
+use crate::service::limit::LimitServiceError;
 use crate::service::worker::CallWorkerExecutorError;
 use golem_common::SafeDisplay;
 use golem_common::model::AgentId;
@@ -26,6 +27,8 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 pub enum WorkerServiceError {
     #[error(transparent)]
     Component(#[from] ComponentServiceError),
+    #[error(transparent)]
+    LimitError(#[from] LimitServiceError),
     #[error(transparent)]
     AuthError(#[from] AuthServiceError),
     #[error(transparent)]
@@ -63,6 +66,7 @@ impl SafeDisplay for WorkerServiceError {
             Self::InternalCallError(inner) => inner.to_safe_string(),
             Self::FileNotFound(_) => self.to_string(),
             Self::BadFileType(_) => self.to_string(),
+            Self::LimitError(inner) => inner.to_safe_string(),
             Self::AuthError(inner) => inner.to_safe_string(),
             Self::RegistryServiceError(inner) => inner.to_safe_string(),
         }
@@ -105,7 +109,8 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
                 })
             }
 
-            WorkerServiceError::RegistryServiceError(RegistryServiceError::LimitExceeded(_)) => {
+            WorkerServiceError::LimitError(LimitServiceError::LimitExceeded(_))
+            | WorkerServiceError::RegistryServiceError(RegistryServiceError::LimitExceeded(_)) => {
                 Self::LimitExceeded(ErrorBody {
                     error: error.to_safe_string(),
                 })
@@ -118,6 +123,7 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
             WorkerServiceError::Internal(_)
             | WorkerServiceError::RegistryServiceError(_)
             | WorkerServiceError::InternalCallError(_)
+            | WorkerServiceError::LimitError(_)
             | WorkerServiceError::Component(ComponentServiceError::InternalError(_)) => {
                 Self::InternalError(WorkerExecutionError {
                     error: Some(GrpcError::Unknown(UnknownError {

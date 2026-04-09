@@ -27,6 +27,7 @@ use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::{AuthService, RemoteAuthService};
 use crate::service::component::{ComponentService, RemoteComponentService};
+use crate::service::limit::{LimitService, RemoteLimitService};
 use crate::service::worker::{WorkerClient, WorkerExecutorWorkerClient, WorkerService};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::redis::RedisPool;
@@ -41,6 +42,7 @@ use tonic::codec::CompressionEncoding;
 #[derive(Clone)]
 pub struct Services {
     pub auth_service: Arc<dyn AuthService>,
+    pub limit_service: Arc<dyn LimitService>,
     pub component_service: Arc<dyn ComponentService>,
     pub worker_service: Arc<WorkerService>,
     pub request_handler: Arc<RequestHandler>,
@@ -66,6 +68,9 @@ impl Services {
             registry_service_client.clone(),
             &config.component_service,
         ));
+
+        let limit_service: Arc<dyn LimitService> =
+            Arc::new(RemoteLimitService::new(registry_service_client.clone()));
 
         let shard_manager_service: Arc<dyn ShardManager> =
             Arc::new(GrpcShardManager::new(&config.shard_manager));
@@ -101,6 +106,7 @@ impl Services {
         let worker_service: Arc<WorkerService> = Arc::new(WorkerService::new(
             component_service.clone(),
             auth_service.clone(),
+            limit_service.clone(),
             worker_client.clone(),
             agent_resolution_cache.clone(),
         ));
@@ -169,6 +175,7 @@ impl Services {
 
         Ok(Self {
             auth_service,
+            limit_service,
             component_service,
             worker_service,
             request_handler,

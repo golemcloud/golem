@@ -16,6 +16,7 @@ use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::route_resolver::RouteResolverError;
 use crate::service::auth::AuthServiceError;
 use crate::service::component::ComponentServiceError;
+use crate::service::limit::LimitServiceError;
 use crate::service::worker::{CallWorkerExecutorError, WorkerServiceError};
 use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
@@ -177,8 +178,18 @@ impl From<WorkerServiceError> for ApiEndpointError {
             WorkerServiceError::GolemError(inner) => inner.into(),
             WorkerServiceError::Component(inner) => inner.into(),
             WorkerServiceError::InternalCallError(inner) => inner.into(),
+            WorkerServiceError::LimitError(inner) => inner.into(),
             WorkerServiceError::AuthError(inner) => inner.into(),
             WorkerServiceError::RegistryServiceError(inner) => inner.into(),
+        }
+    }
+}
+
+impl From<LimitServiceError> for ApiEndpointError {
+    fn from(error: LimitServiceError) -> Self {
+        match error {
+            LimitServiceError::LimitExceeded(_) => Self::limit_exceeded(error),
+            LimitServiceError::InternalError(_) => Self::internal(error),
         }
     }
 }
