@@ -999,19 +999,13 @@ fn render_errors(
     let display_cases = errors
         .codes
         .iter()
-        .map(|(code, model)| {
-            let body_binding = render_errors_case_binding(model, conventions);
-
+        .map(|(code, _model)| {
             line(
                 unit()
                     + name.clone()
                     + "::Error"
                     + code.to_string()
-                    + "("
-                    + body_binding
-                    + ") => write!(f, \"{}\", "
-                    + render_error_body_to_error(model, conventions)
-                    + "),",
+                    + "(body) => write!(f, \"{}\", format!(\"{body:?}\")),",
             )
         })
         .reduce(|acc, e| acc + e)
@@ -1083,19 +1077,6 @@ fn render_errors(
         unit();
 
     Ok(res)
-}
-
-fn render_error_body_to_error(
-    typ: &DataType,
-    conventions: &HashMap<String, ErrorConvention>,
-) -> RustPrinter {
-    match typ {
-        DataType::Model(model) => {
-            render_errors_expr_for_model(&model.name, "body", conventions, &mut HashSet::new())
-                + ".join(\"\\n\")"
-        }
-        _ => unit() + "format!(\"{body:?}\")",
-    }
 }
 
 fn render_error_body_to_errors(
