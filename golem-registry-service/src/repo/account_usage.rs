@@ -412,7 +412,7 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                     p.plan_id, p.name, p.max_memory_per_worker, p.max_table_elements_per_worker, p.max_disk_space_per_worker,
                     p.max_concurrent_agents_per_executor,
                     p.total_app_count,
-                    p.total_env_count, p.total_component_count, p.total_worker_count, p.total_worker_connection_count,
+                    p.total_env_count, p.total_component_count, p.total_worker_connection_count,
                     p.total_component_storage_bytes, p.monthly_gas_limit, p.monthly_component_upload_limit_bytes,
                     p.per_invocation_http_call_limit, p.per_invocation_rpc_call_limit,
                     p.monthly_http_call_limit, p.monthly_rpc_call_limit

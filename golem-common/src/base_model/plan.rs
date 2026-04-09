@@ -27,7 +27,6 @@ declare_structs! {
         pub app_limit: u64,
         pub env_limit: u64,
         pub component_limit: u64,
-        pub worker_limit: u64,
         pub worker_connection_limit: u64,
         pub storage_limit: u64,
         pub monthly_gas_limit: u64,

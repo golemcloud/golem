@@ -113,34 +113,6 @@ impl AccountUsageService {
         Ok(())
     }
 
-    pub async fn add_worker(
-        &self,
-        account_id: AccountId,
-        auth: &AuthCtx,
-    ) -> Result<(), AccountUsageError> {
-        auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
-        let mut account_usage = self
-            .get_account_usage(account_id, Some(UsageType::TotalWorkerCount))
-            .await?;
-        self.add_checked(&mut account_usage, UsageType::TotalWorkerCount, 1)?;
-        self.account_usage_repo.add(&account_usage).await?;
-        Ok(())
-    }
-
-    pub async fn remove_worker(
-        &self,
-        account_id: AccountId,
-        auth: &AuthCtx,
-    ) -> Result<(), AccountUsageError> {
-        auth.authorize_account_action(account_id, AccountAction::UpdateUsage)?;
-        let mut account_usage = self
-            .get_account_usage(account_id, Some(UsageType::TotalWorkerCount))
-            .await?;
-        self.add_checked(&mut account_usage, UsageType::TotalWorkerCount, -1)?;
-        self.account_usage_repo.add(&account_usage).await?;
-        Ok(())
-    }
-
     pub async fn add_worker_connection(
         &self,
         account_id: AccountId,

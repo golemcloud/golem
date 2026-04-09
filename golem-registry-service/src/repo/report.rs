@@ -106,14 +106,7 @@ impl ReportRepo for DbReportRepo<PostgresPool> {
                                 AND e.deleted_at IS NULL
                                 AND c.deleted_at IS NULL
                         ) as components_count,
-                        COALESCE((
-                            SELECT value
-                            FROM account_usage_stats aus
-                            WHERE
-                                aus.account_id = a.account_id
-                                AND aus.usage_type = 3 -- TotalWorkerCount
-                                AND aus.usage_key = 'total'
-                        ), 0) as workers_count
+                        0 as workers_count
                     FROM accounts a
                     JOIN account_revisions r
                         ON r.account_id = a.account_id

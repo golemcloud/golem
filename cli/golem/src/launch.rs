@@ -238,7 +238,6 @@ fn registry_service_config(
                     app_limit: u64::MAX,
                     env_limit: u64::MAX,
                     component_limit: u64::MAX,
-                    worker_limit: u64::MAX,
                     worker_connection_limit: u64::MAX,
                     storage_limit: u64::MAX,
                     monthly_gas_limit: u64::MAX,
