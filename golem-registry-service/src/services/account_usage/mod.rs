@@ -326,6 +326,7 @@ mod tests {
             per_invocation_rpc_call_limit: NumericU64::new(u64::MAX),
             monthly_http_call_limit: NumericU64::new(u64::MAX),
             monthly_rpc_call_limit: NumericU64::new(u64::MAX),
+            oplog_writes_per_second: NumericU64::new(u64::MAX),
         };
         let mut usage = BTreeMap::new();
         usage.insert(UsageType::TotalComponentStorageBytes, current_storage_bytes);
