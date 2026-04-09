@@ -29,6 +29,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::OwnedSemaphorePermit;
 use tracing::debug;
 
+use crate::metrics::storage::record_filesystem_pool_released;
 use crate::services::active_workers::FilesystemStorageSemaphore;
 
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
@@ -274,7 +275,17 @@ impl FileLoader {
                         // we successfully downloaded the file and set it to read-only, set the cache entry to the file
                         *prelocked_entry = Ok(InitializedCacheEntry {
                             path: path.clone(),
-                            _filesystem_storage_permit: filesystem_storage_permit,
+                            filesystem_storage_permit_bytes: if filesystem_storage_permit.is_some()
+                            {
+                                // Round up to permit granularity (1 permit = 1 KB) so the
+                                // released byte count matches what was actually acquired.
+                                crate::services::active_workers::filesystem_storage_bytes_rounded_up(
+                                    file_size,
+                                )
+                            } else {
+                                0
+                            },
+                            filesystem_storage_permit,
                         });
                     }
                     Err(e) => {
@@ -355,18 +366,38 @@ struct InitializedCacheEntry {
     path: PathBuf,
     /// Storage semaphore permit held for the lifetime of this cache entry.
     /// Acquired on cache miss (first download); `None` when no semaphore is
-    /// configured. Dropped automatically when the last `FileUseToken` holding
-    /// this entry is released, returning the permits to the executor pool.
-    _filesystem_storage_permit: Option<OwnedSemaphorePermit>,
+    /// configured. Only returned to the executor pool if the file is
+    /// successfully deleted
+    filesystem_storage_permit: Option<OwnedSemaphorePermit>,
+    /// Byte count corresponding to `filesystem_storage_permit`, for metrics.
+    filesystem_storage_permit_bytes: u64,
+}
+
+impl InitializedCacheEntry {
+    #[cfg(test)]
+    fn new_for_test(
+        path: PathBuf,
+        permit: Option<OwnedSemaphorePermit>,
+        permit_bytes: u64,
+    ) -> Self {
+        Self {
+            path,
+            filesystem_storage_permit: permit,
+            filesystem_storage_permit_bytes: permit_bytes,
+        }
+    }
 }
 
 impl Drop for InitializedCacheEntry {
     fn drop(&mut self) {
         debug!("Removing file {}", self.path.display());
-        if let Err(e) = std::fs::remove_file(&self.path) {
-            tracing::error!("Failed to remove file {}: {}", self.path.display(), e);
+        std::fs::remove_file(&self.path).expect("Failed to remove cached component file — executor filesystem is in an inconsistent state");
+        // File deleted successfully — disk space is freed, return permits to the pool.
+        let permit = self.filesystem_storage_permit.take();
+        if permit.is_some() && self.filesystem_storage_permit_bytes > 0 {
+            record_filesystem_pool_released(self.filesystem_storage_permit_bytes);
         }
-        // _filesystem_storage_permit is dropped here, returning permits to the semaphore.
+        drop(permit);
     }
 }
 
@@ -521,6 +552,24 @@ mod tests {
             semaphore.available_bytes(),
             pool_bytes as u64,
             "all tokens dropped — full pool must be restored"
+        );
+    }
+
+    /// When file deletion fails on drop (e.g. the file was already removed by
+    /// an external process), the executor must panic — a filesystem that cannot
+    /// delete files is in an inconsistent state and the process should not
+    /// continue. This is preferable to silently over-committing disk space.
+    #[test]
+    fn ro_panics_when_file_deletion_fails() {
+        let result = std::panic::catch_unwind(|| {
+            let nonexistent =
+                std::path::PathBuf::from("/tmp/golem-test-nonexistent-file-12345.wasm");
+            let entry = InitializedCacheEntry::new_for_test(nonexistent, None, 0);
+            drop(entry);
+        });
+        assert!(
+            result.is_err(),
+            "dropping an InitializedCacheEntry with a nonexistent path must panic"
         );
     }
 

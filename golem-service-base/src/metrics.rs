@@ -20,3 +20,105 @@ lazy_static! {
         register_int_counter_vec!("version_info", "Version info of the server", &["version"])
             .unwrap();
 }
+
+pub mod storage {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    pub const STORAGE_TYPE_COMPILATION_CACHE: &str = "compilation_cache";
+
+    lazy_static! {
+        pub static ref STORAGE_BYTES_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
+            "golem_storage_bytes_written_total",
+            "Total bytes written to storage, by storage type, account and environment",
+            &["storage_type", "account_id", "environment_id"]
+        )
+        .unwrap();
+        pub static ref STORAGE_BYTES_DELETED_TOTAL: CounterVec = register_counter_vec!(
+            "golem_storage_bytes_deleted_total",
+            "Total bytes deleted from storage, by storage type, account and environment",
+            &["storage_type", "account_id", "environment_id"]
+        )
+        .unwrap();
+        pub static ref STORAGE_OBJECTS_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
+            "golem_storage_objects_written_total",
+            "Total objects written to storage, by storage type, account and environment",
+            &["storage_type", "account_id", "environment_id"]
+        )
+        .unwrap();
+        pub static ref STORAGE_OBJECTS_DELETED_TOTAL: CounterVec = register_counter_vec!(
+            "golem_storage_objects_deleted_total",
+            "Total objects deleted from storage, by storage type, account and environment",
+            &["storage_type", "account_id", "environment_id"]
+        )
+        .unwrap();
+        pub static ref COMPILATION_CACHE_BYTES_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
+            "golem_compilation_cache_bytes_written_total",
+            "Total bytes written to the compiled component cache, by environment",
+            &["storage_type", "environment_id"]
+        )
+        .unwrap();
+        pub static ref COMPILATION_CACHE_OBJECTS_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
+            "golem_compilation_cache_objects_written_total",
+            "Total objects written to the compiled component cache, by environment",
+            &["storage_type", "environment_id"]
+        )
+        .unwrap();
+    }
+
+    pub fn record_storage_bytes_written(
+        storage_type: &str,
+        account_id: &str,
+        environment_id: &str,
+        bytes: u64,
+    ) {
+        STORAGE_BYTES_WRITTEN_TOTAL
+            .with_label_values(&[storage_type, account_id, environment_id])
+            .inc_by(bytes as f64);
+    }
+
+    pub fn record_storage_objects_written(
+        storage_type: &str,
+        account_id: &str,
+        environment_id: &str,
+        count: u64,
+    ) {
+        STORAGE_OBJECTS_WRITTEN_TOTAL
+            .with_label_values(&[storage_type, account_id, environment_id])
+            .inc_by(count as f64);
+    }
+
+    pub fn record_storage_bytes_deleted(
+        storage_type: &str,
+        account_id: &str,
+        environment_id: &str,
+        bytes: u64,
+    ) {
+        STORAGE_BYTES_DELETED_TOTAL
+            .with_label_values(&[storage_type, account_id, environment_id])
+            .inc_by(bytes as f64);
+    }
+
+    pub fn record_storage_objects_deleted(
+        storage_type: &str,
+        account_id: &str,
+        environment_id: &str,
+        count: u64,
+    ) {
+        STORAGE_OBJECTS_DELETED_TOTAL
+            .with_label_values(&[storage_type, account_id, environment_id])
+            .inc_by(count as f64);
+    }
+
+    pub fn record_compilation_cache_bytes_written(environment_id: &str, bytes: u64) {
+        COMPILATION_CACHE_BYTES_WRITTEN_TOTAL
+            .with_label_values(&[STORAGE_TYPE_COMPILATION_CACHE, environment_id])
+            .inc_by(bytes as f64);
+    }
+
+    pub fn record_compilation_cache_objects_written(environment_id: &str, count: u64) {
+        COMPILATION_CACHE_OBJECTS_WRITTEN_TOTAL
+            .with_label_values(&[STORAGE_TYPE_COMPILATION_CACHE, environment_id])
+            .inc_by(count as f64);
+    }
+}

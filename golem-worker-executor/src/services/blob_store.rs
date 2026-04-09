@@ -263,7 +263,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         object_name: String,
     ) -> Result<(), BlobStoreError> {
         self.blob_storage
-            .delete_dir(
+            .delete(
                 "blob_store",
                 "delete_object",
                 BlobStorageNamespace::CustomStorage { environment_id },
