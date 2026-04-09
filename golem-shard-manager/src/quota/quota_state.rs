@@ -226,6 +226,10 @@ impl QuotaState {
 
     /// Computes the allocation share for a single executor.
     pub fn compute_allocation(&self, pod: &Pod, min_executors: u64) -> u64 {
+        /// How much more than the exact pending demand to grant, to avoid
+        /// immediately hitting the limit again on the next invocation.
+        const OVERFETCH_FACTOR: f64 = 1.5;
+
         let active_count = self.leases.len() as u64;
         debug_assert!(active_count > 0);
         debug_assert!(min_executors > 0);
@@ -237,11 +241,19 @@ impl QuotaState {
                 .sum()
         }
 
-        let pod_score: f64 = self
-            .leases
-            .get(pod)
+        fn total_pending_amount(reservations: &[PendingReservation]) -> u64 {
+            reservations.iter().map(|r| r.amount).sum()
+        }
+
+        let pod_lease = self.leases.get(pod);
+
+        let pod_score: f64 = pod_lease
             .map(|l| priority_weighted_demand(&l.pending_reservations))
             .unwrap_or(0.0);
+
+        let pod_pending_amount: u64 = pod_lease
+            .map(|l| total_pending_amount(&l.pending_reservations))
+            .unwrap_or(0);
 
         let total_score: f64 = self
             .leases
@@ -249,12 +261,18 @@ impl QuotaState {
             .map(|l| priority_weighted_demand(&l.pending_reservations))
             .sum();
 
-        if total_score > 0.0 && pod_score > 0.0 {
-            ((self.remaining as f64 * pod_score / total_score) as u64).min(self.remaining)
-        } else {
-            let divisor = active_count.max(min_executors);
-            self.remaining / divisor
-        }
+        // even-split baseline — also the floor when there is no demand.
+        let baseline = self.remaining / active_count.max(min_executors);
+
+        // proportional share; 0 when there is no demand (total_score=0).
+        let proportional =
+            (self.remaining as f64 * pod_score / total_score.max(f64::MIN_POSITIVE)) as u64;
+
+        // cap at pending_amount * OVERFETCH_FACTOR, but never below
+        // baseline so the cap is always a valid upper bound for clamp.
+        let cap = ((pod_pending_amount as f64 * OVERFETCH_FACTOR) as u64).max(baseline);
+
+        proportional.clamp(baseline, cap).min(self.remaining)
     }
 
     /// Total capacity for this resource: remaining pool + all outstanding
