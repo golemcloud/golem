@@ -81,7 +81,12 @@ export class CliReplInterop {
           replServer.once('SIGINT', onSigint);
 
           const savedEval = (replServer as any).eval;
-          (replServer as any).eval = (_: string, __: unknown, ___: string, cb: (err: Error | null, result?: unknown) => void) => cb(null, undefined);
+          (replServer as any).eval = (
+            _: string,
+            __: unknown,
+            ___: string,
+            cb: (err: Error | null, result?: unknown) => void,
+          ) => cb(null, undefined);
 
           try {
             await interop.runReplCliCommand(command, rawArgs, abortController.signal);
@@ -261,7 +266,11 @@ export class CliReplInterop {
       args = hook.adaptArgs(args);
     }
 
-    let result = await this.cli.run({ args: command.commandPath.concat(args), mode: 'inherit', signal });
+    let result = await this.cli.run({
+      args: command.commandPath.concat(args),
+      mode: 'inherit',
+      signal,
+    });
 
     if (hook) {
       await hook.handleResult(command.commandPath.concat(args), result);
