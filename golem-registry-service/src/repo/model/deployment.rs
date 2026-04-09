@@ -42,7 +42,9 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::mcp_deployment::McpDeployment;
 use golem_common::model::quota::{ResourceDefinitionCreation, ResourceDefinitionId};
-use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
+use golem_common::model::security_scheme::{
+    CustomProvider, Provider, SecuritySchemeId, SecuritySchemeName,
+};
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::mcp::CompiledMcp;
 use golem_service_base::model::component::Component;
@@ -695,7 +697,7 @@ impl TryFrom<DeploymentCompiledRouteWithSecuritySchemeRecord> for BoundCompiledR
                     let issuer_url = value
                         .security_scheme_custom_issuer_url
                         .ok_or_else(|| anyhow!("Custom provider missing issuer URL"))?;
-                    Provider::Custom { name, issuer_url }
+                    Provider::Custom(CustomProvider { name, issuer_url })
                 } else {
                     Provider::from_str(&provider_type)
                         .map_err(|e| anyhow!("Failed parsing provider type: {e}"))?

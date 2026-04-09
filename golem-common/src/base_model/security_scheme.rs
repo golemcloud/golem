@@ -14,6 +14,7 @@
 
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::validate_lower_kebab_case_identifier;
+use crate::base_model::Empty;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid,
 };
@@ -93,27 +94,34 @@ declare_enums! {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct CustomProvider {
+    pub name: String,
+    pub issuer_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Provider {
-    Google,
-    Facebook,
-    Microsoft,
-    Gitlab,
-    #[serde(rename_all = "camelCase")]
-    Custom {
-        name: String,
-        issuer_url: String,
-    },
+    Google(Empty),
+    Facebook(Empty),
+    Microsoft(Empty),
+    Gitlab(Empty),
+    Custom(CustomProvider),
 }
 
 impl Provider {
     pub fn kind(&self) -> ProviderKind {
         match self {
-            Provider::Google => ProviderKind::Google,
-            Provider::Facebook => ProviderKind::Facebook,
-            Provider::Microsoft => ProviderKind::Microsoft,
-            Provider::Gitlab => ProviderKind::Gitlab,
-            Provider::Custom { .. } => ProviderKind::Custom,
+            Provider::Google(_) => ProviderKind::Google,
+            Provider::Facebook(_) => ProviderKind::Facebook,
+            Provider::Microsoft(_) => ProviderKind::Microsoft,
+            Provider::Gitlab(_) => ProviderKind::Gitlab,
+            Provider::Custom(_) => ProviderKind::Custom,
         }
     }
 
@@ -125,12 +133,12 @@ impl Provider {
         if url.scheme() != "https" && url.scheme() != "http" {
             return Err("Issuer URL must use http or https scheme".to_string());
         }
-        Ok(Provider::Custom { name, issuer_url })
+        Ok(Provider::Custom(CustomProvider { name, issuer_url }))
     }
 
     pub fn validate_issuer_url_strict(&self) -> Result<(), String> {
         match self {
-            Provider::Custom { issuer_url, .. } => {
+            Provider::Custom(CustomProvider { issuer_url, .. }) => {
                 let url =
                     url::Url::parse(issuer_url).map_err(|e| format!("Invalid issuer URL: {e}"))?;
                 if url.scheme() != "https" {
@@ -190,52 +198,4 @@ impl Provider {
     }
 }
 
-#[cfg(feature = "full")]
-mod provider_poem_openapi {
-    use super::Provider;
-    use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
-    use poem_openapi::types::{ParseError, ParseFromJSON, ParseResult, ToJSON, Type};
 
-    impl Type for Provider {
-        const IS_REQUIRED: bool = true;
-
-        type RawValueType = Self;
-        type RawElementValueType = Self;
-
-        fn name() -> std::borrow::Cow<'static, str> {
-            "Provider".into()
-        }
-
-        fn schema_ref() -> MetaSchemaRef {
-            MetaSchemaRef::Reference(Self::name().to_string())
-        }
-
-        fn register(registry: &mut Registry) {
-            let schema = MetaSchema::new("object");
-            registry.create_schema::<Self, _>(Self::name().to_string(), |_| schema);
-        }
-
-        fn as_raw_value(&self) -> Option<&Self::RawValueType> {
-            Some(self)
-        }
-
-        fn raw_element_iter<'a>(
-            &'a self,
-        ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
-            Box::new(self.as_raw_value().into_iter())
-        }
-    }
-
-    impl ParseFromJSON for Provider {
-        fn parse_from_json(value: Option<serde_json::Value>) -> ParseResult<Self> {
-            let value = value.ok_or_else(ParseError::expected_input)?;
-            serde_json::from_value(value).map_err(|e| ParseError::custom(e.to_string()))
-        }
-    }
-
-    impl ToJSON for Provider {
-        fn to_json(&self) -> Option<serde_json::Value> {
-            serde_json::to_value(self).ok()
-        }
-    }
-}

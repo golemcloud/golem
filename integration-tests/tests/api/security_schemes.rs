@@ -19,6 +19,7 @@ use golem_client::api::{
 use golem_common::model::security_scheme::{
     Provider, SecuritySchemeCreation, SecuritySchemeName, SecuritySchemeUpdate,
 };
+use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
 use pretty_assertions::{assert_eq, assert_ne};
@@ -36,7 +37,7 @@ async fn create_and_fetch_security_scheme(deps: &EnvBasedTestDependencies) -> an
 
     let security_scheme_creation = SecuritySchemeCreation {
         name: SecuritySchemeName("test-scheme".to_string()),
-        provider_type: Provider::Google,
+        provider_type: Provider::Google(Empty {}),
         client_id: "client_id".to_string(),
         client_secret: "client_secret".to_string(),
         redirect_url: "http://localhost:9006/auth/callback".to_string(),
@@ -72,7 +73,7 @@ async fn delete_security_scheme(deps: &EnvBasedTestDependencies) -> anyhow::Resu
 
     let security_scheme_creation = SecuritySchemeCreation {
         name: SecuritySchemeName("test-scheme".to_string()),
-        provider_type: Provider::Google,
+        provider_type: Provider::Google(Empty {}),
         client_id: "client_id".to_string(),
         client_secret: "client_secret".to_string(),
         redirect_url: "http://localhost:9006/auth/callback".to_string(),
@@ -117,7 +118,7 @@ async fn invalid_redirect_url_fails_with_bad_request(
 
     let security_scheme_creation = SecuritySchemeCreation {
         name: SecuritySchemeName("test-scheme".to_string()),
-        provider_type: Provider::Google,
+        provider_type: Provider::Google(Empty {}),
         client_id: "client_id".to_string(),
         client_secret: "client_secret".to_string(),
         redirect_url: "http//example.com".to_string(),
@@ -152,7 +153,7 @@ async fn other_users_cannot_see_security_scheme(
 
     let security_scheme_creation = SecuritySchemeCreation {
         name: SecuritySchemeName("test-scheme".to_string()),
-        provider_type: Provider::Google,
+        provider_type: Provider::Google(Empty {}),
         client_id: "client_id".to_string(),
         client_secret: "client_secret".to_string(),
         redirect_url: "http://localhost:9006/auth/callback".to_string(),
@@ -199,7 +200,7 @@ async fn creating_two_security_schemes_with_same_name_fails(
 
     let security_scheme_creation = SecuritySchemeCreation {
         name: SecuritySchemeName("test-scheme".to_string()),
-        provider_type: Provider::Google,
+        provider_type: Provider::Google(Empty {}),
         client_id: "client_id".to_string(),
         client_secret: "client_secret".to_string(),
         redirect_url: "http://localhost:9006/auth/callback".to_string(),
@@ -237,7 +238,7 @@ async fn security_scheme_name_can_be_reused_after_deletion(
 
     let security_scheme_creation = SecuritySchemeCreation {
         name: SecuritySchemeName("test-scheme".to_string()),
-        provider_type: Provider::Google,
+        provider_type: Provider::Google(Empty {}),
         client_id: "client_id".to_string(),
         client_secret: "client_secret".to_string(),
         redirect_url: "http://localhost:9006/auth/callback".to_string(),
@@ -273,7 +274,7 @@ async fn security_scheme_update(deps: &EnvBasedTestDependencies) -> anyhow::Resu
 
     let security_scheme_creation = SecuritySchemeCreation {
         name: SecuritySchemeName("test-scheme".to_string()),
-        provider_type: Provider::Google,
+        provider_type: Provider::Google(Empty {}),
         client_id: "client_id".to_string(),
         client_secret: "client_secret".to_string(),
         redirect_url: "http://localhost:9006/auth/callback".to_string(),
@@ -286,7 +287,7 @@ async fn security_scheme_update(deps: &EnvBasedTestDependencies) -> anyhow::Resu
 
     let security_scheme_update = SecuritySchemeUpdate {
         current_revision: security_scheme.revision,
-        provider_type: Some(Provider::Gitlab),
+        provider_type: Some(Provider::Gitlab(Empty {})),
         client_id: Some("client_id_1".to_string()),
         client_secret: Some("client_secret_1".to_string()),
         redirect_url: Some("http://localhost:9006/auth/callback_1".to_string()),

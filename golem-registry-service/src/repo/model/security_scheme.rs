@@ -19,7 +19,7 @@ use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{
-    Provider, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
+    CustomProvider, Provider, SecuritySchemeId, SecuritySchemeName, SecuritySchemeRevision,
 };
 use golem_service_base::repo::RepoError;
 use golem_service_base::repo::SqlDateTime;
@@ -83,7 +83,7 @@ impl SecuritySchemeRevisionRecord {
         let scopes: String = serde_json::to_string(&scopes).unwrap();
 
         let (custom_provider_name, custom_issuer_url) = match &provider_type {
-            Provider::Custom { name, issuer_url } => (Some(name.clone()), Some(issuer_url.clone())),
+            Provider::Custom(custom) => (Some(custom.name.clone()), Some(custom.issuer_url.clone())),
             _ => (None, None),
         };
 
@@ -91,7 +91,7 @@ impl SecuritySchemeRevisionRecord {
             security_scheme_id: security_scheme_id.0,
             revision_id: SecuritySchemeRevision::INITIAL.into(),
             provider_type: match &provider_type {
-                Provider::Custom { .. } => "custom".to_string(),
+                Provider::Custom(_) => "custom".to_string(),
                 other => other.to_string(),
             },
             client_id,
@@ -109,7 +109,7 @@ impl SecuritySchemeRevisionRecord {
         let scopes: String = serde_json::to_string(&value.scopes).unwrap();
 
         let (custom_provider_name, custom_issuer_url) = match &value.provider_type {
-            Provider::Custom { name, issuer_url } => (Some(name.clone()), Some(issuer_url.clone())),
+            Provider::Custom(custom) => (Some(custom.name.clone()), Some(custom.issuer_url.clone())),
             _ => (None, None),
         };
 
@@ -117,7 +117,7 @@ impl SecuritySchemeRevisionRecord {
             security_scheme_id: value.id.0,
             revision_id: value.revision.into(),
             provider_type: match &value.provider_type {
-                Provider::Custom { .. } => "custom".to_string(),
+                Provider::Custom(_) => "custom".to_string(),
                 other => other.to_string(),
             },
             client_id: value.client_id.into(),
@@ -158,7 +158,7 @@ impl TryFrom<SecuritySchemeExtRevisionRecord> for SecurityScheme {
                 .revision
                 .custom_issuer_url
                 .ok_or_else(|| anyhow!("Custom provider missing issuer URL in database"))?;
-            Provider::Custom { name, issuer_url }
+            Provider::Custom(CustomProvider { name, issuer_url })
         } else {
             Provider::from_str(&value.revision.provider_type)
                 .map_err(|e| anyhow!("Failed parsing provider type: {e}"))?

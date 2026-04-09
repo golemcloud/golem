@@ -26,6 +26,7 @@ use anyhow::bail;
 use golem_client::api::ApiSecurityClient;
 use golem_client::model::SecuritySchemeCreation;
 use golem_common::model::security_scheme::{Provider, ProviderKind, SecuritySchemeName};
+use golem_common::model::Empty;
 use std::sync::Arc;
 
 pub struct ApiSecuritySchemeCommandHandler {
@@ -80,10 +81,10 @@ impl ApiSecuritySchemeCommandHandler {
         redirect_url: String,
     ) -> anyhow::Result<()> {
         let provider_type = match provider_kind {
-            ProviderKind::Google => Provider::Google,
-            ProviderKind::Facebook => Provider::Facebook,
-            ProviderKind::Microsoft => Provider::Microsoft,
-            ProviderKind::Gitlab => Provider::Gitlab,
+            ProviderKind::Google => Provider::Google(Empty {}),
+            ProviderKind::Facebook => Provider::Facebook(Empty {}),
+            ProviderKind::Microsoft => Provider::Microsoft(Empty {}),
+            ProviderKind::Gitlab => Provider::Gitlab(Empty {}),
             ProviderKind::Custom => {
                 let name = custom_provider_name.ok_or_else(|| {
                     anyhow::anyhow!(

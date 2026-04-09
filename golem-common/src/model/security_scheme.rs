@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::Empty;
 use openidconnect::IssuerUrl;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -21,18 +22,22 @@ pub use crate::base_model::security_scheme::*;
 impl Provider {
     pub fn issuer_url(&self) -> Result<IssuerUrl, String> {
         match self {
-            Provider::Google => {
+            Provider::Google(_) => {
                 Ok(IssuerUrl::new("https://accounts.google.com".to_string()).unwrap())
             }
-            Provider::Facebook => {
+            Provider::Facebook(_) => {
                 Ok(IssuerUrl::new("https://www.facebook.com".to_string()).unwrap())
             }
-            Provider::Microsoft => {
+            Provider::Microsoft(_) => {
                 Ok(IssuerUrl::new("https://login.microsoftonline.com".to_string()).unwrap())
             }
-            Provider::Gitlab => Ok(IssuerUrl::new("https://gitlab.com".to_string()).unwrap()),
-            Provider::Custom { issuer_url, .. } => IssuerUrl::new(issuer_url.clone())
-                .map_err(|e| format!("Invalid custom provider issuer URL: {e}")),
+            Provider::Gitlab(_) => {
+                Ok(IssuerUrl::new("https://gitlab.com".to_string()).unwrap())
+            }
+            Provider::Custom(CustomProvider { issuer_url, .. }) => {
+                IssuerUrl::new(issuer_url.clone())
+                    .map_err(|e| format!("Invalid custom provider issuer URL: {e}"))
+            }
         }
     }
 }
@@ -40,11 +45,11 @@ impl Provider {
 impl Display for Provider {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Provider::Google => write!(f, "google"),
-            Provider::Facebook => write!(f, "facebook"),
-            Provider::Microsoft => write!(f, "microsoft"),
-            Provider::Gitlab => write!(f, "gitlab"),
-            Provider::Custom { name, .. } => write!(f, "custom:{name}"),
+            Provider::Google(_) => write!(f, "google"),
+            Provider::Facebook(_) => write!(f, "facebook"),
+            Provider::Microsoft(_) => write!(f, "microsoft"),
+            Provider::Gitlab(_) => write!(f, "gitlab"),
+            Provider::Custom(CustomProvider { name, .. }) => write!(f, "custom:{name}"),
         }
     }
 }
@@ -54,10 +59,10 @@ impl FromStr for Provider {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "google" => Ok(Provider::Google),
-            "facebook" => Ok(Provider::Facebook),
-            "microsoft" => Ok(Provider::Microsoft),
-            "gitlab" => Ok(Provider::Gitlab),
+            "google" => Ok(Provider::Google(Empty {})),
+            "facebook" => Ok(Provider::Facebook(Empty {})),
+            "microsoft" => Ok(Provider::Microsoft(Empty {})),
+            "gitlab" => Ok(Provider::Gitlab(Empty {})),
             _ => Err(format!(
                 "Invalid provider: {s}. Use Provider::Custom for custom providers"
             )),
@@ -89,22 +94,22 @@ mod tests {
 
     #[test]
     fn provider_serialize_known() {
-        let json = serde_json::to_value(&Provider::Google).unwrap();
+        let json = serde_json::to_value(&Provider::Google(Empty {})).unwrap();
         assert_eq!(json["type"], "google");
-        let json = serde_json::to_value(&Provider::Facebook).unwrap();
+        let json = serde_json::to_value(&Provider::Facebook(Empty {})).unwrap();
         assert_eq!(json["type"], "facebook");
-        let json = serde_json::to_value(&Provider::Microsoft).unwrap();
+        let json = serde_json::to_value(&Provider::Microsoft(Empty {})).unwrap();
         assert_eq!(json["type"], "microsoft");
-        let json = serde_json::to_value(&Provider::Gitlab).unwrap();
+        let json = serde_json::to_value(&Provider::Gitlab(Empty {})).unwrap();
         assert_eq!(json["type"], "gitlab");
     }
 
     #[test]
     fn provider_serialize_custom() {
-        let provider = Provider::Custom {
+        let provider = Provider::Custom(CustomProvider {
             name: "my-keycloak".to_string(),
             issuer_url: "https://keycloak.example.com/realms/myrealm".to_string(),
-        };
+        });
         let json = serde_json::to_value(&provider).unwrap();
         assert_eq!(json["type"], "custom");
         assert_eq!(json["name"], "my-keycloak");
@@ -119,22 +124,22 @@ mod tests {
         let json = r#"{"type": "google"}"#;
         assert_eq!(
             serde_json::from_str::<Provider>(json).unwrap(),
-            Provider::Google
+            Provider::Google(Empty {})
         );
         let json = r#"{"type": "facebook"}"#;
         assert_eq!(
             serde_json::from_str::<Provider>(json).unwrap(),
-            Provider::Facebook
+            Provider::Facebook(Empty {})
         );
         let json = r#"{"type": "microsoft"}"#;
         assert_eq!(
             serde_json::from_str::<Provider>(json).unwrap(),
-            Provider::Microsoft
+            Provider::Microsoft(Empty {})
         );
         let json = r#"{"type": "gitlab"}"#;
         assert_eq!(
             serde_json::from_str::<Provider>(json).unwrap(),
-            Provider::Gitlab
+            Provider::Gitlab(Empty {})
         );
     }
 
@@ -144,10 +149,10 @@ mod tests {
         let provider = serde_json::from_str::<Provider>(json).unwrap();
         assert_eq!(
             provider,
-            Provider::Custom {
+            Provider::Custom(CustomProvider {
                 name: "my-keycloak".to_string(),
                 issuer_url: "https://keycloak.example.com/realms/myrealm".to_string(),
-            }
+            })
         );
     }
 
@@ -213,23 +218,23 @@ mod tests {
 
     #[test]
     fn provider_strict_validation_passes_for_known() {
-        assert!(Provider::Google.validate_issuer_url_strict().is_ok());
+        assert!(Provider::Google(Empty {}).validate_issuer_url_strict().is_ok());
     }
 
     #[test]
     fn provider_issuer_url_known() {
-        assert!(Provider::Google.issuer_url().is_ok());
-        assert!(Provider::Facebook.issuer_url().is_ok());
-        assert!(Provider::Microsoft.issuer_url().is_ok());
-        assert!(Provider::Gitlab.issuer_url().is_ok());
+        assert!(Provider::Google(Empty {}).issuer_url().is_ok());
+        assert!(Provider::Facebook(Empty {}).issuer_url().is_ok());
+        assert!(Provider::Microsoft(Empty {}).issuer_url().is_ok());
+        assert!(Provider::Gitlab(Empty {}).issuer_url().is_ok());
     }
 
     #[test]
     fn provider_issuer_url_custom() {
-        let provider = Provider::Custom {
+        let provider = Provider::Custom(CustomProvider {
             name: "test".to_string(),
             issuer_url: "https://keycloak.example.com/realms/test".to_string(),
-        };
+        });
         let url = provider.issuer_url().unwrap();
         assert_eq!(
             url.url().as_str(),
@@ -239,12 +244,12 @@ mod tests {
 
     #[test]
     fn provider_display() {
-        assert_eq!(Provider::Google.to_string(), "google");
+        assert_eq!(Provider::Google(Empty {}).to_string(), "google");
         assert_eq!(
-            Provider::Custom {
+            Provider::Custom(CustomProvider {
                 name: "my-kc".to_string(),
                 issuer_url: "https://kc.example.com".to_string(),
-            }
+            })
             .to_string(),
             "custom:my-kc"
         );
@@ -252,12 +257,12 @@ mod tests {
 
     #[test]
     fn provider_kind_round_trip() {
-        assert_eq!(Provider::Google.kind(), ProviderKind::Google);
+        assert_eq!(Provider::Google(Empty {}).kind(), ProviderKind::Google);
         assert_eq!(
-            Provider::Custom {
+            Provider::Custom(CustomProvider {
                 name: "x".into(),
                 issuer_url: "https://x.com".into(),
-            }
+            })
             .kind(),
             ProviderKind::Custom
         );
@@ -266,20 +271,20 @@ mod tests {
     #[test]
     fn provider_serde_round_trip() {
         for provider in [
-            Provider::Google,
-            Provider::Facebook,
-            Provider::Microsoft,
-            Provider::Gitlab,
+            Provider::Google(Empty {}),
+            Provider::Facebook(Empty {}),
+            Provider::Microsoft(Empty {}),
+            Provider::Gitlab(Empty {}),
         ] {
             let json = serde_json::to_string(&provider).unwrap();
             let back: Provider = serde_json::from_str(&json).unwrap();
             assert_eq!(provider, back);
         }
 
-        let custom = Provider::Custom {
+        let custom = Provider::Custom(CustomProvider {
             name: "test".into(),
             issuer_url: "https://test.example.com".into(),
-        };
+        });
         let json = serde_json::to_string(&custom).unwrap();
         let back: Provider = serde_json::from_str(&json).unwrap();
         assert_eq!(custom, back);
@@ -287,22 +292,25 @@ mod tests {
 }
 
 mod protobuf {
-    use super::Provider;
+    use super::{Empty, Provider};
     use golem_api_grpc::proto::golem::registry::SecuritySchemeProvider as GrpcProvider;
     use golem_api_grpc::proto::golem::registry::security_scheme_provider::Kind as GrpcProviderKind;
     use golem_api_grpc::proto::golem::registry::security_scheme_provider::{
-        CustomProvider, Facebook, Gitlab, Google, Microsoft,
+        CustomProvider as GrpcCustomProvider, Facebook, Gitlab, Google, Microsoft,
     };
 
     impl From<Provider> for GrpcProvider {
         fn from(value: Provider) -> Self {
             let kind = match value {
-                Provider::Google => GrpcProviderKind::Google(Google {}),
-                Provider::Facebook => GrpcProviderKind::Facebook(Facebook {}),
-                Provider::Microsoft => GrpcProviderKind::Microsoft(Microsoft {}),
-                Provider::Gitlab => GrpcProviderKind::Gitlab(Gitlab {}),
-                Provider::Custom { name, issuer_url } => {
-                    GrpcProviderKind::Custom(CustomProvider { name, issuer_url })
+                Provider::Google(_) => GrpcProviderKind::Google(Google {}),
+                Provider::Facebook(_) => GrpcProviderKind::Facebook(Facebook {}),
+                Provider::Microsoft(_) => GrpcProviderKind::Microsoft(Microsoft {}),
+                Provider::Gitlab(_) => GrpcProviderKind::Gitlab(Gitlab {}),
+                Provider::Custom(custom) => {
+                    GrpcProviderKind::Custom(GrpcCustomProvider {
+                        name: custom.name,
+                        issuer_url: custom.issuer_url,
+                    })
                 }
             };
             GrpcProvider { kind: Some(kind) }
@@ -314,10 +322,10 @@ mod protobuf {
 
         fn try_from(value: GrpcProvider) -> Result<Self, String> {
             match value.kind.ok_or("SecuritySchemeProvider.kind is missing")? {
-                GrpcProviderKind::Google(_) => Ok(Self::Google),
-                GrpcProviderKind::Facebook(_) => Ok(Self::Facebook),
-                GrpcProviderKind::Microsoft(_) => Ok(Self::Microsoft),
-                GrpcProviderKind::Gitlab(_) => Ok(Self::Gitlab),
+                GrpcProviderKind::Google(_) => Ok(Self::Google(Empty {})),
+                GrpcProviderKind::Facebook(_) => Ok(Self::Facebook(Empty {})),
+                GrpcProviderKind::Microsoft(_) => Ok(Self::Microsoft(Empty {})),
+                GrpcProviderKind::Gitlab(_) => Ok(Self::Gitlab(Empty {})),
                 GrpcProviderKind::Custom(c) => Self::custom(c.name, c.issuer_url),
             }
         }
