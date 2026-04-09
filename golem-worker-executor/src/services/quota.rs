@@ -22,12 +22,11 @@ use golem_common::model::quota::{Reservation, ReserveResult};
 use golem_service_base::clients::shard_manager::{BatchRenewalEntry, QuotaError, ShardManager};
 use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
 use itertools::Itertools;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::Duration;
 use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
-use tracing::warn;
 use tracing::{Instrument, info, info_span};
 
 type ResourceKey = (EnvironmentId, ResourceName);
@@ -291,12 +290,21 @@ impl Waiter {
 }
 
 struct LeaseEntry {
-    interest: Weak<()>,
+    /// Only read/written while holding the scc bucket lock via `retain_async`
+    /// or `reuse_slot`.  Uses a `std::sync::Mutex` (non-async, uncontended in
+    /// practice since the scc bucket lock already serialises access) so it can
+    /// be accessed synchronously without async overhead.
+    interest: StdMutex<Weak<()>>,
+    /// Guards the mutable lease state and waiter queue.
+    inner: Mutex<LeaseInner>,
+}
+
+struct LeaseInner {
     waiters: Vec<Waiter>,
     lease: TrackedLease,
 }
 
-impl LeaseEntry {
+impl LeaseInner {
     // take the lease, replacing it with a lost lease. Should only be called immediately
     // before releasing the lease back to the shard manager.
     fn take_lease(&mut self) -> TrackedLease {
@@ -338,7 +346,7 @@ pub struct GrpcQuotaService {
     /// Per-resource state, each protected by its own Mutex so that
     /// `try_reserve` and `renew_all` for different resources are fully
     /// concurrent.
-    state: scc::HashMap<ResourceKey, Arc<Mutex<LeaseEntry>>>,
+    state: scc::HashMap<ResourceKey, Arc<LeaseEntry>>,
 }
 
 impl GrpcQuotaService {
@@ -397,7 +405,7 @@ impl GrpcQuotaService {
         );
     }
 
-    async fn get_slot(&self, key: &ResourceKey) -> Option<Arc<Mutex<LeaseEntry>>> {
+    async fn get_slot(&self, key: &ResourceKey) -> Option<Arc<LeaseEntry>> {
         self.state.read_async(key, |_, v| v.clone()).await
     }
 
@@ -480,7 +488,7 @@ impl GrpcQuotaService {
         }
     }
 
-    fn process_waiters(&self, slot: &mut LeaseEntry, key: &ResourceKey) {
+    fn process_waiters(&self, slot: &mut LeaseInner, key: &ResourceKey) {
         info!("processing quota waiters");
         let lease = match &mut slot.lease {
             TrackedLease::Bounded(b) => b,
@@ -551,7 +559,7 @@ impl GrpcQuotaService {
     /// renewal sees the complete waiter list. The renewed lease is applied
     /// and `process_waiters` is called so the waiter may be served
     /// before `rx.await` is even reached.
-    async fn notify_demand(&self, key: &ResourceKey, slot: &mut LeaseEntry) {
+    async fn notify_demand(&self, key: &ResourceKey, slot: &mut LeaseInner) {
         let (environment_id, resource_name) = key;
         match &slot.lease {
             TrackedLease::Bounded(b) => {
@@ -628,48 +636,44 @@ impl GrpcQuotaService {
         }
     }
 
-    /// Try to reuse an existing slot entry by upgrading its interest Arc or
-    /// reviving a dead-but-not-lost entry.  Returns `Some(interest)` on success,
-    /// `None` if the entry is completely dead (Lost) and must be re-acquired.
-    async fn try_reuse_slot<F>(
-        slot_mutex: &Arc<Mutex<LeaseEntry>>,
-        make_interest: &F,
-    ) -> Option<LeaseInterest>
+    /// Reuse an existing entry. Called while holding the scc bucket lock.
+    /// The `StdMutex` on `interest` is uncontended in practice (the bucket
+    /// lock already serialises access) so this never actually blocks.
+    fn reuse_slot<F>(entry: &Arc<LeaseEntry>, make_interest: &F) -> LeaseInterest
     where
         F: Fn(Arc<()>) -> LeaseInterest,
     {
-        let mut slot = slot_mutex.lock().await;
-        if let Some(arc) = slot.interest.upgrade() {
-            return Some(make_interest(arc));
-        }
-        // Interest is dead but lease is still valid — revive it.
-        if !matches!(slot.lease, TrackedLease::Lost) {
+        let mut interest = entry.interest.lock().unwrap();
+        if let Some(arc) = interest.upgrade() {
+            make_interest(arc)
+        } else {
             let arc = Arc::new(());
-            slot.interest = Arc::downgrade(&arc);
-            return Some(make_interest(arc));
+            *interest = Arc::downgrade(&arc);
+            make_interest(arc)
         }
-        None
     }
 
     async fn renew_all(&self) {
         info!("running renew_all loop");
 
         // phase 1: collect live and dead slots
-        let mut entries_to_renew: Vec<(ResourceKey, Arc<Mutex<LeaseEntry>>)> = Vec::new();
+        let mut entries_to_renew: Vec<(ResourceKey, Arc<LeaseEntry>)> = Vec::new();
         let mut leases_to_release: Vec<TrackedLease> = Vec::new();
 
         self.state
-            .retain_async(|key, slot_mutex| {
-                if let Ok(mut slot) = slot_mutex.try_lock() {
-                    if slot.interest.strong_count() == 0 {
-                        leases_to_release.push(slot.take_lease());
-                        false
+            .retain_async(|key, entry| {
+                let is_dead = entry.interest.lock().unwrap().strong_count() == 0;
+                if is_dead {
+                    // Try to take the lease for release; skip if inner is locked.
+                    if let Ok(mut inner) = entry.inner.try_lock() {
+                        leases_to_release.push(inner.take_lease());
+                        false // remove from map
                     } else {
-                        entries_to_renew.push((key.clone(), slot_mutex.clone()));
+                        // Inner is locked — keep for next pass.
                         true
                     }
                 } else {
-                    // keep leases we couldn't lock, we are going to proccess them on the next pass
+                    entries_to_renew.push((key.clone(), entry.clone()));
                     true
                 }
             })
@@ -687,11 +691,11 @@ impl GrpcQuotaService {
         let renewal_threshold = chrono::Duration::from_std(self.renewal_interval * 2)
             .expect("renewal_interval should result in valid renewal_threshold");
 
-        let mut bounded_to_renew: Vec<(ResourceKey, Arc<Mutex<LeaseEntry>>)> = Vec::new();
-        let mut unlimited_to_renew: Vec<(ResourceKey, Arc<Mutex<LeaseEntry>>)> = Vec::new();
+        let mut bounded_to_renew: Vec<(ResourceKey, Arc<LeaseEntry>)> = Vec::new();
+        let mut unlimited_to_renew: Vec<(ResourceKey, Arc<LeaseEntry>)> = Vec::new();
 
         for (key, slot_mutex) in &entries_to_renew {
-            let slot = slot_mutex.lock().await;
+            let slot = slot_mutex.inner.lock().await;
             match &slot.lease {
                 TrackedLease::Bounded(b) => {
                     if b.expires_at - Utc::now() >= renewal_threshold {
@@ -713,7 +717,7 @@ impl GrpcQuotaService {
         if !bounded_to_renew.is_empty() {
             let mut batch: Vec<BatchRenewalEntry> = Vec::with_capacity(bounded_to_renew.len());
             for (_, slot_mutex) in &bounded_to_renew {
-                let slot = slot_mutex.lock().await;
+                let slot = slot_mutex.inner.lock().await;
                 if let TrackedLease::Bounded(b) = &slot.lease {
                     batch.push(BatchRenewalEntry {
                         resource_definition_id: b.resource_definition_id,
@@ -736,7 +740,7 @@ impl GrpcQuotaService {
                     for ((key, slot_mutex), result) in
                         bounded_to_renew.iter().zip(results.into_iter())
                     {
-                        let mut slot = slot_mutex.lock().await;
+                        let mut slot = slot_mutex.inner.lock().await;
                         let expires_at = if let TrackedLease::Bounded(b) = &slot.lease {
                             b.expires_at
                         } else {
@@ -795,7 +799,7 @@ impl GrpcQuotaService {
         // Renew unlimited leases individually
         for (key, slot_mutex) in &unlimited_to_renew {
             let (environment_id, resource_name) = key;
-            let mut slot = slot_mutex.lock().await;
+            let mut slot = slot_mutex.inner.lock().await;
             if let TrackedLease::Unlimited(u) = &slot.lease {
                 let expires_at = u.expires_at;
                 match self
@@ -822,7 +826,7 @@ impl GrpcQuotaService {
         // If re-acquire fails we leave the entry as Lost and retry next loop.
         for (key, slot_mutex) in &entries_to_renew {
             let (environment_id, resource_name) = key;
-            let is_lost = matches!(slot_mutex.lock().await.lease, TrackedLease::Lost);
+            let is_lost = matches!(slot_mutex.inner.lock().await.lease, TrackedLease::Lost);
             if !is_lost {
                 continue;
             }
@@ -835,7 +839,7 @@ impl GrpcQuotaService {
                 .await
             {
                 Ok(new_lease) => {
-                    let mut slot = slot_mutex.lock().await;
+                    let mut slot = slot_mutex.inner.lock().await;
                     // Only update if still Lost — another concurrent path won't exist
                     // given the single renewal task, but guard defensively.
                     if matches!(slot.lease, TrackedLease::Lost) {
@@ -910,56 +914,26 @@ impl QuotaService for GrpcQuotaService {
             _token: arc,
         };
 
-        // Create a prelocked placeholder so concurrent acquires for the
-        // same key block on its mutex rather than firing another RPC.
-        let arc = Arc::new(());
-        let placeholder_mutex = Arc::new(Mutex::new(LeaseEntry {
-            interest: Arc::downgrade(&arc),
-            waiters: Vec::new(),
-            lease: TrackedLease::Lost, // filled in below
-        }));
-        let mut slot = placeholder_mutex.lock().await;
-
-        loop {
-            match self.state.entry_async(key.clone()).await {
-                scc::hash_map::Entry::Occupied(occ) => {
-                    let slot_mutex = occ.get().clone();
-                    drop(occ);
-                    if let Some(interest) = Self::try_reuse_slot(&slot_mutex, &make_interest).await
-                    {
-                        return interest;
-                    }
-                    // Dead entry, loop to try inserting again
-                    continue;
-                }
-                scc::hash_map::Entry::Vacant(vac) => {
-                    // We are first — insert the prelocked placeholder and release
-                    // the scc bucket lock before making the RPC.
-                    vac.insert_entry(placeholder_mutex.clone());
-                    break;
-                }
+        match self.state.entry_async(key.clone()).await {
+            scc::hash_map::Entry::Occupied(occ) => {
+                let slot = occ.get();
+                return Self::reuse_slot(slot, &make_interest);
+            }
+            scc::hash_map::Entry::Vacant(vac) => {
+                // We are first — insert a placeholder with a lost lease.
+                // it will either be reacquired on the next renew_all loop or inline in the next reserve
+                let arc = Arc::new(());
+                let entry = Arc::new(LeaseEntry {
+                    interest: StdMutex::new(Arc::downgrade(&arc)),
+                    inner: Mutex::new(LeaseInner {
+                        waiters: Vec::new(),
+                        lease: TrackedLease::Lost,
+                    }),
+                });
+                vac.insert_entry(entry);
+                make_interest(arc)
             }
         }
-
-        debug!("Acquiring new lease from shard manager");
-
-        let acquire_result = self
-            .client
-            .acquire_quota_lease(environment_id, resource_name, self.port)
-            .await;
-
-        match acquire_result {
-            Ok(new_lease) => {
-                // it's fine if we failed to acquire a lease here. Either try_reserve or the
-                // background renew loop will fix it.
-                slot.lease = Self::from_quota_lease(&new_lease);
-            }
-            Err(e) => {
-                warn!("Failed to acquire new lease from shard manager: {e}")
-            }
-        };
-
-        make_interest(arc)
     }
 
     async fn try_reserve(&self, interest: &mut LeaseInterest, amount: u64) -> ReserveResult {
@@ -975,7 +949,7 @@ impl QuotaService for GrpcQuotaService {
             .await
             .expect("try_reserve called without a prior acquire for this resource");
 
-        let mut slot = slot_mutex.lock().await;
+        let mut slot = slot_mutex.inner.lock().await;
 
         // Enqueue and let process_waiters try to serve immediately.
         let (tx, rx) = oneshot::channel();
@@ -1031,7 +1005,7 @@ impl QuotaService for GrpcQuotaService {
         );
 
         if let Some(slot_mutex) = self.get_slot(&key).await {
-            let mut slot = slot_mutex.lock().await;
+            let mut slot = slot_mutex.inner.lock().await;
             let credit_back_amount = match &mut slot.lease {
                 TrackedLease::Bounded(lease) => match used.cmp(&reserved) {
                     std::cmp::Ordering::Greater => {
@@ -1465,7 +1439,7 @@ mod tests {
                 break false;
             }
             if let Some(slot_mutex) = svc.get_slot(&key).await
-                && !slot_mutex.lock().await.waiters.is_empty()
+                && !slot_mutex.inner.lock().await.waiters.is_empty()
             {
                 break true;
             }
@@ -1516,7 +1490,7 @@ mod tests {
                 break false;
             }
             if let Some(slot) = svc.get_slot(&key).await
-                && !slot.lock().await.waiters.is_empty()
+                && !slot.inner.lock().await.waiters.is_empty()
             {
                 break true;
             }
@@ -1559,12 +1533,16 @@ mod tests {
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
             .await;
 
+        // Prime the slot: the new acquire design inserts a Lost placeholder;
+        // phase 4 of the first renew_all does the initial acquire_quota_lease.
+        svc.renew_all().await;
+
         // Add a waiter for 10 units — possible at acquire time, rejected after renewal.
         let (tx, rx) = oneshot::channel::<WaiterOutcome>();
         {
             let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
             let slot_mutex = svc.get_slot(&key).await.unwrap();
-            let mut slot = slot_mutex.lock().await;
+            let mut slot = slot_mutex.inner.lock().await;
             slot.waiters.push(Waiter::with_credit(10, 0, tx));
         }
 
@@ -1602,13 +1580,17 @@ mod tests {
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
             .await;
 
+        // Prime the slot: acquire inserts a Lost placeholder; phase 4 of the
+        // first renew_all does the initial acquire_quota_lease.
+        svc.renew_all().await;
+
         // Enqueue two waiters directly to avoid ordering races.
         let (tx_a, mut rx_a) = oneshot::channel::<WaiterOutcome>();
         let (tx_b, rx_b) = oneshot::channel::<WaiterOutcome>();
         {
             let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
             let slot_mutex = svc.get_slot(&key).await.unwrap();
-            let mut slot = slot_mutex.lock().await;
+            let mut slot = slot_mutex.inner.lock().await;
             // Low priority: credit=0, amount=20 → priority 0.0
             slot.waiters.push(Waiter::with_credit(20, 0, tx_a));
             // High priority: credit=1000, amount=20 → priority 50.0
@@ -1665,7 +1647,7 @@ mod tests {
                 break false;
             }
             if let Some(slot_mutex) = svc.get_slot(&key).await
-                && !slot_mutex.lock().await.waiters.is_empty()
+                && !slot_mutex.inner.lock().await.waiters.is_empty()
             {
                 break true;
             }
@@ -1716,7 +1698,7 @@ mod tests {
                 break false;
             }
             if let Some(slot_mutex) = svc.get_slot(&key).await
-                && !slot_mutex.lock().await.waiters.is_empty()
+                && !slot_mutex.inner.lock().await.waiters.is_empty()
             {
                 break true;
             }
@@ -1757,7 +1739,7 @@ mod tests {
         {
             let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
             let slot_mutex = svc.get_slot(&key).await.unwrap();
-            let mut slot = slot_mutex.lock().await;
+            let mut slot = slot_mutex.inner.lock().await;
             slot.waiters.push(Waiter::with_credit(20, 0, tx));
         }
 
@@ -1882,6 +1864,10 @@ mod tests {
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
             .await;
 
+        // Prime the slot: acquire inserts a Lost placeholder; phase 4 of the
+        // first renew_all does the initial acquire_quota_lease.
+        svc.renew_all().await;
+
         // Waiter A: high initial credit (1000), just arrived.
         let (tx_a, mut rx_a) = oneshot::channel::<WaiterOutcome>();
         // Waiter B: low initial credit (-500) but been waiting 200ms
@@ -1890,7 +1876,7 @@ mod tests {
         {
             let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
             let slot_mutex = svc.get_slot(&key).await.unwrap();
-            let mut slot = slot_mutex.lock().await;
+            let mut slot = slot_mutex.inner.lock().await;
             slot.waiters.push(Waiter::with_credit(20, 1000, tx_a));
             // Simulate 200ms wait by backdating last_credit_value_at.
             slot.waiters.push(Waiter {
@@ -1947,15 +1933,19 @@ mod tests {
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
             .await;
 
+        // Prime the slot: acquire inserts a Lost placeholder; phase 4 of the
+        // first renew_all does the initial acquire_quota_lease.
+        svc.renew_all().await;
+
         let (tx, mut rx) = oneshot::channel::<WaiterOutcome>();
         {
             let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
             let slot_mutex = svc.get_slot(&key).await.unwrap();
-            let mut slot = slot_mutex.lock().await;
+            let mut slot = slot_mutex.inner.lock().await;
             slot.waiters.push(Waiter::with_credit(10, 0, tx));
         }
 
-        // First renewal: total_available = 5 < 10, but refill is soon → stay queued.
+        // Second renewal (first with the waiter): total_available=5 < 10, refill imminent → stay queued.
         svc.renew_all().await;
         assert!(
             rx.try_recv().is_err(),
@@ -1994,7 +1984,7 @@ mod tests {
         {
             let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
             let slot_mutex = svc.get_slot(&key).await.unwrap();
-            let mut slot = slot_mutex.lock().await;
+            let mut slot = slot_mutex.inner.lock().await;
             slot.waiters.push(Waiter::with_credit(10, 0, tx));
         }
 
@@ -2027,7 +2017,7 @@ mod tests {
         {
             let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
             let slot_mutex = svc.get_slot(&key).await.unwrap();
-            let mut slot = slot_mutex.lock().await;
+            let mut slot = slot_mutex.inner.lock().await;
             slot.waiters.push(Waiter::with_credit(10, 0, tx));
         }
 
@@ -2209,7 +2199,7 @@ mod tests {
         {
             let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
             let slot_mutex = svc.get_slot(&key).await.unwrap();
-            let mut slot = slot_mutex.lock().await;
+            let mut slot = slot_mutex.inner.lock().await;
             slot.waiters.push(Waiter::with_credit(20, 0, tx));
         }
 
@@ -2248,23 +2238,25 @@ mod tests {
         svc.state
             .upsert_async(
                 key.clone(),
-                Arc::new(Mutex::new(LeaseEntry {
-                    interest: Arc::downgrade(&interest_arc),
-                    waiters: Vec::new(),
-                    lease: TrackedLease::Bounded(BoundedLease {
-                        resource_definition_id: test_resource_definition_id(),
-                        epoch: LeaseEpoch(1),
-                        remaining: 100,
-                        expires_at: Utc::now() + ChronoDuration::milliseconds(150),
-                        resource_limit: ResourceLimit::Rate(ResourceRateLimit {
-                            value: 1000,
-                            period: TimePeriod::Minute,
-                            max: 1000,
+                Arc::new(LeaseEntry {
+                    interest: StdMutex::new(Arc::downgrade(&interest_arc)),
+                    inner: Mutex::new(LeaseInner {
+                        waiters: Vec::new(),
+                        lease: TrackedLease::Bounded(BoundedLease {
+                            resource_definition_id: test_resource_definition_id(),
+                            epoch: LeaseEpoch(1),
+                            remaining: 100,
+                            expires_at: Utc::now() + ChronoDuration::milliseconds(150),
+                            resource_limit: ResourceLimit::Rate(ResourceRateLimit {
+                                value: 1000,
+                                period: TimePeriod::Minute,
+                                max: 1000,
+                            }),
+                            enforcement_action: EnforcementAction::Throttle,
+                            total_available_amount: 100,
                         }),
-                        enforcement_action: EnforcementAction::Throttle,
-                        total_available_amount: 100,
                     }),
-                })),
+                }),
             )
             .await;
         let _ = arc; // keep interest alive
