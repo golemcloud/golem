@@ -59,7 +59,6 @@ use tracing::{Instrument, info};
 use uuid::uuid;
 
 const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
-const BUILTIN_PLUGIN_OWNER_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_BUILTIN_PLUGIN_OWNER_TOKEN;
 
 pub struct LaunchArgs {
     pub router_addr: String,
@@ -263,7 +262,7 @@ fn registry_service_config(
                     id: AccountId(uuid!("51de7d7d-f286-49aa-b79a-96022f7e2df9")),
                     name: "Initial User".to_string(),
                     email: AccountEmail::new("initial@user"),
-                    token: TokenSecret::trusted(ADMIN_TOKEN.to_string()),
+                    token: Some(TokenSecret::trusted(ADMIN_TOKEN.to_string())),
                     plan_id,
                     role: AccountRole::Admin,
                 },
@@ -274,7 +273,7 @@ fn registry_service_config(
                     id: AccountId(uuid!("b0a654af-d67f-4d73-a824-cf75e122bfc0")),
                     name: "Builtin Plugin Owner".to_string(),
                     email: AccountEmail::new("builtin-plugin-owner@golem.cloud"),
-                    token: TokenSecret::trusted(BUILTIN_PLUGIN_OWNER_TOKEN.to_string()),
+                    token: None,
                     plan_id,
                     role: AccountRole::BuiltinPluginOwner,
                 },
@@ -282,6 +281,9 @@ fn registry_service_config(
             accounts
         },
         builtin_plugins: BuiltinPluginsConfig::Enabled(Empty {}),
+        security_scheme: golem_registry_service::config::SecuritySchemeConfig {
+            strict_issuer_url_validation: false,
+        },
         ..Default::default()
     })
 }

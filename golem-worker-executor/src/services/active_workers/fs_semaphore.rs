@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::storage::{record_filesystem_pool_acquired, record_filesystem_pool_total};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
@@ -32,6 +33,7 @@ pub struct FilesystemStorageSemaphore {
 impl FilesystemStorageSemaphore {
     pub(crate) fn new(pool_bytes: usize, acquire_retry_delay: Duration) -> Self {
         let permits = filesystem_storage_pool_bytes_to_permits(pool_bytes);
+        record_filesystem_pool_total(pool_bytes as u64);
         Self {
             semaphore: Arc::new(Semaphore::new(permits)),
             priority_lock: Arc::new(Mutex::new(())),
@@ -42,7 +44,7 @@ impl FilesystemStorageSemaphore {
     /// Available bytes remaining in the pool (rounded down to KB boundary).
     #[cfg(test)]
     pub(crate) fn available_bytes(&self) -> u64 {
-        self.semaphore.available_permits() as u64 * FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024
+        filesystem_storage_permits_to_bytes(self.semaphore.available_permits() as u32)
     }
 
     /// Expose the inner semaphore for tests that need to simulate external
@@ -80,6 +82,8 @@ impl FilesystemStorageSemaphore {
                         self.semaphore.available_permits(),
                         permit.num_permits()
                     );
+                    let actual_bytes = filesystem_storage_permits_to_bytes(permits);
+                    record_filesystem_pool_acquired(actual_bytes);
                     break permit;
                 }
                 Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
@@ -118,6 +122,8 @@ impl FilesystemStorageSemaphore {
                         storage_bytes,
                         self.semaphore.available_permits()
                     );
+                    let actual_bytes = filesystem_storage_permits_to_bytes(permits);
+                    record_filesystem_pool_acquired(actual_bytes);
                     break Some(permit);
                 }
                 Err(TryAcquireError::Closed) => panic!("worker storage semaphore has been closed"),
@@ -154,6 +160,20 @@ pub const FILESYSTEM_STORAGE_PERMIT_SIZE_KB: u64 = 1;
 pub fn bytes_to_filesystem_storage_permits(bytes: u64) -> u32 {
     let kb = bytes.div_ceil(FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024);
     kb.min(u32::MAX as u64) as u32
+}
+
+/// Convert a permit count back to bytes. This is the inverse of
+/// `bytes_to_filesystem_storage_permits` and always returns a multiple of
+/// `FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024`.
+pub fn filesystem_storage_permits_to_bytes(permits: u32) -> u64 {
+    permits as u64 * FILESYSTEM_STORAGE_PERMIT_SIZE_KB * 1024
+}
+
+/// Round a byte count up to the nearest permit boundary (1 KB).
+/// Returns the actual number of bytes consumed from the pool when acquiring
+/// permits for `bytes` — i.e. what will be released when those permits are dropped.
+pub fn filesystem_storage_bytes_rounded_up(bytes: u64) -> u64 {
+    filesystem_storage_permits_to_bytes(bytes_to_filesystem_storage_permits(bytes))
 }
 
 /// Convert a storage semaphore pool size in bytes to the number of permits to

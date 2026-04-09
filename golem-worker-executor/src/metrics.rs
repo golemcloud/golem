@@ -333,3 +333,223 @@ pub mod resources {
         FUEL_RETURN_TOTAL.inc_by(amount as f64);
     }
 }
+
+pub mod storage {
+    // Re-export shared storage metrics from golem-service-base so all services
+    // can use the same metric definitions (same Prometheus global registry).
+    pub use golem_service_base::metrics::storage::*;
+
+    pub const STORAGE_TYPE_BLOB_STORE: &str = "blob_store";
+    pub const STORAGE_TYPE_KV: &str = "kv";
+    pub const STORAGE_TYPE_OPLOG: &str = "oplog";
+    pub const STORAGE_TYPE_OPLOG_ARCHIVE: &str = "oplog_archive";
+    pub const STORAGE_TYPE_FILESYSTEM: &str = "filesystem";
+
+    use lazy_static::lazy_static;
+    use prometheus::*;
+
+    /// Returns the executor identity label: POD_NAME env var, falling back to HOSTNAME, then "unknown".
+    /// Resolved once on first call and cached for the lifetime of the process.
+    pub fn executor_id() -> &'static str {
+        static EXECUTOR_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        EXECUTOR_ID.get_or_init(|| {
+            std::env::var("POD_NAME")
+                .or_else(|_| std::env::var("HOSTNAME"))
+                .unwrap_or_else(|_| "unknown".to_string())
+        })
+    }
+
+    lazy_static! {
+        pub static ref STORAGE_FILESYSTEM_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_storage_filesystem_pool_total_bytes",
+            "Total filesystem storage pool capacity for this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+        pub static ref STORAGE_FILESYSTEM_POOL_USED_BYTES: GaugeVec = register_gauge_vec!(
+            "golem_storage_filesystem_pool_used_bytes",
+            "Currently acquired filesystem storage bytes across all workers on this executor",
+            &["executor_id"]
+        )
+        .unwrap();
+    }
+
+    pub fn record_filesystem_pool_total(bytes: u64) {
+        STORAGE_FILESYSTEM_POOL_TOTAL_BYTES
+            .with_label_values(&[executor_id()])
+            .set(bytes as f64);
+    }
+
+    pub fn record_filesystem_pool_acquired(bytes: u64) {
+        STORAGE_FILESYSTEM_POOL_USED_BYTES
+            .with_label_values(&[executor_id()])
+            .add(bytes as f64);
+    }
+
+    pub fn record_filesystem_pool_released(bytes: u64) {
+        STORAGE_FILESYSTEM_POOL_USED_BYTES
+            .with_label_values(&[executor_id()])
+            .sub(bytes as f64);
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use test_r::test;
+
+        test_r::enable!();
+
+        fn bytes_written(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
+            STORAGE_BYTES_WRITTEN_TOTAL
+                .with_label_values(&[storage_type, account_id, environment_id])
+                .get()
+        }
+
+        fn bytes_deleted(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
+            STORAGE_BYTES_DELETED_TOTAL
+                .with_label_values(&[storage_type, account_id, environment_id])
+                .get()
+        }
+
+        fn objects_written(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
+            STORAGE_OBJECTS_WRITTEN_TOTAL
+                .with_label_values(&[storage_type, account_id, environment_id])
+                .get()
+        }
+
+        fn objects_deleted(storage_type: &str, account_id: &str, environment_id: &str) -> f64 {
+            STORAGE_OBJECTS_DELETED_TOTAL
+                .with_label_values(&[storage_type, account_id, environment_id])
+                .get()
+        }
+
+        #[test]
+        fn record_bytes_written_increments_bytes_counter() {
+            let acct = "acct-bw-1";
+            let env = "env-bw-1";
+            let before = bytes_written(STORAGE_TYPE_BLOB_STORE, acct, env);
+
+            record_storage_bytes_written(STORAGE_TYPE_BLOB_STORE, acct, env, 512);
+
+            assert_eq!(
+                bytes_written(STORAGE_TYPE_BLOB_STORE, acct, env),
+                before + 512.0
+            );
+        }
+
+        #[test]
+        fn record_objects_written_increments_objects_counter() {
+            let acct = "acct-ow-1";
+            let env = "env-ow-1";
+            let before = objects_written(STORAGE_TYPE_BLOB_STORE, acct, env);
+
+            record_storage_objects_written(STORAGE_TYPE_BLOB_STORE, acct, env, 3);
+
+            assert_eq!(
+                objects_written(STORAGE_TYPE_BLOB_STORE, acct, env),
+                before + 3.0
+            );
+        }
+
+        #[test]
+        fn record_bytes_deleted_increments_bytes_counter() {
+            let acct = "acct-bd-1";
+            let env = "env-bd-1";
+            let before = bytes_deleted(STORAGE_TYPE_BLOB_STORE, acct, env);
+
+            record_storage_bytes_deleted(STORAGE_TYPE_BLOB_STORE, acct, env, 256);
+
+            assert_eq!(
+                bytes_deleted(STORAGE_TYPE_BLOB_STORE, acct, env),
+                before + 256.0
+            );
+        }
+
+        #[test]
+        fn record_objects_deleted_increments_objects_counter() {
+            let acct = "acct-od-1";
+            let env = "env-od-1";
+            let before = objects_deleted(STORAGE_TYPE_BLOB_STORE, acct, env);
+
+            record_storage_objects_deleted(STORAGE_TYPE_BLOB_STORE, acct, env, 2);
+
+            assert_eq!(
+                objects_deleted(STORAGE_TYPE_BLOB_STORE, acct, env),
+                before + 2.0
+            );
+        }
+
+        #[test]
+        fn different_label_combinations_are_independent() {
+            let acct_a = "acct-ind-a";
+            let acct_b = "acct-ind-b";
+            let env = "env-ind-1";
+
+            record_storage_bytes_written(STORAGE_TYPE_BLOB_STORE, acct_a, env, 100);
+
+            // acct_b should be unaffected
+            assert_eq!(bytes_written(STORAGE_TYPE_BLOB_STORE, acct_b, env), 0.0);
+            // different storage type with same account/env should be independent
+            assert_eq!(bytes_written(STORAGE_TYPE_KV, acct_a, env), 0.0);
+        }
+
+        #[test]
+        fn multiple_calls_accumulate() {
+            let acct = "acct-acc-1";
+            let env = "env-acc-1";
+            let before = bytes_written(STORAGE_TYPE_OPLOG, acct, env);
+
+            record_storage_bytes_written(STORAGE_TYPE_OPLOG, acct, env, 100);
+            record_storage_bytes_written(STORAGE_TYPE_OPLOG, acct, env, 200);
+            record_storage_bytes_written(STORAGE_TYPE_OPLOG, acct, env, 50);
+
+            assert_eq!(bytes_written(STORAGE_TYPE_OPLOG, acct, env), before + 350.0);
+        }
+
+        #[test]
+        fn filesystem_pool_total_is_set() {
+            record_filesystem_pool_total(1024 * 1024);
+            let id = executor_id();
+            assert_eq!(
+                STORAGE_FILESYSTEM_POOL_TOTAL_BYTES
+                    .with_label_values(&[&id])
+                    .get(),
+                1024.0 * 1024.0
+            );
+        }
+
+        #[test]
+        fn filesystem_pool_acquired_increments_used_gauge() {
+            let id = executor_id();
+            let before = STORAGE_FILESYSTEM_POOL_USED_BYTES
+                .with_label_values(&[&id])
+                .get();
+            record_filesystem_pool_acquired(4096);
+            assert_eq!(
+                STORAGE_FILESYSTEM_POOL_USED_BYTES
+                    .with_label_values(&[&id])
+                    .get(),
+                before + 4096.0
+            );
+            // cleanup to not affect other tests
+            record_filesystem_pool_released(4096);
+        }
+
+        #[test]
+        fn filesystem_pool_released_decrements_used_gauge() {
+            let id = executor_id();
+            // acquire first so we have something to release
+            record_filesystem_pool_acquired(8192);
+            let before = STORAGE_FILESYSTEM_POOL_USED_BYTES
+                .with_label_values(&[&id])
+                .get();
+            record_filesystem_pool_released(8192);
+            assert_eq!(
+                STORAGE_FILESYSTEM_POOL_USED_BYTES
+                    .with_label_values(&[&id])
+                    .get(),
+                before - 8192.0
+            );
+        }
+    }
+}
