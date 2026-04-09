@@ -1456,19 +1456,24 @@ mod tests {
         let mut interest2 = interest.clone();
         let task = tokio::spawn(async move { svc2.try_reserve(&mut interest2, 1).await });
 
-        // Wait until it enters the queue.
+        // notify_demand may resolve the waiter inline; only call renew_all if
+        // the task is still waiting after notify_demand completes.
         let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
-        loop {
+        let needs_renew = loop {
             tokio::task::yield_now().await;
-            let slot_mutex = svc.get_slot(&key).await.unwrap();
-            let slot = slot_mutex.lock().await;
-            if !slot.waiters.is_empty() {
-                break;
+            if task.is_finished() {
+                break false;
             }
-        }
+            if let Some(slot_mutex) = svc.get_slot(&key).await
+                && !slot_mutex.lock().await.waiters.is_empty()
+            {
+                break true;
+            }
+        };
 
-        // Renewal returns total_available=0, capacity resource → reject.
-        svc.renew_all().await;
+        if needs_renew {
+            svc.renew_all().await;
+        }
 
         let result = task.await.unwrap();
         assert!(
@@ -1501,16 +1506,25 @@ mod tests {
         let mut interest2 = interest.clone();
         let task = tokio::spawn(async move { svc2.try_reserve(&mut interest2, 11).await });
 
+        // notify_demand (called inside try_reserve) may resolve the waiter
+        // immediately via the inline renewal. if it does, the task completes
+        // without ever needing renew_all.
         let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
-        loop {
+        let needs_renew = loop {
             tokio::task::yield_now().await;
-            let slot = svc.get_slot(&key).await.unwrap();
-            if !slot.lock().await.waiters.is_empty() {
-                break;
+            if task.is_finished() {
+                break false;
             }
-        }
+            if let Some(slot) = svc.get_slot(&key).await
+                && !slot.lock().await.waiters.is_empty()
+            {
+                break true;
+            }
+        };
 
-        svc.renew_all().await;
+        if needs_renew {
+            svc.renew_all().await;
+        }
 
         let result = task.await.unwrap();
         assert_matches!(
@@ -1642,18 +1656,24 @@ mod tests {
         let mut interest2 = interest.clone();
         let task = tokio::spawn(async move { svc2.try_reserve(&mut interest2, 30).await });
 
-        // Wait until the waiter is in the queue before calling renew_all.
+        // Wait until either the task completes (notify_demand served it inline)
+        // or the waiter is in the queue (needs renew_all to serve it).
         let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
-        loop {
+        let needs_renew = loop {
             tokio::task::yield_now().await;
-            let slot_mutex = svc.get_slot(&key).await.unwrap();
-            let slot = slot_mutex.lock().await;
-            if !slot.waiters.is_empty() {
-                break;
+            if task.is_finished() {
+                break false;
             }
-        }
+            if let Some(slot_mutex) = svc.get_slot(&key).await
+                && !slot_mutex.lock().await.waiters.is_empty()
+            {
+                break true;
+            }
+        };
 
-        svc.renew_all().await;
+        if needs_renew {
+            svc.renew_all().await;
+        }
 
         let result = task.await.unwrap();
         assert_matches!(
@@ -1689,18 +1709,22 @@ mod tests {
         let mut interest2 = interest.clone();
         let task = tokio::spawn(async move { svc2.try_reserve(&mut interest2, 10).await });
 
-        // Wait until the waiter is in the queue.
         let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
-        loop {
+        let needs_renew = loop {
             tokio::task::yield_now().await;
-            let slot_mutex = svc.get_slot(&key).await.unwrap();
-            let slot = slot_mutex.lock().await;
-            if !slot.waiters.is_empty() {
-                break;
+            if task.is_finished() {
+                break false;
             }
-        }
+            if let Some(slot_mutex) = svc.get_slot(&key).await
+                && !slot_mutex.lock().await.waiters.is_empty()
+            {
+                break true;
+            }
+        };
 
-        svc.renew_all().await;
+        if needs_renew {
+            svc.renew_all().await;
+        }
 
         let result = task.await.unwrap();
         assert_matches!(
