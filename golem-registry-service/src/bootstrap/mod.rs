@@ -204,7 +204,7 @@ impl Services {
             let initial_tokens = config
                 .initial_accounts
                 .values()
-                .map(|v| (v.id, v.token.clone()))
+                .filter_map(|v| v.token.clone().map(|token| (v.id, token)))
                 .collect::<Vec<_>>();
             token_service
                 .create_initial_tokens(&initial_tokens)

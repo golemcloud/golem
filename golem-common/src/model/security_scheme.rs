@@ -31,9 +31,7 @@ impl Provider {
             Provider::Microsoft(_) => {
                 Ok(IssuerUrl::new("https://login.microsoftonline.com".to_string()).unwrap())
             }
-            Provider::Gitlab(_) => {
-                Ok(IssuerUrl::new("https://gitlab.com".to_string()).unwrap())
-            }
+            Provider::Gitlab(_) => Ok(IssuerUrl::new("https://gitlab.com".to_string()).unwrap()),
             Provider::Custom(CustomProvider { issuer_url, .. }) => {
                 IssuerUrl::new(issuer_url.clone())
                     .map_err(|e| format!("Invalid custom provider issuer URL: {e}"))
@@ -94,13 +92,13 @@ mod tests {
 
     #[test]
     fn provider_serialize_known() {
-        let json = serde_json::to_value(&Provider::Google(Empty {})).unwrap();
+        let json = serde_json::to_value(Provider::Google(Empty {})).unwrap();
         assert_eq!(json["type"], "google");
-        let json = serde_json::to_value(&Provider::Facebook(Empty {})).unwrap();
+        let json = serde_json::to_value(Provider::Facebook(Empty {})).unwrap();
         assert_eq!(json["type"], "facebook");
-        let json = serde_json::to_value(&Provider::Microsoft(Empty {})).unwrap();
+        let json = serde_json::to_value(Provider::Microsoft(Empty {})).unwrap();
         assert_eq!(json["type"], "microsoft");
-        let json = serde_json::to_value(&Provider::Gitlab(Empty {})).unwrap();
+        let json = serde_json::to_value(Provider::Gitlab(Empty {})).unwrap();
         assert_eq!(json["type"], "gitlab");
     }
 
@@ -218,7 +216,11 @@ mod tests {
 
     #[test]
     fn provider_strict_validation_passes_for_known() {
-        assert!(Provider::Google(Empty {}).validate_issuer_url_strict().is_ok());
+        assert!(
+            Provider::Google(Empty {})
+                .validate_issuer_url_strict()
+                .is_ok()
+        );
     }
 
     #[test]
@@ -306,12 +308,10 @@ mod protobuf {
                 Provider::Facebook(_) => GrpcProviderKind::Facebook(Facebook {}),
                 Provider::Microsoft(_) => GrpcProviderKind::Microsoft(Microsoft {}),
                 Provider::Gitlab(_) => GrpcProviderKind::Gitlab(Gitlab {}),
-                Provider::Custom(custom) => {
-                    GrpcProviderKind::Custom(GrpcCustomProvider {
-                        name: custom.name,
-                        issuer_url: custom.issuer_url,
-                    })
-                }
+                Provider::Custom(custom) => GrpcProviderKind::Custom(GrpcCustomProvider {
+                    name: custom.name,
+                    issuer_url: custom.issuer_url,
+                }),
             };
             GrpcProvider { kind: Some(kind) }
         }

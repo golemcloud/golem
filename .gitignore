@@ -36,3 +36,4 @@ golem-skills/**/dist/
 .cursorignore
 .cqs/
 .ck
+.ckignore

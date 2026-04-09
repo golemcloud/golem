@@ -83,7 +83,9 @@ impl SecuritySchemeRevisionRecord {
         let scopes: String = serde_json::to_string(&scopes).unwrap();
 
         let (custom_provider_name, custom_issuer_url) = match &provider_type {
-            Provider::Custom(custom) => (Some(custom.name.clone()), Some(custom.issuer_url.clone())),
+            Provider::Custom(custom) => {
+                (Some(custom.name.clone()), Some(custom.issuer_url.clone()))
+            }
             _ => (None, None),
         };
 
@@ -109,7 +111,9 @@ impl SecuritySchemeRevisionRecord {
         let scopes: String = serde_json::to_string(&value.scopes).unwrap();
 
         let (custom_provider_name, custom_issuer_url) = match &value.provider_type {
-            Provider::Custom(custom) => (Some(custom.name.clone()), Some(custom.issuer_url.clone())),
+            Provider::Custom(custom) => {
+                (Some(custom.name.clone()), Some(custom.issuer_url.clone()))
+            }
             _ => (None, None),
         };
 

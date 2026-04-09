@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use chrono::Utc;
+use golem_common::model::Empty;
 use golem_common::model::component::ComponentId;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
-use golem_common::model::Empty;
 use golem_service_base::custom_api::{
     CorsOptions, OriginPattern, PathSegment, RequestBodySchema, SecuritySchemeDetails,
     WebhookCallbackBehaviour,

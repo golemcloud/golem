@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::Empty;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::validate_lower_kebab_case_identifier;
-use crate::base_model::Empty;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid,
 };
@@ -197,5 +197,3 @@ impl Provider {
         }
     }
 }
-
-

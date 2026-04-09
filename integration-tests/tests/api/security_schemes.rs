@@ -16,10 +16,10 @@ use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateSecuritySchemeError,
     RegistryServiceGetEnvironmentSecuritySchemesError, RegistryServiceGetSecuritySchemeError,
 };
+use golem_common::model::Empty;
 use golem_common::model::security_scheme::{
     Provider, SecuritySchemeCreation, SecuritySchemeName, SecuritySchemeUpdate,
 };
-use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslExtended;
 use pretty_assertions::{assert_eq, assert_ne};

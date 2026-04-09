@@ -360,37 +360,38 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
             })?;
 
-        if Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
+        Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
             .await
-            .is_some()
-        {
-            let worker = Worker::get_or_create_suspended(
-                self,
-                auth_ctx.account_id(),
-                &owned_agent_id,
-                None,
-                None,
-                Vec::new(),
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-                principal,
-            )
-            .await?;
+            .ok_or(WorkerExecutorError::worker_not_found(
+                owned_agent_id.agent_id(),
+            ))?;
 
-            info!("Interrupting worker before deletion");
-            worker
-                .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-                .await;
-            info!("Marking worker for deletion");
-            worker.start_deleting().await?;
+        let worker = Worker::get_or_create_suspended(
+            self,
+            auth_ctx.account_id(),
+            &owned_agent_id,
+            None,
+            None,
+            Vec::new(),
+            None,
+            None,
+            &InvocationContextStack::fresh(),
+            principal,
+        )
+        .await?;
 
-            self.worker_service().remove(&owned_agent_id).await;
-            self.active_workers().remove(&owned_agent_id.agent_id).await;
+        info!("Interrupting worker before deletion");
+        worker
+            .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
+            .await;
+        info!("Marking worker for deletion");
+        worker.start_deleting().await?;
 
-            // ensure we are holding the worker while we are doing cleanup.
-            drop(worker);
-        }
+        self.worker_service().remove(&owned_agent_id).await;
+        self.active_workers().remove(&owned_agent_id.agent_id).await;
+
+        // ensure we are holding the worker while we are doing cleanup.
+        drop(worker);
 
         Ok(())
     }

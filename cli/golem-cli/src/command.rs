@@ -1275,9 +1275,7 @@ pub mod api {
     pub mod agent_secret {
         use crate::args::parse_agent_secret_path;
         use clap::Subcommand;
-        use golem_common::model::agent_secret::{
-            AgentSecretId, AgentSecretPath, AgentSecretRevision,
-        };
+        use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath};
 
         #[derive(Debug, Subcommand)]
         pub enum AgentSecretSubcommand {
@@ -1299,22 +1297,16 @@ pub mod api {
                 /// Id of the secret to update
                 #[arg(long)]
                 id: AgentSecretId,
-                /// Current revision of the agent secret
-                #[arg(long)]
-                current_revision: AgentSecretRevision,
                 /// Value of the secret in json
                 #[arg(long)]
                 secret_value: Option<String>,
             },
 
-            /// Update Agent Secret
+            /// Delete Agent Secret
             Delete {
                 /// Id of the secret to delete
                 #[arg(long)]
                 id: AgentSecretId,
-                /// Current revision of the agent secret
-                #[arg(long)]
-                current_revision: AgentSecretRevision,
             },
 
             /// List Agent Secrets
@@ -1357,6 +1349,39 @@ pub mod api {
 
             /// Get HTTP API Security Scheme
             Get {
+                /// Security Scheme name
+                security_scheme_name: SecuritySchemeName,
+            },
+
+            /// Update HTTP API Security Scheme
+            Update {
+                /// Security Scheme name
+                security_scheme_name: SecuritySchemeName,
+                /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft, Custom)
+                #[arg(long)]
+                provider_type: Option<ProviderKind>,
+                /// Custom provider display name (required when provider_type is custom)
+                #[arg(long, required_if_eq("provider_type", "custom"))]
+                custom_provider_name: Option<String>,
+                /// Custom provider OIDC issuer URL (required when provider_type is custom)
+                #[arg(long, required_if_eq("provider_type", "custom"))]
+                custom_issuer_url: Option<String>,
+                /// Security Scheme client ID
+                #[arg(long)]
+                client_id: Option<String>,
+                /// Security Scheme client secret
+                #[arg(long)]
+                client_secret: Option<String>,
+                /// Security Scheme Scopes (replaces existing scopes), can be defined multiple times
+                #[arg(long)]
+                scope: Option<Vec<String>>,
+                /// Security Scheme redirect URL
+                #[arg(long)]
+                redirect_url: Option<String>,
+            },
+
+            /// Delete HTTP API Security Scheme
+            Delete {
                 /// Security Scheme name
                 security_scheme_name: SecuritySchemeName,
             },

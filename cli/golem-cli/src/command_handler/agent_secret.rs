@@ -23,9 +23,7 @@ use crate::model::text::agent_secret::AgentSecretCreateView;
 use anyhow::bail;
 use golem_client::api::AgentSecretsClient;
 use golem_client::model::AgentSecretUpdate;
-use golem_common::model::agent_secret::{
-    AgentSecretCreation, AgentSecretId, AgentSecretPath, AgentSecretRevision,
-};
+use golem_common::model::agent_secret::{AgentSecretCreation, AgentSecretId, AgentSecretPath};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_wasm::analysis::AnalysedType;
 use std::sync::Arc;
@@ -46,18 +44,10 @@ impl AgentSecretCommandHandler {
                 secret_type,
                 secret_value,
             } => self.cmd_create(path, secret_type, secret_value).await,
-            AgentSecretSubcommand::UpdateValue {
-                id,
-                current_revision,
-                secret_value,
-            } => {
-                self.cmd_update_value(id, current_revision, secret_value)
-                    .await
+            AgentSecretSubcommand::UpdateValue { id, secret_value } => {
+                self.cmd_update_value(id, secret_value).await
             }
-            AgentSecretSubcommand::Delete {
-                id,
-                current_revision,
-            } => self.cmd_delete(id, current_revision).await,
+            AgentSecretSubcommand::Delete { id } => self.cmd_delete(id).await,
             AgentSecretSubcommand::List => self.cmd_list().await,
         }
     }
@@ -116,10 +106,15 @@ impl AgentSecretCommandHandler {
     async fn cmd_update_value(
         &self,
         id: AgentSecretId,
-        current_revision: AgentSecretRevision,
         secret_value: Option<String>,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
+
+        let current = clients
+            .agent_secrets
+            .get_agent_secret(&id.0)
+            .await
+            .map_service_error()?;
 
         let secret_value: Option<serde_json::Value> =
             match secret_value.map(|sv| serde_json::from_str(&sv)).transpose() {
@@ -135,7 +130,7 @@ impl AgentSecretCommandHandler {
             .update_agent_secret(
                 &id.0,
                 &AgentSecretUpdate {
-                    current_revision,
+                    current_revision: current.revision,
                     secret_value: OptionalFieldUpdate::update_from_option(secret_value),
                 },
             )
@@ -149,16 +144,18 @@ impl AgentSecretCommandHandler {
         Ok(())
     }
 
-    async fn cmd_delete(
-        &self,
-        id: AgentSecretId,
-        current_revision: AgentSecretRevision,
-    ) -> anyhow::Result<()> {
+    async fn cmd_delete(&self, id: AgentSecretId) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
+
+        let current = clients
+            .agent_secrets
+            .get_agent_secret(&id.0)
+            .await
+            .map_service_error()?;
 
         let result = clients
             .agent_secrets
-            .delete_agent_secret(&id.0, current_revision.into())
+            .delete_agent_secret(&id.0, current.revision.into())
             .await
             .map_service_error()?;
 
