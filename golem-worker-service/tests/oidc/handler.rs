@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use chrono::Utc;
+use golem_common::model::Empty;
 use golem_common::model::component::ComponentId;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
@@ -125,7 +126,7 @@ fn sample_security_scheme() -> Arc<SecuritySchemeDetails> {
     Arc::new(SecuritySchemeDetails {
         id: SecuritySchemeId::new(),
         name: SecuritySchemeName("my-scheme".to_string()),
-        provider_type: Provider::Google,
+        provider_type: Provider::Google(Empty {}),
         client_id: ClientId::new("my-client-id".to_string()),
         client_secret: ClientSecret::new("my-client-secret".to_string()),
         redirect_url: RedirectUrl::new("http://example.com/redirect".to_string()).unwrap(),

@@ -26,6 +26,7 @@ use wasmtime_wasi::IoView;
 use crate::durable_host::blobstore::types::ContainerEntry;
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::{Durability, DurableWorkerCtx, InternalRetryResult};
+use crate::metrics::storage::{STORAGE_TYPE_BLOB_STORE, record_storage_objects_deleted};
 use crate::preview2::wasi::blobstore::blobstore::{
     Container, ContainerName, Error, Host, ObjectId,
 };
@@ -185,7 +186,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
-
+            if result.is_ok() {
+                let account_id = self.created_by().to_string();
+                let environment_id_str = environment_id.to_string();
+                record_storage_objects_deleted(
+                    STORAGE_TYPE_BLOB_STORE,
+                    &account_id,
+                    &environment_id_str,
+                    1,
+                );
+            }
             let result = HostResponseBlobStoreUnit {
                 result: result.map_err(|err| err.to_string()),
             };

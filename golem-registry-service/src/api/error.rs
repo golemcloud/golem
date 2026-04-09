@@ -538,10 +538,13 @@ impl From<SecuritySchemeError> for ApiError {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
-            SecuritySchemeError::InvalidRedirectUrl => Self::BadRequest(Json(ErrorsBody {
-                errors: vec![error],
-                cause: None,
-            })),
+            SecuritySchemeError::InvalidRedirectUrl
+            | SecuritySchemeError::InvalidCustomProviderIssuerUrl(_) => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    cause: None,
+                }))
+            }
 
             SecuritySchemeError::SecuritySchemeWithNameAlreadyExists(_)
             | SecuritySchemeError::ConcurrentUpdateAttempt => {

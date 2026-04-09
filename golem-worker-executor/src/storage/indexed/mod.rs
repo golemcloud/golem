@@ -374,16 +374,20 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             .await
     }
 
-    /// Appends multiple entries to the given key with the given id, serializing the value first
+    /// Appends multiple entries to the given key with the given id.
+    /// Returns the total number of bytes written to storage.
     pub async fn append_many<V: BinarySerializer>(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
         pairs: &[(u64, &V)],
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let mut serialized_pairs = Vec::with_capacity(pairs.len());
+        let mut total_bytes = 0u64;
         for (id, value) in pairs {
-            serialized_pairs.push((*id, serialize(value)?));
+            let bytes = serialize(value)?;
+            total_bytes += bytes.len() as u64;
+            serialized_pairs.push((*id, bytes));
         }
         self.storage
             .append_many(
@@ -394,7 +398,8 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 key,
                 serialized_pairs,
             )
-            .await
+            .await?;
+        Ok(total_bytes)
     }
 
     /// Reads a closed range of entries from the index of the given key, deserializing each entry

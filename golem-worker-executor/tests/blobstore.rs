@@ -17,6 +17,10 @@ use anyhow::anyhow;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::Value;
+use golem_worker_executor::metrics::storage::{
+    STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_OBJECTS_DELETED_TOTAL, STORAGE_OBJECTS_WRITTEN_TOTAL,
+    STORAGE_TYPE_BLOB_STORE,
+};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
@@ -118,5 +122,151 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
     drop(executor);
 
     assert_eq!(result, Value::Bool(false));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn blobstore_write_increments_storage_bytes_written_metric(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("BlobStore", "blob-store-metrics-write-1");
+
+    let container_name = format!("{}-metrics-write-container", component.id);
+    let data: Vec<u8> = vec![1u8; 128];
+    let account_id = context.account_id.to_string();
+    let environment_id = context.default_environment_id.to_string();
+
+    let bytes_before = STORAGE_BYTES_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_BLOB_STORE, &account_id, &environment_id])
+        .get();
+    let objects_before = STORAGE_OBJECTS_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_BLOB_STORE, &account_id, &environment_id])
+        .get();
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "create_container",
+            data_value!(container_name.clone()),
+        )
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_object",
+            data_value!(container_name.clone(), "obj1".to_string(), data.clone()),
+        )
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_object",
+            data_value!(container_name, "obj2".to_string(), data.clone()),
+        )
+        .await?;
+
+    drop(executor);
+
+    assert_eq!(
+        STORAGE_BYTES_WRITTEN_TOTAL
+            .with_label_values(&[STORAGE_TYPE_BLOB_STORE, &account_id, &environment_id])
+            .get(),
+        bytes_before + 256.0,
+        "bytes_written should increase by 128 + 128 = 256"
+    );
+    assert_eq!(
+        STORAGE_OBJECTS_WRITTEN_TOTAL
+            .with_label_values(&[STORAGE_TYPE_BLOB_STORE, &account_id, &environment_id])
+            .get(),
+        objects_before + 2.0,
+        "objects_written should increase by 2"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn blobstore_delete_increments_storage_objects_deleted_metric(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("BlobStore", "blob-store-metrics-delete-1");
+
+    let container_name = format!("{}-metrics-delete-container", component.id);
+    let data: Vec<u8> = vec![42u8; 64];
+    let account_id = context.account_id.to_string();
+    let environment_id = context.default_environment_id.to_string();
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "create_container",
+            data_value!(container_name.clone()),
+        )
+        .await?;
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_object",
+            data_value!(
+                container_name.clone(),
+                "obj-to-delete".to_string(),
+                data.clone()
+            ),
+        )
+        .await?;
+
+    let objects_deleted_before = STORAGE_OBJECTS_DELETED_TOTAL
+        .with_label_values(&[STORAGE_TYPE_BLOB_STORE, &account_id, &environment_id])
+        .get();
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "delete_object",
+            data_value!(container_name.clone(), "obj-to-delete".to_string()),
+        )
+        .await?;
+
+    drop(executor);
+
+    assert_eq!(
+        STORAGE_OBJECTS_DELETED_TOTAL
+            .with_label_values(&[STORAGE_TYPE_BLOB_STORE, &account_id, &environment_id])
+            .get(),
+        objects_deleted_before + 1.0,
+        "objects_deleted should increase by 1 after delete_object"
+    );
+
     Ok(())
 }
