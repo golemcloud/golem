@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use desert_rust::BinaryCodec;
 use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::component::ComponentId;
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::EnvironmentId; // used in scan_for_component
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_common::serialization::{deserialize, serialize};
@@ -285,13 +285,14 @@ impl OplogArchive for CompressedOplogArchive {
         result
     }
 
-    async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) {
+    async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) -> u64 {
         if chunk.is_empty() {
-            return;
+            return 0;
         }
 
         let agent_id = &self.agent_id;
         let mut cache = self.cache.write().await;
+        let mut total_bytes = 0u64;
 
         for (idx, entry) in &chunk {
             cache.insert(*idx, entry.clone());
@@ -305,6 +306,8 @@ impl OplogArchive for CompressedOplogArchive {
 
             let compressed_chunk = CompressedOplogChunk::compress(entries)
                 .unwrap_or_else(|err| panic!("failed to compress oplog chunk: {err}"));
+
+            total_bytes += compressed_chunk.compressed_data.len() as u64;
 
             self.indexed_storage
                 .with_entity("compressed_oplog", "append", "compressed_entry")
@@ -321,6 +324,8 @@ impl OplogArchive for CompressedOplogArchive {
                     )
                 });
         }
+
+        total_bytes
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
