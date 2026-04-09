@@ -1338,15 +1338,6 @@ mod tests {
                 .map_err(|e| RegistryServiceError::InternalServerError(e.to_string()))
         }
 
-        async fn update_worker_limit(
-            &self,
-            _account_id: AccountId,
-            _agent_id: &AgentId,
-            _added: bool,
-        ) -> Result<(), RegistryServiceError> {
-            unimplemented!()
-        }
-
         async fn update_worker_connection_limit(
             &self,
             _account_id: AccountId,

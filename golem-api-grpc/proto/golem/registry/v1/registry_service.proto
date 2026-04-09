@@ -30,7 +30,6 @@ service RegistryService {
 
   // limits api
   rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
-  rpc UpdateWorkerLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
   rpc UpdateWorkerConnectionLimit (UpdateWorkerConnectionLimitRequest) returns (UpdateWorkerConnectionLimitResponse);
   rpc BatchUpdateResourceUsage (BatchUpdateResourceUsageRequest) returns (BatchUpdateResourceUsageResponse);
 
@@ -106,19 +105,6 @@ message GetResourceLimitsResponse {
 
 message GetResourceLimitsSuccessResponse {
   golem.common.ResourceLimits limits = 1;
-}
-
-message UpdateWorkerLimitRequest {
-  golem.common.AccountId accountId = 1;
-  golem.worker.AgentId agentId = 2;
-  bool added = 3;
-}
-
-message UpdateWorkerLimitResponse {
-  oneof result {
-    golem.common.Empty success = 1;
-    RegistryServiceError error = 2;
-  }
 }
 
 message UpdateWorkerConnectionLimitRequest {
