@@ -26,14 +26,27 @@ import scala.concurrent.Future
 @agentImplementation()
 final class GuardsDemoImpl(@unused private val name: String) extends GuardsDemo {
 
+  private val expectedCliRetryPolicyNames = List(
+    "scala-integration-immediate",
+    "scala-integration-never"
+  )
+
+  private def appendRetryPolicyVisibility(sb: StringBuilder): Unit = {
+    val policies = RetryApi.getRetryPolicies().sortBy(_.name)
+    val missing  = expectedCliRetryPolicyNames.filterNot(name => RetryApi.getRetryPolicyByName(name).isDefined)
+
+    sb.append(s"original retry policies count=${policies.size}\n")
+    sb.append(s"visible retry policies=${policies.map(_.name).mkString(",")}\n")
+    if (missing.isEmpty) sb.append("result=retry-visible-ok\n")
+    else sb.append(s"result=retry-visible-missing (${missing.mkString(",")})\n")
+  }
+
   override def guardsBlockDemo(): Future[String] = Future.successful {
     val sb = new StringBuilder
     sb.append("=== Block-scoped Guards Demo ===\n")
 
     // withRetryPolicy
-    val origPolicies = RetryApi.getRetryPolicies()
-    sb.append(s"original retry policies count=${origPolicies.size}\n")
-    sb.append(s"result=retry-skipped (named retry policies require host setup)\n")
+    appendRetryPolicyVisibility(sb)
 
     // withPersistenceLevel
     val origLevel = HostApi.getOplogPersistenceLevel()
@@ -72,9 +85,7 @@ final class GuardsDemoImpl(@unused private val name: String) extends GuardsDemo 
     sb.append("=== Resource-style Guards Demo ===\n")
 
     // useRetryPolicy
-    val origPolicies = RetryApi.getRetryPolicies()
-    sb.append(s"original retry policies count=${origPolicies.size}\n")
-    sb.append(s"retry-skipped (named retry policies require host setup)\n")
+    appendRetryPolicyVisibility(sb)
 
     // usePersistenceLevel
     val origLevel = HostApi.getOplogPersistenceLevel()
