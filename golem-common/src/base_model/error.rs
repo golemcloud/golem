@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 pub struct ErrorsBody {
+    pub code: String,
     pub errors: Vec<String>,
 
     #[cfg_attr(feature = "full", oai(skip))]
@@ -29,6 +30,7 @@ pub struct ErrorsBody {
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 pub struct ErrorBody {
+    pub code: String,
     pub error: String,
 
     #[cfg_attr(feature = "full", oai(skip))]

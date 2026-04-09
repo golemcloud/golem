@@ -14,6 +14,7 @@
 
 use crate::services::auth::AuthServiceError;
 use golem_common::SafeDisplay;
+use golem_common::base_model::api;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -40,14 +41,19 @@ impl From<AuthServiceError> for DebuggingApiError {
     fn from(value: AuthServiceError) -> Self {
         let error = value.to_safe_string();
         match value {
-            AuthServiceError::CouldNotAuthenticate => {
-                Self::Unauthorized(Json(ErrorBody { error, cause: None }))
-            }
-            AuthServiceError::DebuggingNotAllowed => {
-                Self::Forbidden(Json(ErrorBody { error, cause: None }))
-            }
+            AuthServiceError::CouldNotAuthenticate => Self::Unauthorized(Json(ErrorBody {
+                error,
+                code: api::error_code::AUTH_UNAUTHORIZED.to_string(),
+                cause: None,
+            })),
+            AuthServiceError::DebuggingNotAllowed => Self::Forbidden(Json(ErrorBody {
+                error,
+                code: api::error_code::AUTH_FORBIDDEN.to_string(),
+                cause: None,
+            })),
             AuthServiceError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
                 error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(inner),
             })),
         }

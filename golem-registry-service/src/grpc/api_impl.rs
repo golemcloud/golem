@@ -52,8 +52,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     ResolveAgentTypeByNamesResponse, ResolveAgentTypeByNamesSuccessResponse,
     ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
     SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
-    UpdateWorkerConnectionLimitResponse,
-    authenticate_token_response, batch_update_resource_usage_response, download_component_response,
+    UpdateWorkerConnectionLimitResponse, authenticate_token_response,
+    batch_update_resource_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
@@ -1022,6 +1022,7 @@ fn internal_error(error: &str) -> RegistryServiceError {
         error: Some(registry_service_error::Error::InternalError(
             golem_api_grpc::proto::golem::common::ErrorBody {
                 error: error.to_string(),
+                code: golem_common::base_model::api::error_code::INTERNAL_UNKNOWN.to_string(),
             },
         )),
     }

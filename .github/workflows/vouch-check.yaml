@@ -1,0 +1,35 @@
+name: Vouch Check
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: read
+
+jobs:
+  check-pr:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: mitchellh/vouch/action/check-pr@main
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          auto-close: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  check-issue:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: mitchellh/vouch/action/check-issue@main
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          auto-close: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

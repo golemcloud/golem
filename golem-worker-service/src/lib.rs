@@ -28,7 +28,7 @@ use crate::config::WorkerServiceConfig;
 use crate::mcp::{GolemAgentMcpServer, McpBearerAuth, oauth_proxy_routes};
 use crate::service::registry_event_subscriber::WorkerServiceRegistryInvalidationHandler;
 use anyhow::{Context, anyhow};
-use golem_common::poem::LazyEndpointExt;
+use golem_common::poem::{CliClientInfoMiddleware, LazyEndpointExt};
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::TowerCompatExt;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
@@ -189,6 +189,7 @@ impl WorkerService {
             .nest("/metrics", metrics)
             .with(CookieJarManager::new())
             .with(cors)
+            .with(CliClientInfoMiddleware::new())
             .with_if_lazy(tracer.is_some(), || {
                 OpenTelemetryTracing::new(tracer.unwrap())
             });

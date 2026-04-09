@@ -26,7 +26,8 @@ use crate::model::text::http_api_security::{
 use anyhow::bail;
 use golem_client::api::ApiSecurityClient;
 use golem_client::model::{SecuritySchemeCreation, SecuritySchemeDto, SecuritySchemeUpdate};
-use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
+use golem_common::model::Empty;
+use golem_common::model::security_scheme::{Provider, ProviderKind, SecuritySchemeName};
 use std::sync::Arc;
 
 pub struct ApiSecuritySchemeCommandHandler {
@@ -43,6 +44,8 @@ impl ApiSecuritySchemeCommandHandler {
             ApiSecuritySchemeSubcommand::Create {
                 security_scheme_name,
                 provider_type,
+                custom_provider_name,
+                custom_issuer_url,
                 client_id,
                 client_secret,
                 scope,
@@ -51,6 +54,8 @@ impl ApiSecuritySchemeCommandHandler {
                 self.cmd_create(
                     security_scheme_name,
                     provider_type,
+                    custom_provider_name,
+                    custom_issuer_url,
                     client_id,
                     client_secret,
                     scope,
@@ -64,14 +69,38 @@ impl ApiSecuritySchemeCommandHandler {
             ApiSecuritySchemeSubcommand::Update {
                 security_scheme_name,
                 provider_type,
+                custom_provider_name,
+                custom_issuer_url,
                 client_id,
                 client_secret,
                 scope,
                 redirect_url,
             } => {
+                let provider = match provider_type {
+                    Some(kind) => Some(match kind {
+                        ProviderKind::Google => Provider::Google(Empty {}),
+                        ProviderKind::Facebook => Provider::Facebook(Empty {}),
+                        ProviderKind::Microsoft => Provider::Microsoft(Empty {}),
+                        ProviderKind::Gitlab => Provider::Gitlab(Empty {}),
+                        ProviderKind::Custom => {
+                            let name = custom_provider_name.ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "--custom-provider-name is required when provider_type is custom"
+                                )
+                            })?;
+                            let issuer_url = custom_issuer_url.ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "--custom-issuer-url is required when provider_type is custom"
+                                )
+                            })?;
+                            Provider::custom(name, issuer_url).map_err(|e| anyhow::anyhow!(e))?
+                        }
+                    }),
+                    None => None,
+                };
                 self.cmd_update(
                     security_scheme_name,
-                    provider_type,
+                    provider,
                     client_id,
                     client_secret,
                     scope,
@@ -89,12 +118,32 @@ impl ApiSecuritySchemeCommandHandler {
     async fn cmd_create(
         &self,
         security_scheme_name: SecuritySchemeName,
-        provider_type: Provider,
+        provider_kind: ProviderKind,
+        custom_provider_name: Option<String>,
+        custom_issuer_url: Option<String>,
         client_id: String,
         client_secret: String,
         scopes: Vec<String>,
         redirect_url: String,
     ) -> anyhow::Result<()> {
+        let provider_type = match provider_kind {
+            ProviderKind::Google => Provider::Google(Empty {}),
+            ProviderKind::Facebook => Provider::Facebook(Empty {}),
+            ProviderKind::Microsoft => Provider::Microsoft(Empty {}),
+            ProviderKind::Gitlab => Provider::Gitlab(Empty {}),
+            ProviderKind::Custom => {
+                let name = custom_provider_name.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "--custom-provider-name is required when provider_type is custom"
+                    )
+                })?;
+                let issuer_url = custom_issuer_url.ok_or_else(|| {
+                    anyhow::anyhow!("--custom-issuer-url is required when provider_type is custom")
+                })?;
+                Provider::custom(name, issuer_url).map_err(|e| anyhow::anyhow!(e))?
+            }
+        };
+
         let environment = self
             .ctx
             .environment_handler()

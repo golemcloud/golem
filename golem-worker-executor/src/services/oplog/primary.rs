@@ -13,6 +13,10 @@
 // limitations under the License.
 
 use crate::metrics::oplog::record_oplog_call;
+use crate::metrics::storage::{
+    STORAGE_TYPE_OPLOG, record_storage_bytes_written, record_storage_objects_deleted,
+    record_storage_objects_written,
+};
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
 use crate::storage::indexed::{
@@ -20,6 +24,7 @@ use crate::storage::indexed::{
 };
 use async_lock::Mutex;
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
@@ -227,7 +232,7 @@ impl OplogService for PrimaryOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         last_oplog_index: Option<OplogIndex>,
-        _initial_worker_metadata: AgentMetadata,
+        initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
@@ -248,6 +253,7 @@ impl OplogService for PrimaryOplogService {
                     key,
                     last_oplog_index,
                     owned_agent_id.clone(),
+                    initial_worker_metadata.created_by,
                 ),
             )
             .await
@@ -391,9 +397,11 @@ struct CreateOplogConstructor {
     key: String,
     last_oplog_idx: Option<OplogIndex>,
     owned_agent_id: OwnedAgentId,
+    account_id: AccountId,
 }
 
 impl CreateOplogConstructor {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
@@ -404,6 +412,7 @@ impl CreateOplogConstructor {
         key: String,
         last_oplog_idx: Option<OplogIndex>,
         owned_agent_id: OwnedAgentId,
+        account_id: AccountId,
     ) -> Self {
         Self {
             indexed_storage,
@@ -415,6 +424,7 @@ impl CreateOplogConstructor {
             key,
             last_oplog_idx,
             owned_agent_id,
+            account_id,
         }
     }
 }
@@ -442,6 +452,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.key,
             last_oplog_idx,
             self.owned_agent_id,
+            self.account_id,
             close,
         ))
     }
@@ -462,6 +473,7 @@ impl Drop for PrimaryOplog {
 }
 
 impl PrimaryOplog {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
@@ -472,6 +484,7 @@ impl PrimaryOplog {
         key: String,
         last_oplog_idx: OplogIndex,
         owned_agent_id: OwnedAgentId,
+        account_id: AccountId,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         Self {
@@ -487,6 +500,7 @@ impl PrimaryOplog {
                 last_committed_idx: last_oplog_idx,
                 last_oplog_idx,
                 owned_agent_id,
+                account_id,
                 last_added_non_hint_entry: None,
                 persistence_level: PersistenceLevel::Smart,
             })),
@@ -508,6 +522,7 @@ struct PrimaryOplogState {
     last_oplog_idx: OplogIndex,
     last_committed_idx: OplogIndex,
     owned_agent_id: OwnedAgentId,
+    account_id: AccountId,
     last_added_non_hint_entry: Option<OplogIndex>,
     persistence_level: PersistenceLevel,
 }
@@ -516,6 +531,7 @@ impl PrimaryOplogState {
     async fn append(&mut self, entries: Vec<OplogEntry>) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("append");
 
+        let entry_count = entries.len() as u64;
         let mut pairs = Vec::with_capacity(entries.len());
         let mut last_idx = self.last_committed_idx;
         for entry in entries {
@@ -524,7 +540,8 @@ impl PrimaryOplogState {
             last_idx = oplog_idx;
         }
         let pairs_ref: Vec<(u64, &OplogEntry)> = pairs.iter().map(|(id, e)| (*id, e)).collect();
-        self.indexed_storage
+        let bytes_written = self
+            .indexed_storage
             .with_entity("oplog", "append", "entry")
             .append_many(
                 IndexedStorageNamespace::OpLog {
@@ -540,6 +557,23 @@ impl PrimaryOplogState {
                     self.key
                 )
             });
+
+        if entry_count > 0 {
+            let account_id = self.account_id.to_string();
+            let environment_id = self.owned_agent_id.environment_id().to_string();
+            record_storage_bytes_written(
+                STORAGE_TYPE_OPLOG,
+                &account_id,
+                &environment_id,
+                bytes_written,
+            );
+            record_storage_objects_written(
+                STORAGE_TYPE_OPLOG,
+                &account_id,
+                &environment_id,
+                entry_count,
+            );
+        }
         drop(pairs_ref);
 
         self.last_committed_idx = last_idx;
@@ -766,7 +800,18 @@ impl Oplog for PrimaryOplog {
         if remaining == 0 {
             state.delete().await;
         }
-        before - remaining
+        let dropped = before - remaining;
+        if dropped > 0 {
+            let account_id = state.account_id.to_string();
+            let environment_id = state.owned_agent_id.environment_id().to_string();
+            record_storage_objects_deleted(
+                STORAGE_TYPE_OPLOG,
+                &account_id,
+                &environment_id,
+                dropped,
+            );
+        }
+        dropped
     }
 
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -806,16 +851,33 @@ impl Oplog for PrimaryOplog {
     }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
-        let (blob_storage, owned_agent_id, max_length) = {
+        let (blob_storage, owned_agent_id, account_id, max_length) = {
             let state = self.state.lock().await;
             (
                 state.blob_storage.clone(),
                 state.owned_agent_id.clone(),
+                state.account_id,
                 state.max_payload_size,
             )
         };
-        PrimaryOplogService::upload_raw_payload(blob_storage, max_length, &owned_agent_id, data)
-            .await
+        let data_len = data.len() as u64;
+        let result = PrimaryOplogService::upload_raw_payload(
+            blob_storage,
+            max_length,
+            &owned_agent_id,
+            data,
+        )
+        .await;
+        if let Ok(RawOplogPayload::External { .. }) = &result {
+            // Only count bytes that were actually uploaded externally
+            record_storage_bytes_written(
+                STORAGE_TYPE_OPLOG,
+                &account_id.to_string(),
+                &owned_agent_id.environment_id().to_string(),
+                data_len,
+            );
+        }
+        result
     }
 
     async fn download_raw_payload(

@@ -37,6 +37,7 @@ pub mod key_value_storage;
 pub mod keyvalue;
 pub mod namespace_routed_key_value_storage;
 pub mod observability;
+pub mod oplog_metrics;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod resource_limits;
@@ -72,6 +73,7 @@ tag_suite!(revert, group3);
 tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
 tag_suite!(resource_limits, group1);
+tag_suite!(oplog_metrics, group1);
 tag_suite!(storage_quota, group1);
 
 sequential_suite!(key_value_storage);

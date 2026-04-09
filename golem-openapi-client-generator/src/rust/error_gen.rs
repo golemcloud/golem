@@ -19,6 +19,74 @@ pub fn error_gen() -> Module {
     let code = indoc! { r#"
         use bytes::Bytes;
 
+        #[derive(Debug, Clone, Copy)]
+        pub enum ErrorMessages<'a> {
+            None,
+            One(&'a str),
+            Many(&'a [String]),
+        }
+
+        pub enum ErrorMessagesIter<'a> {
+            None,
+            One(std::option::IntoIter<&'a str>),
+            Many(std::slice::Iter<'a, String>),
+        }
+
+        impl<'a> Iterator for ErrorMessagesIter<'a> {
+            type Item = &'a str;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                match self {
+                    ErrorMessagesIter::None => None,
+                    ErrorMessagesIter::One(iter) => iter.next(),
+                    ErrorMessagesIter::Many(iter) => iter.next().map(String::as_str),
+                }
+            }
+        }
+
+        impl<'a> ErrorMessages<'a> {
+            pub fn iter(self) -> ErrorMessagesIter<'a> {
+                match self {
+                    ErrorMessages::None => ErrorMessagesIter::None,
+                    ErrorMessages::One(message) => ErrorMessagesIter::One(Some(message).into_iter()),
+                    ErrorMessages::Many(messages) => ErrorMessagesIter::Many(messages.iter()),
+                }
+            }
+
+            pub fn join(self, separator: &str) -> String {
+                self.iter().collect::<Vec<_>>().join(separator)
+            }
+
+            pub fn to_vec(self) -> Vec<String> {
+                self.iter().map(str::to_string).collect()
+            }
+        }
+
+        pub trait ErrorInfo {
+            fn service_name() -> &'static str;
+            fn status_code(&self) -> u16;
+            fn errors(&self) -> ErrorMessages<'_>;
+            fn code(&self) -> Option<&str>;
+            fn is_status_code(&self, status_code: u16) -> bool {
+                self.status_code() == status_code
+            }
+            fn is_success(&self) -> bool {
+                (200..300).contains(&self.status_code())
+            }
+            fn is_client_error(&self) -> bool {
+                (400..500).contains(&self.status_code())
+            }
+            fn is_server_error(&self) -> bool {
+                (500..600).contains(&self.status_code())
+            }
+            fn is_not_found(&self) -> bool {
+                self.is_status_code(404)
+            }
+            fn has_code(&self, code: &str) -> bool {
+                self.code() == Some(code)
+            }
+        }
+
         #[derive(Debug, thiserror::Error)]
         pub enum Error<T> {
             #[error("{0}")]
@@ -41,6 +109,86 @@ pub fn error_gen() -> Module {
         impl<T> Error<T> {
             pub fn unexpected(code: u16, data: Bytes) -> Error<T> {
                 Error::Unexpected { code, data }
+            }
+
+            pub fn service_name(&self) -> &'static str
+            where
+                T: ErrorInfo,
+            {
+                T::service_name()
+            }
+
+            pub fn status_code(&self) -> Option<u16>
+            where
+                T: ErrorInfo,
+            {
+                match self {
+                    Error::Item(item) => Some(item.status_code()),
+                    Error::Unexpected { code, .. } => Some(*code),
+                    _ => None,
+                }
+            }
+
+            pub fn errors(&self) -> ErrorMessages<'_>
+            where
+                T: ErrorInfo,
+            {
+                match self {
+                    Error::Item(item) => item.errors(),
+                    _ => ErrorMessages::None,
+                }
+            }
+
+            pub fn code(&self) -> Option<&str>
+            where
+                T: ErrorInfo,
+            {
+                match self {
+                    Error::Item(item) => item.code(),
+                    _ => None,
+                }
+            }
+
+            pub fn is_status_code(&self, status_code: u16) -> bool
+            where
+                T: ErrorInfo,
+            {
+                self.status_code() == Some(status_code)
+            }
+
+            pub fn is_success(&self) -> bool
+            where
+                T: ErrorInfo,
+            {
+                self.status_code().is_some_and(|code| (200..300).contains(&code))
+            }
+
+            pub fn is_client_error(&self) -> bool
+            where
+                T: ErrorInfo,
+            {
+                self.status_code().is_some_and(|code| (400..500).contains(&code))
+            }
+
+            pub fn is_server_error(&self) -> bool
+            where
+                T: ErrorInfo,
+            {
+                self.status_code().is_some_and(|code| (500..600).contains(&code))
+            }
+
+            pub fn is_not_found(&self) -> bool
+            where
+                T: ErrorInfo,
+            {
+                self.is_status_code(404)
+            }
+
+            pub fn has_code(&self, code: &str) -> bool
+            where
+                T: ErrorInfo,
+            {
+                self.code() == Some(code)
             }
         }
 
@@ -72,7 +220,11 @@ pub fn error_gen() -> Module {
     Module {
         def: ModuleDef {
             name: ModuleName::new("error"),
-            exports: vec!["Error".to_string()],
+            exports: vec![
+                "ErrorInfo".to_string(),
+                "ErrorMessages".to_string(),
+                "Error".to_string(),
+            ],
         },
         code: code.to_string(),
     }

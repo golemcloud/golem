@@ -204,7 +204,7 @@ impl Services {
             let initial_tokens = config
                 .initial_accounts
                 .values()
-                .map(|v| (v.id, v.token.clone()))
+                .filter_map(|v| v.token.clone().map(|token| (v.id, token)))
                 .collect::<Vec<_>>();
             token_service
                 .create_initial_tokens(&initial_tokens)
@@ -314,6 +314,7 @@ impl Services {
             repos.security_scheme_repo.clone(),
             environment_service.clone(),
             registry_change_notifier.clone(),
+            config.security_scheme.strict_issuer_url_validation,
         ));
 
         let http_api_deployment_service = Arc::new(HttpApiDeploymentService::new(

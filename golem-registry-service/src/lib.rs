@@ -24,7 +24,7 @@ pub mod services;
 use self::bootstrap::Services;
 use self::config::RegistryServiceConfig;
 use anyhow::Context;
-use golem_common::poem::LazyEndpointExt;
+use golem_common::poem::{CliClientInfoMiddleware, LazyEndpointExt};
 use opentelemetry_sdk::trace::SdkTracer;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
@@ -172,6 +172,7 @@ impl RegistryService {
             .nest("/metrics", metrics)
             .with(CookieJarManager::new())
             .with(cors)
+            .with(CliClientInfoMiddleware::new())
             .with_if_lazy(tracer.is_some(), || {
                 OpenTelemetryTracing::new(tracer.unwrap())
             });

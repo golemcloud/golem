@@ -22,7 +22,7 @@ use crate::custom_api::{
 };
 use golem_api_grpc::proto;
 use golem_common::model::agent::{AgentTypeName, HttpMethod};
-use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
 use golem_wasm::analysis::TypeEnum;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::{BTreeSet, HashMap};
@@ -36,10 +36,11 @@ impl TryFrom<proto::golem::customapi::SecuritySchemeDetails> for SecuritySchemeD
     ) -> Result<Self, Self::Error> {
         let id = value.id.ok_or("id field missing")?.try_into()?;
 
-        let provider_type = value
-            .provider()
+        let provider_type: Provider = value
+            .provider
+            .ok_or("provider field missing")?
             .try_into()
-            .map_err(|e| format!("invalid provider: {e}"))?;
+            .map_err(|e: String| format!("invalid provider: {e}"))?;
 
         Ok(Self {
             id,
@@ -61,10 +62,7 @@ impl From<SecuritySchemeDetails>
         Self {
             id: Some(value.id.into()),
             name: value.name.0,
-            provider: golem_api_grpc::proto::golem::registry::SecuritySchemeProvider::from(
-                value.provider_type,
-            )
-            .into(),
+            provider: Some(value.provider_type.into()),
             client_id: value.client_id.deref().clone(),
             client_secret: value.client_secret.secret().clone(),
             redirect_url: value.redirect_url.deref().clone(),

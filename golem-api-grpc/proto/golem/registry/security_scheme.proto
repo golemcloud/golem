@@ -8,10 +8,21 @@ message SecuritySchemeId {
   golem.common.UUID value = 1;
 }
 
-enum SecuritySchemeProvider {
-  SECURITY_SCHEME_PROVIDER_UNSPECIFIED = 0;
-  SECURITY_SCHEME_PROVIDER_GOOGLE = 1;
-  SECURITY_SCHEME_PROVIDER_FACEBOOK = 2;
-  SECURITY_SCHEME_PROVIDER_MICROSOFT = 3;
-  SECURITY_SCHEME_PROVIDER_GITLAB = 4;
+message SecuritySchemeProvider {
+  oneof kind {
+    Google google = 1;
+    Facebook facebook = 2;
+    Microsoft microsoft = 3;
+    Gitlab gitlab = 4;
+    CustomProvider custom = 5;
+  }
+
+  message Google {}
+  message Facebook {}
+  message Microsoft {}
+  message Gitlab {}
+  message CustomProvider {
+    string name = 1;
+    string issuer_url = 2;
+  }
 }
