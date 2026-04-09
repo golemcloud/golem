@@ -4,7 +4,7 @@ package golem.component;
 
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
-import "golem/component/component_files.proto";
+import "golem/component/agent_files.proto";
 import "golem/component/component_id.proto";
 import "golem/component/plugin.proto";
 import "golem/worker/agent_config.proto";
@@ -61,7 +61,7 @@ message AgentTypeProvisionConfig {
   map<string, string> wasi_config = 2;
   repeated golem.worker.AgentConfigEntry config_values = 3;
   repeated golem.component.PluginInstallation plugins = 4;
-  repeated golem.component.InitialComponentFile files = 5;
+  repeated golem.component.InitialAgentFile files = 5;
 }
 
 message BinaryDescriptor {
