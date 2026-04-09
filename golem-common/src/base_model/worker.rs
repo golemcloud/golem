@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::base_model::component::{ComponentFilePermissions, ComponentRevision};
+use crate::base_model::component::{AgentFilePermissions, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::oplog::AgentResourceId;
@@ -26,17 +26,17 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
 declare_enums! {
-    pub enum FlatComponentFileSystemNodeKind {
+    pub enum AgentFileSystemNodeKind {
         Directory,
         File,
     }
 }
 
-impl Display for FlatComponentFileSystemNodeKind {
+impl Display for AgentFileSystemNodeKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            FlatComponentFileSystemNodeKind::Directory => write!(f, "directory"),
-            FlatComponentFileSystemNodeKind::File => write!(f, "file"),
+            AgentFileSystemNodeKind::Directory => write!(f, "directory"),
+            AgentFileSystemNodeKind::File => write!(f, "file"),
         }
     }
 }
@@ -156,13 +156,12 @@ declare_structs! {
         pub number_of_invocations: u64,
     }
 
-    // TODO: Rename to AgentFileSystemNode
-    pub struct FlatComponentFileSystemNode {
+    pub struct AgentFileSystemNode {
         pub name: String,
         pub last_modified: u64,
-        pub kind: FlatComponentFileSystemNodeKind,
-        pub permissions: Option<ComponentFilePermissions>, // only for files
-        pub size: Option<u64>,                             // only for files
+        pub kind: AgentFileSystemNodeKind,
+        pub permissions: Option<AgentFilePermissions>, // only for files
+        pub size: Option<u64>,                         // only for files
     }
 }
 
