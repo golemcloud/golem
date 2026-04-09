@@ -837,7 +837,11 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     kind: HostFailureKind::Transient,
                     message: error_code.to_string(),
                 });
-                let mut properties = golem_common::model::RetryProperties::new();
+                let mut properties = golem_common::model::RetryContext::http(
+                    &request_state.request.method.to_string(),
+                    &request_state.request.uri,
+                );
+                self.state.enrich_retry_properties(&mut properties);
                 properties.set(
                     "error-type",
                     golem_common::model::PredicateValue::Text("transient".to_string()),
@@ -845,6 +849,12 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                 self.try_trigger_retry(failure, properties)
                     .await
                     .map_err(wasmtime::Error::from_anyhow)?;
+                let future_res = self
+                    .table()
+                    .get_mut(&Resource::<FutureIncomingResponse>::new_borrow(handle))?;
+                *future_res = wasmtime_wasi_http::types::HostFutureIncomingResponse::ready(Ok(
+                    Err(error_code.clone()),
+                ));
                 response = Ok(Some(Ok(Err(error_code))));
             }
 

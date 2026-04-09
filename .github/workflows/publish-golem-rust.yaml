@@ -17,7 +17,7 @@ jobs:
     runs-on: blacksmith
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: true
       - uses: useblacksmith/rust-cache@v3
@@ -28,10 +28,7 @@ jobs:
           save-if: false
 
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        uses: dtolnay/rust-toolchain@stable
       - id: get_version
         uses: battila7/get-version-action@v2
       - name: Publish crates

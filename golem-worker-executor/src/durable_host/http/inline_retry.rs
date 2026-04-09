@@ -798,7 +798,20 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                         .await
                     {
                         AsyncRetryDecision::RetryAfterDelay(delay) => {
-                            tokio::time::sleep(delay).await;
+                            let sleep = tokio::time::sleep(delay);
+                            let interrupt = execution_status
+                                .read()
+                                .unwrap()
+                                .create_await_interrupt_signal();
+                            tokio::pin!(sleep);
+                            tokio::pin!(interrupt);
+
+                            match futures::future::select(sleep, interrupt).await {
+                                futures::future::Either::Left((_done, _)) => {}
+                                futures::future::Either::Right((_interrupt_kind, _)) => {
+                                    return Ok(Err(initial_error));
+                                }
+                            }
                         }
                         AsyncRetryDecision::Exhausted => {
                             return Ok(Err(initial_error));

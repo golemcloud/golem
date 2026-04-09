@@ -22,7 +22,7 @@ cargo build -p <crate>    # Build specific crate
 
 Always run `cargo make build` before starting work to ensure all dependencies are compiled.
 
-**Note:** The SDKs in `sdks/` are not part of the main build flow. Load the `sdk-development` skill when working on SDKs.
+**Note:** The SDKs in `sdks/` are not part of the main build flow. Load `sdk-development` when working on the Rust or TypeScript SDKs, and `golem-scala-development` when working on the Scala SDK.
 
 ## Testing
 
@@ -106,7 +106,7 @@ All crate dependencies must have their versions specified in the root workspace 
 - `golem-wasm/` - WASM utilities
 - `golem-rib/` - Rib language implementation
 - `cli/` - CLI tools (golem-cli, golem)
-- `sdks/` - Language-specific SDKs (Rust, TypeScript) - **not part of main build flow, see SDK-specific AGENTS.md**
+- `sdks/` - Language-specific SDKs (Rust, TypeScript, Scala) - **not part of main build flow, see SDK-specific AGENTS.md**
 - `golem-skills/` - Skill definitions and skill testing harness
 - `integration-tests/` - Integration test suite
 - `test-components/` - Test WASM components
