@@ -45,6 +45,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,
+    pub environment_state_cache_capacity: Option<usize>,
     pub number_of_shards_override: Option<usize>,
     pub shared_client: bool,
     pub db_type: DbType,
@@ -130,6 +131,7 @@ impl Default for EnvBasedTestDependenciesConfig {
     fn default() -> Self {
         Self {
             worker_executor_cluster_size: 4,
+            environment_state_cache_capacity: None,
             number_of_shards_override: None,
             shared_client: false,
             db_type: DbType::Postgres,
@@ -324,6 +326,7 @@ impl EnvBasedTestDependencies {
                 config.default_stdout_level(),
                 config.default_stderr_level(),
                 registry_service,
+                config.environment_state_cache_capacity,
                 false,
             )
             .await,

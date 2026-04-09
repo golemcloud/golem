@@ -213,6 +213,8 @@ pub enum TestMode {
         worker_executor_base_http_port: u16,
         #[arg(long, default_value = "9100")]
         worker_executor_base_grpc_port: u16,
+        #[arg(long)]
+        environment_state_cache_capacity: Option<usize>,
         #[arg(long, default_value = "false")]
         mute_child: bool,
         #[arg(long, default_value = "test-components")]
@@ -274,6 +276,7 @@ impl BenchmarkTestDependencies {
         worker_executor_base_grpc_port: u16,
         mute_child: bool,
         component_directory: &str,
+        environment_state_cache_capacity: Option<usize>,
         otlp: bool,
     ) -> Self {
         let workspace_root = Path::new(workspace_root).canonicalize().unwrap();
@@ -394,6 +397,7 @@ impl BenchmarkTestDependencies {
                 out_level,
                 Level::ERROR,
                 registry_service.clone(),
+                environment_state_cache_capacity,
                 otlp,
             )
             .await,
@@ -551,6 +555,7 @@ impl BenchmarkTestDependencies {
                 worker_service_custom_request_port,
                 worker_executor_base_http_port,
                 worker_executor_base_grpc_port,
+                environment_state_cache_capacity,
                 mute_child,
                 component_directory,
             } => {
@@ -575,6 +580,7 @@ impl BenchmarkTestDependencies {
                     *worker_executor_base_grpc_port,
                     *mute_child,
                     component_directory,
+                    *environment_state_cache_capacity,
                     otlp,
                 )
                 .await
