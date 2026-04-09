@@ -1108,6 +1108,7 @@ mod protobuf {
 
             Self::Unauthorized(ErrorBody {
                 error: error.to_string(),
+                code: golem_common::base_model::api::error_code::AUTH_UNAUTHORIZED.to_string(),
             })
         }
     }

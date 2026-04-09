@@ -706,9 +706,12 @@ dependencies = [
     "generate-registry-service-openapi",
     "generate-worker-service-openapi"
 ]
-install_crate = { crate_name = "golem-openapi-client-generator", version = "=0.0.16" }
-command = "golem-openapi-client-generator"
+command = "cargo"
 args = [
+    "run",
+    "-p",
+    "golem-openapi-client-generator",
+    "--",
     "merge",
     "--spec-yaml",
     "./target/golem-registry-service.yaml",

@@ -541,7 +541,12 @@ async fn fork_invalid_worker(
         .unwrap_err()
         .to_string();
 
-    assert!(error.contains(&format!("Worker not found: {source_agent_id}")));
+    assert!(
+        error.contains("AGENT_NOT_FOUND")
+            && error.contains("Worker not found")
+            && error.contains(&source_name),
+        "actual error: {error}"
+    );
     Ok(())
 }
 

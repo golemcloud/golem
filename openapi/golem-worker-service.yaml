@@ -3437,16 +3437,22 @@ components:
       type: object
       title: ErrorBody
       required:
+      - code
       - error
       properties:
+        code:
+          type: string
         error:
           type: string
     ErrorBodyWithOptionalWorkerError:
       type: object
       title: ErrorBodyWithOptionalWorkerError
       required:
+      - code
       - error
       properties:
+        code:
+          type: string
         error:
           type: string
         workerError:
@@ -3455,8 +3461,11 @@ components:
       type: object
       title: ErrorsBody
       required:
+      - code
       - errors
       properties:
+        code:
+          type: string
         errors:
           type: array
           items:
