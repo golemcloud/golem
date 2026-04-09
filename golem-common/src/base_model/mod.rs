@@ -15,6 +15,7 @@
 pub mod account;
 pub mod agent;
 pub mod agent_secret;
+pub mod api;
 pub mod application;
 pub mod auth;
 pub mod base64;

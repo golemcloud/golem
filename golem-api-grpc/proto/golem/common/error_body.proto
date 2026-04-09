@@ -4,8 +4,10 @@ package golem.common;
 
 message ErrorBody {
   string error = 1;
+  string code = 2;
 }
 
 message ErrorsBody {
   repeated string errors = 1;
+  string code = 2;
 }
