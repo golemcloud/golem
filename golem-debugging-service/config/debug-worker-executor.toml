@@ -100,6 +100,7 @@ indexed_storage_layers = 2
 max_operations_before_commit = 128
 max_operations_before_commit_ephemeral = 1024
 max_payload_size = 65536
+oplog_rate_limit_enabled = false
 plugin_max_commit_count = 3
 plugin_max_elapsed_time = "5s"
 
@@ -334,6 +335,7 @@ without_time = false
 # max_operations_before_commit = 128
 # max_operations_before_commit_ephemeral = 1024
 # max_payload_size = 65536
+# oplog_rate_limit_enabled = false
 # plugin_max_commit_count = 3
 # plugin_max_elapsed_time = "5s"
 # 

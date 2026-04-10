@@ -186,6 +186,7 @@ impl Default for RegistryServiceConfig {
                 monthly_http_call_limit: 1_000_000_000_000_000_000,
                 monthly_rpc_call_limit: 1_000_000_000_000_000_000,
                 max_concurrent_agents_per_executor: 1_000_000_000_000_000_000, // unlimited sentinel
+                oplog_writes_per_second: 1_000_000_000_000_000_000,            // unlimited sentinel
             },
         );
 
@@ -487,6 +488,8 @@ pub struct PrecreatedPlan {
     pub monthly_rpc_call_limit: u64,
     #[serde(default = "default_unlimited")]
     pub max_concurrent_agents_per_executor: u64,
+    #[serde(default = "default_unlimited")]
+    pub oplog_writes_per_second: u64,
 }
 
 fn default_max_table_elements_per_worker() -> u64 {

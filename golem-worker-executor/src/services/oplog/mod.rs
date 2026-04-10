@@ -49,6 +49,7 @@ mod ephemeral;
 mod multilayer;
 pub mod plugin;
 mod primary;
+pub mod rate_limited;
 
 #[cfg(test)]
 pub mod tests;
