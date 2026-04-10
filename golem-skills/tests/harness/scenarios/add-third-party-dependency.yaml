@@ -31,18 +31,18 @@ steps:
       rust: >
         Modify the CounterAgent in test-app so the 'increment' function base64-encodes the current counter
         value as a string before returning it. Use the 'base64' crate with the STANDARD engine.
-        The function should return a string (change the WIT return type to string if needed).
+        The function should return a string (change the method's return type to string).
         For example, if the counter is 1, return the base64 encoding of "1" which is "MQ==".
         Make sure it builds and deploys successfully.
       ts: >
         Modify the CounterAgent in test-app so the 'increment' function converts the string
         "hello world" to camelCase using the 'change-case' package and returns the result as a string
-        instead of the counter value. Change the WIT return type to string if needed.
+        instead of the counter value. Change the method's return type to string.
         Make sure it builds and deploys successfully.
       scala: >
         Modify the CounterAgent in test-app so the 'increment' function uses upickle to serialize
         the counter value into a JSON string like {"count":1} and returns that string.
-        Change the WIT return type to string if needed.
+        Change the method's return type to string.
         Make sure it builds and deploys successfully.
     verify:
       build: true

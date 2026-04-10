@@ -1032,6 +1032,7 @@ export class ScenarioExecutor {
         { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
         expect,
         fail,
+        stepLabel,
       );
     } else if (!result.success) {
       fail(`SHELL_FAILED: ${result.output}`);
@@ -1101,6 +1102,7 @@ export class ScenarioExecutor {
         { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, resultJson },
         expect,
         fail,
+        stepLabel,
       );
     } else if (!result.success) {
       fail(`INVOKE_FAILED: ${result.output}`);
@@ -1130,6 +1132,7 @@ export class ScenarioExecutor {
         { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, resultJson },
         expect,
         fail,
+        stepLabel,
       );
     } else if (!result.success) {
       fail(`INVOKE_JSON_FAILED: ${result.output}`);
@@ -1168,6 +1171,7 @@ export class ScenarioExecutor {
           },
           expect,
           fail,
+          stepLabel,
         );
       } else if (!response.ok) {
         fail(`HTTP_FAILED: ${response.status} ${body.slice(0, 500)}`);
@@ -1190,9 +1194,15 @@ export class ScenarioExecutor {
     ctx: AssertionContext,
     expect: z.infer<typeof ExpectSchema>,
     fail: (msg: string) => void,
+    stepLabel?: string,
   ): void {
     for (const ar of evaluate(ctx, expect)) {
-      if (!ar.passed) fail(`ASSERTION_FAILED (${ar.assertion}): ${ar.message}`);
+      if (ar.passed) {
+        if (stepLabel)
+          log.stepAction(stepLabel, `✓ assertion passed (${ar.assertion}): ${ar.message}`);
+      } else {
+        fail(`ASSERTION_FAILED (${ar.assertion}): ${ar.message}`);
+      }
     }
   }
 
