@@ -30,7 +30,7 @@ const SUPPORTED_AGENTS = [
   "opencode",
   "codex",
 ] as const;
-const SUPPORTED_LANGUAGES = ["ts", "rust"] as const;
+const SUPPORTED_LANGUAGES = ["ts", "rust", "scala"] as const;
 
 type SupportedAgent = (typeof SUPPORTED_AGENTS)[number];
 type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];

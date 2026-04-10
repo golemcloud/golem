@@ -12,6 +12,7 @@ steps:
       expectedFiles:
         ts: ["test-app/src/main.ts", "test-app/package.json"]
         rust: ["test-app/src/lib.rs", "test-app/Cargo.toml"]
+        scala: ["test-app/build.sbt", "test-app/src/main/scala/test_app_scala_main/CounterAgent.scala"]
 
   - id: "invoke-increment"
     invoke_json:
@@ -21,4 +22,3 @@ steps:
       result_json:
         - path: "$"
           equals: 1
-

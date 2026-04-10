@@ -155,6 +155,63 @@ describe("Variable substitution integration", () => {
     );
   });
 
+  it("resolves scala-specific language maps for prompt and verify fields", async () => {
+    const driver = new StubDriver();
+    const watcher = new SkillWatcher(skillsDir);
+    const opts: ScenarioExecutorOptions = {
+      agent: "claude-code",
+      language: "scala",
+    };
+    const executor = createExecutor(
+      driver,
+      watcher,
+      workspace,
+      skillsDir,
+      opts,
+    );
+
+    let capturedVerify:
+      | { build?: boolean; deploy?: boolean; expectedFiles?: string[] }
+      | undefined;
+    (executor as unknown as Record<string, unknown>)["executeVerification"] =
+      async (
+        _stepLabel: string,
+        verify: { build?: boolean; deploy?: boolean; expectedFiles?: string[] },
+      ) => {
+        capturedVerify = verify;
+      };
+
+    const spec: ScenarioSpec = {
+      name: "scala-language-map",
+      settings: { cleanup: false },
+      steps: [
+        {
+          id: "scala-step",
+          tag: "prompt" as const,
+          prompt: {
+            ts: "ts prompt",
+            rust: "rust prompt",
+            scala: "scala prompt",
+          },
+          verify: {
+            expectedFiles: {
+              ts: ["ts/main.ts"],
+              rust: ["rust/lib.rs"],
+              scala: ["scala/build.sbt", "scala/src/main/scala/Main.scala"],
+            },
+          },
+        },
+      ],
+    };
+
+    const result = await executor.execute(spec);
+    assert.equal(result.status, "pass");
+    assert.deepEqual(driver.prompts, ["scala prompt"]);
+    assert.deepEqual(capturedVerify, {
+      expectedFiles: ["scala/build.sbt", "scala/src/main/scala/Main.scala"],
+    });
+  });
+
   it("leaves unknown variables as-is in prompts", async () => {
     const driver = new StubDriver();
     const watcher = new SkillWatcher(skillsDir);

@@ -17,10 +17,10 @@ export const DEFAULT_STEP_TIMEOUT_SECONDS = 300;
 
 // --- Language-conditional resolution ---
 
-const SUPPORTED_LANG_KEYS = new Set(["ts", "rust"]);
+const SUPPORTED_LANG_KEYS = new Set(["ts", "rust", "scala"]);
 
 /**
- * Checks if a value is a language-keyed map (e.g., { ts: "...", rust: "..." }).
+ * Checks if a value is a language-keyed map (e.g., { ts: "...", rust: "...", scala: "..." }).
  * Returns true only if the value is a plain object whose keys are all known language codes.
  */
 function isLanguageMap(value: unknown): value is Record<string, unknown> {
@@ -30,7 +30,7 @@ function isLanguageMap(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Resolves a field that can be either a plain value or a { ts: T, rust: T } map.
+ * Resolves a field that can be either a plain value or a language-keyed map.
  * If it's a language map and a language is provided, returns the matching entry.
  * If it's a plain value (string, array, non-language object), returns it as-is.
  */
@@ -153,7 +153,7 @@ const ACTION_FIELDS = [
   "http",
 ] as const;
 
-// Language-conditional: accepts either T or { ts: T, rust: T, ... }
+// Language-conditional: accepts either T or { ts: T, rust: T, scala: T, ... }
 function langConditional<T extends z.ZodType>(schema: T) {
   return z.union([schema, z.record(z.string(), schema)]);
 }
