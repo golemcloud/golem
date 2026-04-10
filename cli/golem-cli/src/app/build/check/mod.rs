@@ -191,9 +191,8 @@ fn check_command_version(
         };
 
         bail!(
-            "{} ({}) failed to run: {}\nHint: {}",
+            "{} failed to run: {}\nHint: {}",
             requirement.name.log_color_error_highlight(),
-            command,
             detail,
             requirement.install_hint
         );
@@ -207,18 +206,16 @@ fn check_command_version(
         );
         let version = extract_version(output_text.as_str()).ok_or_else(|| {
             anyhow!(
-                "{} ({}) version could not be detected from output\nHint: {}",
+                "{} version could not be detected from output\nHint: {}",
                 requirement.name.log_color_error_highlight(),
-                command,
                 requirement.install_hint
             )
         })?;
 
         verify_version_range(requirement.name, &version, range).map_err(|err| {
             anyhow!(
-                "{} ({}) {}\nHint: {}",
+                "{} {}\nHint: {}",
                 requirement.name.log_color_error_highlight(),
-                command,
                 err,
                 requirement.install_hint
             )
@@ -271,9 +268,8 @@ fn check_rust_target(
         Ok(())
     } else {
         bail!(
-            "{} is missing ({})\nHint: {}",
+            "{} is missing\nHint: {}",
             requirement.name.log_color_error_highlight(),
-            target,
             requirement.install_hint
         )
     }

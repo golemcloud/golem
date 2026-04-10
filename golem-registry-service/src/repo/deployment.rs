@@ -26,7 +26,9 @@ use super::model::deployment::{
     DeploymentRegisteredAgentTypeRecord,
 };
 use super::model::resource_definition::ResourceDefinitionRepoError;
+use super::model::retry_policy::RetryPolicyRepoError;
 use super::resource_definition::DbResourceDefinitionRepo;
+use super::retry_policy::DbRetryPolicyRepo;
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::deployment::{
@@ -813,6 +815,26 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                                 }
                             }
                             ResourceDefinitionRepoError::ConcurrentModification => {
+                                DeployRepoError::ConcurrentModification
+                            }
+                            other => other.into(),
+                        })?;
+                    }
+
+                    for retry_policy in deployment_creation.created_retry_policies {
+                        let retry_policy_name = retry_policy.name.clone();
+                        DbRetryPolicyRepo::<PostgresPool>::create_within_transaction(
+                            tx,
+                            retry_policy,
+                        )
+                        .await
+                        .map_err(|err| match err {
+                            RetryPolicyRepoError::NameViolatesUniqueness => {
+                                DeployRepoError::RetryPolicyConflict {
+                                    name: retry_policy_name,
+                                }
+                            }
+                            RetryPolicyRepoError::ConcurrentModification => {
                                 DeployRepoError::ConcurrentModification
                             }
                             other => other.into(),

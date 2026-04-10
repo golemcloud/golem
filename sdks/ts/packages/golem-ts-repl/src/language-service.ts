@@ -319,10 +319,12 @@ export class LanguageService {
   ): Array<{ name: string; signature: string }> | undefined {
     if (!isValidIdentifier(agentTypeName)) return;
 
-    // Use Awaited<> to unwrap Promise if .get() is async
+    const constructorMethod = this.getAgentTypePrimaryFactoryMethodName(agentTypeName);
+
+    // Use Awaited<> to unwrap Promise if constructor method is async
     const sourceText =
       this.snippetImports +
-      `const __client = null! as Awaited<ReturnType<typeof ${agentTypeName}.get>>;\n` +
+      `const __client = null! as Awaited<ReturnType<typeof ${agentTypeName}.${constructorMethod}>>;\n` +
       'void __client;\n';
     const sourceFile = this.project.createSourceFile('__client_info__.ts', sourceText, {
       overwrite: true,
@@ -342,7 +344,7 @@ export class LanguageService {
         const signatures = propType.getCallSignatures();
         if (signatures.length === 0) return;
         const rawTypeText = checker.getTypeText(propType, clientDecl);
-        let typeText = rawTypeText.replace(/import\([^)]*\)\./g, '');
+        let typeText = normalizeTypeText(rawTypeText);
         const methodParameterNames =
           this.config.agents[agentTypeName]?.methodParameterNames?.[symbol.getName()];
         const remoteMethodSignature = getRemoteMethodClientSignature(
@@ -363,8 +365,10 @@ export class LanguageService {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  getAgentTypeGetSignature(agentTypeName: string): string | undefined {
+  getAgentTypePrimaryFactoryMethodSignature(agentTypeName: string): string | undefined {
     if (!isValidIdentifier(agentTypeName)) return;
+
+    const constructorMethod = this.getAgentTypePrimaryFactoryMethodName(agentTypeName);
 
     const sourceText =
       this.snippetImports + `const __agentType = ${agentTypeName};\n` + 'void __agentType;\n';
@@ -376,7 +380,7 @@ export class LanguageService {
     if (!agentTypeDecl) return;
 
     const checker = this.project.getTypeChecker();
-    const getSymbol = agentTypeDecl.getType().getProperty('get');
+    const getSymbol = agentTypeDecl.getType().getProperty(constructorMethod);
     if (!getSymbol) return;
 
     const getType = checker.getTypeOfSymbolAtLocation(getSymbol, agentTypeDecl);
@@ -390,7 +394,7 @@ export class LanguageService {
         const paramName = paramSymbol.getName();
         const paramType = checker.getTypeOfSymbolAtLocation(paramSymbol, decl ?? agentTypeDecl);
         let typeText = checker.getTypeText(paramType, decl ?? agentTypeDecl);
-        typeText = typeText.replace(/import\([^)]*\)\./g, '');
+        typeText = normalizeTypeText(typeText);
 
         const parameterDecl = decl && tsm.Node.isParameterDeclaration(decl) ? decl : undefined;
         const prefix = parameterDecl?.isRestParameter() ? '...' : '';
@@ -400,7 +404,11 @@ export class LanguageService {
       })
       .join(', ');
 
-    return `${agentTypeName}.get(${parameters})`;
+    return `${agentTypeName}.${constructorMethod}(${parameters})`;
+  }
+
+  private getAgentTypePrimaryFactoryMethodName(agentTypeName: string): 'get' | 'newPhantom' {
+    return this.config.agents[agentTypeName]?.mode === 'ephemeral' ? 'newPhantom' : 'get';
   }
 
   private getSnippetPlaceholderCompletions(
@@ -538,6 +546,10 @@ function matchTriggerCharacter(
     return ch as ts.CompletionsTriggerCharacter;
   }
   return undefined;
+}
+
+function normalizeTypeText(typeText: string): string {
+  return typeText.replace(/import\([^)]*\)\./g, '');
 }
 
 type CallArgumentContext = {

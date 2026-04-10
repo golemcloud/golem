@@ -1,0 +1,22 @@
+name: "golem-new-project-rust"
+settings:
+  timeout_per_subprompt: 300
+skip_if:
+  language: "ts"
+steps:
+  - id: "create-project"
+    prompt: "Create a new Golem application called test-app with Rust."
+    expectedSkills:
+      - "golem-new-project"
+    allowedExtraSkills:
+      - "golem-db-app-ts"
+      - "golem-db-app-rust"
+    verify:
+      build: true
+
+  - id: "check-project-files"
+    shell:
+      command: "ls"
+      args: ["test-app/golem.yaml"]
+    expect:
+      exit_code: 0

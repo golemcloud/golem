@@ -4,10 +4,12 @@ world golem-rust {
   import golem:api/host@1.5.0;
   import golem:api/oplog@1.5.0;
   import golem:api/context@1.5.0;
+  import golem:api/retry@1.5.0;
 
   import golem:agent/host@1.5.0;
 
   import golem:durability/durability@1.5.0;
+  import golem:quota/host@1.5.0;
   import golem:rdbms/ignite2@1.5.0;
   import golem:rdbms/mysql@1.5.0;
   import golem:rdbms/postgres@1.5.0;

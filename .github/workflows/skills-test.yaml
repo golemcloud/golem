@@ -2,6 +2,8 @@ name: Skills Test Harness
 
 on:
   push:
+    branches:
+      - main
     paths:
       - 'golem-skills/**'
   pull_request:
@@ -10,21 +12,87 @@ on:
   schedule:
     - cron: '0 6 * * 1' # Weekly Monday 6am UTC
   workflow_dispatch:
-    inputs:
-      golem_version:
-        description: 'Golem version to test'
-        required: true
-        default: 'latest'
+
+concurrency:
+  group: skills-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  WASI_SDK_VERSION: "25"
+  WASI_SDK_PATH: /opt/wasi-sdk
 
 jobs:
+  build-binaries:
+    name: Build Golem Binaries
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    env:
+      CARGO_BUILD_JOBS: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable && rustup target add wasm32-wasip1 wasm32-wasip2
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v4-rust
+          shared-key: release
+          cache-all-crates: true
+          save-if: true
+
+      - uses: davidB/rust-cargo-make@v1
+
+      - name: Build golem-cli and golem server
+        run: cargo build -p golem-cli -p golem --release
+        timeout-minutes: 30
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: cargo-bins/cargo-binstall@main
+
+      - name: Install WASI SDK
+        run: |
+          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
+          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
+
+      - name: Install TS SDK build prerequisites
+        run: |
+          cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag v0.1.4
+          cargo binstall --force cargo-component@0.21.1
+          npm install -g pnpm@10
+
+      - name: Build TS SDK
+        run: cargo make build-sdk-ts
+
+      - name: Upload golem binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: golem-binaries
+          path: |
+            target/release/golem-cli
+            target/release/golem
+          retention-days: 1
+
+      - name: Upload TS SDK packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: golem-ts-sdk
+          path: sdks/ts/packages/
+          retention-days: 1
+
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "lts/*"
           cache: 'npm'
@@ -44,20 +112,35 @@ jobs:
   integration-test:
     name: ${{ matrix.agent }} x ${{ matrix.language }}
     runs-on: ubuntu-latest
-    needs: unit-tests
+    needs: [unit-tests, build-binaries]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: golem_test
+        ports:
+          - "5432:5432"
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: golem
+          MYSQL_DATABASE: golem_test
+        ports:
+          - "3306:3306"
+        options: --health-cmd "mysqladmin ping" --health-interval 10s --health-timeout 5s --health-retries 5
     strategy:
       fail-fast: false
       matrix:
-        agent: [claude-code, gemini, opencode, codex]
-        language: [ts]
-        exclude:
-          - agent: claude-code
-            language: rust
+        agent: [claude-code, opencode, codex]
+        language: [ts, rust]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "lts/*"
           cache: 'npm'
@@ -68,12 +151,18 @@ jobs:
         with:
           targets: wasm32-wasip2
 
+      - name: Download golem binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: golem-binaries
+          path: /tmp/golem-bin
+
       - name: Install Golem
         run: |
-          curl -Lo golem https://github.com/golemcloud/golem/releases/download/v1.4.2/golem-x86_64-unknown-linux-gnu
-          chmod +x golem
-          sudo mv golem /usr/local/bin/golem
-          golem --version
+          chmod +x /tmp/golem-bin/golem-cli /tmp/golem-bin/golem
+          sudo mv /tmp/golem-bin/golem-cli /usr/local/bin/golem-cli
+          sudo mv /tmp/golem-bin/golem /usr/local/bin/golem
+          golem-cli --version || golem --version
 
       - name: Start Golem Server
         run: |
@@ -93,12 +182,6 @@ jobs:
         if: matrix.agent == 'claude-code'
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Install Gemini CLI
-        if: matrix.agent == 'gemini'
-        run: |
-          npm install -g @google/gemini-cli
-          mkdir -p ~/.gemini
-
       - name: Install OpenCode
         if: matrix.agent == 'opencode'
         run: npm install -g opencode-ai
@@ -110,6 +193,32 @@ jobs:
         run: |
           npm install -g @openai/codex
           printenv OPENAI_API_KEY | codex login --with-api-key
+
+      - name: Download TS SDK packages
+        if: matrix.language == 'ts'
+        uses: actions/download-artifact@v4
+        with:
+          name: golem-ts-sdk
+          path: sdks/ts/packages/
+
+      - name: Install TS SDK dependencies (restore hoisted node_modules)
+        if: matrix.language == 'ts'
+        run: |
+          npm install -g pnpm@10
+          cd sdks/ts
+          pnpm install --frozen-lockfile
+
+      - uses: cargo-bins/cargo-binstall@main
+
+      - name: Install wasm-rquickjs-cli (TS builds only)
+        if: matrix.language == 'ts'
+        run: |
+          cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag v0.1.4
+          rustup target add wasm32-wasip1
+
+      - name: Install cargo-component (Rust builds only)
+        if: matrix.language == 'rust'
+        run: cargo binstall --force cargo-component@0.21.1
 
       - name: Install Harness Dependencies
         run: |
@@ -136,13 +245,29 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_MODEL: google/gemini-3-pro-preview
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/golem_test
+          MYSQL_URL: mysql://root:golem@localhost:3306/golem_test
+          GOLEM_PATH: ${{ github.workspace }}
         run: |
           cd /tmp/harness-run
           tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} --scenarios scenarios --skills ./skills
 
       - name: Upload Results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: results-${{ matrix.agent }}-${{ matrix.language }}
           path: /tmp/harness-run/results/
+
+      - name: Clean workspace build artifacts before upload
+        if: always()
+        run: find /tmp/harness-run/workspaces -name 'golem-temp' -type d -exec rm -rf {} + 2>/dev/null; find /tmp/harness-run/workspaces -name 'target' -type d -exec rm -rf {} + 2>/dev/null; find /tmp/harness-run/workspaces -name 'node_modules' -type d -exec rm -rf {} + 2>/dev/null; true
+
+      - name: Upload Workspaces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspaces-${{ matrix.agent }}-${{ matrix.language }}
+          path: /tmp/harness-run/workspaces/
+          retention-days: 3

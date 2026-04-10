@@ -135,6 +135,8 @@ pub enum DeployValidationError {
     AgentSecretTypeConflict { path: CanonicalAgentSecretPath },
     #[error("Multiple resource definitions for the name: {name}")]
     ConflictingResourceDefinitions { name: ResourceName },
+    #[error("Multiple retry policy defaults with the same name: {name}")]
+    ConflictingRetryPolicyDefaults { name: String },
 }
 
 impl SafeDisplay for DeployValidationError {

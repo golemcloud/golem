@@ -82,8 +82,6 @@ impl ComponentUpsertResult {
 pub struct ComponentView {
     #[serde(skip)]
     pub show_sensitive: bool,
-    #[serde(skip)]
-    pub show_exports_for_rib: bool,
 
     pub component_name: ComponentName,
     pub component_id: ComponentId,
@@ -100,15 +98,7 @@ pub struct ComponentView {
 }
 
 impl ComponentView {
-    pub fn new_rib_style(show_sensitive: bool, value: ComponentDto) -> Self {
-        Self::new(show_sensitive, true, value)
-    }
-
-    pub fn new_wit_style(show_sensitive: bool, value: ComponentDto) -> Self {
-        Self::new(show_sensitive, false, value)
-    }
-
-    pub fn new(show_sensitive: bool, show_exports_for_rib: bool, value: ComponentDto) -> Self {
+    pub fn new(show_sensitive: bool, value: ComponentDto) -> Self {
         let exports = {
             let agent_types = value.metadata.agent_types().to_vec();
 
@@ -117,7 +107,6 @@ impl ComponentView {
 
         ComponentView {
             show_sensitive,
-            show_exports_for_rib,
             component_name: value.component_name,
             component_id: value.id,
             component_version: value.metadata.root_package_version().clone(),

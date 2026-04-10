@@ -131,6 +131,12 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                     .invalidate_domains_for_environment(*environment_id)
                     .await;
             }
+            RegistryInvalidationEvent::RetryPolicyChanged { environment_id, .. } => {
+                debug!(
+                    environment_id = %environment_id,
+                    "Received retry policy changed event, ignoring"
+                );
+            }
             RegistryInvalidationEvent::ResourceDefinitionChanged { .. } => {}
         }
     }

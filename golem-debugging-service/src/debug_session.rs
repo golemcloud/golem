@@ -29,9 +29,7 @@ use golem_common::model::oplog::{
     AgentError, DurableFunctionType, OplogEntry, OplogIndex, OplogPayload,
 };
 use golem_common::model::oplog::{PublicDurableFunctionType, PublicOplogEntry, PublicSnapshotData};
-use golem_common::model::{
-    AgentId, AgentInvocationResult, AgentMetadata, OwnedAgentId, RetryConfig,
-};
+use golem_common::model::{AgentId, AgentInvocationResult, AgentMetadata, OwnedAgentId};
 use golem_wasm::wasmtime::ResourceTypeId;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -315,6 +313,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             error: AgentError::Unknown(error.error),
             retry_from: error.retry_from,
             inside_atomic_region: error.inside_atomic_region,
+            retry_policy_state: error.retry_policy_state.map(Into::into),
         }),
         PublicOplogEntry::NoOp(timestamp_parameter) => Ok(OplogEntry::NoOp {
             timestamp: timestamp_parameter.timestamp,
@@ -329,18 +328,6 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::Exited(exited) => Ok(OplogEntry::Exited {
             timestamp: exited.timestamp,
         }),
-        PublicOplogEntry::ChangeRetryPolicy(change_retry_policy) => {
-            Ok(OplogEntry::ChangeRetryPolicy {
-                timestamp: change_retry_policy.timestamp,
-                new_policy: RetryConfig {
-                    max_attempts: change_retry_policy.new_policy.max_attempts,
-                    min_delay: change_retry_policy.new_policy.min_delay,
-                    max_delay: change_retry_policy.new_policy.max_delay,
-                    multiplier: change_retry_policy.new_policy.multiplier,
-                    max_jitter_factor: change_retry_policy.new_policy.max_jitter_factor,
-                },
-            })
-        }
         PublicOplogEntry::BeginAtomicRegion(_) => {
             Err("Cannot override an oplog with a begin atomic region oplog".to_string())
         }
@@ -552,6 +539,17 @@ fn get_oplog_entry_from_public_oplog_entry(
                 last_batch_start: params.last_batch_start,
             })
         }
+        PublicOplogEntry::SetRetryPolicy(params) => {
+            let policy: golem_common::model::retry_policy::NamedRetryPolicy = params.policy.into();
+            Ok(OplogEntry::SetRetryPolicy {
+                timestamp: params.timestamp,
+                policy,
+            })
+        }
+        PublicOplogEntry::RemoveRetryPolicy(params) => Ok(OplogEntry::RemoveRetryPolicy {
+            timestamp: params.timestamp,
+            name: params.name,
+        }),
     }
 }
 

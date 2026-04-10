@@ -357,9 +357,20 @@ impl RegistryServiceGrpcApi {
             .ok_or("missing environment_id field")?
             .try_into()?;
 
+        let component_id: ComponentId = request
+            .component_id
+            .ok_or("missing component_id field")?
+            .try_into()?;
+
+        let component_revision: ComponentRevision = request.component_revision.try_into()?;
+
         let agent_types = self
             .deployment_service
-            .list_deployed_agent_types(environment_id)
+            .list_latest_deployed_agent_types_by_component_revision(
+                environment_id,
+                component_id,
+                component_revision,
+            )
             .await?;
 
         Ok(GetAllAgentTypesSuccessResponse {
@@ -379,11 +390,23 @@ impl RegistryServiceGrpcApi {
             .ok_or("missing environment_id field")?
             .try_into()?;
 
+        let component_id: ComponentId = request
+            .component_id
+            .ok_or("missing component_id field")?
+            .try_into()?;
+
+        let component_revision: ComponentRevision = request.component_revision.try_into()?;
+
         let agent_type_name = AgentTypeName(request.agent_type);
 
         let agent_type = self
             .deployment_service
-            .get_deployed_agent_type(environment_id, &agent_type_name)
+            .get_latest_deployed_agent_type_by_component_revision(
+                environment_id,
+                component_id,
+                component_revision,
+                &agent_type_name,
+            )
             .await?;
 
         Ok(GetAgentTypeSuccessResponse {

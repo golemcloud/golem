@@ -38,9 +38,6 @@ import { UnstructuredBinary } from '../../../newTypes/binaryInput';
 import * as util from 'node:util';
 import { getLanguageCodes, getMimeTypes } from '../../schema/helpers';
 import { Config } from '../../../agentConfig';
-import { Type } from '@golemcloud/golem-ts-types-core';
-import { getConfigValue } from 'golem:agent/host@1.5.0';
-import * as WitType from '../types/WitType.js';
 
 export type ParameterDetail = {
   name: string;

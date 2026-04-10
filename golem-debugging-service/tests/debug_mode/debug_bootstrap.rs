@@ -210,5 +210,6 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
             websocket_connection_pool,
             leak_sentinel,
         )
+        .await
     }
 }

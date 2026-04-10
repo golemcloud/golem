@@ -25,10 +25,11 @@ mod tests {
     use golem_common::model::base64::Base64;
     use golem_common::model::component::ComponentDto;
     use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
+    use golem_common::model::oplog::PublicOplogEntry;
     use golem_common::model::plugin_registration::{
         OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
     };
-    use golem_common::model::{AgentStatus, IdempotencyKey};
+    use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
     use golem_common::{agent_id, data_value};
     use golem_test_framework::components::rdb::DbInfo;
@@ -943,6 +944,47 @@ mod tests {
         }
     }
 
+    async fn wait_for_oplog_completions(
+        user: &(impl TestDsl + Send + Sync + ?Sized),
+        worker_id: &golem_common::model::AgentId,
+        expected_count: usize,
+        timeout: Duration,
+        received: &Arc<Mutex<Vec<BatchCallback>>>,
+    ) {
+        let start = tokio::time::Instant::now();
+        loop {
+            let oplog = user
+                .get_oplog(worker_id, OplogIndex::INITIAL)
+                .await
+                .unwrap_or_default();
+
+            let completed = oplog
+                .iter()
+                .filter(|e| matches!(&e.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+                .count();
+
+            if completed >= expected_count {
+                return;
+            }
+
+            if start.elapsed() > timeout {
+                let batches = received.lock().unwrap().clone();
+                panic!(
+                    "Timed out waiting for oplog completions \
+                     (got {} of {} expected AgentInvocationFinished entries; \
+                     {} callback invocations across {} batches: {:?})",
+                    completed,
+                    expected_count,
+                    invocation_count(&batches),
+                    batches.len(),
+                    batches,
+                );
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
     // ========================================================================
     // I1: Shard reassignment — no entry loss
     // ========================================================================
@@ -1022,15 +1064,17 @@ mod tests {
             .unwrap();
         }
 
-        let _ = wait_for_invocations(&received, 4, Duration::from_secs(60)).await;
+        // Two-phase setup gate: wait for oplog persistence, then for callbacks.
+        wait_for_oplog_completions(&user, &worker_id, 4, Duration::from_secs(120), &received).await;
+        let _ = wait_for_invocations(&received, 4, Duration::from_secs(120)).await;
 
-        // Shard reassignment: stop 2 executors, wait, start them back
+        // Shard reassignment: stop 2 executors, allow reassignment, then start them back.
         deps.stop_random_worker_executors(2).await;
+        // Give the shard manager time to detect executor loss and reassign shards.
         tokio::time::sleep(Duration::from_secs(5)).await;
         deps.start_random_worker_executors(2).await;
-        tokio::time::sleep(Duration::from_secs(5)).await;
 
-        // Wait for worker to be available again
+        // Wait for the worker to become usable again after shard movement.
         user.wait_for_statuses(
             &worker_id,
             &[AgentStatus::Idle, AgentStatus::Running],
@@ -1050,7 +1094,7 @@ mod tests {
             .unwrap();
         }
 
-        let batches = wait_for_invocations(&received, 7, Duration::from_secs(60)).await;
+        let batches = wait_for_invocations(&received, 7, Duration::from_secs(120)).await;
         let fn_names = extract_function_names(&batches);
         // Exactly-once: exactly 1 init + 6 adds, no duplicates across shard reassignment.
         // Current bug: no checkpoint, so shard reassignment causes re-delivery.
@@ -1262,12 +1306,14 @@ mod tests {
             .unwrap();
         }
 
+        // Two-phase setup gate: wait for oplog persistence, then for callbacks
+        wait_for_oplog_completions(&user, &worker_id, 4, Duration::from_secs(120), &received).await;
         let _ = wait_for_invocations(&received, 4, Duration::from_secs(60)).await;
 
         deps.stop_random_worker_executors(2).await;
+        // Give the shard manager time to detect executor loss and reassign shards
         tokio::time::sleep(Duration::from_secs(5)).await;
         deps.start_random_worker_executors(2).await;
-        tokio::time::sleep(Duration::from_secs(5)).await;
 
         user.wait_for_statuses(
             &worker_id,
@@ -1288,7 +1334,7 @@ mod tests {
             .unwrap();
         }
 
-        let batches = wait_for_invocations(&received, 7, Duration::from_secs(60)).await;
+        let batches = wait_for_invocations(&received, 7, Duration::from_secs(120)).await;
         let fn_names = extract_function_names(&batches);
         // Exactly-once: exactly 1 init + 6 adds, no duplicates after locality recovery.
         // Current bug: no checkpoint, so shard reassignment causes re-delivery.

@@ -73,8 +73,14 @@ pub(crate) fn worker_error_to_string(e: &WorkerError) -> String {
         WorkerError::OutOfMemory => "out of memory".to_string(),
         WorkerError::ExceededMemoryLimit => "exceeded memory limit".to_string(),
         WorkerError::InternalError(s) => format!("internal error: {s}"),
-        WorkerError::ExceededTableLimit => todo!(),
-        WorkerError::NodeOutOfFilesystemStorage => todo!(),
-        WorkerError::AgentExceededFilesystemStorageLimit => todo!(),
+        WorkerError::DeterministicTrap(s) => format!("deterministic trap: {s}"),
+        WorkerError::TransientError(s) => format!("transient error: {s}"),
+        WorkerError::PermanentError(s) => format!("permanent error: {s}"),
+        WorkerError::ExceededTableLimit => "exceeded table limit".to_string(),
+        WorkerError::ExceededHttpCallLimit => "exceeded http call limit".to_string(),
+        WorkerError::ExceededRpcCallLimit => "exceeded rpc call limit".to_string(),
+        WorkerError::NodeOutOfFilesystemStorage => "node out of filesystem storage".to_string(),
+        WorkerError::AgentExceededFilesystemStorageLimit => "agent exceeded filesystem storage limit".to_string(),
+        WorkerError::AgentTerminatedByQuota(_) => "agent terminated by quota".to_string(),
     }
 }

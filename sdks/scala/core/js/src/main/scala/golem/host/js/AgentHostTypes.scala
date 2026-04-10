@@ -75,43 +75,13 @@ object JsDatetime {
 
 @js.native
 sealed trait JsSnapshot extends js.Object {
-  def data: Uint8Array = js.native
-  def mimeType: String = js.native
+  def payload: Uint8Array = js.native
+  def mimeType: String    = js.native
 }
 
 object JsSnapshot {
-  def apply(data: Uint8Array, mimeType: String): JsSnapshot =
-    js.Dynamic.literal("data" -> data, "mimeType" -> mimeType).asInstanceOf[JsSnapshot]
-}
-
-// --- RetryPolicy ---
-
-@js.native
-sealed trait JsRetryPolicy extends js.Object {
-  def maxAttempts: Int                    = js.native
-  def minDelay: js.BigInt                 = js.native
-  def maxDelay: js.BigInt                 = js.native
-  def multiplier: Double                  = js.native
-  def maxJitterFactor: js.UndefOr[Double] = js.native
-}
-
-object JsRetryPolicy {
-  def apply(
-    maxAttempts: Int,
-    minDelay: js.BigInt,
-    maxDelay: js.BigInt,
-    multiplier: Double,
-    maxJitterFactor: js.UndefOr[Double] = js.undefined
-  ): JsRetryPolicy = {
-    val obj = js.Dynamic.literal(
-      "maxAttempts" -> maxAttempts,
-      "minDelay"    -> minDelay,
-      "maxDelay"    -> maxDelay,
-      "multiplier"  -> multiplier
-    )
-    maxJitterFactor.foreach(j => obj.updateDynamic("maxJitterFactor")(j))
-    obj.asInstanceOf[JsRetryPolicy]
-  }
+  def apply(payload: Uint8Array, mimeType: String): JsSnapshot =
+    js.Dynamic.literal("payload" -> payload, "mimeType" -> mimeType).asInstanceOf[JsSnapshot]
 }
 
 // --- PersistenceLevel  –  tagged union ---

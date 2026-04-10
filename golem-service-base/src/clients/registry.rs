@@ -1163,6 +1163,23 @@ fn proto_registry_event_to_model(
                 },
             )
         }
+        Some(Payload::RetryPolicyChanged(rpc)) => {
+            let environment_id = rpc
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in RetryPolicyChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::RetryPolicyChanged {
+                    event_id,
+                    environment_id,
+                },
+            )
+        }
         Some(Payload::ResourceDefinitionChanged(rdc)) => {
             let environment_id = rdc
                 .environment_id

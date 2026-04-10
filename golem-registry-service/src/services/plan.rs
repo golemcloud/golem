@@ -77,7 +77,8 @@ impl PlanService {
                         || existing_plan.max_disk_space_per_worker
                             != plan.max_disk_space_per_worker
                         || existing_plan.max_concurrent_agents_per_executor
-                            != plan.max_concurrent_agents_per_executor;
+                            != plan.max_concurrent_agents_per_executor
+                        || existing_plan.oplog_writes_per_second != plan.oplog_writes_per_second;
 
                     if needs_update {
                         info!("Updating initial plan {}", plan.plan_id);
@@ -112,6 +113,7 @@ impl PlanService {
                         monthly_http_call_limit: plan.monthly_http_call_limit,
                         monthly_rpc_call_limit: plan.monthly_rpc_call_limit,
                         max_concurrent_agents_per_executor: plan.max_concurrent_agents_per_executor,
+                        oplog_writes_per_second: plan.oplog_writes_per_second,
                     },
                     &AuthCtx::System,
                 )
@@ -158,6 +160,7 @@ impl PlanService {
             per_invocation_rpc_call_limit: plan.per_invocation_rpc_call_limit.into(),
             monthly_http_call_limit: plan.monthly_http_call_limit.into(),
             monthly_rpc_call_limit: plan.monthly_rpc_call_limit.into(),
+            oplog_writes_per_second: plan.oplog_writes_per_second.into(),
         };
 
         self.plan_repo.create_or_update(record).await?;

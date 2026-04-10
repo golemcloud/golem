@@ -14,7 +14,7 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../newTypes/either';
-import { AgentMethod, DataSchema, HttpMountDetails } from 'golem:agent/common@1.5.0';
+import { AgentMethod, DataSchema } from 'golem:agent/common@1.5.0';
 import { AgentMethodRegistry } from '../registry/agentMethodRegistry';
 import { ClassMetadata, MethodParams } from '@golemcloud/golem-ts-types-core';
 import { validateMethodName } from './helpers';
@@ -24,7 +24,8 @@ import { resolveMethodReturnDataSchema } from './methodOutput';
 export function getAgentMethodSchema(
   classMetadata: ClassMetadata,
   agentClassName: string,
-  httpMountDetails: HttpMountDetails | undefined,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _httpMountDetails?: unknown,
 ): AgentMethod[] {
   const baseError = `Schema generation failed for agent class ${agentClassName}`;
 

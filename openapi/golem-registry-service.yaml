@@ -30,6 +30,7 @@ tags:
 - name: RegistryService
 - name: Reports
 - name: Resources
+- name: RetryPolicies
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
 - name: Worker
@@ -7231,6 +7232,365 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_resource_revision
+  /v1/envs/{environment_id}/retry-policies:
+    post:
+      tags:
+      - RegistryService
+      - RetryPolicies
+      - Environment
+      summary: Create a new retry policy
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/RetryPolicyCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RetryPolicyDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: create_retry_policy
+    get:
+      tags:
+      - RegistryService
+      - RetryPolicies
+      - Environment
+      summary: Get all retry policies of the environment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_RetryPolicyDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_environment_retry_policies
+  /v1/retry-policies/{retry_policy_id}:
+    get:
+      tags:
+      - RegistryService
+      - RetryPolicies
+      summary: Get retry policy by id.
+      parameters:
+      - name: retry_policy_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RetryPolicyDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_retry_policy
+    patch:
+      tags:
+      - RegistryService
+      - RetryPolicies
+      summary: Update retry policy
+      parameters:
+      - name: retry_policy_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/RetryPolicyUpdate'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RetryPolicyDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: update_retry_policy
+    delete:
+      tags:
+      - RegistryService
+      - RetryPolicies
+      summary: Delete retry policy
+      parameters:
+      - name: retry_policy_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: current_revision
+        schema:
+          type: integer
+          format: uint64
+        in: query
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RetryPolicyDto'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: delete_retry_policy
   /v1/envs/{environment_id}/security-schemes:
     post:
       tags:
@@ -8473,6 +8833,632 @@ components:
             - Variant
             example: Variant
       - $ref: '#/components/schemas/TypeVariant'
+    ApiAddDelayPolicy:
+      type: object
+      title: ApiAddDelayPolicy
+      required:
+      - delayMs
+      - inner
+      properties:
+        delayMs:
+          type: integer
+          format: uint64
+        inner:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+    ApiBooleanValue:
+      type: object
+      title: ApiBooleanValue
+      required:
+      - value
+      properties:
+        value:
+          type: boolean
+    ApiClampPolicy:
+      type: object
+      title: ApiClampPolicy
+      required:
+      - minDelayMs
+      - maxDelayMs
+      - inner
+      properties:
+        minDelayMs:
+          type: integer
+          format: uint64
+        maxDelayMs:
+          type: integer
+          format: uint64
+        inner:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+    ApiCountBoxPolicy:
+      type: object
+      title: ApiCountBoxPolicy
+      required:
+      - maxRetries
+      - inner
+      properties:
+        maxRetries:
+          type: integer
+          format: uint32
+        inner:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+    ApiExponentialPolicy:
+      type: object
+      title: ApiExponentialPolicy
+      required:
+      - baseDelayMs
+      - factor
+      properties:
+        baseDelayMs:
+          type: integer
+          format: uint64
+        factor:
+          type: number
+          format: double
+    ApiFibonacciPolicy:
+      type: object
+      title: ApiFibonacciPolicy
+      required:
+      - firstMs
+      - secondMs
+      properties:
+        firstMs:
+          type: integer
+          format: uint64
+        secondMs:
+          type: integer
+          format: uint64
+    ApiFilteredOnPolicy:
+      type: object
+      title: ApiFilteredOnPolicy
+      required:
+      - predicate
+      - inner
+      properties:
+        predicate:
+          $ref: '#/components/schemas/ApiPredicate'
+        inner:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+    ApiImmediatePolicy:
+      type: object
+      title: ApiImmediatePolicy
+    ApiIntegerValue:
+      type: object
+      title: ApiIntegerValue
+      required:
+      - value
+      properties:
+        value:
+          type: integer
+          format: int64
+    ApiJitterPolicy:
+      type: object
+      title: ApiJitterPolicy
+      required:
+      - factor
+      - inner
+      properties:
+        factor:
+          type: number
+          format: double
+        inner:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+    ApiNeverPolicy:
+      type: object
+      title: ApiNeverPolicy
+    ApiPeriodicPolicy:
+      type: object
+      title: ApiPeriodicPolicy
+      required:
+      - delayMs
+      properties:
+        delayMs:
+          type: integer
+          format: uint64
+    ApiPredicate:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyExistence'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertySetCheck'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyPattern'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertyPrefix'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPropertySubstring'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPredicatePair'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPredicatePair'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPredicateNot'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPredicateTrue'
+      - $ref: '#/components/schemas/ApiPredicate_ApiPredicateFalse'
+      discriminator:
+        propertyName: type
+        mapping:
+          PropEq: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+          PropNeq: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+          PropGt: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+          PropGte: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+          PropLt: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+          PropLte: '#/components/schemas/ApiPredicate_ApiPropertyComparison'
+          PropExists: '#/components/schemas/ApiPredicate_ApiPropertyExistence'
+          PropIn: '#/components/schemas/ApiPredicate_ApiPropertySetCheck'
+          PropMatches: '#/components/schemas/ApiPredicate_ApiPropertyPattern'
+          PropStartsWith: '#/components/schemas/ApiPredicate_ApiPropertyPrefix'
+          PropContains: '#/components/schemas/ApiPredicate_ApiPropertySubstring'
+          And: '#/components/schemas/ApiPredicate_ApiPredicatePair'
+          Or: '#/components/schemas/ApiPredicate_ApiPredicatePair'
+          Not: '#/components/schemas/ApiPredicate_ApiPredicateNot'
+          'True': '#/components/schemas/ApiPredicate_ApiPredicateTrue'
+          'False': '#/components/schemas/ApiPredicate_ApiPredicateFalse'
+    ApiPredicateFalse:
+      type: object
+      title: ApiPredicateFalse
+    ApiPredicateNot:
+      type: object
+      title: ApiPredicateNot
+      required:
+      - predicate
+      properties:
+        predicate:
+          $ref: '#/components/schemas/ApiPredicate'
+    ApiPredicatePair:
+      type: object
+      title: ApiPredicatePair
+      required:
+      - left
+      - right
+      properties:
+        left:
+          $ref: '#/components/schemas/ApiPredicate'
+        right:
+          $ref: '#/components/schemas/ApiPredicate'
+    ApiPredicateTrue:
+      type: object
+      title: ApiPredicateTrue
+    ApiPredicateValue:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ApiPredicateValue_ApiTextValue'
+      - $ref: '#/components/schemas/ApiPredicateValue_ApiIntegerValue'
+      - $ref: '#/components/schemas/ApiPredicateValue_ApiBooleanValue'
+      discriminator:
+        propertyName: type
+        mapping:
+          Text: '#/components/schemas/ApiPredicateValue_ApiTextValue'
+          Integer: '#/components/schemas/ApiPredicateValue_ApiIntegerValue'
+          Boolean: '#/components/schemas/ApiPredicateValue_ApiBooleanValue'
+    ApiPredicateValue_ApiBooleanValue:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Boolean
+            example: Boolean
+      - $ref: '#/components/schemas/ApiBooleanValue'
+    ApiPredicateValue_ApiIntegerValue:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Integer
+            example: Integer
+      - $ref: '#/components/schemas/ApiIntegerValue'
+    ApiPredicateValue_ApiTextValue:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Text
+            example: Text
+      - $ref: '#/components/schemas/ApiTextValue'
+    ApiPredicate_ApiPredicateFalse:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - 'False'
+            example: 'False'
+      - $ref: '#/components/schemas/ApiPredicateFalse'
+    ApiPredicate_ApiPredicateNot:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Not
+            example: Not
+      - $ref: '#/components/schemas/ApiPredicateNot'
+    ApiPredicate_ApiPredicatePair:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Or
+            example: Or
+      - $ref: '#/components/schemas/ApiPredicatePair'
+    ApiPredicate_ApiPredicateTrue:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - 'True'
+            example: 'True'
+      - $ref: '#/components/schemas/ApiPredicateTrue'
+    ApiPredicate_ApiPropertyComparison:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - PropLte
+            example: PropLte
+      - $ref: '#/components/schemas/ApiPropertyComparison'
+    ApiPredicate_ApiPropertyExistence:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - PropExists
+            example: PropExists
+      - $ref: '#/components/schemas/ApiPropertyExistence'
+    ApiPredicate_ApiPropertyPattern:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - PropMatches
+            example: PropMatches
+      - $ref: '#/components/schemas/ApiPropertyPattern'
+    ApiPredicate_ApiPropertyPrefix:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - PropStartsWith
+            example: PropStartsWith
+      - $ref: '#/components/schemas/ApiPropertyPrefix'
+    ApiPredicate_ApiPropertySetCheck:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - PropIn
+            example: PropIn
+      - $ref: '#/components/schemas/ApiPropertySetCheck'
+    ApiPredicate_ApiPropertySubstring:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - PropContains
+            example: PropContains
+      - $ref: '#/components/schemas/ApiPropertySubstring'
+    ApiPropertyComparison:
+      type: object
+      title: ApiPropertyComparison
+      required:
+      - property
+      - value
+      properties:
+        property:
+          type: string
+        value:
+          $ref: '#/components/schemas/ApiPredicateValue'
+    ApiPropertyExistence:
+      type: object
+      title: ApiPropertyExistence
+      required:
+      - property
+      properties:
+        property:
+          type: string
+    ApiPropertyPattern:
+      type: object
+      title: ApiPropertyPattern
+      required:
+      - property
+      - pattern
+      properties:
+        property:
+          type: string
+        pattern:
+          type: string
+    ApiPropertyPrefix:
+      type: object
+      title: ApiPropertyPrefix
+      required:
+      - property
+      - prefix
+      properties:
+        property:
+          type: string
+        prefix:
+          type: string
+    ApiPropertySetCheck:
+      type: object
+      title: ApiPropertySetCheck
+      required:
+      - property
+      - values
+      properties:
+        property:
+          type: string
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiPredicateValue'
+    ApiPropertySubstring:
+      type: object
+      title: ApiPropertySubstring
+      required:
+      - property
+      - substring
+      properties:
+        property:
+          type: string
+        substring:
+          type: string
+    ApiRetryPolicy:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiPeriodicPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiExponentialPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiFibonacciPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiImmediatePolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiNeverPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiCountBoxPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiTimeBoxPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiClampPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiAddDelayPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiJitterPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiFilteredOnPolicy'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
+      - $ref: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
+      discriminator:
+        propertyName: type
+        mapping:
+          Periodic: '#/components/schemas/ApiRetryPolicy_ApiPeriodicPolicy'
+          Exponential: '#/components/schemas/ApiRetryPolicy_ApiExponentialPolicy'
+          Fibonacci: '#/components/schemas/ApiRetryPolicy_ApiFibonacciPolicy'
+          Immediate: '#/components/schemas/ApiRetryPolicy_ApiImmediatePolicy'
+          Never: '#/components/schemas/ApiRetryPolicy_ApiNeverPolicy'
+          CountBox: '#/components/schemas/ApiRetryPolicy_ApiCountBoxPolicy'
+          TimeBox: '#/components/schemas/ApiRetryPolicy_ApiTimeBoxPolicy'
+          Clamp: '#/components/schemas/ApiRetryPolicy_ApiClampPolicy'
+          AddDelay: '#/components/schemas/ApiRetryPolicy_ApiAddDelayPolicy'
+          Jitter: '#/components/schemas/ApiRetryPolicy_ApiJitterPolicy'
+          FilteredOn: '#/components/schemas/ApiRetryPolicy_ApiFilteredOnPolicy'
+          AndThen: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
+          Union: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
+          Intersect: '#/components/schemas/ApiRetryPolicy_ApiRetryPolicyPair'
+    ApiRetryPolicyPair:
+      type: object
+      title: ApiRetryPolicyPair
+      required:
+      - first
+      - second
+      properties:
+        first:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+        second:
+          $ref: '#/components/schemas/ApiRetryPolicy'
+    ApiRetryPolicy_ApiAddDelayPolicy:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - AddDelay
+            example: AddDelay
+      - $ref: '#/components/schemas/ApiAddDelayPolicy'
+    ApiRetryPolicy_ApiClampPolicy:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Clamp
+            example: Clamp
+      - $ref: '#/components/schemas/ApiClampPolicy'
+    ApiRetryPolicy_ApiCountBoxPolicy:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - CountBox
+            example: CountBox
+      - $ref: '#/components/schemas/ApiCountBoxPolicy'
+    ApiRetryPolicy_ApiExponentialPolicy:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Exponential
+            example: Exponential
+      - $ref: '#/components/schemas/ApiExponentialPolicy'
+    ApiRetryPolicy_ApiFibonacciPolicy:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Fibonacci
+            example: Fibonacci
+      - $ref: '#/components/schemas/ApiFibonacciPolicy'
+    ApiRetryPolicy_ApiFilteredOnPolicy:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - FilteredOn
+            example: FilteredOn
+      - $ref: '#/components/schemas/ApiFilteredOnPolicy'
+    ApiRetryPolicy_ApiImmediatePolicy:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Immediate
+            example: Immediate
+      - $ref: '#/components/schemas/ApiImmediatePolicy'
+    ApiRetryPolicy_ApiJitterPolicy:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Jitter
+            example: Jitter
+      - $ref: '#/components/schemas/ApiJitterPolicy'
+    ApiRetryPolicy_ApiNeverPolicy:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Never
+            example: Never
+      - $ref: '#/components/schemas/ApiNeverPolicy'
+    ApiRetryPolicy_ApiPeriodicPolicy:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Periodic
+            example: Periodic
+      - $ref: '#/components/schemas/ApiPeriodicPolicy'
+    ApiRetryPolicy_ApiRetryPolicyPair:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Intersect
+            example: Intersect
+      - $ref: '#/components/schemas/ApiRetryPolicyPair'
+    ApiRetryPolicy_ApiTimeBoxPolicy:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - TimeBox
+            example: TimeBox
+      - $ref: '#/components/schemas/ApiTimeBoxPolicy'
+    ApiTextValue:
+      type: object
+      title: ApiTextValue
+      required:
+      - value
+      properties:
+        value:
+          type: string
+    ApiTimeBoxPolicy:
+      type: object
+      title: ApiTimeBoxPolicy
+      required:
+      - limitMs
+      - inner
+      properties:
+        limitMs:
+          type: integer
+          format: uint64
+        inner:
+          $ref: '#/components/schemas/ApiRetryPolicy'
     Application:
       type: object
       title: Application
@@ -8883,6 +9869,7 @@ components:
       - version
       - agentSecretDefaults
       - quotaResourceDefaults
+      - retryPolicyDefaults
       properties:
         currentRevision:
           type: integer
@@ -8900,6 +9887,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ResourceDefinitionCreation'
+        retryPolicyDefaults:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentRetryPolicyDefault'
     DeploymentPlan:
       type: object
       title: DeploymentPlan
@@ -8988,6 +9979,25 @@ components:
         hash:
           type: string
           format: hash
+    DeploymentRetryPolicyDefault:
+      type: object
+      title: DeploymentRetryPolicyDefault
+      description: Default retry policy to create as part of deployment
+      required:
+      - name
+      - priority
+      - predicate
+      - policy
+      properties:
+        name:
+          type: string
+        priority:
+          type: integer
+          format: uint32
+        predicate:
+          $ref: '#/components/schemas/ApiPredicate'
+        policy:
+          $ref: '#/components/schemas/ApiRetryPolicy'
     DeploymentRollback:
       type: object
       title: DeploymentRollback
@@ -10057,6 +11067,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ResourceDefinition'
+    Page_RetryPolicyDto:
+      type: object
+      title: Page_RetryPolicyDto
+      required:
+      - values
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/RetryPolicyDto'
     Page_SecuritySchemeDto:
       type: object
       title: Page_SecuritySchemeDto
@@ -10156,6 +11176,7 @@ components:
       - monthlyHttpCallLimit
       - monthlyRpcCallLimit
       - maxConcurrentAgentsPerExecutor
+      - oplogWritesPerSecond
       properties:
         planId:
           type: string
@@ -10205,6 +11226,9 @@ components:
           type: integer
           format: uint64
         maxConcurrentAgentsPerExecutor:
+          type: integer
+          format: uint64
+        oplogWritesPerSecond:
           type: integer
           format: uint64
     PluginInstallation:
@@ -10628,6 +11652,70 @@ components:
           type: integer
           format: uint64
           description: Maximum burst capacity
+    RetryPolicyCreation:
+      type: object
+      title: RetryPolicyCreation
+      required:
+      - name
+      - priority
+      - predicateJson
+      - policyJson
+      properties:
+        name:
+          type: string
+        priority:
+          type: integer
+          format: uint32
+        predicateJson:
+          type: string
+        policyJson:
+          type: string
+    RetryPolicyDto:
+      type: object
+      title: RetryPolicyDto
+      required:
+      - id
+      - environmentId
+      - name
+      - revision
+      - priority
+      - predicateJson
+      - policyJson
+      properties:
+        id:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        revision:
+          type: integer
+          format: uint64
+        priority:
+          type: integer
+          format: uint32
+        predicateJson:
+          type: string
+        policyJson:
+          type: string
+    RetryPolicyUpdate:
+      type: object
+      title: RetryPolicyUpdate
+      required:
+      - currentRevision
+      properties:
+        currentRevision:
+          type: integer
+          format: uint64
+        priority:
+          type: integer
+          format: uint32
+        predicateJson:
+          type: string
+        policyJson:
+          type: string
     SecuritySchemeAgentSecurity:
       type: object
       title: SecuritySchemeAgentSecurity

@@ -1,1 +1,1 @@
-export { CounterAgent } from './counter-agent';
+import './counter-agent';

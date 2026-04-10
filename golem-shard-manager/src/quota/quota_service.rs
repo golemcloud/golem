@@ -25,7 +25,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::LeaseEpoch;
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_service_base::model::quota_lease::PendingReservation;
-use sqlx::types::Json;
+use golem_service_base::repo::Blob;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -135,7 +135,7 @@ impl QuotaService {
             {
                 for lr in lease_records {
                     let pod = Pod {
-                        ip: lr.pod_ip.0,
+                        ip: lr.pod_ip.into_value(),
                         port: lr
                             .pod_port
                             .try_into()
@@ -311,6 +311,26 @@ impl QuotaService {
         Ok(lease)
     }
 
+    /// Renew multiple leases in one call.  Results are in the same order as
+    /// the input entries.  Each entry is processed independently — failure of
+    /// one does not affect others.
+    pub async fn batch_renew_leases(
+        &self,
+        renewals: Vec<(
+            ResourceDefinitionId,
+            Pod,
+            LeaseEpoch,
+            u64,
+            Vec<PendingReservation>,
+        )>,
+    ) -> Vec<Result<QuotaLease, QuotaError>> {
+        let mut results = Vec::with_capacity(renewals.len());
+        for (rid, pod, epoch, unused, pending) in renewals {
+            results.push(self.renew_lease(rid, pod, epoch, unused, pending).await);
+        }
+        results
+    }
+
     pub async fn release_lease(
         &self,
         resource_definition_id: ResourceDefinitionId,
@@ -399,9 +419,9 @@ impl QuotaService {
             .to_lease_record(pod)
             .ok_or_else(|| anyhow::anyhow!("pod lease not found after mutation"))?;
 
-        let expired: Vec<(Json<IpAddr>, i32)> = expired_pods
+        let expired: Vec<(Blob<IpAddr>, i32)> = expired_pods
             .iter()
-            .map(|p| (Json(p.ip), p.port.into()))
+            .map(|p| (Blob::new(p.ip), p.port.into()))
             .collect();
 
         self.repo
@@ -420,7 +440,7 @@ impl QuotaService {
             .save_lease_release(
                 &resource_record,
                 previous_revision,
-                Json(pod.ip),
+                Blob::new(pod.ip),
                 pod.port.into(),
             )
             .await

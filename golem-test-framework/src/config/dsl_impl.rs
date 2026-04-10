@@ -994,6 +994,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             version: DeploymentVersion(Uuid::new_v4().to_string()),
             agent_secret_defaults: Vec::new(),
             quota_resource_defaults: Vec::new(),
+            retry_policy_defaults: Vec::new(),
         };
 
         modify_deployment(&mut deployment_creation);

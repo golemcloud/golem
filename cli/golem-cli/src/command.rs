@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use self::api::agent_secret::AgentSecretSubcommand;
+use self::api::retry_policy::RetryPolicySubcommand;
 use crate::app::template::AppTemplateName;
 use crate::command::api::ApiSubcommand;
 use crate::command::cloud::CloudSubcommand;
@@ -634,7 +635,7 @@ pub enum GolemCliSubcommand {
         #[clap(long)]
         output_dir: Option<PathBuf>,
     },
-    /// Start Rib REPL for a selected component
+    /// Start REPL for a selected component
     Repl {
         /// Select the language for the REPL, defaults to the component's language
         #[arg(long)]
@@ -761,6 +762,11 @@ pub enum GolemCliSubcommand {
     AgentSecret {
         #[clap(subcommand)]
         subcommand: AgentSecretSubcommand,
+    },
+    /// Manage Retry Policies
+    RetryPolicy {
+        #[clap(subcommand)]
+        subcommand: RetryPolicySubcommand,
     },
     /// Generate shell completion
     Completion {
@@ -1128,6 +1134,11 @@ pub mod worker {
             /// When set to true it queries for most up-to-date status for each agent, default is false
             #[arg(long, default_value_t = false)]
             precise: bool,
+            /// Watch mode: periodically clear the screen and redisplay the agent list.
+            /// Pass without a value to use the default interval (400ms), or --refresh=MILLIS
+            /// to set a custom polling interval. Conflicts with --scan-cursor.
+            #[arg(long, default_missing_value = "400", value_name = "MILLIS", num_args = 0..=1, conflicts_with = "scan_cursor")]
+            refresh: Option<u64>,
         },
         /// Connect to an agent and live stream its standard output, error and log channels
         Stream {
@@ -1311,6 +1322,63 @@ pub mod api {
 
             /// List Agent Secrets
             List,
+        }
+    }
+
+    pub mod retry_policy {
+        use clap::Subcommand;
+        use golem_common::model::retry_policy::RetryPolicyId;
+
+        #[derive(Debug, Subcommand)]
+        pub enum RetryPolicySubcommand {
+            /// Create a retry policy in the environment
+            Create {
+                /// Name of the retry policy
+                #[arg(long)]
+                name: String,
+                /// Priority (higher = checked first)
+                #[arg(long)]
+                priority: u32,
+                /// Predicate as JSON string
+                #[arg(long)]
+                predicate_json: String,
+                /// Policy as JSON string
+                #[arg(long)]
+                policy_json: String,
+            },
+
+            /// List retry policies in the environment
+            List,
+
+            /// Get a retry policy by ID
+            Get {
+                /// ID of the retry policy
+                #[arg(long)]
+                id: RetryPolicyId,
+            },
+
+            /// Update a retry policy
+            Update {
+                /// ID of the retry policy to update
+                #[arg(long)]
+                id: RetryPolicyId,
+                /// New priority (optional)
+                #[arg(long)]
+                priority: Option<u32>,
+                /// New predicate as JSON string (optional)
+                #[arg(long)]
+                predicate_json: Option<String>,
+                /// New policy as JSON string (optional)
+                #[arg(long)]
+                policy_json: Option<String>,
+            },
+
+            /// Delete a retry policy
+            Delete {
+                /// ID of the retry policy to delete
+                #[arg(long)]
+                id: RetryPolicyId,
+            },
         }
     }
 

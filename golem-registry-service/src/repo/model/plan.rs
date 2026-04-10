@@ -38,6 +38,7 @@ pub struct PlanRecord {
     pub per_invocation_rpc_call_limit: NumericU64,
     pub monthly_http_call_limit: NumericU64,
     pub monthly_rpc_call_limit: NumericU64,
+    pub oplog_writes_per_second: NumericU64,
 }
 
 impl PlanRecord {
@@ -76,6 +77,7 @@ impl From<PlanRecord> for Plan {
             monthly_http_call_limit: value.monthly_http_call_limit.get(),
             monthly_rpc_call_limit: value.monthly_rpc_call_limit.get(),
             max_concurrent_agents_per_executor: value.max_concurrent_agents_per_executor.get(),
+            oplog_writes_per_second: value.oplog_writes_per_second.get(),
             plan_id: PlanId(value.plan_id),
             name: PlanName(value.name),
         }

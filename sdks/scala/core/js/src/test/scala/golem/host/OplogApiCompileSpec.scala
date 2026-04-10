@@ -93,7 +93,9 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.Jump(p)                         => s"jump(${p.jump.start})"
     case OplogEntry.Interrupted(t)                  => s"interrupted(${t.seconds})"
     case OplogEntry.Exited(t)                       => s"exited(${t.seconds})"
-    case OplogEntry.ChangeRetryPolicy(p)            => s"retry(${p.newPolicy.maxAttempts})"
+    case OplogEntry.SetRetryPolicy(p)               => s"set-retry(${p.name})"
+    case OplogEntry.RemoveRetryPolicy(p)            => s"remove-retry(${p.name})"
+    case OplogEntry.FilesystemStorageUsageUpdate(p) => s"fs-usage(${p.delta})"
     case OplogEntry.BeginAtomicRegion(t)            => s"begin-atomic(${t.seconds})"
     case OplogEntry.EndAtomicRegion(p)              => s"end-atomic(${p.beginIndex})"
     case OplogEntry.BeginRemoteWrite(t)             => s"begin-rw(${t.seconds})"
@@ -129,14 +131,12 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   private val mockAgentId = AgentHostApi.AgentIdLiteral(mockCompId, "test-agent")
 
   private val allEntries: List[OplogEntry] = {
-    val retryPolicy = HostApi.RetryPolicy(3, BigInt(1000000), BigInt(60000000000L), 2.0, Some(0.1))
     List(
       OplogEntry.Create(
         CreateParameters(
           ts,
           mockAgentId,
           BigInt(1),
-          List("arg1"),
           Map("env" -> "val"),
           "golem",
           "test-env",
@@ -156,7 +156,11 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.Restart(ts),
       OplogEntry.Error(ErrorParameters(ts, "boom", BigInt(5))),
       OplogEntry.Jump(JumpParameters(ts, oplogRegion)),
-      OplogEntry.ChangeRetryPolicy(ChangeRetryPolicyParameters(ts, retryPolicy)),
+      OplogEntry.SetRetryPolicy(
+        SetRetryPolicyParameters(ts, "default", 0, """{"nodes":[]}""", """{"nodes":[]}""")
+      ),
+      OplogEntry.RemoveRetryPolicy(RemoveRetryPolicyParameters(ts, "default")),
+      OplogEntry.FilesystemStorageUsageUpdate(FilesystemStorageUsageUpdateParameters(ts, BigInt(4096))),
       OplogEntry.EndAtomicRegion(EndAtomicRegionParameters(ts, BigInt(1))),
       OplogEntry.EndRemoteWrite(EndRemoteWriteParameters(ts, BigInt(2))),
       OplogEntry.GrowMemory(GrowMemoryParameters(ts, BigInt(65536))),
@@ -209,9 +213,9 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   }
 
   def spec = suite("OplogApiCompileSpec")(
-    test("all 37 OplogEntry variants constructed") {
+    test("all 38 OplogEntry variants constructed") {
       val distinctTags = allEntries.map(describeEntry).map(_.takeWhile(_ != '(')).distinct
-      assertTrue(distinctTags.size >= 37)
+      assertTrue(distinctTags.size >= 38)
     },
     test("exhaustive OplogEntry match compiles") {
       allEntries.foreach(e => Predef.assert(describeEntry(e).nonEmpty))

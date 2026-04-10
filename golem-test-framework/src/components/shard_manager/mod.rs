@@ -106,6 +106,7 @@ async fn env_vars(
             "GOLEM__REGISTRY_SERVICE__PORT",
             registry_service.grpc_port().to_string(),
         )
+        .with_str("GOLEM__QUOTA__LEASE_DURATION", "5s")
         .with_all(
             rdb.info()
                 .env("golem_shard_manager", rdb_private_connection),

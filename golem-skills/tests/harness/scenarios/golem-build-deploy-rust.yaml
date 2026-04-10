@@ -1,0 +1,46 @@
+name: "golem-build-deploy-rust"
+settings:
+  timeout_per_subprompt: 300
+  golem_server:
+    custom_request_port: 9006
+skip_if:
+  language: "ts"
+steps:
+  - id: "create-project"
+    prompt: "Create a new Golem application called deploy-test with Rust."
+    expectedSkills:
+      - "golem-new-project"
+    allowedExtraSkills:
+      - "golem-db-app-ts"
+      - "golem-db-app-rust"
+    verify:
+      deploy: true
+
+  - id: "check-project-files"
+    shell:
+      command: "ls"
+      args: ["deploy-test/golem.yaml"]
+    expect:
+      exit_code: 0
+
+  - id: "increment-counter"
+    http:
+      url: "http://deploy-test.localhost:9006/counters/default/increment"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+    expect:
+      status: 200
+    retry:
+      attempts: 3
+      delay: 5
+
+  - id: "increment-counter-again"
+    http:
+      url: "http://deploy-test.localhost:9006/counters/default/increment"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+    expect:
+      status: 200
+      body_contains: "2"

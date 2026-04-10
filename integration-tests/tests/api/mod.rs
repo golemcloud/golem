@@ -26,6 +26,7 @@ mod http_api_deployment;
 mod plugin_registration;
 mod reports;
 mod resource_definition;
+mod retry_policies;
 mod rpc_auth;
 mod security_schemes;
 

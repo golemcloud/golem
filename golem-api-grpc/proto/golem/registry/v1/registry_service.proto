@@ -368,6 +368,7 @@ message RegistryInvalidationEvent {
     DomainRegistrationChangedEvent domain_registration_changed = 6;
     SecuritySchemeChangedEvent security_scheme_changed = 7;
     ResourceDefinitionChangedEvent resource_definition_changed = 8;
+    RetryPolicyChangedEvent retry_policy_changed = 9;
   }
 }
 
@@ -409,4 +410,9 @@ message ResourceDefinitionChangedEvent {
   golem.common.EnvironmentId environment_id = 1;
   golem.common.ResourceDefinitionId resource_definition_id = 2;
   string resource_name = 3;
+}
+
+// Sent when an environment retry policy is created, updated, or deleted.
+message RetryPolicyChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
 }

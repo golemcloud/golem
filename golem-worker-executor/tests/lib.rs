@@ -41,6 +41,7 @@ pub mod oplog_metrics;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod resource_limits;
+pub mod retry_policies;
 pub mod revert;
 pub mod rpc;
 pub mod scalability;
@@ -63,6 +64,7 @@ tag_suite!(agent, group1);
 tag_suite!(hot_update, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
+tag_suite!(retry_policies, group2);
 
 tag_suite!(durability, group3);
 tag_suite!(rpc, group3);
