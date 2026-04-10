@@ -735,6 +735,27 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             leak_sentinel,
         }
     }
+    /// Rewrites the `OwnedAgentId` so that `environment_id` comes from the
+    /// target component's metadata rather than from the caller. This ensures
+    /// that auth checks, shard routing, and all downstream code use the
+    /// component-authoritative environment.
+    /// See https://github.com/golemcloud/golem/issues/3099
+    async fn canonicalize_owned_agent_id(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<OwnedAgentId, RpcError> {
+        let component = self
+            .component_service()
+            .get_metadata(owned_agent_id.component_id(), None)
+            .await
+            .map_err(|e| RpcError::RemoteInternalError {
+                details: format!("Failed to resolve target component metadata: {e}"),
+            })?;
+        Ok(OwnedAgentId::new(
+            component.environment_id,
+            &owned_agent_id.agent_id,
+        ))
+    }
 }
 
 #[async_trait]
@@ -749,6 +770,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_stack: InvocationContextStack,
         agent_config: Vec<WorkerAgentConfigEntry>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
+
         if self
             .shard_service()
             .check_worker(&owned_agent_id.agent_id)
@@ -808,6 +831,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<UntypedDataValue, RpcError> {
+        let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
+
         if self
             .shard_service()
             .check_worker(&owned_agent_id.agent_id)
@@ -884,6 +909,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
+        let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
+
         if self
             .shard_service()
             .check_worker(&owned_agent_id.agent_id)

@@ -209,6 +209,25 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.shard_service().check_worker(agent_id.as_ref())
     }
 
+    /// Rewrites the `OwnedAgentId` so that `environment_id` comes from the
+    /// target component's metadata rather than from the caller-supplied
+    /// request data. This ensures that shard routing, auth checks, and all
+    /// downstream code use the component-authoritative environment.
+    /// See https://github.com/golemcloud/golem/issues/3099
+    async fn canonicalize_owned_agent_id(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<OwnedAgentId, WorkerExecutorError> {
+        let component = self
+            .component_service()
+            .get_metadata(owned_agent_id.component_id(), None)
+            .await?;
+        Ok(OwnedAgentId::new(
+            component.environment_id,
+            &owned_agent_id.agent_id,
+        ))
+    }
+
     /// Validate that the request carries a well-formed `auth_ctx` field.
     ///
     /// TODO: Now that `account_id` is resolved from the component owner
@@ -234,6 +253,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+        let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
