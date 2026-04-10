@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as log from "./log.js";
 
 export interface WatcherEvent {
   path: string;
@@ -59,13 +60,13 @@ export class SkillWatcher {
           if (!this.warnedMissingTool) {
             this.warnedMissingTool = true;
             const tool = platform === "darwin" ? "fswatch" : "inotifywait";
-            console.warn(
+            log.warn(
               `SkillWatcher: "${tool}" not found; falling back to atime-based detection. ` +
               `Install ${tool} for real-time skill activation tracking.`,
             );
           }
         } else {
-          console.error(`SkillWatcher error: ${err.message}`);
+          log.error(`SkillWatcher error: ${err.message}`);
         }
       });
     }
@@ -88,7 +89,7 @@ export class SkillWatcher {
     } else if (platform === "darwin") {
       return spawn("fswatch", ["-0", "-a", "-L", dir]);
     }
-    console.warn(
+    log.warn(
       `SkillWatcher: Unsupported platform ${platform}, activation tracking disabled.`,
     );
     return null;

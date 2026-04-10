@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import chalk from "chalk";
+import * as log from "../log.js";
 
 export interface AgentResult {
   success: boolean;
@@ -102,7 +103,7 @@ export abstract class BaseAgentDriver implements AgentDriver {
         const lines = stdoutBuf.split("\n");
         stdoutBuf = lines.pop()!;
         for (const line of lines) {
-          console.log(`${prefix} ${line}`);
+          log.driver(prefix, line);
         }
       });
       child.stderr?.on("data", (data) => {
@@ -112,7 +113,7 @@ export abstract class BaseAgentDriver implements AgentDriver {
         const lines = stderrBuf.split("\n");
         stderrBuf = lines.pop()!;
         for (const line of lines) {
-          console.log(`${prefix} ${chalk.gray(line)}`);
+          log.driverErr(prefix, line);
         }
       });
 
@@ -122,8 +123,8 @@ export abstract class BaseAgentDriver implements AgentDriver {
 
       child.on("close", (exitCode) => {
         clearTimeout(timeoutId);
-        if (stdoutBuf) console.log(`${prefix} ${stdoutBuf}`);
-        if (stderrBuf) console.log(`${prefix} ${chalk.gray(stderrBuf)}`);
+        if (stdoutBuf) log.driver(prefix, stdoutBuf);
+        if (stderrBuf) log.driverErr(prefix, stderrBuf);
         const durationSeconds = (Date.now() - startTime) / 1000;
         resolve({
           success: exitCode === 0,

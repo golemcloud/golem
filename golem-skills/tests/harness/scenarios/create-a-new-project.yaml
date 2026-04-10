@@ -8,8 +8,9 @@ steps:
       - "golem-new-project"
     verify:
       build: true
+      deploy: true
 
 # TODO:
 #  - verify the created directory according to the language
-#  - deploy and invoke the app
+#  - deploy and invoke the app rust: CounterAgent, increment
 

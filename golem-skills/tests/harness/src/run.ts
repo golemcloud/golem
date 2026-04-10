@@ -21,7 +21,7 @@ import {
   type MergedSummary,
   type HtmlScenarioReport,
 } from "./html-report.js";
-import chalk from "chalk";
+import * as log from "./log.js";
 import { detectGolemWorkspaceRoot, resolveGolemTargetDir, GolemServer } from "./workspace.js";
 
 const SUPPORTED_AGENTS = [
@@ -94,9 +94,7 @@ async function mergeReports(
   }
 
   if (summaries.length === 0) {
-    console.error(
-      chalk.red("No summary.json files found in the reports directory"),
-    );
+    log.error("No summary.json files found in the reports directory");
     process.exit(1);
   }
 
@@ -137,13 +135,13 @@ async function mergeReports(
 
   const mergedPath = path.join(outputDir, "merged-summary.json");
   await fs.writeFile(mergedPath, JSON.stringify(merged, null, 2));
-  console.log(chalk.green(`Merged summary written to ${mergedPath}`));
+  log.success(`Merged summary written to ${mergedPath}`);
 
   // Generate HTML for merged report
   const htmlContent = generateHtmlReport(merged, []);
   const htmlPath = path.join(outputDir, "report.html");
   await fs.writeFile(htmlPath, htmlContent);
-  console.log(chalk.green(`HTML report written to ${htmlPath}`));
+  log.success(`HTML report written to ${htmlPath}`);
 }
 
 async function main() {
@@ -191,17 +189,12 @@ async function main() {
     const detected = await detectGolemWorkspaceRoot();
     if (detected) {
       process.env.GOLEM_PATH = detected;
-      console.log(chalk.cyan(`Auto-detected GOLEM_PATH: ${detected}`));
+      log.info(`Auto-detected GOLEM_PATH: ${detected}`);
     }
   }
 
   if (!process.env.GOLEM_PATH) {
-    console.error(
-      chalk.red(
-        "GOLEM_PATH is not set and could not be auto-detected.\n" +
-        "Set GOLEM_PATH to the root of your golem repository checkout, or run the harness from within the golem repo tree.",
-      ),
-    );
+    log.error("GOLEM_PATH is not set and could not be auto-detected.\nSet GOLEM_PATH to the root of your golem repository checkout, or run the harness from within the golem repo tree.");
     process.exit(1);
   }
 
@@ -210,7 +203,7 @@ async function main() {
   const golemTargetDir = resolveGolemTargetDir(process.env.GOLEM_PATH);
   const pathSep = process.platform === "win32" ? ";" : ":";
   process.env.PATH = golemTargetDir + pathSep + (process.env.PATH ?? "");
-  console.log(chalk.cyan(`Using golem binary from: ${golemTargetDir}`));
+  log.info(`Using golem binary from: ${golemTargetDir}`);
 
   if (help) {
     const usage = `
@@ -234,7 +227,7 @@ Options:
   -h, --help            Show this help message
 `.trim();
 
-    console.log(usage);
+    log.usage(usage);
     process.exit(0);
   }
 
@@ -247,21 +240,13 @@ Options:
 
   for (const a of agents) {
     if (!SUPPORTED_AGENTS.includes(a)) {
-      console.error(
-        chalk.red(
-          `Unsupported agent: ${a}. Supported: ${SUPPORTED_AGENTS.join(", ")}`,
-        ),
-      );
+      log.error(`Unsupported agent: ${a}. Supported: ${SUPPORTED_AGENTS.join(", ")}`);
       process.exit(1);
     }
   }
   for (const l of languages) {
     if (!SUPPORTED_LANGUAGES.includes(l)) {
-      console.error(
-        chalk.red(
-          `Unsupported language: ${l}. Supported: ${SUPPORTED_LANGUAGES.join(", ")}`,
-        ),
-      );
+      log.error(`Unsupported language: ${l}. Supported: ${SUPPORTED_LANGUAGES.join(", ")}`);
       process.exit(1);
     }
   }
@@ -273,9 +258,7 @@ Options:
     ? Number.parseInt(timeout, 10)
     : undefined;
   if (resumeFrom && !scenarioFilter) {
-    console.error(
-      chalk.red("--resume-from requires --scenario to avoid aborting on unrelated scenarios"),
-    );
+    log.error("--resume-from requires --scenario to avoid aborting on unrelated scenarios");
     process.exit(1);
   }
 
@@ -283,7 +266,7 @@ Options:
     globalTimeoutSeconds !== undefined &&
     (!Number.isFinite(globalTimeoutSeconds) || globalTimeoutSeconds <= 0)
   ) {
-    console.error(chalk.red(`Invalid --timeout value: ${timeout}`));
+    log.error(`Invalid --timeout value: ${timeout}`);
     process.exit(1);
   }
 
@@ -295,13 +278,13 @@ Options:
 
   // Dry-run mode: validate and print step summaries, then exit
   if (dryRun) {
-    console.log(chalk.bold("=== Dry Run ==="));
+    log.bold("=== Dry Run ===");
     for (const file of scenarioFiles) {
       const spec = await ScenarioLoader.load(path.join(scenariosDir, file));
       if (scenarioFilter && spec.name !== scenarioFilter) continue;
 
-      console.log(chalk.blue(`\nScenario: ${spec.name}`));
-      console.log(`  Steps: ${spec.steps.length}`);
+      log.heading(`\nScenario: ${spec.name}`);
+      log.plain(`  Steps: ${spec.steps.length}`);
       for (let i = 0; i < spec.steps.length; i++) {
         const step = spec.steps[i];
         const label = step.id ?? `step-${i + 1}`;
@@ -323,16 +306,14 @@ Options:
         if (step.skip_if) {
           conditions.push(`skip_if: ${JSON.stringify(step.skip_if)}`);
         }
-        console.log(`  [${label}] ${promptPreview}`);
-        console.log(
-          `    skills: ${skills} | timeout: ${typeof timeoutVal === "number" ? `${timeoutVal}s` : timeoutVal}`,
-        );
+        log.dryRunStepLine(label, promptPreview);
+        log.dryRunStepDetail(`skills: ${skills} | timeout: ${typeof timeoutVal === "number" ? `${timeoutVal}s` : timeoutVal}`);
         if (conditions.length > 0) {
-          console.log(`    conditions: ${conditions.join(", ")}`);
+          log.dryRunStepDetail(`conditions: ${conditions.join(", ")}`);
         }
       }
     }
-    console.log(chalk.green("\nAll scenarios validated successfully."));
+    log.success("\nAll scenarios validated successfully.");
     return;
   }
 
@@ -340,11 +321,11 @@ Options:
   const golemServer = new GolemServer();
   const runId = randomUUID();
   const workspacesRoot = path.join(process.cwd(), "workspaces", runId);
-  console.log(chalk.gray(`Run ID: ${runId}`));
+  log.dim(`Run ID: ${runId}`);
   const serverDataDir = path.join(workspacesRoot, "golem-server-data");
-  console.log(chalk.cyan("Starting Golem server..."));
+  log.info("Starting Golem server...");
   await golemServer.start(9881, serverDataDir);
-  console.log(chalk.green("Golem server is ready."));
+  log.success("Golem server is ready.");
 
   // Set up graceful Ctrl+C handling
   const abortController = new AbortController();
@@ -353,17 +334,13 @@ Options:
   process.on("SIGINT", () => {
     if (interrupted) {
       golemServer.stop().finally(() => {
-        console.log(chalk.red("\nForce exit."));
+        log.error("\nForce exit.");
         process.exit(130);
       });
       return;
     }
     interrupted = true;
-    console.log(
-      chalk.yellow(
-        "\nInterrupted. Finishing current step and writing partial results... (press Ctrl+C again to force exit)",
-      ),
-    );
+    log.warn("\nInterrupted. Finishing current step and writing partial results... (press Ctrl+C again to force exit)");
     abortController.abort();
   });
 
@@ -376,18 +353,12 @@ Options:
     for (const currentLanguage of languages) {
       const driver = createDriver(currentAgent);
       const watcher = new SkillWatcher(skillsDir);
-      console.log(
-        chalk.gray(
-          `Config: agent=${currentAgent}, language=${currentLanguage}, scenarios=${scenariosDir}, output=${resultsDir}, timeout=${globalTimeoutSeconds ?? "default"}`,
-        ),
-      );
+      log.dim(`Config: agent=${currentAgent}, language=${currentLanguage}, scenarios=${scenariosDir}, output=${resultsDir}, timeout=${globalTimeoutSeconds ?? "default"}`);
 
       for (const file of scenarioFiles) {
         // Check if interrupted before starting next scenario
         if (interrupted) {
-          console.log(
-            chalk.yellow(`Skipping remaining scenarios due to interruption.`),
-          );
+          log.warn("Skipping remaining scenarios due to interruption.");
           break;
         }
 
@@ -397,19 +368,13 @@ Options:
 
         // Restart Golem server between scenarios to get a clean state
         if (!isFirstScenario) {
-          console.log(
-            chalk.gray("Restarting Golem server for clean state..."),
-          );
+          log.dim("Restarting Golem server for clean state...");
           await golemServer.restart();
-          console.log(chalk.green("Golem server restarted."));
+          log.success("Golem server restarted.");
         }
         isFirstScenario = false;
 
-        console.log(
-          chalk.blue(
-            `Running scenario: ${spec.name} [${currentAgent} x ${currentLanguage}]`,
-          ),
-        );
+        log.heading(`Running scenario: ${spec.name} [${currentAgent} x ${currentLanguage}]`);
         const workspace = workspaceOverride
           ? path.resolve(process.cwd(), workspaceOverride)
           : path.join(
@@ -436,24 +401,15 @@ Options:
 
         const allPassed = scenarioResult.status === "pass";
         if (allPassed) {
-          console.log(chalk.green(`Scenario ${spec.name} PASSED`));
+          log.scenarioPass(spec.name);
         } else {
           hasFailures = true;
-          console.log(chalk.red(`Scenario ${spec.name} FAILED`));
+          log.scenarioFail(spec.name);
           for (const res of results) {
             if (!res.success) {
-              console.log(
-                chalk.red(
-                  `  Step failed: ${("prompt" in res.step && res.step.prompt) || res.step.id || "unnamed"}`,
-                ),
-              );
-              console.log(chalk.red(`  Error: ${res.error}`));
+              log.scenarioFailedStep(String(("prompt" in res.step && res.step.prompt) || res.step.id || "unnamed"), res.error ?? "");
               if (res.classification) {
-                console.log(
-                  chalk.yellow(
-                    `  [${res.classification.category}] ${res.classification.guidance}`,
-                  ),
-                );
+                log.scenarioFailureClassification(res.classification.category, res.classification.guidance);
               }
             }
           }
@@ -478,9 +434,7 @@ Options:
         await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
         scenarioReports.push(report);
 
-        console.log(
-          `${allPassed ? "PASS" : "FAIL"} ${spec.name} steps=${results.length}/${spec.steps.length}`,
-        );
+        log.scenarioResultLine(allPassed, spec.name, results.length, spec.steps.length);
       }
     }
   }
@@ -575,33 +529,25 @@ Options:
     }
 
     // Print summary
-    console.log("");
-    console.log(chalk.bold("=== Test Summary ==="));
-    console.log(`Total:    ${totalScenarios}`);
-    console.log(chalk.green(`Passed:   ${passed}`));
-    if (failed > 0) {
-      console.log(chalk.red(`Failed:   ${failed}`));
-    } else {
-      console.log(`Failed:   ${failed}`);
-    }
-    console.log(`Duration: ${totalDuration.toFixed(1)}s`);
+    log.blank();
+    log.bold("=== Test Summary ===");
+    log.plain(`Total:    ${totalScenarios}`);
+    log.summaryLine("Passed:   ", passed, "green");
+    log.summaryLine("Failed:   ", failed, failed > 0 ? "red" : undefined);
+    log.plain(`Duration: ${totalDuration.toFixed(1)}s`);
 
     if (worstFailures.length > 0) {
-      console.log("");
-      console.log(chalk.red("Failures:"));
+      log.blank();
+      log.error("Failures:");
       for (const f of worstFailures) {
-        console.log(chalk.red(`  ${f.scenario}: ${f.error}`));
+        log.summaryFailure(f.scenario, f.error);
         if (f.guidance) {
-          console.log(chalk.yellow(`    ${f.guidance}`));
+          log.summaryGuidance(f.guidance);
         }
       }
     }
 
-    console.log(
-      chalk.gray(
-        `Reports: ${summaryPath}, ${path.join(resultsDir, "report.html")}`,
-      ),
-    );
+    log.dim(`Reports: ${summaryPath}, ${path.join(resultsDir, "report.html")}`);
   }
 
   if (hasFailures) {
@@ -613,7 +559,7 @@ Options:
 }
 
 main().catch(async (err) => {
-  console.error(chalk.red("Fatal error:"));
-  console.error(err);
+  log.fatal("Fatal error:");
+  log.error(String(err));
   process.exit(1);
 });

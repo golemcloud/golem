@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { accessSync, constants } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
-import chalk from "chalk";
+import * as log from "./log.js";
 
 /**
  * Detect if the current working directory is within a checked-out golem repository.
@@ -155,7 +155,6 @@ export class GolemServer {
       },
     );
 
-    const prefix = chalk.magenta("[golem]");
     let stdoutBuf = "";
     let stderrBuf = "";
 
@@ -164,7 +163,7 @@ export class GolemServer {
       const lines = stdoutBuf.split("\n");
       stdoutBuf = lines.pop()!;
       for (const line of lines) {
-        console.log(`${prefix} ${line}`);
+        log.golemServer(line);
       }
     });
     this.serverProcess.stderr?.on("data", (data: Buffer) => {
@@ -172,20 +171,20 @@ export class GolemServer {
       const lines = stderrBuf.split("\n");
       stderrBuf = lines.pop()!;
       for (const line of lines) {
-        console.log(`${prefix} ${chalk.gray(line)}`);
+        log.golemServerErr(line);
       }
     });
 
     this.serverProcess.on("error", (err) => {
-      console.error(`${prefix} ${chalk.red(`process error: ${err.message}`)}`);
+      log.golemServerError(err.message);
       this.serverProcess = null;
     });
 
     this.serverProcess.on("exit", (code, signal) => {
-      if (stdoutBuf) console.log(`${prefix} ${stdoutBuf}`);
-      if (stderrBuf) console.log(`${prefix} ${chalk.gray(stderrBuf)}`);
+      if (stdoutBuf) log.golemServer(stdoutBuf);
+      if (stderrBuf) log.golemServerErr(stderrBuf);
       if (code !== null && code !== 0) {
-        console.error(`${prefix} ${chalk.red(`exited with code ${code}`)}`);
+        log.golemServerExit(code);
       } else if (signal) {
         // Expected when we stop it ourselves
       }

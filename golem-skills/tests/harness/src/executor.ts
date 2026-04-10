@@ -11,6 +11,7 @@ import {
   type FailureClassification,
 } from "./failure-classification.js";
 import { findGolemAppDir } from "./workspace.js";
+import * as log from "./log.js";
 
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 300;
 
@@ -503,7 +504,7 @@ export class ScenarioExecutor {
       };
       // Reuse shouldRunStep with a fake step that has only skip_if
       if (!shouldRunStep({ skip_if: spec.skip_if }, ctx)) {
-        console.log(`Scenario ${spec.name}: skipped (skip_if condition met)`);
+        log.scenarioSkip(spec.name);
         return {
           status: "pass",
           durationSeconds: 0,
@@ -577,9 +578,7 @@ export class ScenarioExecutor {
           if (step.id === this.options.resumeFromStepId) {
             resumeReached = true;
           } else {
-            console.log(
-              `Step ${step.id ?? "(unnamed)"}: skipped (before resume point)`,
-            );
+            log.stepSkip(step.id ?? "(unnamed)", "before resume point");
             results.push({
               step: originalStep,
               success: true,
@@ -593,9 +592,7 @@ export class ScenarioExecutor {
 
         // Conditional execution
         if (!shouldRunStep(step, conditionContext)) {
-          console.log(
-            `Step ${step.id ?? "(unnamed)"}: skipped (condition not met)`,
-          );
+          log.stepSkip(step.id ?? "(unnamed)", "condition not met");
           results.push({
             step: originalStep,
             success: true,
@@ -621,9 +618,7 @@ export class ScenarioExecutor {
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
           if (attempt > 1) {
-            console.log(
-              `Step ${step.id ?? "(unnamed)"}: retry attempt ${attempt}/${maxAttempts} (delay=${retryDelay}s)`,
-            );
+            log.stepRetry(step.id ?? "(unnamed)", attempt, maxAttempts, retryDelay);
             await new Promise((resolve) =>
               setTimeout(resolve, retryDelay * 1000),
             );
@@ -724,7 +719,7 @@ export class ScenarioExecutor {
     const stepBaseline = this.watcher.markBaseline();
     await this.watcher.snapshotAtimes();
     const stepLabel = step.id ?? "(unnamed)";
-    console.log(`Step ${stepLabel}: starting (timeout=${stepTimeoutSeconds}s)`);
+    log.stepStart(stepLabel, stepTimeoutSeconds);
 
     const fail = (msg: string) => {
       success = false;
@@ -777,7 +772,7 @@ export class ScenarioExecutor {
   // --- Action handlers ---
 
   private async executeSleep(stepLabel: string, seconds: number): Promise<void> {
-    console.log(`Step ${stepLabel}: sleeping for ${seconds}s`);
+    log.stepAction(stepLabel, `sleeping for ${seconds}s`);
     await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
   }
 
@@ -788,7 +783,7 @@ export class ScenarioExecutor {
     commandEnv: Record<string, string>,
     fail: (msg: string) => void,
   ): Promise<void> {
-    console.log(`Step ${stepLabel}: creating agent "${spec.name}"`);
+    log.stepAction(stepLabel, `creating agent "${spec.name}"`);
     const projectDir = await this.findGolemProjectDir();
     const args = ["agent", "new", spec.name];
     if (spec.env) {
@@ -814,7 +809,7 @@ export class ScenarioExecutor {
     commandEnv: Record<string, string>,
     fail: (msg: string) => void,
   ): Promise<void> {
-    console.log(`Step ${stepLabel}: deleting agent "${spec.name}"`);
+    log.stepAction(stepLabel, `deleting agent "${spec.name}"`);
     const projectDir = await this.findGolemProjectDir();
     const result = await this.runLocalCommand(
       "golem", ["agent", "delete", spec.name], timeout, projectDir, commandEnv,
@@ -830,7 +825,7 @@ export class ScenarioExecutor {
     commandEnv: Record<string, string>,
     fail: (msg: string) => void,
   ): Promise<void> {
-    console.log(`Step ${stepLabel}: running shell command "${shell.command}"`);
+    log.stepAction(stepLabel, `running shell command "${shell.command}"`);
     const shellCwd = shell.cwd
       ? path.resolve(this.workspace, shell.cwd)
       : this.workspace;
@@ -851,7 +846,7 @@ export class ScenarioExecutor {
     timeout: number,
     commandEnv: Record<string, string>,
   ): Promise<void> {
-    console.log(`Step ${stepLabel}: triggering ${trigger.agent}.${trigger.function}`);
+    log.stepAction(stepLabel, `triggering ${trigger.agent}.${trigger.function}`);
     const projectDir = await this.findGolemProjectDir();
     const args = ["agent", "invoke", trigger.agent, trigger.function, "--trigger"];
     if (trigger.args) args.push(trigger.args);
@@ -869,11 +864,11 @@ export class ScenarioExecutor {
   ): Promise<boolean> {
     const useContinueSession = continueSession !== false && !isFirstPrompt;
     if (useContinueSession) {
-      console.log(`Step ${stepLabel}: sending followup prompt`);
+      log.stepAction(stepLabel, "sending followup prompt");
       const result = await this.driver.sendFollowup(prompt, timeout);
       if (!result.success) fail(`Agent failed: ${result.output}`);
     } else {
-      console.log(`Step ${stepLabel}: sending prompt`);
+      log.stepAction(stepLabel, "sending prompt");
       const result = await this.driver.sendPrompt(prompt, timeout);
       if (!result.success) fail(`Agent failed: ${result.output}`);
     }
@@ -888,7 +883,7 @@ export class ScenarioExecutor {
     commandEnv: Record<string, string>,
     fail: (msg: string) => void,
   ): Promise<void> {
-    console.log(`Step ${stepLabel}: invoking ${invoke.agent}.${invoke.function}`);
+    log.stepAction(stepLabel, `invoking ${invoke.agent}.${invoke.function}`);
     const projectDir = await this.findGolemProjectDir();
     const args = ["agent", "invoke", invoke.agent, invoke.function];
     if (invoke.args) args.push(invoke.args);
@@ -916,7 +911,7 @@ export class ScenarioExecutor {
     commandEnv: Record<string, string>,
     fail: (msg: string) => void,
   ): Promise<void> {
-    console.log(`Step ${stepLabel}: invoking (json) ${invoke.agent}.${invoke.function}`);
+    log.stepAction(stepLabel, `invoking (json) ${invoke.agent}.${invoke.function}`);
     const projectDir = await this.findGolemProjectDir();
     const args = ["--format", "json", "agent", "invoke", invoke.agent, invoke.function];
     if (invoke.args) args.push(invoke.args);
@@ -944,7 +939,7 @@ export class ScenarioExecutor {
     timeoutSeconds: number,
     fail: (msg: string) => void,
   ): Promise<void> {
-    console.log(`Step ${stepLabel}: HTTP ${http.method ?? "GET"} ${http.url}`);
+    log.stepAction(stepLabel, `HTTP ${http.method ?? "GET"} ${http.url}`);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
     const onParentAbort = () => controller.abort();
@@ -999,10 +994,10 @@ export class ScenarioExecutor {
     const watcherEvents = this.watcher.getActivatedEventsSince(baseline);
     const atimeResults = await this.watcher.getSkillsWithChangedAtime();
     for (const evt of watcherEvents) {
-      console.log(`Step ${stepLabel}: fswatch detected "${evt.skillName}" via ${evt.path}`);
+      log.stepSkillDetected(stepLabel, "fswatch", evt.skillName, evt.path);
     }
     for (const res of atimeResults) {
-      console.log(`Step ${stepLabel}: atime detected "${res.skillName}" via ${res.path}`);
+      log.stepSkillDetected(stepLabel, "atime", res.skillName, res.path);
     }
     const activatedSkills = Array.from(
       new Set([
@@ -1010,7 +1005,7 @@ export class ScenarioExecutor {
         ...atimeResults.map((r) => r.skillName),
       ]),
     );
-    console.log(`Step ${stepLabel}: activated skills [${activatedSkills.join(", ")}]`);
+    log.stepActivatedSkills(stepLabel, activatedSkills);
     const error = this.assertSkillActivation(step, activatedSkills);
     if (error) fail(error);
     return activatedSkills;
@@ -1026,7 +1021,7 @@ export class ScenarioExecutor {
     const projectDir = await this.findGolemProjectDir();
 
     if (verify.build) {
-      console.log(`Step ${stepLabel}: running golem build in ${projectDir}`);
+      log.stepAction(stepLabel, `running golem build in ${projectDir}`);
       const result = await this.runLocalCommand("golem", ["build"], 600, projectDir, commandEnv);
       if (!result.success) fail(`BUILD_FAILED: ${result.output}`);
     }
@@ -1036,7 +1031,7 @@ export class ScenarioExecutor {
       if (!verify.build) {
         const golemTempDir = path.join(projectDir, "golem-temp");
         await fs.rm(golemTempDir, { recursive: true, force: true });
-        console.log(`Step ${stepLabel}: running implicit golem build before deploy in ${projectDir}`);
+        log.stepAction(stepLabel, `running implicit golem build before deploy in ${projectDir}`);
         const buildResult = await this.runLocalCommand("golem", ["build"], 600, projectDir, commandEnv);
         if (!buildResult.success) {
           fail(`BUILD_FAILED: ${buildResult.output}`);
@@ -1045,7 +1040,7 @@ export class ScenarioExecutor {
       }
 
       if (currentSuccess) {
-        console.log(`Step ${stepLabel}: running golem deploy in ${projectDir}`);
+        log.stepAction(stepLabel, `running golem deploy in ${projectDir}`);
         const deployResult = await this.runLocalCommand("golem", ["deploy", "--yes"], 600, projectDir, commandEnv);
         if (!deployResult.success) fail(`DEPLOY_FAILED: ${deployResult.output}`);
       }
