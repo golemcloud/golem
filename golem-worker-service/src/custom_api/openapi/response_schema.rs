@@ -14,6 +14,7 @@ use crate::custom_api::openapi::schema_mapping::create_schema_from_analysed_type
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 use golem_common::base_model::agent::{ElementSchema, HttpMethod};
 use golem_common::model::agent::DataSchema;
+use golem_service_base::custom_api::PathSegment;
 use golem_wasm::analysis::AnalysedType;
 use indexmap::IndexMap;
 use openapiv3::{
@@ -204,6 +205,13 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
             responses.insert(404, ResponseBodyOpenApiSchema::NoBody);
         }
         RichRouteBehaviour::OpenApiSpec(_) => {
+            let content_type = match route.path.as_slice() {
+                [PathSegment::Literal { value }] if value == "openapi.yaml" => {
+                    "application/yaml".to_string()
+                }
+                _ => "application/json".to_string(),
+            };
+
             let schema = openapiv3::Schema {
                 schema_data: Default::default(),
                 schema_kind: SchemaKind::Type(Type::Object(ObjectType {
@@ -219,7 +227,7 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
                 200,
                 ResponseBodyOpenApiSchema::Known {
                     schema: Box::new(schema),
-                    content_type: "application/json".to_string(),
+                    content_type,
                 },
             );
         }
