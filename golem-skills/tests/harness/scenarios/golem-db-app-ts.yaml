@@ -1,0 +1,66 @@
+name: "golem-db-app-ts"
+
+settings:
+  timeout_per_subprompt: 600
+  golem_server:
+    custom_request_port: 9006
+skip_if:
+  language: "rust"
+steps:
+  - id: "create-db-app"
+    prompt: |
+      Create a new Golem application called db-app with TypeScript.
+      Then modify the app to be a simple task tracker backed by PostgreSQL:
+      1. Create a TaskAgent with mount path "/tasks/{name}" that:
+         - Has a POST endpoint at "/add" that takes a title (string) parameter, inserts it into a "tasks" table, and returns a confirmation message
+         - Has a GET endpoint at "/list" that returns all task titles from the table as a string array
+         - On first call, creates the tasks table if it doesn't exist (id SERIAL PRIMARY KEY, title TEXT NOT NULL)
+      2. Check node_modules/@golemcloud/golem-ts-sdk/types/ for the rdbms version (e.g. golem_rdbms_X_Y_Z_postgres.d.ts) and use that version in the import: import { DbConnection, DbValue, DbResult } from 'golem:rdbms/postgres@X.Y.Z'
+      3. Read the DB connection URL from process.env.DB_POSTGRES_URL
+      4. Set DB_POSTGRES_URL environment variable in golem.yaml under the component's env section to "postgres://postgres:postgres@localhost:5432/golem_test"
+    expectedSkills:
+      - "golem-db-app-ts"
+    allowedExtraSkills:
+      - "golem-new-project"
+      - "golem-db-app-rust"
+
+  - id: "build-and-deploy"
+    prompt: "Build the project with golem build in the db-app directory. Fix any build errors. Then deploy with golem deploy --yes."
+
+  - id: "check-project-files"
+    shell:
+      command: "ls"
+      args: ["db-app/golem.yaml"]
+    expect:
+      exit_code: 0
+
+  - id: "add-task-via-http"
+    http:
+      url: "http://db-app.localhost:9006/tasks/default/add"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+      body: '{"title": "Test task from harness"}'
+    expect:
+      status: 200
+    retry:
+      attempts: 3
+      delay: 5
+
+  - id: "list-tasks-via-http"
+    http:
+      url: "http://db-app.localhost:9006/tasks/default/list"
+      method: "GET"
+    expect:
+      status: 200
+      body_contains: "Test task from harness"
+
+  - id: "verify-db-rows"
+    shell:
+      command: "bash"
+      args:
+        - "-c"
+        - "PGPASSWORD=postgres psql -h localhost -U postgres -d golem_test -t -c \"SELECT count(*) FROM tasks WHERE title = 'Test task from harness'\" | tr -d ' '"
+    expect:
+      exit_code: 0
+      stdout_matches: "[1-9]"
