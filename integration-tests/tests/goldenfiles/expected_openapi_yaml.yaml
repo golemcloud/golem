@@ -647,16 +647,6 @@ paths:
                 format: int64
                 type: integer
           description: Response 200
-  /openapi.json:
-    get:
-      responses:
-        '200':
-          content:
-            application/json:
-              schema:
-                additionalProperties: true
-                type: object
-          description: Response 200
   /webhook-agents/{agent-name}/set-test-server-url:
     post:
       parameters:

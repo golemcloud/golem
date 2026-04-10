@@ -42,6 +42,10 @@ impl HttpApiOpenApiSpec {
         let mut paths = BTreeMap::new();
 
         for route in routes {
+            if matches!(&route.behavior, RichRouteBehaviour::OpenApiSpec(_)) {
+                continue;
+            }
+
             add_route_to_paths(route, &mut paths)?;
         }
 
