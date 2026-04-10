@@ -122,6 +122,7 @@ pub struct Application {
     pub secret_defaults: IndexMap<EnvironmentName, Vec<EnvironmentAgentSecret>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub retry_policy_defaults: IndexMap<EnvironmentName, Vec<EnvironmentRetryPolicyDefault>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub resource_defaults: IndexMap<EnvironmentName, Vec<ResourceDefinitionCreation>>,
 }
 
