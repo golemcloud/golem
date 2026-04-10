@@ -1,6 +1,7 @@
 import { BaseAgentDriver, AgentResult } from "./base.js";
 
 export class ClaudeAgentDriver extends BaseAgentDriver {
+  protected readonly driverName = "claude";
   protected readonly skillDirs = [".claude/skills"];
   private sessionId: string | null = null;
 

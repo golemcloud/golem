@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import chalk from "chalk";
 
 export interface AgentResult {
   success: boolean;
@@ -21,8 +22,16 @@ export abstract class BaseAgentDriver implements AgentDriver {
   protected skillsDir: string = "";
   protected readonly skillLinkMode: "symlink" | "copy" = "symlink";
 
+  /** Short name used as a colored prefix in log output (e.g. "claude", "amp") */
+  protected abstract readonly driverName: string;
+
   /** Directories relative to workspace where skills should be symlinked (e.g. ['.claude/skills']) */
   protected abstract readonly skillDirs: string[];
+
+  /** Returns the colored log prefix for this driver, e.g. `[claude]` */
+  protected get logPrefix(): string {
+    return chalk.magenta(`[${this.driverName}]`);
+  }
 
   async setup(workspace: string, skillsDir: string): Promise<void> {
     this.workspace = workspace;
@@ -82,15 +91,29 @@ export abstract class BaseAgentDriver implements AgentDriver {
       });
 
       let output = "";
+      let stdoutBuf = "";
+      let stderrBuf = "";
+      const prefix = this.logPrefix;
+
       child.stdout?.on("data", (data) => {
         const chunk = data.toString();
         output += chunk;
-        process.stdout.write(chunk);
+        stdoutBuf += chunk;
+        const lines = stdoutBuf.split("\n");
+        stdoutBuf = lines.pop()!;
+        for (const line of lines) {
+          console.log(`${prefix} ${line}`);
+        }
       });
       child.stderr?.on("data", (data) => {
         const chunk = data.toString();
         output += chunk;
-        process.stderr.write(chunk);
+        stderrBuf += chunk;
+        const lines = stderrBuf.split("\n");
+        stderrBuf = lines.pop()!;
+        for (const line of lines) {
+          console.log(`${prefix} ${chalk.gray(line)}`);
+        }
       });
 
       const timeoutId = setTimeout(() => {
@@ -99,6 +122,8 @@ export abstract class BaseAgentDriver implements AgentDriver {
 
       child.on("close", (exitCode) => {
         clearTimeout(timeoutId);
+        if (stdoutBuf) console.log(`${prefix} ${stdoutBuf}`);
+        if (stderrBuf) console.log(`${prefix} ${chalk.gray(stderrBuf)}`);
         const durationSeconds = (Date.now() - startTime) / 1000;
         resolve({
           success: exitCode === 0,

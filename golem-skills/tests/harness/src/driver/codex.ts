@@ -1,6 +1,7 @@
 import { BaseAgentDriver, AgentResult } from "./base.js";
 
 export class CodexAgentDriver extends BaseAgentDriver {
+  protected readonly driverName = "codex";
   protected readonly skillDirs = [".agents/skills"];
   private lastSessionId: string | null = null;
 

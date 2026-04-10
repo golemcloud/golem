@@ -1,6 +1,7 @@
 import { BaseAgentDriver, AgentResult } from "./base.js";
 
 export class OpenCodeAgentDriver extends BaseAgentDriver {
+  protected readonly driverName = "opencode";
   protected readonly skillDirs = [".claude/skills", ".agents/skills"];
 
   private buildArgs(prompt: string): string[] {
