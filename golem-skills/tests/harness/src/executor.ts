@@ -13,6 +13,37 @@ import {
 import { findGolemAppDir } from "./workspace.js";
 
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 300;
+
+// --- Language-conditional resolution ---
+
+const SUPPORTED_LANG_KEYS = new Set(["ts", "rust"]);
+
+/**
+ * Checks if a value is a language-keyed map (e.g., { ts: "...", rust: "..." }).
+ * Returns true only if the value is a plain object whose keys are all known language codes.
+ */
+function isLanguageMap(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length > 0 && keys.every((k) => SUPPORTED_LANG_KEYS.has(k));
+}
+
+/**
+ * Resolves a field that can be either a plain value or a { ts: T, rust: T } map.
+ * If it's a language map and a language is provided, returns the matching entry.
+ * If it's a plain value (string, array, non-language object), returns it as-is.
+ */
+function resolveByLanguage<T>(
+  value: T | Record<string, T> | undefined,
+  language: string | undefined,
+): T | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (isLanguageMap(value) && language) {
+    return (value as Record<string, T>)[language];
+  }
+  return value as T;
+}
+
 // --- Schemas ---
 
 const RetrySchema = z.object({
@@ -64,6 +95,7 @@ const StepConditionSchema = z.object({
 const ACTION_FIELDS = [
   "prompt",
   "invoke",
+  "invoke_json",
   "shell",
   "trigger",
   "create_agent",
@@ -72,22 +104,28 @@ const ACTION_FIELDS = [
   "http",
 ] as const;
 
+// Language-conditional: accepts either T or { ts: T, rust: T, ... }
+function langConditional<T extends z.ZodType>(schema: T) {
+  return z.union([schema, z.record(z.string(), schema)]);
+}
+
+const VerifySchema = z.object({
+  build: z.boolean().optional(),
+  deploy: z.boolean().optional(),
+});
+
 const StepSpecSchema = z
   .object({
     id: z.string().optional(),
-    prompt: z.string().optional(),
-    expectedSkills: z.array(z.string()).optional(),
-    allowedExtraSkills: z.array(z.string()).optional(),
+    prompt: langConditional(z.string()).optional(),
+    expectedSkills: langConditional(z.array(z.string())).optional(),
+    allowedExtraSkills: langConditional(z.array(z.string())).optional(),
     strictSkillMatch: z.boolean().optional(),
     timeout: z.number().optional(),
     continue_session: z.boolean().optional(),
-    verify: z
-      .object({
-        build: z.boolean().optional(),
-        deploy: z.boolean().optional(),
-      })
-      .optional(),
+    verify: langConditional(VerifySchema).optional(),
     invoke: InvokeSchema.optional(),
+    invoke_json: InvokeSchema.optional(),
     expect: ExpectSchema.optional(),
     sleep: z.number().optional(),
     shell: ShellSchema.optional(),
@@ -135,17 +173,19 @@ const ScenarioSpecSchema = z.object({
   steps: z.array(StepSpecSchema).min(1, "Scenario must have at least one step"),
 });
 
+type LangConditional<T> = T | Record<string, T>;
+
 interface StepCommon {
   id?: string;
-  expectedSkills?: string[];
-  allowedExtraSkills?: string[];
+  expectedSkills?: LangConditional<string[]>;
+  allowedExtraSkills?: LangConditional<string[]>;
   strictSkillMatch?: boolean;
   timeout?: number;
   continue_session?: boolean;
-  verify?: {
+  verify?: LangConditional<{
     build?: boolean;
     deploy?: boolean;
-  };
+  }>;
   expect?: z.infer<typeof ExpectSchema>;
   only_if?: StepCondition;
   skip_if?: StepCondition;
@@ -170,8 +210,9 @@ type HttpSpec = {
 
 type RawStepSpec = z.infer<typeof StepSpecSchema>;
 
-type PromptStep = StepCommon & { tag: "prompt"; prompt: string };
+type PromptStep = StepCommon & { tag: "prompt"; prompt: LangConditional<string> };
 type InvokeStep = StepCommon & { tag: "invoke"; invoke: InvokeSpec };
+type InvokeJsonStep = StepCommon & { tag: "invoke_json"; invoke_json: InvokeSpec };
 type ShellStep = StepCommon & { tag: "shell"; shell: ShellSpec };
 type TriggerStep = StepCommon & { tag: "trigger"; trigger: TriggerSpec };
 type CreateAgentStep = StepCommon & { tag: "create_agent"; create_agent: CreateAgentSpec };
@@ -182,6 +223,7 @@ type HttpStep = StepCommon & { tag: "http"; http: HttpSpec };
 export type StepSpec =
   | PromptStep
   | InvokeStep
+  | InvokeJsonStep
   | ShellStep
   | TriggerStep
   | CreateAgentStep
@@ -227,6 +269,7 @@ export function parseStep(raw: RawStepSpec): StepSpec {
   switch (tag) {
     case "prompt": return { ...common, tag, prompt: raw.prompt! };
     case "invoke": return { ...common, tag, invoke: raw.invoke! };
+    case "invoke_json": return { ...common, tag, invoke_json: raw.invoke_json! };
     case "shell": return { ...common, tag, shell: raw.shell! };
     case "trigger": return { ...common, tag, trigger: raw.trigger! };
     case "create_agent": return { ...common, tag, create_agent: raw.create_agent! };
@@ -376,15 +419,25 @@ export class ScenarioExecutor {
       s ? substituteVariables(s, variables) : s;
     const subArr = (arr: string[] | undefined) =>
       arr?.map((s) => substituteVariables(s, variables));
+    const subLangStr = (v: LangConditional<string>): LangConditional<string> =>
+      typeof v === "string"
+        ? substituteVariables(v, variables)
+        : Object.fromEntries(Object.entries(v).map(([k, s]) => [k, substituteVariables(s, variables)]));
 
     switch (step.tag) {
       case "prompt":
-        return { ...step, prompt: substituteVariables(step.prompt, variables) };
+        return { ...step, prompt: subLangStr(step.prompt) };
       case "invoke":
         return { ...step, invoke: {
           agent: substituteVariables(step.invoke.agent, variables),
           function: substituteVariables(step.invoke.function, variables),
           args: sub(step.invoke.args),
+        }};
+      case "invoke_json":
+        return { ...step, invoke_json: {
+          agent: substituteVariables(step.invoke_json.agent, variables),
+          function: substituteVariables(step.invoke_json.function, variables),
+          args: sub(step.invoke_json.args),
         }};
       case "shell":
         return { ...step, shell: {
@@ -425,6 +478,20 @@ export class ScenarioExecutor {
       case "sleep":
         return { ...step };
     }
+  }
+
+  private resolveLanguageFields(step: StepSpec): StepSpec {
+    const lang = this.options.language;
+    const resolved = {
+      ...step,
+      expectedSkills: resolveByLanguage(step.expectedSkills, lang),
+      allowedExtraSkills: resolveByLanguage(step.allowedExtraSkills, lang),
+      verify: resolveByLanguage(step.verify, lang),
+    };
+    if (step.tag === "prompt") {
+      return { ...resolved, tag: "prompt", prompt: resolveByLanguage(step.prompt, lang)! } as StepSpec;
+    }
+    return resolved as StepSpec;
   }
 
   async execute(spec: ScenarioSpec): Promise<ScenarioRunResult> {
@@ -507,8 +574,10 @@ export class ScenarioExecutor {
         // Check abort signal
         if (this.options.abortSignal?.aborted) break;
 
-        // Substitute template variables
-        const step = this.substituteStepVariables(originalStep, variables);
+        // Substitute template variables and resolve language-conditional fields
+        const step = this.resolveLanguageFields(
+          this.substituteStepVariables(originalStep, variables),
+        );
 
         // Resume-from: skip steps before the target
         if (!resumeReached) {
@@ -522,7 +591,7 @@ export class ScenarioExecutor {
               step: originalStep,
               success: true,
               durationSeconds: 0,
-              expectedSkills: step.expectedSkills ?? [],
+              expectedSkills: (step.expectedSkills as string[] | undefined) ?? [],
               activatedSkills: [],
             });
             continue;
@@ -538,7 +607,7 @@ export class ScenarioExecutor {
             step: originalStep,
             success: true,
             durationSeconds: 0,
-            expectedSkills: step.expectedSkills ?? [],
+            expectedSkills: (step.expectedSkills as string[] | undefined) ?? [],
             activatedSkills: [],
           });
           continue;
@@ -609,7 +678,7 @@ export class ScenarioExecutor {
           step: originalStep,
           success: finalResult!.success,
           durationSeconds: totalDuration,
-          expectedSkills: step.expectedSkills ?? [],
+          expectedSkills: (step.expectedSkills as string[] | undefined) ?? [],
           activatedSkills: finalResult!.activatedSkills,
           error: errorStr,
           attempts: maxAttempts > 1 ? attempts : undefined,
@@ -687,10 +756,13 @@ export class ScenarioExecutor {
         this.executeTrigger(stepLabel, step.trigger, stepTimeoutSeconds, commandEnv);
         break;
       case "prompt":
-        isFirstPrompt = await this.executePrompt(stepLabel, step.prompt, step.continue_session, isFirstPrompt, stepTimeoutSeconds, fail);
+        isFirstPrompt = await this.executePrompt(stepLabel, step.prompt as string, step.continue_session, isFirstPrompt, stepTimeoutSeconds, fail);
         break;
       case "invoke":
         await this.executeInvoke(stepLabel, step.invoke, step.expect, stepTimeoutSeconds, commandEnv, fail);
+        break;
+      case "invoke_json":
+        await this.executeInvokeJson(stepLabel, step.invoke_json, step.expect, stepTimeoutSeconds, commandEnv, fail);
         break;
       case "http":
         await this.executeHttp(stepLabel, step.http, step.expect, stepTimeoutSeconds, fail);
@@ -828,6 +900,35 @@ export class ScenarioExecutor {
     }
   }
 
+  private async executeInvokeJson(
+    stepLabel: string,
+    invoke: InvokeSpec,
+    expect: StepCommon["expect"],
+    timeout: number,
+    commandEnv: Record<string, string>,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    console.log(`Step ${stepLabel}: invoking (json) ${invoke.agent}.${invoke.function}`);
+    const projectDir = await this.findGolemProjectDir();
+    const args = ["--format", "json", "agent", "invoke", invoke.agent, invoke.function];
+    if (invoke.args) args.push(invoke.args);
+    const result = await this.runLocalCommand(
+      "golem", args, timeout, projectDir, commandEnv,
+    );
+
+    let resultJson: unknown;
+    try { resultJson = JSON.parse(result.output); } catch { /* not JSON */ }
+
+    if (expect) {
+      this.evaluateAssertions(
+        { stdout: result.output, stderr: "", exitCode: result.exitCode, resultJson },
+        expect, fail,
+      );
+    } else if (!result.success) {
+      fail(`INVOKE_JSON_FAILED: ${result.output}`);
+    }
+  }
+
   private async executeHttp(
     stepLabel: string,
     http: HttpSpec,
@@ -947,7 +1048,7 @@ export class ScenarioExecutor {
     step: StepSpec,
     activatedSkills: string[],
   ): string | undefined {
-    const expectedSkills = step.expectedSkills ?? [];
+    const expectedSkills = (step.expectedSkills as string[] | undefined) ?? [];
     if (expectedSkills.length === 0) {
       return undefined;
     }
@@ -969,7 +1070,7 @@ export class ScenarioExecutor {
       return undefined;
     }
 
-    const allowedExtras = new Set(step.allowedExtraSkills ?? []);
+    const allowedExtras = new Set((step.allowedExtraSkills as string[] | undefined) ?? []);
     const unexpectedExtras = activatedSkills.filter(
       (skill) => !expectedSet.has(skill) && !allowedExtras.has(skill),
     );

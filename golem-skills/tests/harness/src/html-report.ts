@@ -125,7 +125,7 @@ function generateScenarioDetails(reports: ScenarioReport[]): string {
       const steps = report.results
         .map((r, i) => {
           const stepName = escapeHtml(
-            r.step.id ?? (r.step.tag === "prompt" ? r.step.prompt : undefined) ?? `step-${i + 1}`,
+            r.step.id ?? (r.step.tag === "prompt" ? r.step.prompt as string : undefined) ?? `step-${i + 1}`,
           );
           const sClass = r.success ? "pass" : "fail";
           const errorBlock = r.error
