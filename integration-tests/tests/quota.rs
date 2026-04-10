@@ -15,11 +15,11 @@
 use crate::Tracing;
 use anyhow::anyhow;
 use golem_client::api::RegistryServiceClient;
-use golem_common::model::AgentStatus;
 use golem_common::model::quota::{
     EnforcementAction, ResourceCapacityLimit, ResourceDefinitionCreation, ResourceLimit,
     ResourceName, ResourceRateLimit, TimePeriod,
 };
+use golem_common::model::{AgentId, AgentStatus};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -616,14 +616,205 @@ async fn rate_limit_reject_stops_at_limit(
     Ok(())
 }
 
-/// Two agents each try to make HTTP calls against the same rate-limited
-/// resource.  With Throttle enforcement the agents will suspend when the rate
-/// is exhausted.  We run them with a small limit and a high max_iterations to
-/// verify the combined call count does not exceed the burst capacity within
-/// the test window.
+/// Verifies that a quota token can be split and sent to a second Rust agent
+/// over RPC. The sender creates a token, splits half the expected-use to a
+/// `QuotaRpcReceiver` agent, and both agents make HTTP calls in parallel.
+/// The combined call count must not exceed the burst capacity of the original
+/// token.
 #[test]
 #[tracing::instrument]
 #[timeout("8m")]
+async fn quota_token_rpc_rust(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let client = deps.registry_service().client(&user.token).await;
+
+    provision_rate_resource(
+        &client,
+        &env.id.0,
+        "rpc-shared-rate",
+        4,
+        4,
+        TimePeriod::Hour,
+        EnforcementAction::Throttle,
+    )
+    .await?;
+
+    let received = Arc::new(AtomicU64::new(0));
+    let received_clone = received.clone();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+
+    let http_server = tokio::spawn(async move {
+        use axum::{Router, routing::get};
+        let route = Router::new().route(
+            "/call",
+            get(move || {
+                let cnt = received_clone.clone();
+                async move {
+                    cnt.fetch_add(1, Ordering::SeqCst);
+                    "ok"
+                }
+            }),
+        );
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    let component = user
+        .component(&env.id, "golem_it_agent_sdk_rust_release")
+        .name("golem-it:agent-sdk-rust")
+        .store()
+        .await?;
+
+    let sender = agent_id!("QuotaRpcSender", "rpc-sender");
+    let sender_sys = user.start_agent(&component.id, sender.clone()).await?;
+
+    user.invoke_agent(
+        &component,
+        &sender,
+        "split_and_loop",
+        data_value!(
+            "rpc-shared-rate".to_string(),
+            4u64,
+            2u64,
+            "localhost".to_string(),
+            port as u64,
+            4u64
+        ),
+    )
+    .await?;
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    user.wait_for_statuses(
+        &sender_sys,
+        &[AgentStatus::Idle, AgentStatus::Suspended],
+        Duration::from_secs(60),
+    )
+    .await?;
+
+    user.wait_for_statuses(
+        &AgentId {
+            component_id: component.id,
+            agent_id: "QuotaRpcReceiver(\"rpc-sender-receiver\")".to_string(),
+        },
+        &[AgentStatus::Idle, AgentStatus::Suspended],
+        Duration::from_secs(60),
+    )
+    .await?;
+
+    http_server.abort();
+
+    let total = received.load(Ordering::SeqCst);
+
+    assert_eq!(total, 4);
+
+    Ok(())
+}
+
+/// Same as `quota_token_rpc_rust` but using the TypeScript SDK test component.
+#[test]
+#[tracing::instrument]
+#[timeout("8m")]
+async fn quota_token_rpc_ts(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let client = deps.registry_service().client(&user.token).await;
+
+    provision_rate_resource(
+        &client,
+        &env.id.0,
+        "rpc-shared-rate-ts",
+        4,
+        4,
+        TimePeriod::Hour,
+        EnforcementAction::Throttle,
+    )
+    .await?;
+
+    let received = Arc::new(AtomicU64::new(0));
+    let received_clone = received.clone();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+
+    let http_server = tokio::spawn(async move {
+        use axum::{Router, routing::get};
+        let route = Router::new().route(
+            "/call",
+            get(move || {
+                let cnt = received_clone.clone();
+                async move {
+                    cnt.fetch_add(1, Ordering::SeqCst);
+                    "ok"
+                }
+            }),
+        );
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    let component = user
+        .component(&env.id, "golem_it_agent_sdk_ts")
+        .name("golem-it:agent-sdk-ts")
+        .store()
+        .await?;
+
+    let sender = agent_id!("QuotaRpcSender", "rpc-sender-ts");
+
+    tracing::warn!("here0");
+    let sender_sys = user.start_agent(&component.id, sender.clone()).await?;
+
+    tracing::warn!("here1");
+    user.invoke_agent(
+        &component,
+        &sender,
+        "splitAndLoop",
+        data_value!(
+            "rpc-shared-rate-ts".to_string(),
+            4u64,
+            2u64,
+            "localhost".to_string(),
+            port as u64,
+            4u64
+        ),
+    )
+    .await?;
+
+    tracing::warn!("here2");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    user.wait_for_statuses(
+        &sender_sys,
+        &[AgentStatus::Idle, AgentStatus::Suspended],
+        Duration::from_secs(60),
+    )
+    .await?;
+
+    user.wait_for_statuses(
+        &AgentId {
+            component_id: component.id,
+            agent_id: "QuotaRpcReceiver(\"rpc-sender-ts-receiver\")".to_string(),
+        },
+        &[AgentStatus::Idle, AgentStatus::Suspended],
+        Duration::from_secs(60),
+    )
+    .await?;
+
+    http_server.abort();
+
+    let total = received.load(Ordering::SeqCst);
+
+    assert_eq!(total, 4);
+
+    Ok(())
+}
+
+#[test_r::test]
 async fn rate_limit_throttle_two_agents(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,

@@ -114,6 +114,13 @@ impl QuotaTokenEntry {
         }
     }
 
+    pub fn last_credit_at(&self) -> &DateTime<Utc> {
+        match &self.lease {
+            LeaseInterestHandle::Live(i) => &i.last_credit_value_at,
+            LeaseInterestHandle::Pending(p) => &p.last_credit_at,
+        }
+    }
+
     /// Update the replayed credit state. Used during replay of reserve/commit entries.
     pub fn update_replayed_credit(&mut self, credit: i64, at: DateTime<Utc>) {
         match &mut self.lease {

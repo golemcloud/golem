@@ -654,8 +654,6 @@ impl GrpcQuotaService {
     }
 
     async fn renew_all(&self) {
-        info!("running renew_all loop");
-
         // phase 1: collect live and dead slots
         let mut entries_to_renew: Vec<(ResourceKey, Arc<LeaseEntry>)> = Vec::new();
         let mut leases_to_release: Vec<TrackedLease> = Vec::new();
@@ -679,9 +677,11 @@ impl GrpcQuotaService {
             })
             .await;
 
-        debug!("releasing {} unneeded leases", leases_to_release.len());
-
         // phase 2: release dead leases
+        if !leases_to_release.is_empty() {
+            debug!("releasing {} unneeded leases", leases_to_release.len());
+        }
+
         for lease in leases_to_release {
             self.try_release_lease_if_needed(lease).await;
         }
@@ -941,11 +941,6 @@ impl QuotaService for GrpcQuotaService {
     }
 
     async fn try_reserve(&self, interest: &mut LeaseInterest, amount: u64) -> ReserveResult {
-        debug!(
-            "reserving {amount} for {}/{}",
-            interest.environment_id, interest.resource_name
-        );
-
         let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
 
         let slot_mutex = self
@@ -954,6 +949,11 @@ impl QuotaService for GrpcQuotaService {
             .expect("try_reserve called without a prior acquire for this resource");
 
         let mut slot = slot_mutex.inner.lock().await;
+
+        debug!(
+            "reserving {amount} for {}/{} ({:?})",
+            interest.environment_id, interest.resource_name, slot.lease
+        );
 
         // Enqueue and let process_waiters try to serve immediately.
         let (tx, rx) = oneshot::channel();

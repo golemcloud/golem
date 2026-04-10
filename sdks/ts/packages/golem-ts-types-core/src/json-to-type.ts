@@ -217,5 +217,8 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         optional: json.optional,
       };
     }
+
+    case 'quota-token':
+      return { kind: 'quota-token', name: json.name, owner: json.owner, optional: json.optional };
   }
 }

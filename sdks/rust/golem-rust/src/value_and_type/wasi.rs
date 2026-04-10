@@ -16,6 +16,7 @@ use super::type_builder::TypeNodeBuilder;
 use crate::bindings::wasi::logging::logging::Level;
 use crate::value_and_type::{FromValueAndType, IntoValue};
 use golem_wasm::{NodeBuilder, WitValueExtractor};
+pub(crate) use wasip2::clocks::wall_clock::Datetime;
 
 impl IntoValue for Level {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
@@ -103,4 +104,46 @@ mod tests {
             }
         })
     );
+}
+
+impl IntoValue for Datetime {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        let builder = builder.record();
+        let builder = self.seconds.add_to_builder(builder.item());
+        let builder = (self.nanoseconds as u64).add_to_builder(builder.item());
+        builder.finish()
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        let builder = builder.record(Some("Datetime".to_string()), Some("wasi".to_string()));
+        let builder = <u64>::add_to_type_builder(builder.field("seconds"));
+        let builder = <u64>::add_to_type_builder(builder.field("nanoseconds"));
+        builder.finish()
+    }
+}
+
+impl FromValueAndType for Datetime {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let seconds = extractor
+            .field(0usize)
+            .ok_or_else(|| "Missing seconds field in Datetime".to_string())
+            .and_then(|f| {
+                f.u64()
+                    .ok_or_else(|| "Expected u64 for seconds".to_string())
+            })?;
+        let nanoseconds = extractor
+            .field(1usize)
+            .ok_or_else(|| "Missing nanoseconds field in Datetime".to_string())
+            .and_then(|f| {
+                f.u64()
+                    .ok_or_else(|| "Expected u64 for nanoseconds".to_string())
+            })
+            .map(|v| v as u32)?;
+        Ok(Self {
+            seconds,
+            nanoseconds,
+        })
+    }
 }
