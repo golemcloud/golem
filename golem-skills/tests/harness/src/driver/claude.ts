@@ -54,8 +54,6 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
         "--permission-mode",
         "bypassPermissions",
         "--resume",
-        "--session-id",
-        this.sessionId,
         prompt,
       ],
       timeout,

@@ -921,6 +921,20 @@ export class ScenarioExecutor {
       success = errors.length === 0;
     }
 
+    // After any step that may have created a project, update the agent driver's
+    // working directory to the app directory so it finds AGENTS.md and
+    // .agents/skills/ directly. This covers both create_project steps and prompt
+    // steps where the agent creates the project itself.
+    try {
+      const appDir = await this.findGolemProjectDir();
+      if (appDir !== this.workspace) {
+        log.stepAction(stepLabel, `agent cwd → ${appDir}`);
+        this.driver.setWorkingDirectory(appDir);
+      }
+    } catch {
+      // No golem app found yet — that's fine
+    }
+
     return { success, errors, activatedSkills, isFirstPrompt };
   }
 

@@ -49,6 +49,8 @@ export interface AgentDriver {
   sendPrompt(prompt: string, timeout: number): Promise<AgentResult>;
   sendFollowup(prompt: string, timeout: number): Promise<AgentResult>;
   teardown(): Promise<void>;
+  /** Update the working directory used for subsequent agent invocations. */
+  setWorkingDirectory(dir: string): void;
 }
 
 export abstract class BaseAgentDriver implements AgentDriver {
@@ -70,6 +72,10 @@ export abstract class BaseAgentDriver implements AgentDriver {
     this.workspace = workspace;
     this.bootstrapSkillSourceDir = bootstrapSkillSourceDir;
     await this.seedBootstrapSkill();
+  }
+
+  setWorkingDirectory(dir: string): void {
+    this.workspace = dir;
   }
 
   protected async seedBootstrapSkill(): Promise<void> {

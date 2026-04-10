@@ -24,6 +24,7 @@ const mockDriver: AgentDriver = {
     durationSeconds: 0,
     exitCode: 0,
   }),
+  setWorkingDirectory: () => {},
 };
 
 // Minimal mock watcher

@@ -28,6 +28,9 @@ class StubDriver implements AgentDriver {
   async teardown(): Promise<void> {
     /* no-op */
   }
+  setWorkingDirectory(_dir: string): void {
+    /* no-op */
+  }
 }
 
 function createExecutor(
