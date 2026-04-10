@@ -219,7 +219,7 @@ describe("Variable substitution integration", () => {
           tag: "invoke" as const,
           invoke: {
             agent: "{{agent}}",
-            function: "test-func",
+            method: "test-func",
             args: '{"lang":"{{language}}"}',
           },
         },

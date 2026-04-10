@@ -61,7 +61,7 @@ const HttpSchema = z.object({
 
 const InvokeSchema = z.object({
   agent: z.string(),
-  function: z.string(),
+  method: z.string(),
   args: z.string().optional(),
 });
 
@@ -73,7 +73,7 @@ const ShellSchema = z.object({
 
 const TriggerSchema = z.object({
   agent: z.string(),
-  function: z.string(),
+  method: z.string(),
   args: z.string().optional(),
 });
 
@@ -113,6 +113,7 @@ function langConditional<T extends z.ZodType>(schema: T) {
 const VerifySchema = z.object({
   build: z.boolean().optional(),
   deploy: z.boolean().optional(),
+  expectedFiles: langConditional(z.array(z.string())).optional(),
 });
 
 const StepSpecSchema = z
@@ -186,6 +187,7 @@ interface StepCommon {
   verify?: LangConditional<{
     build?: boolean;
     deploy?: boolean;
+    expectedFiles?: LangConditional<string[]>;
   }>;
   expect?: z.infer<typeof ExpectSchema>;
   only_if?: StepCondition;
@@ -193,9 +195,9 @@ interface StepCommon {
   retry?: { attempts: number; delay: number };
 }
 
-type InvokeSpec = { agent: string; function: string; args?: string };
+type InvokeSpec = { agent: string; method: string; args?: string };
 type ShellSpec = { command: string; args?: string[]; cwd?: string };
-type TriggerSpec = { agent: string; function: string; args?: string };
+type TriggerSpec = { agent: string; method: string; args?: string };
 type CreateAgentSpec = {
   name: string;
   env?: Record<string, string>;
@@ -430,13 +432,13 @@ export class ScenarioExecutor {
       case "invoke":
         return { ...step, invoke: {
           agent: substituteVariables(step.invoke.agent, variables),
-          function: substituteVariables(step.invoke.function, variables),
+          method: substituteVariables(step.invoke.method, variables),
           args: sub(step.invoke.args),
         }};
       case "invoke_json":
         return { ...step, invoke_json: {
           agent: substituteVariables(step.invoke_json.agent, variables),
-          function: substituteVariables(step.invoke_json.function, variables),
+          method: substituteVariables(step.invoke_json.method, variables),
           args: sub(step.invoke_json.args),
         }};
       case "shell":
@@ -448,7 +450,7 @@ export class ScenarioExecutor {
       case "trigger":
         return { ...step, trigger: {
           agent: substituteVariables(step.trigger.agent, variables),
-          function: substituteVariables(step.trigger.function, variables),
+          method: substituteVariables(step.trigger.method, variables),
           args: sub(step.trigger.args),
         }};
       case "create_agent":
@@ -482,11 +484,14 @@ export class ScenarioExecutor {
 
   private resolveLanguageFields(step: StepSpec): StepSpec {
     const lang = this.options.language;
+    const resolvedVerify = resolveByLanguage(step.verify, lang);
     const resolved = {
       ...step,
       expectedSkills: resolveByLanguage(step.expectedSkills, lang),
       allowedExtraSkills: resolveByLanguage(step.allowedExtraSkills, lang),
-      verify: resolveByLanguage(step.verify, lang),
+      verify: resolvedVerify
+        ? { ...resolvedVerify, expectedFiles: resolveByLanguage(resolvedVerify.expectedFiles, lang) }
+        : undefined,
     };
     if (step.tag === "prompt") {
       return { ...resolved, tag: "prompt", prompt: resolveByLanguage(step.prompt, lang)! } as StepSpec;
@@ -760,9 +765,9 @@ export class ScenarioExecutor {
     // Verify skills activation
     const activatedSkills = await this.verifySkillActivation(stepLabel, step, stepBaseline, fail);
 
-    // Build/deploy verification
-    if (step.verify?.build || step.verify?.deploy) {
-      await this.executeVerification(stepLabel, step.verify, commandEnv, success, fail);
+    // Build/deploy/expectedFiles verification
+    if (step.verify?.build || step.verify?.deploy || step.verify?.expectedFiles) {
+      await this.executeVerification(stepLabel, step.verify as { build?: boolean; deploy?: boolean; expectedFiles?: string[] }, commandEnv, success, fail);
       success = errors.length === 0;
     }
 
@@ -846,9 +851,9 @@ export class ScenarioExecutor {
     timeout: number,
     commandEnv: Record<string, string>,
   ): Promise<void> {
-    log.stepAction(stepLabel, `triggering ${trigger.agent}.${trigger.function}`);
+    log.stepAction(stepLabel, `triggering ${trigger.agent}.${trigger.method}`);
     const projectDir = await this.findGolemProjectDir();
-    const args = ["agent", "invoke", trigger.agent, trigger.function, "--trigger"];
+    const args = ["agent", "invoke", trigger.agent, trigger.method, "--trigger"];
     if (trigger.args) args.push(trigger.args);
     this.runLocalCommand("golem", args, timeout, projectDir, commandEnv)
       .catch(() => { /* fire and forget */ });
@@ -883,9 +888,9 @@ export class ScenarioExecutor {
     commandEnv: Record<string, string>,
     fail: (msg: string) => void,
   ): Promise<void> {
-    log.stepAction(stepLabel, `invoking ${invoke.agent}.${invoke.function}`);
+    log.stepAction(stepLabel, `invoking ${invoke.agent}.${invoke.method}`);
     const projectDir = await this.findGolemProjectDir();
-    const args = ["agent", "invoke", invoke.agent, invoke.function];
+    const args = ["agent", "invoke", invoke.agent, invoke.method];
     if (invoke.args) args.push(invoke.args);
     const result = await this.runLocalCommand(
       "golem", args, timeout, projectDir, commandEnv,
@@ -911,9 +916,9 @@ export class ScenarioExecutor {
     commandEnv: Record<string, string>,
     fail: (msg: string) => void,
   ): Promise<void> {
-    log.stepAction(stepLabel, `invoking (json) ${invoke.agent}.${invoke.function}`);
+    log.stepAction(stepLabel, `invoking (json) ${invoke.agent}.${invoke.method}`);
     const projectDir = await this.findGolemProjectDir();
-    const args = ["--format", "json", "agent", "invoke", invoke.agent, invoke.function];
+    const args = ["--format", "json", "agent", "invoke", invoke.agent, invoke.method];
     if (invoke.args) args.push(invoke.args);
     const result = await this.runLocalCommand(
       "golem", args, timeout, projectDir, commandEnv,
@@ -1013,12 +1018,24 @@ export class ScenarioExecutor {
 
   private async executeVerification(
     stepLabel: string,
-    verify: { build?: boolean; deploy?: boolean },
+    verify: { build?: boolean; deploy?: boolean; expectedFiles?: string[] },
     commandEnv: Record<string, string>,
     currentSuccess: boolean,
     fail: (msg: string) => void,
   ): Promise<void> {
     const projectDir = await this.findGolemProjectDir();
+
+    if (verify.expectedFiles) {
+      for (const relPath of verify.expectedFiles) {
+        const fullPath = path.join(this.workspace, relPath);
+        try {
+          await fs.access(fullPath);
+          log.stepAction(stepLabel, `expected file exists: ${relPath}`);
+        } catch {
+          fail(`EXPECTED_FILE_MISSING: ${relPath}`);
+        }
+      }
+    }
 
     if (verify.build) {
       log.stepAction(stepLabel, `running golem build in ${projectDir}`);

@@ -9,8 +9,16 @@ steps:
     verify:
       build: true
       deploy: true
+      expectedFiles:
+        ts: ["test-app/src/main.ts", "test-app/package.json"]
+        rust: ["test-app/src/lib.rs", "test-app/Cargo.toml"]
 
-# TODO:
-#  - verify the created directory according to the language
-#  - deploy and invoke the app rust: CounterAgent, increment
+  - id: "invoke-increment"
+    invoke_json:
+      agent: 'CounterAgent("test")'
+      method: 'increment'
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
 

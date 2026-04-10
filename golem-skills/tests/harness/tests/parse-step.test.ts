@@ -23,12 +23,12 @@ describe("parseStep", () => {
 
   it("parses an invoke step", () => {
     const result = parseStep({
-      invoke: { agent: "my-agent", function: "do-thing", args: '{"x":1}' },
+      invoke: { agent: "my-agent", method: "do-thing", args: '{"x":1}' },
     });
     assert.equal(result.tag, "invoke");
     if (result.tag === "invoke") {
       assert.equal(result.invoke.agent, "my-agent");
-      assert.equal(result.invoke.function, "do-thing");
+      assert.equal(result.invoke.method, "do-thing");
       assert.equal(result.invoke.args, '{"x":1}');
     }
   });
@@ -47,12 +47,12 @@ describe("parseStep", () => {
 
   it("parses a trigger step", () => {
     const result = parseStep({
-      trigger: { agent: "worker", function: "run" },
+      trigger: { agent: "worker", method: "run" },
     });
     assert.equal(result.tag, "trigger");
     if (result.tag === "trigger") {
       assert.equal(result.trigger.agent, "worker");
-      assert.equal(result.trigger.function, "run");
+      assert.equal(result.trigger.method, "run");
     }
   });
 
@@ -237,7 +237,7 @@ steps:
   - id: "call-sync"
     invoke:
       agent: "worker-agent"
-      function: "process-item"
+      method: "process-item"
       args: '{"item_id": 42}'
     expect:
       exit_code: 0
@@ -246,7 +246,7 @@ steps:
   - id: "fire-async"
     trigger:
       agent: "worker-agent"
-      function: "background-cleanup"
+      method: "background-cleanup"
 
   - id: "settle"
     sleep: 2
@@ -269,7 +269,7 @@ steps:
     assert.equal(call.tag, "invoke");
     if (call.tag === "invoke") {
       assert.equal(call.invoke.agent, "worker-agent");
-      assert.equal(call.invoke.function, "process-item");
+      assert.equal(call.invoke.method, "process-item");
       assert.equal(call.invoke.args, '{"item_id": 42}');
     }
     assert.equal(call.expect?.stdout_contains, "processed");
@@ -277,7 +277,7 @@ steps:
     assert.equal(fire.tag, "trigger");
     if (fire.tag === "trigger") {
       assert.equal(fire.trigger.agent, "worker-agent");
-      assert.equal(fire.trigger.function, "background-cleanup");
+      assert.equal(fire.trigger.method, "background-cleanup");
     }
 
     assert.equal(settle.tag, "sleep");
@@ -447,11 +447,11 @@ steps:
   - id: "kick-off"
     trigger:
       agent: "bg-worker"
-      function: "start"
+      method: "start"
   - id: "call-worker"
     invoke:
       agent: "bg-worker"
-      function: "status"
+      method: "status"
     expect:
       stdout_contains: "running"
   - id: "check-api"
