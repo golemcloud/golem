@@ -753,7 +753,7 @@ export class ScenarioExecutor {
         await this.executeShell(stepLabel, step.shell, step.expect, stepTimeoutSeconds, commandEnv, fail);
         break;
       case "trigger":
-        this.executeTrigger(stepLabel, step.trigger, stepTimeoutSeconds, commandEnv);
+        await this.executeTrigger(stepLabel, step.trigger, stepTimeoutSeconds, commandEnv);
         break;
       case "prompt":
         isFirstPrompt = await this.executePrompt(stepLabel, step.prompt as string, step.continue_session, isFirstPrompt, stepTimeoutSeconds, fail);
@@ -796,8 +796,20 @@ export class ScenarioExecutor {
     fail: (msg: string) => void,
   ): Promise<void> {
     console.log(`Step ${stepLabel}: creating agent "${spec.name}"`);
+    const projectDir = await this.findGolemProjectDir();
+    const args = ["agent", "new", spec.name];
+    if (spec.env) {
+      for (const [k, v] of Object.entries(spec.env)) {
+        args.push("-e", `${k}=${v}`);
+      }
+    }
+    if (spec.config) {
+      for (const [k, v] of Object.entries(spec.config)) {
+        args.push("-c", `${k}=${v}`);
+      }
+    }
     const result = await this.runLocalCommand(
-      "golem", ["agent", "new", spec.name], timeout, this.workspace, commandEnv,
+      "golem", args, timeout, projectDir, commandEnv,
     );
     if (!result.success) fail(`CREATE_AGENT_FAILED: ${result.output}`);
   }
@@ -810,8 +822,9 @@ export class ScenarioExecutor {
     fail: (msg: string) => void,
   ): Promise<void> {
     console.log(`Step ${stepLabel}: deleting agent "${spec.name}"`);
+    const projectDir = await this.findGolemProjectDir();
     const result = await this.runLocalCommand(
-      "golem", ["agent", "delete", spec.name], timeout, this.workspace, commandEnv,
+      "golem", ["agent", "delete", spec.name], timeout, projectDir, commandEnv,
     );
     if (!result.success) fail(`DELETE_AGENT_FAILED: ${result.output}`);
   }
@@ -839,16 +852,17 @@ export class ScenarioExecutor {
     }
   }
 
-  private executeTrigger(
+  private async executeTrigger(
     stepLabel: string,
     trigger: TriggerSpec,
     timeout: number,
     commandEnv: Record<string, string>,
-  ): void {
+  ): Promise<void> {
     console.log(`Step ${stepLabel}: triggering ${trigger.agent}.${trigger.function}`);
+    const projectDir = await this.findGolemProjectDir();
     const args = ["agent", "invoke", trigger.agent, trigger.function, "--trigger"];
     if (trigger.args) args.push(trigger.args);
-    this.runLocalCommand("golem", args, timeout, this.workspace, commandEnv)
+    this.runLocalCommand("golem", args, timeout, projectDir, commandEnv)
       .catch(() => { /* fire and forget */ });
   }
 
@@ -882,10 +896,11 @@ export class ScenarioExecutor {
     fail: (msg: string) => void,
   ): Promise<void> {
     console.log(`Step ${stepLabel}: invoking ${invoke.agent}.${invoke.function}`);
+    const projectDir = await this.findGolemProjectDir();
     const args = ["agent", "invoke", invoke.agent, invoke.function];
     if (invoke.args) args.push(invoke.args);
     const result = await this.runLocalCommand(
-      "golem", args, timeout, this.workspace, commandEnv,
+      "golem", args, timeout, projectDir, commandEnv,
     );
 
     if (expect) {

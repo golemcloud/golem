@@ -495,7 +495,7 @@ steps:
       url: "http://localhost"
 `);
     for (const step of spec.steps) {
-      const actionKeys = ["prompt", "invoke", "shell", "trigger", "create_agent", "delete_agent", "sleep", "http"] as const;
+      const actionKeys = ["prompt", "invoke", "invoke_json", "shell", "trigger", "create_agent", "delete_agent", "sleep", "http"] as const;
       const present = actionKeys.filter((k) => Object.prototype.hasOwnProperty.call(step, k));
       assert.equal(present.length, 1, `Step "${step.id}" should have exactly one action field, got: ${present.join(", ")}`);
       assert.equal(present[0], step.tag, `Step "${step.id}" action field should match tag`);
