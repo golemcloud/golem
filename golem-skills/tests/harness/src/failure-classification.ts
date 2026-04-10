@@ -18,7 +18,7 @@ const CLASSIFICATION_MAP: Record<
   SKILL_NOT_ACTIVATED: {
     category: "agent",
     guidance:
-      "Ensure the agent reads SKILL.md. Check the watcher directory and verify skills are copied correctly.",
+      "Ensure the agent reads SKILL.md. Check the watcher scope and verify the bootstrap skill or generated project skill files exist where the agent expects them.",
   },
   SKILL_MISMATCH: {
     category: "agent",
@@ -69,6 +69,11 @@ const CLASSIFICATION_MAP: Record<
     category: "assertion",
     guidance:
       "Output did not match expected assertions. Review the expect block and compare with actual output.",
+  },
+  EXPECTED_FILE_MISSING: {
+    category: "assertion",
+    guidance:
+      "A required file was not created. Check the scenario's expectedFiles list and verify the preceding step generated the expected project output.",
   },
 };
 

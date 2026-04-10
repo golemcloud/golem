@@ -2,7 +2,7 @@ import { BaseAgentDriver, AgentResult } from "./base.js";
 
 export class ClaudeAgentDriver extends BaseAgentDriver {
   protected readonly driverName = "claude";
-  protected readonly skillDirs = [".claude/skills"];
+  protected readonly skillDirs = [".agents/skills"];
   private sessionId: string | null = null;
 
   async sendPrompt(prompt: string, timeout: number): Promise<AgentResult> {

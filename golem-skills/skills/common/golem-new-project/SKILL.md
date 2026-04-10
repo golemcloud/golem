@@ -11,10 +11,10 @@ Assume the `golem` or `golem-cli` binary exists and is added to PATH.
 Try `golem --version` to check if it exists. If not, try `golem-cli --version`. Every command below works for `golem` and `golem-cli`
 
 **Critical rules:**
-- Do NOT modify SDK versions in `package.json`. The SDK is resolved automatically via local paths. Changing versions to npm-published ones will break the build.
-- Do NOT remove or modify `@agent`, `@endpoint`, `@prompt`, or `@description` decorators in generated code. They are valid and required.
-- Do NOT run `npm install` after `golem new` — dependencies are already set up correctly.
-- If `golem build` fails, read the error carefully. Do NOT try to "fix" it by changing SDK versions or removing decorators.
+- Do NOT modify generated SDK dependency versions in files such as `package.json`, `Cargo.toml`, `build.sbt`, or `project/plugins.sbt` unless the user explicitly asks. The generated project is wired to the local checkout and changing it to published versions can break the build.
+- For TypeScript projects, do NOT remove or modify generated decorators such as `@agent`, `@endpoint`, `@prompt`, or `@description`. They are valid and required.
+- For TypeScript projects, do NOT run `npm install` after `golem new` unless the user explicitly asks. The generated dependencies are already configured correctly.
+- If `golem build` fails, read the error carefully. Do NOT try to "fix" it by swapping generated local SDK references to published versions or deleting generated code.
 - Keep all file operations inside the current workspace using relative paths (for example, `test-app/golem.yaml`). Do not traverse to parent directories or use absolute paths outside the workspace.
 - Prefer shell checks such as `ls`/`find` for generated artifacts in `golem-temp`. Some environments block direct file-tool reads there via ignore rules.
 
@@ -34,14 +34,17 @@ golem new my-app --template ts -Y
 
 ### Supported Templates
 
-Supported template identifiers: `ts` (TypeScript), `rust`
+Supported template identifiers: `ts` (TypeScript), `rust`, `scala`
 
 ## Step 2: Verify Project Structure
 
 After running `golem new`, verify the following:
 
 1. A `golem.yaml` file exists in the project root
-2. A folder named common-{ts|rust} exists in the project root
+2. Language-specific scaffold files exist for the chosen template, for example:
+   - TypeScript: `package.json` and `src/main.ts`
+   - Rust: `Cargo.toml` and `src/lib.rs`
+   - Scala: `build.sbt` and `src/main/scala/...`
 
 ## Step 3: Build the Project
 

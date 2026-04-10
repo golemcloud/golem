@@ -436,11 +436,11 @@ mod test {
         CargoDependencyMatcher, CargoDependencyRequirement, build_cargo_update_spec,
         evaluate_cargo_dependency_compliance, rust_dependency_requirements,
     };
+    use crate::app::template::TEMPLATES_DIR;
     use crate::app::edit::cargo_toml::DependencySpec;
     use crate::sdk_overrides::sdk_overrides;
     use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, BTreeSet};
-    use std::path::PathBuf;
     use test_r::test;
     use toml_edit::DocumentMut;
 
@@ -519,10 +519,12 @@ mod test {
 
     #[test]
     fn rust_template_and_check_requirements_match() {
-        let template_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("templates/rust/component/component-dir/Cargo.toml._");
-        let template_source = std::fs::read_to_string(&template_path)
+        let template_source = TEMPLATES_DIR
+            .get_file("rust/component/component-dir/Cargo.toml._")
             .unwrap()
+            .contents_utf8()
+            .unwrap()
+            .to_string()
             .replace("GOLEM_RUST_VERSION_OR_PATH", "version = \"0.0.0\"");
 
         let doc: DocumentMut = template_source.parse().unwrap();
@@ -530,7 +532,7 @@ mod test {
 
         let template_names = deps
             .iter()
-            .map(|(k, _)| k.to_string())
+            .map(|(k, _): (&str, _)| k.to_string())
             .collect::<BTreeSet<_>>();
 
         let overrides = sdk_overrides().unwrap();
@@ -559,12 +561,12 @@ mod test {
             let item = deps.get(dep_name.as_str()).unwrap();
             let found = item
                 .as_table_like()
-                .and_then(|table| table.get("features"))
-                .and_then(|features| features.as_array())
-                .map(|array| {
+                .and_then(|table: &dyn toml_edit::TableLike| table.get("features"))
+                .and_then(|features: &toml_edit::Item| features.as_array())
+                .map(|array: &toml_edit::Array| {
                     array
                         .iter()
-                        .filter_map(|v| v.as_str())
+                        .filter_map(|v: &toml_edit::Value| v.as_str())
                         .map(str::to_string)
                         .collect::<Vec<_>>()
                 })
@@ -583,9 +585,12 @@ mod test {
 
     #[test]
     fn rust_common_on_demand_template_uses_relative_target_and_no_cargo_target_dir_env() {
-        let template_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("templates/rust/common-on-demand/golem.yaml");
-        let template_source = std::fs::read_to_string(&template_path).unwrap();
+        let template_source = TEMPLATES_DIR
+            .get_file("rust/common-on-demand/golem.yaml")
+            .unwrap()
+            .contents_utf8()
+            .unwrap()
+            .to_string();
 
         assert!(template_source.contains("{{ cargoTarget }}/wasm32-wasip2/debug"));
         assert!(template_source.contains("{{ cargoTarget }}/wasm32-wasip2/release"));

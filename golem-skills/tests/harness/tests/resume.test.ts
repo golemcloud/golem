@@ -32,7 +32,7 @@ const mockDriver: AgentDriver = {
 
 // Minimal mock watcher
 function createMockWatcher(): SkillWatcher {
-  const watcher = new SkillWatcher("/tmp/fake-skills");
+  const watcher = new SkillWatcher("/tmp/fake-workspace");
   // Override start/stop to be no-ops
   watcher.start = async () => {};
   watcher.stop = async () => {};
@@ -40,7 +40,6 @@ function createMockWatcher(): SkillWatcher {
   watcher.snapshotAtimes = async () => {};
   watcher.getActivatedEventsSince = () => [];
   watcher.getSkillsWithChangedAtime = async () => [];
-  watcher.addWatchDir = () => {};
   return watcher;
 }
 
@@ -58,7 +57,7 @@ describe("Resume-from validation", () => {
       mockDriver,
       createMockWatcher(),
       "/tmp/fake-workspace",
-      "/tmp/fake-skills",
+      "/tmp/bootstrap-skill",
       { resumeFromStepId: "nonexistent-step" },
     );
 
@@ -87,7 +86,7 @@ describe("Resume-from validation", () => {
       mockDriver,
       createMockWatcher(),
       "/tmp/fake-workspace-resume",
-      "/tmp/fake-skills",
+      "/tmp/bootstrap-skill",
       { resumeFromStepId: "step-2" },
     );
 

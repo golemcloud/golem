@@ -153,7 +153,6 @@ async function main() {
       output: { type: "string", default: "./results" },
       scenario: { type: "string" },
       timeout: { type: "string" },
-      skills: { type: "string", default: "../../skills" },
       help: { type: "boolean", short: "h", default: false },
       "dry-run": { type: "boolean", default: false },
       "resume-from": { type: "string" },
@@ -167,7 +166,6 @@ async function main() {
     output,
     scenario: scenarioFilter,
     timeout,
-    skills: skillsDirRel,
     help,
     "dry-run": dryRun,
     "resume-from": resumeFrom,
@@ -197,10 +195,11 @@ async function main() {
     log.error("GOLEM_PATH is not set and could not be auto-detected.\nSet GOLEM_PATH to the root of your golem repository checkout, or run the harness from within the golem repo tree.");
     process.exit(1);
   }
+  const golemPath = process.env.GOLEM_PATH!;
 
   // Resolve the target directory containing the golem binary and prepend it
   // to PATH so all spawned processes (including agent drivers) use the correct binary.
-  const golemTargetDir = resolveGolemTargetDir(process.env.GOLEM_PATH);
+  const golemTargetDir = resolveGolemTargetDir(golemPath);
   const pathSep = process.platform === "win32" ? ";" : ":";
   process.env.PATH = golemTargetDir + pathSep + (process.env.PATH ?? "");
   log.info(`Using golem binary from: ${golemTargetDir}`);
@@ -219,7 +218,6 @@ Options:
   --scenarios <dir>     Path to scenario YAML files (default: ./scenarios)
   --output <dir>        Results output directory (default: ./results)
   --timeout <seconds>   Global timeout per scenario step in seconds (default: ${DEFAULT_STEP_TIMEOUT_SECONDS})
-  --skills <dir>        Path to skills directory (default: ../../skills)
   --dry-run             Validate scenarios and print step summaries without executing
   --resume-from <id>    Resume execution from the given step ID
   --workspace <path>    Override workspace directory
@@ -251,7 +249,6 @@ Options:
     }
   }
 
-  const skillsDir = path.resolve(process.cwd(), skillsDirRel!);
   const scenariosDir = path.resolve(process.cwd(), scenarios!);
   const resultsDir = path.resolve(process.cwd(), output!);
   const globalTimeoutSeconds = timeout
@@ -271,6 +268,20 @@ Options:
   }
 
   await fs.mkdir(resultsDir, { recursive: true });
+
+  const bootstrapSkillSourceDir = path.join(
+    golemPath,
+    "golem-skills",
+    "skills",
+    "common",
+    "golem-new-project",
+  );
+  try {
+    await fs.access(path.join(bootstrapSkillSourceDir, "SKILL.md"));
+  } catch {
+    log.error(`Bootstrap skill not found at ${bootstrapSkillSourceDir}`);
+    process.exit(1);
+  }
 
   const scenarioFiles = (await fs.readdir(scenariosDir)).filter(
     (f) => f.endsWith(".yaml") || f.endsWith(".yml"),
@@ -352,7 +363,6 @@ Options:
   for (const currentAgent of agents) {
     for (const currentLanguage of languages) {
       const driver = createDriver(currentAgent);
-      const watcher = new SkillWatcher(skillsDir);
       log.dim(`Config: agent=${currentAgent}, language=${currentLanguage}, scenarios=${scenariosDir}, output=${resultsDir}, timeout=${globalTimeoutSeconds ?? "default"}`);
 
       for (const file of scenarioFiles) {
@@ -382,11 +392,12 @@ Options:
               spec.name.replace(/\s+/g, "-").toLowerCase(),
               currentLanguage,
             );
+        const watcher = new SkillWatcher(workspace);
         const executor = new ScenarioExecutor(
           driver,
           watcher,
           workspace,
-          skillsDir,
+          bootstrapSkillSourceDir,
           {
             globalTimeoutSeconds,
             agent: currentAgent,

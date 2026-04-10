@@ -148,6 +148,7 @@ impl TemplateHandler {
         }
 
         self.apply_new_template_plan(&safe_template_plan)?;
+        create_claude_symlink(&context.application_path)?;
 
         logln("");
         log_finished_ok("applying template(s)");
@@ -959,4 +960,31 @@ impl TemplateHandler {
 
         Ok(())
     }
+}
+
+/// Creates a `.claude` → `.agents` symlink in the application directory so that
+/// Claude Code can discover the same skills as Amp/Codex without duplicating files.
+fn create_claude_symlink(application_path: &Path) -> anyhow::Result<()> {
+    let agents_dir = application_path.join(".agents");
+    let claude_link = application_path.join(".claude");
+
+    if !agents_dir.exists() {
+        return Ok(());
+    }
+
+    if claude_link.exists() || claude_link.is_symlink() {
+        return Ok(());
+    }
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(".agents", &claude_link)?;
+    }
+
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(".agents", &claude_link)?;
+    }
+
+    Ok(())
 }

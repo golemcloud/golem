@@ -14,7 +14,7 @@ import { SkillWatcher } from "../src/watcher.js";
 // Stub driver that records prompts sent to it
 class StubDriver implements AgentDriver {
   prompts: string[] = [];
-  async setup(_workspace: string, _skillsDir: string): Promise<void> {
+  async setup(_workspace: string, _bootstrapSkillSourceDir: string): Promise<void> {
     /* no-op */
   }
   async sendPrompt(prompt: string, _timeout: number): Promise<AgentResult> {
@@ -34,14 +34,14 @@ function createExecutor(
   driver: AgentDriver,
   watcher: SkillWatcher,
   workspace: string,
-  skillsDir: string,
+  bootstrapSkillSourceDir: string,
   opts?: ScenarioExecutorOptions,
 ): ScenarioExecutor {
   const executor = new ScenarioExecutor(
     driver,
     watcher,
     workspace,
-    skillsDir,
+    bootstrapSkillSourceDir,
     opts,
   );
   // Patch out golem connectivity check — there's no server in tests
@@ -53,14 +53,15 @@ function createExecutor(
 describe("Variable substitution integration", () => {
   let tmpDir: string;
   let workspace: string;
-  let skillsDir: string;
+  let bootstrapSkillSourceDir: string;
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "vars-integ-"));
     workspace = path.join(tmpDir, "workspace");
-    skillsDir = path.join(tmpDir, "skills");
+    bootstrapSkillSourceDir = path.join(tmpDir, "bootstrap-skill");
     await fs.mkdir(workspace, { recursive: true });
-    await fs.mkdir(skillsDir, { recursive: true });
+    await fs.mkdir(bootstrapSkillSourceDir, { recursive: true });
+    await fs.writeFile(path.join(bootstrapSkillSourceDir, "SKILL.md"), "bootstrap");
   });
 
   afterEach(async () => {
@@ -69,7 +70,7 @@ describe("Variable substitution integration", () => {
 
   it("substitutes {{agent}}, {{language}}, {{workspace}}, {{scenario}} in a prompt step", async () => {
     const driver = new StubDriver();
-    const watcher = new SkillWatcher(skillsDir);
+    const watcher = new SkillWatcher(workspace);
     const opts: ScenarioExecutorOptions = {
       agent: "claude-code",
       language: "ts",
@@ -78,7 +79,7 @@ describe("Variable substitution integration", () => {
       driver,
       watcher,
       workspace,
-      skillsDir,
+      bootstrapSkillSourceDir,
       opts,
     );
 
@@ -119,13 +120,13 @@ describe("Variable substitution integration", () => {
 
   it("substitutes variables in a shell command and verifies via expect", async () => {
     const driver = new StubDriver();
-    const watcher = new SkillWatcher(skillsDir);
+    const watcher = new SkillWatcher(workspace);
     const opts: ScenarioExecutorOptions = { agent: "opencode", language: "rust" };
     const executor = createExecutor(
       driver,
       watcher,
       workspace,
-      skillsDir,
+      bootstrapSkillSourceDir,
       opts,
     );
 
@@ -157,7 +158,7 @@ describe("Variable substitution integration", () => {
 
   it("resolves scala-specific language maps for prompt and verify fields", async () => {
     const driver = new StubDriver();
-    const watcher = new SkillWatcher(skillsDir);
+    const watcher = new SkillWatcher(workspace);
     const opts: ScenarioExecutorOptions = {
       agent: "claude-code",
       language: "scala",
@@ -166,7 +167,7 @@ describe("Variable substitution integration", () => {
       driver,
       watcher,
       workspace,
-      skillsDir,
+      bootstrapSkillSourceDir,
       opts,
     );
 
@@ -214,7 +215,7 @@ describe("Variable substitution integration", () => {
 
   it("leaves unknown variables as-is in prompts", async () => {
     const driver = new StubDriver();
-    const watcher = new SkillWatcher(skillsDir);
+    const watcher = new SkillWatcher(workspace);
     const opts: ScenarioExecutorOptions = {
       agent: "claude-code",
       language: "ts",
@@ -223,7 +224,7 @@ describe("Variable substitution integration", () => {
       driver,
       watcher,
       workspace,
-      skillsDir,
+      bootstrapSkillSourceDir,
       opts,
     );
 
@@ -255,13 +256,13 @@ describe("Variable substitution integration", () => {
 
   it("substitutes variables in invoke fields", async () => {
     const driver = new StubDriver();
-    const watcher = new SkillWatcher(skillsDir);
+    const watcher = new SkillWatcher(workspace);
     const opts: ScenarioExecutorOptions = { agent: "opencode", language: "ts" };
     const executor = createExecutor(
       driver,
       watcher,
       workspace,
-      skillsDir,
+      bootstrapSkillSourceDir,
       opts,
     );
 
@@ -296,13 +297,13 @@ describe("Variable substitution integration", () => {
 
   it("unwraps noisy invoke_json output to the actual invocation result", async () => {
     const driver = new StubDriver();
-    const watcher = new SkillWatcher(skillsDir);
+    const watcher = new SkillWatcher(workspace);
     const opts: ScenarioExecutorOptions = { agent: "amp", language: "ts" };
     const executor = createExecutor(
       driver,
       watcher,
       workspace,
-      skillsDir,
+      bootstrapSkillSourceDir,
       opts,
     );
 
@@ -358,7 +359,7 @@ describe("Variable substitution integration", () => {
 
   it("substitutes variables in create_agent name", async () => {
     const driver = new StubDriver();
-    const watcher = new SkillWatcher(skillsDir);
+    const watcher = new SkillWatcher(workspace);
     const opts: ScenarioExecutorOptions = {
       agent: "claude-code",
       language: "ts",
@@ -367,7 +368,7 @@ describe("Variable substitution integration", () => {
       driver,
       watcher,
       workspace,
-      skillsDir,
+      bootstrapSkillSourceDir,
       opts,
     );
 
@@ -395,7 +396,7 @@ describe("Variable substitution integration", () => {
 
   it("conditions + variables work together (skip_if prevents execution)", async () => {
     const driver = new StubDriver();
-    const watcher = new SkillWatcher(skillsDir);
+    const watcher = new SkillWatcher(workspace);
     const opts: ScenarioExecutorOptions = {
       agent: "claude-code",
       language: "ts",
@@ -404,7 +405,7 @@ describe("Variable substitution integration", () => {
       driver,
       watcher,
       workspace,
-      skillsDir,
+      bootstrapSkillSourceDir,
       opts,
     );
 
@@ -442,7 +443,7 @@ describe("Variable substitution integration", () => {
 
   it("abort signal stops execution mid-scenario", async () => {
     const driver = new StubDriver();
-    const watcher = new SkillWatcher(skillsDir);
+    const watcher = new SkillWatcher(workspace);
     const controller = new AbortController();
     const opts: ScenarioExecutorOptions = {
       agent: "claude-code",
@@ -453,7 +454,7 @@ describe("Variable substitution integration", () => {
       driver,
       watcher,
       workspace,
-      skillsDir,
+      bootstrapSkillSourceDir,
       opts,
     );
 

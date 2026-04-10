@@ -127,6 +127,36 @@ describe("parseStep", () => {
     assert.deepEqual(result.retry, { attempts: 3, delay: 2 });
   });
 
+  it("requires expectedSkills when strictSkillMatch is set", async () => {
+    await assert.rejects(
+      () => loadScenarioYaml(`
+name: "strict-skill-match"
+steps:
+  - prompt: "do it"
+    strictSkillMatch: true
+`),
+      (err: Error) => {
+        assert.ok(err.message.includes("expectedSkills"));
+        return true;
+      },
+    );
+  });
+
+  it("requires expectedSkills when allowedExtraSkills is set", async () => {
+    await assert.rejects(
+      () => loadScenarioYaml(`
+name: "allowed-extra-skills"
+steps:
+  - prompt: "do it"
+    allowedExtraSkills: ["skill-b"]
+`),
+      (err: Error) => {
+        assert.ok(err.message.includes("expectedSkills"));
+        return true;
+      },
+    );
+  });
+
   it("omits undefined common fields from output", () => {
     const result = parseStep({ prompt: "minimal" });
     assert.equal(result.tag, "prompt");
@@ -318,6 +348,7 @@ steps:
     skip_if:
       agent: "opencode"
     continue_session: true
+    expectedSkills: ["golem-integration"]
     allowedExtraSkills: ["golem-test-runner"]
 `);
     assert.equal(spec.name, "conditional-flow");
@@ -336,6 +367,7 @@ steps:
     assert.deepEqual(multi.only_if, { language: "ts", os: "linux" });
     assert.deepEqual(multi.skip_if, { agent: "opencode" });
     assert.equal(multi.continue_session, true);
+    assert.deepEqual(multi.expectedSkills, ["golem-integration"]);
     assert.deepEqual(multi.allowedExtraSkills, ["golem-test-runner"]);
   });
 

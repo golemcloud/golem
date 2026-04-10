@@ -14,6 +14,7 @@ import { findGolemAppDir } from "./workspace.js";
 import * as log from "./log.js";
 
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 300;
+const WATCHER_SNAPSHOT_SETTLE_MS = 25;
 
 // --- Language-conditional resolution ---
 
@@ -195,7 +196,20 @@ const StepSpecSchema = z
     {
       message: `Step must have exactly one action field (${ACTION_FIELDS.join(", ")})`,
     },
-  );
+  )
+  .superRefine((step, ctx) => {
+    if (
+      step.expectedSkills === undefined &&
+      (step.allowedExtraSkills !== undefined || step.strictSkillMatch)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["expectedSkills"],
+        message:
+          "expectedSkills is required when allowedExtraSkills or strictSkillMatch is set",
+      });
+    }
+  });
 
 const SettingsSchema = z
   .object({
@@ -441,21 +455,22 @@ export function shouldRunStep(
 export class ScenarioExecutor {
   private driver: AgentDriver;
   private watcher: SkillWatcher;
+  private watcherStarted = false;
   private workspace: string;
-  private skillsDir: string;
+  private bootstrapSkillSourceDir: string;
   private options: ScenarioExecutorOptions;
 
   constructor(
     driver: AgentDriver,
     watcher: SkillWatcher,
     workspace: string,
-    skillsDir: string,
+    bootstrapSkillSourceDir: string,
     options?: ScenarioExecutorOptions,
   ) {
     this.driver = driver;
     this.watcher = watcher;
     this.workspace = workspace;
-    this.skillsDir = skillsDir;
+    this.bootstrapSkillSourceDir = bootstrapSkillSourceDir;
     this.options = options ?? {};
   }
 
@@ -600,17 +615,8 @@ export class ScenarioExecutor {
 
     // Setup workspace (each run gets a unique ID so no cleanup needed)
     await fs.mkdir(this.workspace, { recursive: true });
-    await this.driver.setup(this.workspace, this.skillsDir);
-    // Watch all agent skill directories — each agent reads skills from its own location
-    const agentSkillsDirs = [
-      ".claude/skills",
-      ".agents/skills",
-    ];
-    for (const rel of agentSkillsDirs) {
-      this.watcher.addWatchDir(path.join(this.workspace, rel));
-    }
+    await this.driver.setup(this.workspace, this.bootstrapSkillSourceDir);
     await this.verifyGolemConnectivity(spec);
-    await this.watcher.start();
 
     // Build extra env for commands from settings
     const commandEnv = this.buildCommandEnv(spec);
@@ -747,6 +753,7 @@ export class ScenarioExecutor {
       }
 
       await this.watcher.stop();
+      this.watcherStarted = false;
       await this.driver.teardown();
     }
 
@@ -777,8 +784,19 @@ export class ScenarioExecutor {
       spec.settings?.timeout_per_subprompt ??
       this.options.globalTimeoutSeconds ??
       DEFAULT_STEP_TIMEOUT_SECONDS;
-    const stepBaseline = this.watcher.markBaseline();
-    await this.watcher.snapshotAtimes();
+    const shouldTrackSkills = this.needsSkillTracking(step);
+    let stepBaseline = 0;
+    if (shouldTrackSkills) {
+      if (!this.watcherStarted) {
+        await this.watcher.start();
+        this.watcherStarted = true;
+      }
+      await this.watcher.snapshotAtimes();
+      await new Promise((resolve) =>
+        setTimeout(resolve, WATCHER_SNAPSHOT_SETTLE_MS),
+      );
+      stepBaseline = this.watcher.markBaseline();
+    }
     const stepLabel = step.id ?? "(unnamed)";
     log.stepStart(stepLabel, stepTimeoutSeconds);
 
@@ -819,7 +837,9 @@ export class ScenarioExecutor {
     }
 
     // Verify skills activation
-    const activatedSkills = await this.verifySkillActivation(stepLabel, step, stepBaseline, fail);
+    const activatedSkills = shouldTrackSkills
+      ? await this.verifySkillActivation(stepLabel, step, stepBaseline, fail)
+      : [];
 
     // Build/deploy/expectedFiles verification
     if (step.verify?.build || step.verify?.deploy || step.verify?.expectedFiles) {
@@ -828,6 +848,14 @@ export class ScenarioExecutor {
     }
 
     return { success, errors, activatedSkills, isFirstPrompt };
+  }
+
+  private needsSkillTracking(step: StepSpec): boolean {
+    return Boolean(
+      (step.expectedSkills as string[] | undefined)?.length ||
+      (step.allowedExtraSkills as string[] | undefined)?.length ||
+      step.strictSkillMatch,
+    );
   }
 
   // --- Action handlers ---
@@ -1079,6 +1107,11 @@ export class ScenarioExecutor {
     fail: (msg: string) => void,
   ): Promise<void> {
     const projectDir = await this.findGolemProjectDir();
+    let verificationFailed = !currentSuccess;
+    const recordFailure = (msg: string) => {
+      verificationFailed = true;
+      fail(msg);
+    };
 
     if (verify.expectedFiles) {
       const expectedCount = verify.expectedFiles.length;
@@ -1093,7 +1126,7 @@ export class ScenarioExecutor {
           log.stepAction(stepLabel, `expected file exists: ${relPath}`);
         } catch {
           missingCount += 1;
-          fail(`EXPECTED_FILE_MISSING: ${relPath}`);
+          recordFailure(`EXPECTED_FILE_MISSING: ${relPath}`);
         }
       }
 
@@ -1107,10 +1140,14 @@ export class ScenarioExecutor {
     if (verify.build) {
       log.stepAction(stepLabel, `running golem build in ${projectDir}`);
       const result = await this.runLocalCommand("golem", ["build"], 600, projectDir, commandEnv);
-      if (!result.success) fail(`BUILD_FAILED: ${result.output}`);
+      if (!result.success) recordFailure(`BUILD_FAILED: ${result.output}`);
     }
 
     if (verify.deploy) {
+      if (verificationFailed) {
+        return;
+      }
+
       // Deploy implies build — run build first if not already run
       if (!verify.build) {
         const golemTempDir = path.join(projectDir, "golem-temp");
@@ -1118,15 +1155,15 @@ export class ScenarioExecutor {
         log.stepAction(stepLabel, `running implicit golem build before deploy in ${projectDir}`);
         const buildResult = await this.runLocalCommand("golem", ["build"], 600, projectDir, commandEnv);
         if (!buildResult.success) {
-          fail(`BUILD_FAILED: ${buildResult.output}`);
+          recordFailure(`BUILD_FAILED: ${buildResult.output}`);
           return;
         }
       }
 
-      if (currentSuccess) {
+      if (!verificationFailed) {
         log.stepAction(stepLabel, `running golem deploy in ${projectDir}`);
         const deployResult = await this.runLocalCommand("golem", ["deploy", "--yes"], 600, projectDir, commandEnv);
-        if (!deployResult.success) fail(`DEPLOY_FAILED: ${deployResult.output}`);
+        if (!deployResult.success) recordFailure(`DEPLOY_FAILED: ${deployResult.output}`);
       }
     }
   }

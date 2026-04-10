@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { ScenarioExecutor } from "../src/executor.js";
 
 type StepLike = {
@@ -12,6 +15,22 @@ type ExecutorWithPrivate = {
     step: StepLike,
     activated: string[],
   ): string | undefined;
+  workspace: string;
+  findGolemProjectDir(): Promise<string>;
+  runLocalCommand(
+    command: string,
+    args: string[],
+    timeoutSeconds: number,
+    cwd: string,
+    extraEnv?: Record<string, string>,
+  ): Promise<{ success: boolean; output: string }>;
+  executeVerification(
+    stepLabel: string,
+    verify: { build?: boolean; deploy?: boolean; expectedFiles?: string[] },
+    commandEnv: Record<string, string>,
+    currentSuccess: boolean,
+    fail: (msg: string) => void,
+  ): Promise<void>;
 };
 
 function assertSkillActivation(
@@ -81,5 +100,71 @@ describe("assertSkillActivation", () => {
       ["skill-a"],
     );
     assert.equal(result, undefined);
+  });
+});
+
+describe("executeVerification", () => {
+  it("does not attempt deploy when expected files are missing", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "verify-files-"));
+    try {
+      const executor = Object.create(
+        ScenarioExecutor.prototype,
+      ) as unknown as ExecutorWithPrivate;
+      const calls: string[][] = [];
+      const failures: string[] = [];
+
+      executor.workspace = workspace;
+      executor.findGolemProjectDir = async () => workspace;
+      executor.runLocalCommand = async (_command, args) => {
+        calls.push(args);
+        return { success: true, output: "ok" };
+      };
+
+      await executor.executeVerification(
+        "verify",
+        { expectedFiles: ["missing.txt"], deploy: true },
+        {},
+        true,
+        (msg) => failures.push(msg),
+      );
+
+      assert.deepEqual(calls, []);
+      assert.equal(failures.length, 1);
+      assert.ok(failures[0].includes("EXPECTED_FILE_MISSING"));
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("does not attempt deploy after a build failure", async () => {
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "verify-build-"));
+    try {
+      const executor = Object.create(
+        ScenarioExecutor.prototype,
+      ) as unknown as ExecutorWithPrivate;
+      const calls: string[][] = [];
+      const failures: string[] = [];
+
+      executor.workspace = workspace;
+      executor.findGolemProjectDir = async () => workspace;
+      executor.runLocalCommand = async (_command, args) => {
+        calls.push(args);
+        return { success: false, output: "build failed" };
+      };
+
+      await executor.executeVerification(
+        "verify",
+        { build: true, deploy: true },
+        {},
+        true,
+        (msg) => failures.push(msg),
+      );
+
+      assert.deepEqual(calls, [["build"]]);
+      assert.equal(failures.length, 1);
+      assert.ok(failures[0].includes("BUILD_FAILED"));
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
   });
 });

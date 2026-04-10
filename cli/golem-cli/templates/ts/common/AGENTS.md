@@ -1,6 +1,15 @@
 <!-- golem-managed:guide:ts:start -->
 <!-- Golem manages this section. Do not edit manually. -->
 
+# Skills
+
+This project includes coding-agent skills in `.agents/skills/`. Load a skill when the task matches its description.
+
+| Skill | Description |
+|-------|-------------|
+| `golem-new-project` | Creating a new Golem application project with `golem new` |
+| `golem-add-npm-package` | Adding an npm package dependency to the project |
+
 # Golem Application Development Guide (TypeScript)
 
 ## Overview
@@ -385,83 +394,6 @@ const result2 = infallibleTransaction((tx) => {
 });
 ```
 
-## Using `golem new`
-
-Use `golem new` to create new applications and to add new components or agents to existing applications.
-
-### Create a new application
-
-```shell
-golem new my-app --template ts
-```
-
-This creates a new application directory, initializes `golem.yaml`, and creates the first TypeScript component with a default agent template.
-
-You can also run `golem new .` in an empty directory to initialize the current folder as a new application.
-
-If the folder name is not a valid Golem application name (lowercase kebab-case), specify one explicitly:
-
-```shell
-golem new . --application-name my-app --template ts
-```
-
-### Add to an existing application
-
-From inside an existing application, use `.` as the path:
-
-```shell
-golem new . --template ts
-```
-
-By default this applies the TypeScript template to a matching TypeScript component, or creates one if needed.
-
-### Create or target a specific component
-
-```shell
-golem new . --template ts --component-name my-app:billing
-```
-
-- If `my-app:billing` exists and is TypeScript, the template is applied there.
-- If it does not exist, `golem new` creates the component and applies the template.
-
-### Applying multiple templates
-
-You can apply multiple templates to the same component in one command:
-
-```shell
-golem new . --template ts --template my:agent-template --component-name my-app:billing
-```
-
-You can also apply templates incrementally by running `golem new` multiple times for the same component.
-
-If multiple templates affect the same files, `golem new` merges the changes and shows the planned updates before applying them.
-
-### Component directory behavior
-
-- If the application has exactly one component, its `dir` in `golem.yaml` is `.`.
-- If the application has multiple components, each component has an explicit `dir` in `golem.yaml`.
-- When needed, `golem new` can promote an existing root component layout into explicit per-component directories.
-
-### Choosing one vs multiple components
-
-In most cases, prefer a single component with multiple agents.
-
-Use multiple components only when you have a technical reason, for example:
-- using different guest languages in the same application (for example Rust + TypeScript)
-- separating components with distinct operational or ownership constraints
-
-### Useful flags
-
-- `--template <name>`: can be used multiple times to apply and merge several templates into one component (in non-interactive mode, at least one template is required)
-- `--component-name <namespace:name>`: target or create a specific component
-- `--application-name <name>`: set the application name when creating a new application
-
-To discover available templates:
-
-```shell
-golem templates
-```
-
 ## Application Manifest (golem.yaml)
 
 - Root `golem.yaml`: app name, includes, environments, and `components` entries
@@ -496,10 +428,11 @@ golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
 ## Key Constraints
 
 - Target is WebAssembly via [QuickJS](https://github.com/DelSkayn/rquickjs/) — supports ES2020 including modules, async/await, async generators, Proxies, BigInt, WeakRef, FinalizationRegistry, and all standard built-ins (Array, Map, Set, Promise, RegExp, Date, JSON, Math, typed arrays, etc.)
-- Golem's JS runtime implements a subset of Browser and Node.js APIs (documented in the [wasm-rquickjs README](https://github.com/golemcloud/wasm-rquickjs)). The following are available out of the box:
-    - **Browser APIs**: `fetch`, `Headers`, `Request`, `Response`, `FormData`, `Blob`, `File`, `URL`, `URLSearchParams`, `console`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`, `setImmediate`, `AbortController`, `AbortSignal`, `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `ReadableStream`, `WritableStream`, `TransformStream`, `structuredClone`, `crypto.randomUUID`, `crypto.getRandomValues`
-    - **Node.js APIs**: `node:buffer` (`Buffer`), `node:fs` (`readFile`, `readFileSync`, `writeFile`, `writeFileSync`), `node:path`, `node:process` (`argv`, `env`, `cwd`), `node:stream`, `node:util`
-- Additional npm dependencies can be installed with `npm install`, but they will only work if they use the APIs listed above
+- Golem's JS runtime implements a broad set of Browser and Node.js APIs (documented in the [wasm-rquickjs README](https://github.com/golemcloud/wasm-rquickjs)). The following are available out of the box:
+    - **Web Platform APIs**: `fetch`, `Headers`, `Request`, `Response`, `FormData`, `Blob`, `File`, `URL`, `URLSearchParams`, `console`, `setTimeout`/`clearTimeout`, `setInterval`/`clearInterval`, `setImmediate`, `AbortController`, `AbortSignal`, `DOMException`, `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `ReadableStream`, `WritableStream`, `TransformStream`, `structuredClone`, `crypto.randomUUID`, `crypto.getRandomValues`, `Event`, `EventTarget`, `CustomEvent`, `MessageChannel`, `MessagePort`, `Intl` (DateTimeFormat, NumberFormat, Collator, PluralRules)
+    - **Node.js modules**: `node:buffer`, `node:crypto` (hashes, HMAC, ciphers, key generation, sign/verify, DH, ECDH, X509, etc.), `node:dgram` (UDP sockets), `node:dns`, `node:events` (EventEmitter), `node:fs` and `node:fs/promises` (comprehensive filesystem API), `node:http`/`node:https` (client and server), `node:module`, `node:net` (TCP sockets and servers), `node:os`, `node:path`, `node:perf_hooks`, `node:process`, `node:punycode`, `node:querystring`, `node:readline`, `node:sqlite` (embedded SQLite, requires feature flag), `node:stream` and `node:stream/promises`, `node:string_decoder`, `node:test`, `node:timers`, `node:url`, `node:util`, `node:v8`, `node:vm`, `node:zlib` (gzip, deflate, brotli)
+    - **Stubs** (throw or no-op for compatibility): `node:child_process`, `node:cluster`, `node:http2`, `node:inspector`, `node:tls`, `node:worker_threads`
+- Additional npm dependencies can be installed with `npm install` — most packages targeting browsers or using the Node.js APIs listed above will work
 - Check the [wasm-rquickjs README](https://github.com/golemcloud/wasm-rquickjs) for the most up-to-date list of available APIs
 - TypeScript **enums are not supported** — use string literal unions instead
 - All agent classes must extend `BaseAgent` and be decorated with `@agent()`

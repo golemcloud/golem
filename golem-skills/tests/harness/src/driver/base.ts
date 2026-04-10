@@ -11,7 +11,7 @@ export interface AgentResult {
 }
 
 export interface AgentDriver {
-  setup(workspace: string, skillsDir: string): Promise<void>;
+  setup(workspace: string, bootstrapSkillSourceDir: string): Promise<void>;
   sendPrompt(prompt: string, timeout: number): Promise<AgentResult>;
   sendFollowup(prompt: string, timeout: number): Promise<AgentResult>;
   teardown(): Promise<void>;
@@ -19,13 +19,12 @@ export interface AgentDriver {
 
 export abstract class BaseAgentDriver implements AgentDriver {
   protected workspace: string = ".";
-  protected skillsDir: string = "";
-  protected readonly skillLinkMode: "symlink" | "copy" = "symlink";
+  protected bootstrapSkillSourceDir: string = "";
 
   /** Short tag used in log output (e.g. "claude-code", "amp") */
   protected abstract readonly driverName: string;
 
-  /** Directories relative to workspace where skills should be symlinked (e.g. ['.claude/skills']) */
+  /** Directories relative to workspace where the bootstrap skill should be copied. */
   protected abstract readonly skillDirs: string[];
 
   /** Returns the driver log tag, e.g. `claude-code` */
@@ -33,38 +32,24 @@ export abstract class BaseAgentDriver implements AgentDriver {
     return this.driverName;
   }
 
-  async setup(workspace: string, skillsDir: string): Promise<void> {
+  async setup(workspace: string, bootstrapSkillSourceDir: string): Promise<void> {
     this.workspace = workspace;
-    this.skillsDir = skillsDir;
-    await this.linkSkills();
+    this.bootstrapSkillSourceDir = bootstrapSkillSourceDir;
+    await this.seedBootstrapSkill();
   }
 
-  protected async linkSkills(): Promise<void> {
-    const skills = await fs.readdir(this.skillsDir, { withFileTypes: true });
-    for (const targetDir of this.skillDirs) {
-      const absTargetDir = path.join(this.workspace, targetDir);
-      await fs.mkdir(absTargetDir, { recursive: true });
+  protected async seedBootstrapSkill(): Promise<void> {
+    const sourceDir = path.resolve(this.bootstrapSkillSourceDir);
+    await fs.access(path.join(sourceDir, "SKILL.md"));
 
-      for (const dirent of skills) {
-        if (!dirent.isDirectory()) continue;
-        const sourceFile = path.join(
-          path.resolve(this.skillsDir, dirent.name),
-          "SKILL.md",
-        );
-        try {
-          await fs.access(sourceFile);
-        } catch {
-          continue;
-        }
-        const destDir = path.join(absTargetDir, dirent.name);
-        await fs.mkdir(destDir, { recursive: true });
-        const destFile = path.join(destDir, "SKILL.md");
-        if (this.skillLinkMode === "copy") {
-          await fs.copyFile(sourceFile, destFile).catch(() => {});
-        } else {
-          await fs.symlink(sourceFile, destFile).catch(() => {});
-        }
-      }
+    for (const targetDir of this.skillDirs) {
+      const destDir = path.join(
+        this.workspace,
+        targetDir,
+        "golem-new-project",
+      );
+      await fs.mkdir(path.dirname(destDir), { recursive: true });
+      await fs.cp(sourceDir, destDir, { recursive: true });
     }
   }
 
