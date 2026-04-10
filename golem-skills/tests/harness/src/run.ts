@@ -9,6 +9,7 @@ import {
   DEFAULT_STEP_TIMEOUT_SECONDS,
   type ScenarioRunResult,
 } from "./executor.js";
+import { AmpAgentDriver } from "./driver/amp.js";
 import { ClaudeAgentDriver } from "./driver/claude.js";
 import { OpenCodeAgentDriver } from "./driver/opencode.js";
 import { CodexAgentDriver } from "./driver/codex.js";
@@ -24,6 +25,7 @@ import chalk from "chalk";
 import { detectGolemWorkspaceRoot, findGolemAppDir, resolveGolemTargetDir, GolemServer } from "./workspace.js";
 
 const SUPPORTED_AGENTS = [
+  "amp",
   "claude-code",
   "opencode",
   "codex",
@@ -45,6 +47,8 @@ interface ScenarioReport {
 
 function createDriver(agent: SupportedAgent): AgentDriver {
   switch (agent) {
+    case "amp":
+      return new AmpAgentDriver();
     case "claude-code":
       return new ClaudeAgentDriver();
     case "opencode":

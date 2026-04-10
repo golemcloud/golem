@@ -12,6 +12,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\""
   },
   "dependencies": {
+    "@sourcegraph/amp-sdk": "latest",
     "yaml": "^2.3.4",
     "tsx": "^4.7.0",
     "zod": "^3.22.4",
