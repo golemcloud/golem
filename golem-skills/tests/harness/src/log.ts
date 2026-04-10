@@ -342,6 +342,23 @@ export function stepActivatedSkills(label: string, skills: string[]): void {
   );
 }
 
+// --- CLI command output ----------------------------------------------------
+
+export function cliOutput(label: string, command: string, output: string): void {
+  if (!output.trim()) return;
+  stepLine(label, `${chalk.gray(`[${command}]`)}`);
+  for (const line of output.split(/\r?\n/)) {
+    if (line.trim()) stepLine(label, `${chalk.gray("│")} ${chalk.gray(line)}`);
+  }
+}
+
+export function invokeResult(label: string, target: string, stdout: string): void {
+  stepLine(label, `${chalk.green("✓ invoke")} ${chalk.white(target)} ${chalk.gray("result:")}`);
+  for (const line of stdout.split(/\r?\n/)) {
+    if (line.trim()) stepLine(label, `${chalk.gray("│")} ${chalk.white(line)}`);
+  }
+}
+
 // --- Scenario results ------------------------------------------------------
 
 export function scenarioPass(name: string): void {

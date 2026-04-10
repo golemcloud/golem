@@ -904,6 +904,7 @@ export class ScenarioExecutor {
     const result = await this.runLocalCommand(
       "golem", args, timeout, projectDir, commandEnv,
     );
+    log.cliOutput(stepLabel, "golem agent new", result.output);
     if (!result.success) fail(`CREATE_AGENT_FAILED: ${result.output}`);
   }
 
@@ -919,6 +920,7 @@ export class ScenarioExecutor {
     const result = await this.runLocalCommand(
       "golem", ["agent", "delete", spec.name], timeout, projectDir, commandEnv,
     );
+    log.cliOutput(stepLabel, "golem agent delete", result.output);
     if (!result.success) fail(`DELETE_AGENT_FAILED: ${result.output}`);
   }
 
@@ -945,6 +947,7 @@ export class ScenarioExecutor {
     const result = await this.runLocalCommand(
       "golem", args, timeout, this.workspace, commandEnv,
     );
+    log.cliOutput(stepLabel, "golem new", result.output);
     if (!result.success) fail(`CREATE_PROJECT_FAILED: ${result.output}`);
   }
 
@@ -1022,6 +1025,8 @@ export class ScenarioExecutor {
       "golem", args, timeout, projectDir, commandEnv,
     );
 
+    log.invokeResult(stepLabel, `${invoke.agent}.${invoke.method}`, result.stdout);
+
     if (expect) {
       let resultJson: unknown;
       try { resultJson = JSON.parse(result.stdout); } catch { /* not JSON */ }
@@ -1051,6 +1056,8 @@ export class ScenarioExecutor {
     );
 
     const resultJson = extractInvokeJsonResult(result.stdout);
+
+    log.invokeResult(stepLabel, `${invoke.agent}.${invoke.method}`, result.stdout);
 
     if (expect) {
       this.evaluateAssertions(
@@ -1182,6 +1189,7 @@ export class ScenarioExecutor {
     if (verify.build) {
       log.stepAction(stepLabel, `running golem build in ${projectDir}`);
       const result = await this.runLocalCommand("golem", ["build"], 600, projectDir, commandEnv);
+      log.cliOutput(stepLabel, "golem build", result.output);
       if (!result.success) recordFailure(`BUILD_FAILED: ${result.output}`);
     }
 
@@ -1196,6 +1204,7 @@ export class ScenarioExecutor {
         await fs.rm(golemTempDir, { recursive: true, force: true });
         log.stepAction(stepLabel, `running implicit golem build before deploy in ${projectDir}`);
         const buildResult = await this.runLocalCommand("golem", ["build"], 600, projectDir, commandEnv);
+        log.cliOutput(stepLabel, "golem build", buildResult.output);
         if (!buildResult.success) {
           recordFailure(`BUILD_FAILED: ${buildResult.output}`);
           return;
@@ -1205,6 +1214,7 @@ export class ScenarioExecutor {
       if (!verificationFailed) {
         log.stepAction(stepLabel, `running golem deploy in ${projectDir}`);
         const deployResult = await this.runLocalCommand("golem", ["deploy", "--yes"], 600, projectDir, commandEnv);
+        log.cliOutput(stepLabel, "golem deploy", deployResult.output);
         if (!deployResult.success) recordFailure(`DEPLOY_FAILED: ${deployResult.output}`);
       }
     }

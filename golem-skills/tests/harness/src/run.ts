@@ -419,7 +419,9 @@ Options:
           log.scenarioFail(spec.name);
           for (const res of results) {
             if (!res.success) {
-              log.scenarioFailedStep(String(("prompt" in res.step && res.step.prompt) || res.step.id || "unnamed"), res.error ?? "");
+              const rawStepName = ("prompt" in res.step && res.step.prompt) || res.step.id || "unnamed";
+              const stepName = typeof rawStepName === "string" ? rawStepName : JSON.stringify(rawStepName);
+              log.scenarioFailedStep(stepName, res.error ?? "");
               if (res.classification) {
                 log.scenarioFailureClassification(res.classification.category, res.classification.guidance);
               }
