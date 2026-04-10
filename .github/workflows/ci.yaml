@@ -665,6 +665,201 @@ jobs:
           path: tmp/test-components-wasm
           key: golem-test-components-${{ github.run_id }}
 
+  skill-harness-unit-tests:
+    name: Skill Harness Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'
+          cache-dependency-path: golem-skills/tests/harness/package.json
+
+      - name: Install and Build
+        working-directory: golem-skills/tests/harness
+        run: |
+          npm install
+          npm run build
+
+      - name: Run Unit Tests
+        working-directory: golem-skills/tests/harness
+        run: npm test
+
+  skill-harness-integration-test:
+    name: skill-harness ${{ matrix.agent }} x ${{ matrix.language }}
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs:
+      - build-and-store
+      - build-golem-ts
+      - build-golem-scala
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: golem_test
+        ports:
+          - "5432:5432"
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: golem
+          MYSQL_DATABASE: golem_test
+        ports:
+          - "3306:3306"
+        options: --health-cmd "mysqladmin ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: [claude-code, opencode, codex]
+        language: [ts, rust, scala]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip1 wasm32-wasip2'
+          install-cargo-binstall: 'true'
+
+      - uses: ./.github/actions/setup-js-wasm-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+
+      - uses: ./.github/actions/restore-binaries
+        with:
+          run-id: ${{ github.run_id }}
+          copy-to-target: 'true'
+
+      - name: Install Filesystem Watcher
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools
+
+      - name: Install Claude Code
+        if: matrix.agent == 'claude-code'
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Install OpenCode
+        if: matrix.agent == 'opencode'
+        run: npm install -g opencode-ai
+
+      - name: Install Codex CLI
+        if: matrix.agent == 'codex'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          npm install -g @openai/codex
+          printenv OPENAI_API_KEY | codex login --with-api-key
+
+      - name: Restore built TS SDK
+        if: matrix.language == 'ts' || matrix.language == 'scala'
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            sdks/ts/packages/golem-ts-sdk/dist
+            sdks/ts/packages/golem-ts-sdk/types
+            sdks/ts/packages/golem-ts-sdk/wasm
+            sdks/ts/packages/golem-ts-typegen/dist
+            sdks/ts/packages/golem-ts-types-core/dist
+            sdks/ts/packages/golem-ts-bridge/dist
+            sdks/ts/packages/golem-ts-repl/dist
+          key: golem-ts-sdk-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Install TS SDK dependencies
+        if: matrix.language == 'ts' || matrix.language == 'scala'
+        working-directory: sdks/ts
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Java
+        if: matrix.language == 'scala'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup SBT
+        if: matrix.language == 'scala'
+        uses: sbt/setup-sbt@v1
+
+      - name: Cache scala dependencies
+        if: matrix.language == 'scala'
+        uses: coursier/cache-action@v8
+
+      - name: Sync WIT dependencies
+        if: matrix.language == 'scala'
+        run: cargo make wit
+
+      - name: Build agent_guest.wasm
+        if: matrix.language == 'scala'
+        working-directory: sdks/scala
+        run: ./scripts/generate-agent-guest-wasm.sh
+
+      - name: Publish Scala SDK locally
+        if: matrix.language == 'scala'
+        working-directory: sdks/scala
+        run: |
+          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
+
+      - name: Install Harness Dependencies
+        working-directory: golem-skills/tests/harness
+        run: |
+          npm install
+          npm run build
+          npm install -g tsx
+
+      - name: Setup isolated test directory
+        run: |
+          mkdir -p /tmp/harness-run
+          cp -r golem-skills/tests/harness/dist /tmp/harness-run/dist
+          cp -r golem-skills/tests/harness/node_modules /tmp/harness-run/node_modules
+          cp -r golem-skills/tests/harness/src /tmp/harness-run/src
+          cp -r golem-skills/tests/harness/scenarios /tmp/harness-run/scenarios
+          cp golem-skills/tests/harness/package.json /tmp/harness-run/
+          cp golem-skills/tests/harness/tsconfig.json /tmp/harness-run/
+          cd /tmp/harness-run && git init -b main && git config user.email "ci@golem.cloud" && git config user.name "CI" && git add -A && git commit -m "init"
+
+      - name: Run Skill Tests
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_MODEL: google/gemini-3-pro-preview
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/golem_test
+          MYSQL_URL: mysql://root:golem@localhost:3306/golem_test
+          GOLEM_PATH: ${{ github.workspace }}
+        run: |
+          cd /tmp/harness-run
+          tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} --scenarios scenarios
+
+      - name: Upload Results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: skill-results-${{ matrix.agent }}-${{ matrix.language }}
+          path: /tmp/harness-run/results/
+
+      - name: Clean workspace build artifacts before upload
+        if: always()
+        run: find /tmp/harness-run/workspaces -name 'golem-temp' -type d -exec rm -rf {} + 2>/dev/null; find /tmp/harness-run/workspaces -name 'target' -type d -exec rm -rf {} + 2>/dev/null; find /tmp/harness-run/workspaces -name 'node_modules' -type d -exec rm -rf {} + 2>/dev/null; rm -rf /tmp/harness-run/workspaces/golem-server-data 2>/dev/null; true
+
+      - name: Upload Workspaces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-workspaces-${{ matrix.agent }}-${{ matrix.language }}
+          path: /tmp/harness-run/workspaces/
+          retention-days: 3
+
   docker-targets-build:
     env:
       CARGO_BUILD_JOBS: 10
