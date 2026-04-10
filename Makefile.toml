@@ -335,6 +335,41 @@ exec --fail-on-error %{PNPM_BIN} clean
 [tasks.clean-sdk-ts.windows]
 env = { PNPM_BIN = "pnpm.cmd" }
 
+[tasks.build-sdk-scala]
+description = "Publishes the Scala SDK to local Ivy/Maven cache as 0.0.0-SNAPSHOT"
+dependencies = ["wit-sdks"]
+cwd = "./sdks/scala"
+script = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -f target/.local-publish-marker ]; then
+    echo "Scala SDK already published locally, skipping (delete sdks/scala/target/.local-publish-marker to force)"
+else
+    ./scripts/generate-agent-guest-wasm.sh
+    sbt 'set every version := "0.0.0-SNAPSHOT"' \
+        '+modelJVM/publishLocal' \
+        '+modelJS/publishLocal' \
+        '+macros/publishLocal' \
+        'core/publishLocal' \
+        '+codegen/publishLocal' \
+        '++2.12.21' \
+        'sbtPlugin/publishLocal'
+    mkdir -p target
+    touch target/.local-publish-marker
+fi
+'''
+
+[tasks.clean-sdk-scala]
+description = "Cleans the Scala SDK"
+cwd = "./sdks/scala"
+script = '''
+#!/usr/bin/env bash
+set -euo pipefail
+sbt clean
+rm -f target/.local-publish-marker
+'''
+
 ## ** CHECK **
 
 [tasks.check]
