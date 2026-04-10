@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod fixtures;
+pub mod parameter_naming;
 pub mod rust;
 pub mod type_naming;
 pub mod typescript;

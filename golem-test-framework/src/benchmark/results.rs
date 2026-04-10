@@ -15,9 +15,9 @@
 use crate::benchmark::BenchmarkRecorder;
 use crate::benchmark::config::RunConfig;
 use chrono::{DateTime, Utc};
-use cli_table::format::{Border, Justify, Separator};
-use cli_table::{Cell, CellStruct, Style, Table};
 use colored::Colorize;
+use comfy_table::presets::NOTHING;
+use comfy_table::{Attribute, Cell, CellAlignment, ContentArrangement, Table};
 use itertools::Itertools;
 use serde::de::{Error, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -396,74 +396,69 @@ impl Display for BenchmarkResultView {
             let show_duration = items.iter().any(|i| i.duration.is_some());
             let show_count = items.iter().any(|i| i.count.is_some());
 
-            let mut title = Vec::new();
-            if show_cluster_size {
-                title.push("Cluster size".cell().bold(true));
+            fn bold(s: &str) -> Cell {
+                Cell::new(s).add_attribute(Attribute::Bold)
             }
-            if show_length {
-                title.push("Length".cell().bold(true));
-            }
-            if show_size {
-                title.push("Size".cell().bold(true));
-            }
-            if show_duration {
-                title.push("Duration Avg".cell().bold(true));
-                title.push("Duration Min".cell().bold(true));
-                title.push("Duration Max".cell().bold(true));
-                title.push("Duration Median".cell().bold(true));
-                title.push("Duration p90".cell().bold(true));
-                title.push("Duration p95".cell().bold(true));
-                title.push("Duration p99".cell().bold(true));
-            }
-            if show_count {
-                title.push("Count Avg".cell().bold(true));
-                title.push("Count Min".cell().bold(true));
-                title.push("Count Max".cell().bold(true));
+            fn right(s: String) -> Cell {
+                Cell::new(s).set_alignment(CellAlignment::Right)
             }
 
-            let tbl = items.iter().sorted_by_key(|i| &i.config).map(|item| {
+            let mut header = Vec::new();
+            if show_cluster_size {
+                header.push(bold("Cluster size"));
+            }
+            if show_length {
+                header.push(bold("Length"));
+            }
+            if show_size {
+                header.push(bold("Size"));
+            }
+            if show_duration {
+                header.push(bold("Duration Avg"));
+                header.push(bold("Duration Min"));
+                header.push(bold("Duration Max"));
+                header.push(bold("Duration Median"));
+                header.push(bold("Duration p90"));
+                header.push(bold("Duration p95"));
+                header.push(bold("Duration p99"));
+            }
+            if show_count {
+                header.push(bold("Count Avg"));
+                header.push(bold("Count Min"));
+                header.push(bold("Count Max"));
+            }
+
+            let mut tbl = Table::new();
+            tbl.load_preset(NOTHING)
+                .set_content_arrangement(ContentArrangement::Disabled)
+                .set_header(header);
+
+            for item in items.iter().sorted_by_key(|i| &i.config) {
                 let mut record = Vec::new();
                 if show_cluster_size {
-                    record.push(
+                    record.push(right(
                         item.config
                             .as_ref()
                             .unwrap()
                             .cluster_size
                             .unwrap()
-                            .cell()
-                            .justify(Justify::Right),
-                    );
+                            .to_string(),
+                    ));
                 }
                 if show_length {
-                    record.push(
-                        item.config
-                            .as_ref()
-                            .unwrap()
-                            .length
-                            .unwrap()
-                            .cell()
-                            .justify(Justify::Right),
-                    );
+                    record.push(right(
+                        item.config.as_ref().unwrap().length.unwrap().to_string(),
+                    ));
                 }
                 if show_size {
-                    record.push(
-                        item.config
-                            .as_ref()
-                            .unwrap()
-                            .size
-                            .unwrap()
-                            .cell()
-                            .justify(Justify::Right),
-                    );
+                    record.push(right(
+                        item.config.as_ref().unwrap().size.unwrap().to_string(),
+                    ));
                 }
                 if show_duration {
-                    fn duration_cell(d: Option<&Duration>) -> CellStruct {
-                        d.map(|d| format!("{d:.2?}"))
-                            .unwrap_or("".to_string())
-                            .cell()
-                            .justify(Justify::Right)
-                    }
-
+                    let duration_cell = |d: Option<&Duration>| {
+                        right(d.map(|d| format!("{d:.2?}")).unwrap_or_default())
+                    };
                     record.push(duration_cell(item.duration.as_ref().map(|d| &d.avg)));
                     record.push(duration_cell(item.duration.as_ref().map(|d| &d.min)));
                     record.push(duration_cell(item.duration.as_ref().map(|d| &d.max)));
@@ -473,30 +468,16 @@ impl Display for BenchmarkResultView {
                     record.push(duration_cell(item.duration.as_ref().map(|d| &d.p99)));
                 }
                 if show_count {
-                    fn count_cell(c: Option<u64>) -> CellStruct {
-                        c.map(|c| format!("{c}"))
-                            .unwrap_or("".to_string())
-                            .cell()
-                            .justify(Justify::Right)
-                    }
-
+                    let count_cell =
+                        |c: Option<u64>| right(c.map(|c| format!("{c}")).unwrap_or_default());
                     record.push(count_cell(item.count.as_ref().map(|c| c.avg)));
                     record.push(count_cell(item.count.as_ref().map(|c| c.min)));
                     record.push(count_cell(item.count.as_ref().map(|c| c.max)));
                 }
+                tbl.add_row(record);
+            }
 
-                record
-            });
-
-            let res = tbl
-                .table()
-                .title(title)
-                .separator(Separator::builder().build())
-                .border(Border::builder().build())
-                .display()
-                .unwrap();
-
-            writeln!(f, "{res}")?;
+            writeln!(f, "{tbl}")?;
         }
 
         Ok(())

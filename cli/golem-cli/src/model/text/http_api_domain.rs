@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use crate::model::text::fmt::*;
-use cli_table::Table;
+
 use golem_common::model::domain_registration::DomainRegistration;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DomainRegistrationNewView(pub DomainRegistration);
@@ -41,31 +40,23 @@ impl MessageWithFields for DomainRegistrationNewView {
     }
 }
 
-#[derive(Table)]
-struct DomainRegistrationTableView {
-    #[table(title = "Domain")]
-    pub domain: String,
-    #[table(title = "ID")]
-    pub id: Uuid,
-    #[table(title = "Environment ID")]
-    pub environment_id: Uuid,
-}
-
-impl From<&DomainRegistration> for DomainRegistrationTableView {
-    fn from(value: &DomainRegistration) -> Self {
-        DomainRegistrationTableView {
-            domain: value.domain.0.clone(),
-            id: value.id.0,
-            environment_id: value.environment_id.0,
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HttpApiDomainListView(pub Vec<DomainRegistration>);
 
 impl TextView for HttpApiDomainListView {
     fn log(&self) {
-        log_table::<_, DomainRegistrationTableView>(&self.0);
+        let mut table = new_table(vec![
+            Column::new("Domain"),
+            Column::new("ID").fixed(),
+            Column::new("Environment ID").fixed(),
+        ]);
+        for reg in &self.0 {
+            table.add_row(vec![
+                reg.domain.0.clone(),
+                reg.id.0.to_string(),
+                reg.environment_id.0.to_string(),
+            ]);
+        }
+        log_table(table);
     }
 }

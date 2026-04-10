@@ -19,12 +19,12 @@ interface host {
     /// resource consumption.  Drop without committing is equivalent to
     /// committing zero usage.
     resource reservation {
-        /// Commit actual usage.
+        /// Commit actual usage, consuming the reservation.
         ///
         /// If `used` < reserved  — unused capacity is returned to the pool.
         /// If `used` > reserved  — the excess is deducted from the token's
         ///                          remaining allocation as "debt".
-        commit: func(used: u64);
+        commit: static func(this: reservation, used: u64);
     }
 
     /// An unforgeable capability granting the right to consume a named

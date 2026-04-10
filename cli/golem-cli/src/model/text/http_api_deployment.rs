@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::model::text::fmt::{
-    FieldsBuilder, MessageWithFields, TextView, format_main_id, format_message_highlight, log_table,
+    Column, FieldsBuilder, MessageWithFields, TextView, format_main_id, format_message_highlight,
+    log_table, new_table,
 };
-use cli_table::Table;
 use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentAgentSecurity};
 use serde_derive::{Deserialize, Serialize};
 
@@ -65,31 +65,22 @@ fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> 
     fields.build()
 }
 
-#[derive(Table)]
-struct HttpApiDeploymentTableView {
-    #[table(title = "Domain")]
-    pub domain: String,
-    #[table(title = "ID")]
-    pub id: String,
-    #[table(title = "Environment ID")]
-    pub environment_id: String,
-    #[table(title = "Revision")]
-    pub revision: u64,
-}
-
-impl From<&HttpApiDeployment> for HttpApiDeploymentTableView {
-    fn from(value: &HttpApiDeployment) -> Self {
-        Self {
-            domain: value.domain.to_string(),
-            id: value.id.to_string(),
-            environment_id: value.environment_id.to_string(),
-            revision: value.revision.into(),
-        }
-    }
-}
-
 impl TextView for Vec<HttpApiDeployment> {
     fn log(&self) {
-        log_table::<_, HttpApiDeploymentTableView>(self);
+        let mut table = new_table(vec![
+            Column::new("Domain"),
+            Column::new("ID").fixed(),
+            Column::new("Environment ID").fixed(),
+            Column::new("Revision").fixed(),
+        ]);
+        for dep in self {
+            table.add_row(vec![
+                dep.domain.to_string(),
+                dep.id.to_string(),
+                dep.environment_id.to_string(),
+                dep.revision.to_string(),
+            ]);
+        }
+        log_table(table);
     }
 }

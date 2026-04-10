@@ -27,6 +27,7 @@ use crate::model::repl::{BridgeReplArgs, ReplMetadata, ReplScriptSource};
 use crate::process::{CommandExt, ExitStatusExt, which};
 use crate::sdk_overrides::sdk_overrides;
 use crate::{binary_path_to_string, fs};
+use golem_common::base_model::agent::AgentMode;
 use golem_common::model::agent::DataSchema;
 use golem_common::model::component::ComponentName;
 use heck::ToLowerCamelCase;
@@ -236,10 +237,14 @@ impl TypeScriptRepl {
     ) -> anyhow::Result<()> {
         let agents_config = repl_metadata
             .agents
-            .keys()
-            .map(|agent_type_name| {
+            .iter()
+            .map(|(agent_type_name, agent_metadata)| {
                 let client_package_name = bridge_client_directory_name(agent_type_name);
                 let client_package_imported_name = client_package_name.to_lower_camel_case();
+                let mode = match agent_metadata.mode {
+                    AgentMode::Durable => "durable",
+                    AgentMode::Ephemeral => "ephemeral",
+                };
                 let parameter_names_json = method_parameter_names
                     .get(agent_type_name.as_str())
                     .map(serde_json::to_string)
@@ -248,11 +253,13 @@ impl TypeScriptRepl {
                     '{agent_type_name}': {{
                       clientPackageName: {client_package_name},
                       clientPackageImportedName: {client_package_imported_name},
+                      mode: {mode},
                       methodParameterNames: {parameter_names_json},
                       package: await import({client_package_name}),
                     }}",
                     client_package_name = js_string_literal(client_package_name)?,
-                    client_package_imported_name = js_string_literal(client_package_imported_name)?
+                    client_package_imported_name = js_string_literal(client_package_imported_name)?,
+                    mode = js_string_literal(mode)?
                 })
             })
             .collect::<Result<Vec<_>, _>>()?

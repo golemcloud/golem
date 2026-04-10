@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::model::text::fmt::*;
-use cli_table::Table;
 use golem_common::model::retry_policy::RetryPolicyDto;
 use serde_derive::{Deserialize, Serialize};
 
@@ -93,34 +92,26 @@ fn retry_policy_view_fields(view: &RetryPolicyDto) -> Vec<(String, String)> {
     fields.build()
 }
 
-#[derive(Table)]
-struct RetryPolicyTableView {
-    #[table(title = "EnvironmentId")]
-    pub environment_id: String,
-    #[table(title = "Name")]
-    pub name: String,
-    #[table(title = "ID")]
-    pub id: String,
-    #[table(title = "Revision", Justify = "Right")]
-    pub revision: u64,
-    #[table(title = "Priority", Justify = "Right")]
-    pub priority: u32,
-}
-
-impl From<&RetryPolicyDto> for RetryPolicyTableView {
-    fn from(value: &RetryPolicyDto) -> Self {
-        Self {
-            environment_id: value.environment_id.0.to_string(),
-            name: value.name.clone(),
-            id: value.id.to_string(),
-            revision: value.revision.get(),
-            priority: value.priority,
-        }
-    }
-}
-
 impl TextView for Vec<RetryPolicyDto> {
     fn log(&self) {
-        log_table::<_, RetryPolicyTableView>(self.as_slice())
+        let mut table = new_table(vec![
+            Column::new("Environment ID").fixed(),
+            Column::new("Name").fixed(),
+            Column::new("ID").fixed(),
+            Column::new("Revision").fixed_right(),
+            Column::new("Priority").fixed_right(),
+        ]);
+
+        for policy in self {
+            table.add_row(vec![
+                policy.environment_id.0.to_string(),
+                policy.name.clone(),
+                policy.id.to_string(),
+                policy.revision.get().to_string(),
+                policy.priority.to_string(),
+            ]);
+        }
+
+        log_table(table)
     }
 }

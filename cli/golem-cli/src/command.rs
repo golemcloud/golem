@@ -635,7 +635,7 @@ pub enum GolemCliSubcommand {
         #[clap(long)]
         output_dir: Option<PathBuf>,
     },
-    /// Start Rib REPL for a selected component
+    /// Start REPL for a selected component
     Repl {
         /// Select the language for the REPL, defaults to the component's language
         #[arg(long)]
@@ -1134,6 +1134,11 @@ pub mod worker {
             /// When set to true it queries for most up-to-date status for each agent, default is false
             #[arg(long, default_value_t = false)]
             precise: bool,
+            /// Watch mode: periodically clear the screen and redisplay the agent list.
+            /// Pass without a value to use the default interval (400ms), or --refresh=MILLIS
+            /// to set a custom polling interval. Conflicts with --scan-cursor.
+            #[arg(long, default_missing_value = "400", value_name = "MILLIS", num_args = 0..=1, conflicts_with = "scan_cursor")]
+            refresh: Option<u64>,
         },
         /// Connect to an agent and live stream its standard output, error and log channels
         Stream {

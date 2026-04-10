@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::text::fmt::*;
-use cli_table::Table;
+
 use golem_common::model::agent_secret::AgentSecretDto;
 use serde_derive::{Deserialize, Serialize};
 
@@ -80,41 +80,30 @@ fn agent_secret_view_fields(view: &AgentSecretDto) -> Vec<(String, String)> {
     fields.build()
 }
 
-#[derive(Table)]
-struct AgentSecretTableView {
-    #[table(title = "EnvironmentId")]
-    pub environment_id: String,
-    #[table(title = "Path")]
-    pub path: String,
-    #[table(title = "ID")]
-    pub id: String,
-    #[table(title = "Revision", Justify = "Right")]
-    pub revision: u64,
-    #[table(title = "Secret Type")]
-    pub secret_type: String,
-    #[table(title = "Secret Value")]
-    pub secret_value: String,
-}
-
-impl From<&AgentSecretDto> for AgentSecretTableView {
-    fn from(value: &AgentSecretDto) -> Self {
-        Self {
-            environment_id: value.environment_id.0.to_string(),
-            path: value.path.to_string(),
-            id: value.id.to_string(),
-            revision: value.revision.get(),
-            secret_type: format!("{:?}", value.secret_type),
-            secret_value: value
-                .secret_value
-                .as_ref()
-                .unwrap_or(&serde_json::Value::Null)
-                .to_string(),
-        }
-    }
-}
-
 impl TextView for Vec<AgentSecretDto> {
     fn log(&self) {
-        log_table::<_, AgentSecretTableView>(self.as_slice())
+        let mut table = new_table(vec![
+            Column::new("Environment ID").fixed(),
+            Column::new("Path"),
+            Column::new("ID").fixed(),
+            Column::new("Revision").fixed_right(),
+            Column::new("Secret Type").fixed(),
+            Column::new("Secret Value"),
+        ]);
+        for secret in self {
+            table.add_row(vec![
+                secret.environment_id.0.to_string(),
+                secret.path.to_string(),
+                secret.id.to_string(),
+                secret.revision.get().to_string(),
+                format!("{:?}", secret.secret_type),
+                secret
+                    .secret_value
+                    .as_ref()
+                    .unwrap_or(&serde_json::Value::Null)
+                    .to_string(),
+            ]);
+        }
+        log_table(table);
     }
 }

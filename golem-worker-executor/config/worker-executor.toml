@@ -153,6 +153,10 @@ type = "Disabled"
 
 [public_worker_api.tls.config]
 
+[quota_service]
+inline_wait_threshold = "1m"
+renewal_interval = "10s"
+
 [rdbms.pool]
 acquire_timeout = "3s"
 eviction_period = "2m"
@@ -450,6 +454,10 @@ without_time = false
 # 
 # [public_worker_api.tls.config]
 # 
+# [quota_service]
+# inline_wait_threshold = "1m"
+# renewal_interval = "10s"
+# 
 # [rdbms.pool]
 # acquire_timeout = "3s"
 # eviction_period = "2m"
@@ -716,6 +724,10 @@ without_time = false
 # type = "Disabled"
 # 
 # [public_worker_api.tls.config]
+# 
+# [quota_service]
+# inline_wait_threshold = "1m"
+# renewal_interval = "10s"
 # 
 # [rdbms.pool]
 # acquire_timeout = "3s"

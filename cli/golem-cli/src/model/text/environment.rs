@@ -16,9 +16,7 @@ use crate::log::LogColorize;
 use crate::model::environment::{
     EnvironmentReference, ResolvedEnvironmentIdentity, ResolvedEnvironmentIdentitySource,
 };
-use crate::model::text::fmt::{TextView, log_table};
-use cli_table::Table;
-use cli_table::format::Justify;
+use crate::model::text::fmt::{Column, TextView, log_table, new_table};
 use golem_client::model::EnvironmentWithDetails;
 
 pub fn format_resolved_environment_identity(environment: &ResolvedEnvironmentIdentity) -> String {
@@ -64,41 +62,30 @@ pub fn format_resolved_environment_identity(environment: &ResolvedEnvironmentIde
     }
 }
 
-#[derive(Table)]
-struct EnvironmentSummaryTableView {
-    #[table(title = "Application Name")]
-    pub application_name: String,
-    #[table(title = "Environment Name")]
-    pub environment_name: String,
-    #[table(title = "Deployment Revision", justify = "Justify::Right")]
-    pub deployment_revision: String,
-    #[table(title = "Deployment Version")]
-    pub deployment_version: String,
-}
-
-impl From<&EnvironmentWithDetails> for EnvironmentSummaryTableView {
-    fn from(value: &EnvironmentWithDetails) -> Self {
-        Self {
-            application_name: value.application.name.0.clone(),
-            environment_name: value.environment.name.0.clone(),
-            deployment_revision: value
-                .environment
-                .current_deployment
-                .as_ref()
-                .map(|d| d.deployment_revision.get().to_string())
-                .unwrap_or_default(),
-            deployment_version: value
-                .environment
-                .current_deployment
-                .as_ref()
-                .map(|d| d.deployment_version.0.clone())
-                .unwrap_or_default(),
-        }
-    }
-}
-
 impl TextView for Vec<EnvironmentWithDetails> {
     fn log(&self) {
-        log_table::<_, EnvironmentSummaryTableView>(self.as_slice())
+        let mut table = new_table(vec![
+            Column::new("Application Name"),
+            Column::new("Environment Name"),
+            Column::new("Deployment Revision").fixed_right(),
+            Column::new("Deployment Version").fixed(),
+        ]);
+        for env in self {
+            table.add_row(vec![
+                env.application.name.0.clone(),
+                env.environment.name.0.clone(),
+                env.environment
+                    .current_deployment
+                    .as_ref()
+                    .map(|d| d.deployment_revision.get().to_string())
+                    .unwrap_or_default(),
+                env.environment
+                    .current_deployment
+                    .as_ref()
+                    .map(|d| d.deployment_version.0.clone())
+                    .unwrap_or_default(),
+            ]);
+        }
+        log_table(table);
     }
 }

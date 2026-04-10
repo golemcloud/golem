@@ -23,7 +23,6 @@ use golem_service_base::db::{LabelledPoolApi, Pool};
 use golem_service_base::model::quota_lease::PendingReservation;
 use golem_service_base::repo::{Blob, NumericU64, RepoError, SqlDateTime};
 use indoc::indoc;
-use sqlx::types::Json;
 use std::fmt::Debug;
 use std::net::IpAddr;
 use tracing::{Instrument, info_span};
@@ -54,7 +53,7 @@ pub struct QuotaResourceRecord {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct QuotaLeaseRecord {
     pub resource_definition_id: Uuid,
-    pub pod_ip: Json<IpAddr>,
+    pub pod_ip: Blob<IpAddr>,
     pub pod_port: i32,
     pub epoch: NumericU64,
     pub allocated: NumericU64,
@@ -70,14 +69,14 @@ pub trait QuotaRepo: Send + Sync {
         resource: &QuotaResourceRecord,
         previous_resource_revision: i64,
         lease: &QuotaLeaseRecord,
-        expired_pods: &[(Json<IpAddr>, i32)],
+        expired_pods: &[(Blob<IpAddr>, i32)],
     ) -> Result<(), QuotaRepoError>;
 
     async fn save_lease_release(
         &self,
         resource: &QuotaResourceRecord,
         previous_resource_revision: i64,
-        pod_ip: Json<IpAddr>,
+        pod_ip: Blob<IpAddr>,
         pod_port: i32,
     ) -> Result<(), QuotaRepoError>;
 
@@ -128,7 +127,7 @@ impl<Repo: QuotaRepo> QuotaRepo for LoggedQuotaRepo<Repo> {
         resource: &QuotaResourceRecord,
         previous_resource_revision: i64,
         lease: &QuotaLeaseRecord,
-        expired_pods: &[(Json<IpAddr>, i32)],
+        expired_pods: &[(Blob<IpAddr>, i32)],
     ) -> Result<(), QuotaRepoError> {
         self.repo
             .save_lease_change(resource, previous_resource_revision, lease, expired_pods)
@@ -142,7 +141,7 @@ impl<Repo: QuotaRepo> QuotaRepo for LoggedQuotaRepo<Repo> {
         &self,
         resource: &QuotaResourceRecord,
         previous_resource_revision: i64,
-        pod_ip: Json<IpAddr>,
+        pod_ip: Blob<IpAddr>,
         pod_port: i32,
     ) -> Result<(), QuotaRepoError> {
         self.repo
@@ -222,7 +221,7 @@ impl QuotaRepo for DbQuotaRepo<PostgresPool> {
         resource: &QuotaResourceRecord,
         previous_resource_revision: i64,
         lease: &QuotaLeaseRecord,
-        expired_pods: &[(Json<IpAddr>, i32)],
+        expired_pods: &[(Blob<IpAddr>, i32)],
     ) -> Result<(), QuotaRepoError> {
         let resource = resource.clone();
         let lease = lease.clone();
@@ -234,7 +233,7 @@ impl QuotaRepo for DbQuotaRepo<PostgresPool> {
                     Self::upsert_resource_in_tx(tx, &resource, previous_resource_revision).await?;
                     Self::upsert_lease_in_tx(tx, &lease).await?;
                     for (ip, port) in &expired_pods {
-                        Self::delete_lease_in_tx(tx, resource.resource_definition_id, *ip, *port)
+                        Self::delete_lease_in_tx(tx, resource.resource_definition_id, ip, *port)
                             .await?;
                     }
                     Ok(())
@@ -248,7 +247,7 @@ impl QuotaRepo for DbQuotaRepo<PostgresPool> {
         &self,
         resource: &QuotaResourceRecord,
         previous_resource_revision: i64,
-        pod_ip: Json<IpAddr>,
+        pod_ip: Blob<IpAddr>,
         pod_port: i32,
     ) -> Result<(), QuotaRepoError> {
         let resource = resource.clone();
@@ -257,8 +256,13 @@ impl QuotaRepo for DbQuotaRepo<PostgresPool> {
             .with_tx_err(SVC_NAME, "save_lease_release", |tx| {
                 async move {
                     Self::upsert_resource_in_tx(tx, &resource, previous_resource_revision).await?;
-                    Self::delete_lease_in_tx(tx, resource.resource_definition_id, pod_ip, pod_port)
-                        .await?;
+                    Self::delete_lease_in_tx(
+                        tx,
+                        resource.resource_definition_id,
+                        &pod_ip,
+                        pod_port,
+                    )
+                    .await?;
                     Ok(())
                 }
                 .boxed()
@@ -418,7 +422,7 @@ impl DbQuotaRepo<PostgresPool> {
                     pending_reservations = $8
             "#})
             .bind(record.resource_definition_id)
-            .bind(record.pod_ip)
+            .bind(&record.pod_ip)
             .bind(record.pod_port)
             .bind(record.epoch)
             .bind(record.allocated)
@@ -433,7 +437,7 @@ impl DbQuotaRepo<PostgresPool> {
     async fn delete_lease_in_tx(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         resource_definition_id: Uuid,
-        pod_ip: Json<IpAddr>,
+        pod_ip: &Blob<IpAddr>,
         pod_port: i32,
     ) -> Result<(), RepoError> {
         tx.execute(

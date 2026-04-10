@@ -37,7 +37,7 @@ golem.yaml                            # Golem Application Manifest (contains com
 package.json                          # Root npm dependencies
 tsconfig.json                         # Component TypeScript config
 src/
-  main.ts                             # Module entry point; re-exports of agents
+  main.ts                             # Module entry point; imports agent modules
   <agent_name>.ts                     # Agent definitions and implementations
 
 # Multi-component app
@@ -46,12 +46,12 @@ package.json                          # NPM dependencies (shared for all compone
 <component-a>/
   tsconfig.json                       # Component TypeScript config
   src/
-    main.ts                           # Module entry point; re-exports of agents
+    main.ts                           # Module entry point; imports agent modules
     <agent_name>.ts                   # Agent definitions and implementations
 <component-b>/
   tsconfig.json                       # Component TypeScript config
   src/
-    main.ts                           # Module entry point; re-exports of agents
+    main.ts                           # Module entry point; imports agent modules
     <agent_name>.ts                   # Agent definitions and implementations
 
 golem-temp/                           # Build artifacts (gitignored)
@@ -60,6 +60,8 @@ golem-temp/                           # Build artifacts (gitignored)
       golem.yaml                      # Build templates for all TS components
       rollup.config.component.mjs     # Shared Rollup configuration
 ```
+
+`src/main.ts` is an entrypoint module that should import each agent module for side effects (for example, `import './counter-agent';`). Agent classes do not need to be exported for discovery (export them only when another module needs to import them). Importing a module executes it, so if that module contains multiple `@agent()` classes, all of them are discovered.
 
 ## Prerequisites
 

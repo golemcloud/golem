@@ -17,6 +17,9 @@ service ShardManagerService {
   // Executors call these RPCs to acquire, renew, and release quota leases.
   rpc AcquireQuotaLease(AcquireQuotaLeaseRequest) returns (AcquireQuotaLeaseResponse);
   rpc RenewQuotaLease(RenewQuotaLeaseRequest) returns (RenewQuotaLeaseResponse);
+  // Renew multiple leases in one round-trip. Results are in the same order
+  // as the request entries.
+  rpc BatchRenewQuotaLeases(BatchRenewQuotaLeasesRequest) returns (BatchRenewQuotaLeasesResponse);
   rpc ReleaseQuotaLease(ReleaseQuotaLeaseRequest) returns (ReleaseQuotaLeaseResponse);
 }
 
@@ -121,3 +124,19 @@ message ReleaseQuotaLeaseResponse {
 }
 
 message ReleaseQuotaLeaseSuccessResponse { }
+
+message BatchRenewQuotaLeasesRequest {
+  repeated RenewQuotaLeaseRequest renewals = 1;
+}
+
+// One result per entry in the request, in the same order.
+message BatchRenewQuotaLeasesResponse {
+  repeated RenewQuotaLeaseResult results = 1;
+}
+
+message RenewQuotaLeaseResult {
+  oneof result {
+    RenewQuotaLeaseSuccessResponse success = 1;
+    golem.shardmanager.v1.QuotaError error = 2;
+  }
+}

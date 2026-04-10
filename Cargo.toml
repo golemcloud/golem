@@ -87,9 +87,9 @@ chrono = { version = "0.4.40", features = ["serde"] }
 clap = { version = "4.5.60", features = ["derive", "suggestions", "color", "help", ] }
 clap-verbosity-flag = { version = "3.0.4", features = ["tracing"] }
 clap_complete = "4.5.66"
-cli-table = "0.4.9"
 colored = "3.0.0"
 colored-diff = "0.2.3"
+comfy-table = "7.2.2"
 combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
 console-subscriber = "0.5.0"
@@ -97,7 +97,7 @@ convert_case = "0.11.0"
 cookie = "0.18.1"
 criterion = "0.5"
 crossbeam-channel = "0.5.15"
-crossterm = "0.28.1"
+crossterm = "0.29"
 darling = "0.20.11"
 dashmap = "7.0.0-rc2"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
@@ -252,7 +252,7 @@ testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", 
 textwrap = "0.16.1"
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["default", "macros"] }
-tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "io-std", "net", "tracing", "process", ] }
+tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "io-std", "net", "tracing", "process", "signal"] }
 tokio-postgres = "0.7.13"
 tokio-rustls = { version = "0.26.2" }
 tokio-stream = { version = "0.1", features = ["sync"] }
