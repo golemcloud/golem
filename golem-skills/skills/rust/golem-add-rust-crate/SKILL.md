@@ -7,7 +7,7 @@ description: "Add a new Rust crate dependency to a Rust Golem project. Use when 
 
 ## Important constraints
 
-- The compilation target is `wasm32-wasip1` — only crates that support this target will work.
+- The compilation target is `wasm32-wasip2` — only crates that support this target will work.
 - Crates that use threads, native system calls, `mmap`, networking via `std::net`, or platform-specific C libraries **will not compile**.
 - Pure Rust crates and crates that support `wasm32-wasi` generally work.
 - If unsure whether a crate compiles for WASM, add it and run `golem build` to find out.

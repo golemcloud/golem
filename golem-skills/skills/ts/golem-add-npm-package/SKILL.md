@@ -59,8 +59,8 @@ These are already in the project's `package.json` — do NOT add them again:
 
 ## HTTP requests
 
-Use the built-in `fetch` API — it is available globally. Do NOT add `node-fetch` or `axios`.
+Use the built-in `fetch` API — it is available globally. 
 
 ## AI / LLM features
 
-To add AI capabilities, configure the relevant provider in the component's `golem.yaml` dependencies section and set the corresponding environment variables.
+Use any third party AI/LLM library from npmjs.com, but it has to only depend on the _supported_ runtime APIs.

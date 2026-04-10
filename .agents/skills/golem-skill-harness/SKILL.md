@@ -7,6 +7,36 @@ description: "Developing, testing, and running Golem skill tests with the skill 
 
 The skill test harness lives in `golem-skills/tests/harness/`. It drives coding agents (Claude Code, OpenCode, Codex) through scenario YAML files, verifying that skills are activated and produce correct results. Skill definitions live in `golem-skills/skills/`.
 
+## Skill Directory Structure
+
+Skills in `golem-skills/skills/` are organized by language scope:
+
+```
+golem-skills/skills/
+  common/                  # Language-independent skills (included for all languages)
+    golem-new-project/
+      SKILL.md
+  rust/                    # Rust-specific skills (included only for Rust projects)
+    golem-add-rust-crate/
+      SKILL.md
+  ts/                      # TypeScript-specific skills (included only for TS projects)
+    golem-add-npm-package/
+      SKILL.md
+  scala/                   # Scala-specific skills (included only for Scala projects)
+```
+
+When `golem new` creates a project, it embeds the `common/` skills plus the language-specific skills into the project's `.agents/skills/` and `.claude/skills/` directories.
+
+## Rebuilding After Skill Changes
+
+**Skills are embedded in the `golem` / `golem-cli` binaries.** If you add or modify a skill under `golem-skills/skills/`, you **must** recompile the binaries before the changes take effect — including before running the skill test harness.
+
+```shell
+cargo make build-release-full
+```
+
+Without this step, `golem new` will still emit the old skill content, and the harness will test against stale skills.
+
 ## Prerequisites
 
 - **Node.js 20+** and npm
@@ -51,7 +81,6 @@ npx tsx src/run.ts [options]
 | `--scenarios <dir>` | Path to scenario YAML directory | `./scenarios` |
 | `--output <dir>` | Results output directory | `./results` |
 | `--timeout <seconds>` | Global timeout per step | `300` |
-| `--skills <dir>` | Path to skills directory | `../../skills` |
 | `--dry-run` | Validate scenarios without executing | `false` |
 | `--resume-from <id>` | Resume from a specific step ID | — |
 | `--workspace <path>` | Override workspace directory | — |
@@ -90,7 +119,13 @@ The harness manages the Golem server automatically:
 
 ### 1. Create the skill definition
 
-Create `golem-skills/skills/<skill-name>/SKILL.md` with YAML frontmatter:
+Create the skill under the appropriate subdirectory of `golem-skills/skills/`:
+- `common/<skill-name>/SKILL.md` — for language-independent skills
+- `rust/<skill-name>/SKILL.md` — for Rust-specific skills
+- `ts/<skill-name>/SKILL.md` — for TypeScript-specific skills
+- `scala/<skill-name>/SKILL.md` — for Scala-specific skills
+
+Use YAML frontmatter:
 
 ```markdown
 ---
@@ -103,7 +138,15 @@ description: "What the skill does. Use when <trigger conditions>."
 Instructions for the agent...
 ```
 
-### 2. Write a scenario YAML
+### 2. Rebuild the binaries
+
+After creating or modifying a skill, recompile so the changes are embedded:
+
+```shell
+cargo make build-release-full
+```
+
+### 3. Write a scenario YAML
 
 Create `golem-skills/tests/harness/scenarios/<scenario-name>.yaml`:
 
@@ -122,10 +165,10 @@ steps:
       build: true
 ```
 
-### 3. Run the scenario
+### 4. Run the scenario
 
 ```shell
-npx tsx src/run.ts --agent claude-code --language rust --scenario my-scenario --skills ../../skills
+npx tsx src/run.ts --agent claude-code --language rust --scenario my-scenario
 ```
 
 ## Scenario YAML Reference
@@ -371,10 +414,10 @@ Results are written to `--output` (default `./results/`):
 
 ## Existing Skills and Scenarios
 
-Skills in `golem-skills/skills/`:
-- `golem-new-project` — scaffolding with `golem new`
-- `golem-db-app-ts` — database-backed TS application
-- `golem-db-app-rust` — database-backed Rust application
+Skills in `golem-skills/skills/` (see [Skill Directory Structure](#skill-directory-structure) for layout):
+- `common/golem-new-project` — scaffolding with `golem new`
+- `rust/golem-add-rust-crate` — adding Rust crate dependencies
+- `ts/golem-add-npm-package` — adding npm package dependencies
 
 Scenarios in `golem-skills/tests/harness/scenarios/`:
 - `golem-new-project-ts.yaml` / `golem-new-project-rust.yaml` — project creation
