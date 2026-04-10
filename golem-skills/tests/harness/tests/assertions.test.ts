@@ -167,6 +167,14 @@ describe("Assertion Engine", () => {
       });
       assert.equal(results[0].passed, false);
     });
+
+    it("handles missing parsed json gracefully", () => {
+      const results = evaluate(makeContext({ resultJson: undefined }), {
+        result_json: [{ path: "$", equals: 1 }],
+      });
+      assert.equal(results[0].passed, false);
+      assert.ok(results[0].message.includes("expected 1"));
+    });
   });
 
   describe("multiple assertions", () => {

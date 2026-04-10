@@ -45,6 +45,54 @@ function resolveByLanguage<T>(
   return value as T;
 }
 
+function tryParseJson<T>(value: string): T | undefined {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseJsonCommandOutput<T>(output: string): T | undefined {
+  const trimmed = output.trim();
+  if (!trimmed) return undefined;
+
+  const direct = tryParseJson<T>(trimmed);
+  if (direct !== undefined) {
+    return direct;
+  }
+
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const parsed = tryParseJson<T>(lines[i]);
+    if (parsed !== undefined) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+}
+
+function extractInvokeJsonResult(output: string): unknown {
+  const parsed = parseJsonCommandOutput<Record<string, unknown>>(output);
+  if (!parsed || typeof parsed !== "object") {
+    return parsed;
+  }
+
+  const resultJson = parsed.result_json;
+  if (!resultJson || typeof resultJson !== "object") {
+    return parsed;
+  }
+
+  return "value" in resultJson
+    ? (resultJson as Record<string, unknown>).value
+    : undefined;
+}
+
 // --- Schemas ---
 
 const RetrySchema = z.object({
@@ -324,6 +372,14 @@ export interface ScenarioRunResult {
   stepResults: StepResult[];
   artifactPaths: string[];
   workspace: string;
+}
+
+interface LocalCommandResult {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  output: string;
+  exitCode: number | null;
 }
 
 export interface ScenarioExecutorOptions {
@@ -839,7 +895,7 @@ export class ScenarioExecutor {
     );
 
     if (expect) {
-      this.evaluateAssertions({ stdout: result.output, stderr: "", exitCode: result.exitCode }, expect, fail);
+      this.evaluateAssertions({ stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }, expect, fail);
     } else if (!result.success) {
       fail(`SHELL_FAILED: ${result.output}`);
     }
@@ -898,9 +954,9 @@ export class ScenarioExecutor {
 
     if (expect) {
       let resultJson: unknown;
-      try { resultJson = JSON.parse(result.output); } catch { /* not JSON */ }
+      try { resultJson = JSON.parse(result.stdout); } catch { /* not JSON */ }
       this.evaluateAssertions(
-        { stdout: result.output, stderr: "", exitCode: result.exitCode, resultJson },
+        { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, resultJson },
         expect, fail,
       );
     } else if (!result.success) {
@@ -924,12 +980,11 @@ export class ScenarioExecutor {
       "golem", args, timeout, projectDir, commandEnv,
     );
 
-    let resultJson: unknown;
-    try { resultJson = JSON.parse(result.output); } catch { /* not JSON */ }
+    const resultJson = extractInvokeJsonResult(result.stdout);
 
     if (expect) {
       this.evaluateAssertions(
-        { stdout: result.output, stderr: "", exitCode: result.exitCode, resultJson },
+        { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, resultJson },
         expect, fail,
       );
     } else if (!result.success) {
@@ -1026,14 +1081,26 @@ export class ScenarioExecutor {
     const projectDir = await this.findGolemProjectDir();
 
     if (verify.expectedFiles) {
+      const expectedCount = verify.expectedFiles.length;
+      const fileLabel = expectedCount === 1 ? "file" : "files";
+      let missingCount = 0;
+
+      log.stepAction(stepLabel, `verifying ${expectedCount} expected ${fileLabel}`);
       for (const relPath of verify.expectedFiles) {
         const fullPath = path.join(this.workspace, relPath);
         try {
           await fs.access(fullPath);
           log.stepAction(stepLabel, `expected file exists: ${relPath}`);
         } catch {
+          missingCount += 1;
           fail(`EXPECTED_FILE_MISSING: ${relPath}`);
         }
+      }
+
+      if (missingCount === 0) {
+        log.stepAction(stepLabel, `expected ${fileLabel} verified`);
+      } else {
+        log.stepAction(stepLabel, `expected ${fileLabel} verification failed (${missingCount} missing)`);
       }
     }
 
@@ -1155,7 +1222,7 @@ export class ScenarioExecutor {
     timeoutSeconds: number,
     cwd: string,
     extraEnv?: Record<string, string>,
-  ): Promise<{ success: boolean; output: string; exitCode: number | null }> {
+  ): Promise<LocalCommandResult> {
     const controller = new AbortController();
     const { signal } = controller;
 
@@ -1167,9 +1234,10 @@ export class ScenarioExecutor {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
-      let output = "";
-      child.stdout?.on("data", (data) => (output += data.toString()));
-      child.stderr?.on("data", (data) => (output += data.toString()));
+      let stdout = "";
+      let stderr = "";
+      child.stdout?.on("data", (data) => (stdout += data.toString()));
+      child.stderr?.on("data", (data) => (stderr += data.toString()));
 
       const timeoutId = setTimeout(() => {
         controller.abort();
@@ -1177,14 +1245,22 @@ export class ScenarioExecutor {
 
       child.on("close", (exitCode) => {
         clearTimeout(timeoutId);
-        resolve({ success: exitCode === 0, output, exitCode });
+        resolve({
+          success: exitCode === 0,
+          stdout,
+          stderr,
+          output: stdout + stderr,
+          exitCode,
+        });
       });
 
       child.on("error", (error) => {
         clearTimeout(timeoutId);
         resolve({
           success: false,
-          output: output + error.message,
+          stdout,
+          stderr,
+          output: stdout + stderr + error.message,
           exitCode: null,
         });
       });

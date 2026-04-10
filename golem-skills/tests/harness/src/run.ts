@@ -560,6 +560,6 @@ Options:
 
 main().catch(async (err) => {
   log.fatal("Fatal error:");
-  log.error(String(err));
+  log.error(err instanceof Error ? (err.stack ?? `${err.name}: ${err.message}`) : String(err));
   process.exit(1);
 });

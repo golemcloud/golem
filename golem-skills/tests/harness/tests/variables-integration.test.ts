@@ -237,6 +237,68 @@ describe("Variable substitution integration", () => {
     );
   });
 
+  it("unwraps noisy invoke_json output to the actual invocation result", async () => {
+    const driver = new StubDriver();
+    const watcher = new SkillWatcher(skillsDir);
+    const opts: ScenarioExecutorOptions = { agent: "amp", language: "ts" };
+    const executor = createExecutor(
+      driver,
+      watcher,
+      workspace,
+      skillsDir,
+      opts,
+    );
+
+    (executor as unknown as Record<string, unknown>)["findGolemProjectDir"] = async () => workspace;
+    (executor as unknown as Record<string, unknown>)["runLocalCommand"] = async () => ({
+      success: true,
+      stdout: JSON.stringify({
+        idempotency_key: "abc-123",
+        result_json: {
+          typ: { type: "U64" },
+          value: 1,
+        },
+        result_wave: ["1"],
+        result_format: "TypeScript syntax",
+      }),
+      stderr: "Invoking agent test-app/local/CounterAgent.increment\n",
+      output: [
+        JSON.stringify({
+          idempotency_key: "abc-123",
+          result_json: {
+            typ: { type: "U64" },
+            value: 1,
+          },
+          result_wave: ["1"],
+          result_format: "TypeScript syntax",
+        }),
+        "Invoking agent test-app/local/CounterAgent.increment\n",
+      ].join(""),
+      exitCode: 0,
+    });
+
+    const spec: ScenarioSpec = {
+      name: "invoke-json-output",
+      settings: { cleanup: false },
+      steps: [
+        {
+          id: "invoke-json",
+          tag: "invoke_json" as const,
+          invoke_json: {
+            agent: 'CounterAgent("test")',
+            method: "increment",
+          },
+          expect: {
+            result_json: [{ path: "$", equals: 1 }],
+          },
+        },
+      ],
+    };
+
+    const result = await executor.execute(spec);
+    assert.equal(result.status, "pass", result.stepResults[0]?.error);
+  });
+
   it("substitutes variables in create_agent name", async () => {
     const driver = new StubDriver();
     const watcher = new SkillWatcher(skillsDir);
