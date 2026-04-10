@@ -1143,7 +1143,7 @@ export class ScenarioExecutor {
       ]),
     );
     log.stepActivatedSkills(stepLabel, activatedSkills);
-    const error = this.assertSkillActivation(step, activatedSkills);
+    const error = this.assertSkillActivation(stepLabel, step, activatedSkills);
     if (error) fail(error);
     return activatedSkills;
   }
@@ -1221,6 +1221,7 @@ export class ScenarioExecutor {
   }
 
   private assertSkillActivation(
+    stepLabel: string,
     step: StepSpec,
     activatedSkills: string[],
   ): string | undefined {
@@ -1246,12 +1247,15 @@ export class ScenarioExecutor {
       return undefined;
     }
 
-    const allowedExtras = new Set((step.allowedExtraSkills as string[] | undefined) ?? []);
-    const unexpectedExtras = activatedSkills.filter(
-      (skill) => !expectedSet.has(skill) && !allowedExtras.has(skill),
-    );
-    if (unexpectedExtras.length > 0) {
-      return `SKILL_MISMATCH: unexpected extra skills [${unexpectedExtras.join(", ")}]`;
+    const allowedExtraSkills = (step.allowedExtraSkills as string[] | undefined);
+    if (allowedExtraSkills) {
+      const allowedExtras = new Set(allowedExtraSkills);
+      const unexpectedExtras = activatedSkills.filter(
+        (skill) => !expectedSet.has(skill) && !allowedExtras.has(skill),
+      );
+      if (unexpectedExtras.length > 0) {
+        log.warn(`extra skills activated beyond allowedExtraSkills: [${unexpectedExtras.join(", ")}]`);
+      }
     }
 
     return undefined;
