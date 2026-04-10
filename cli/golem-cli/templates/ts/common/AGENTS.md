@@ -11,6 +11,14 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-build` | Building a Golem application with `golem build` |
 | `golem-deploy` | Deploying a Golem application with `golem deploy` |
 | `golem-add-npm-package` | Adding an npm package dependency to the project |
+| `golem-add-agent-ts` | Adding a new agent type to a TypeScript Golem component |
+| `golem-configure-durability-ts` | Choosing between durable and ephemeral agents |
+| `golem-annotate-agent-ts` | Adding prompt and description annotations to agent methods |
+| `golem-call-another-agent-ts` | Calling another agent and awaiting the result (RPC) |
+| `golem-fire-and-forget-ts` | Triggering an agent invocation without waiting for the result |
+| `golem-schedule-future-call-ts` | Scheduling a future agent invocation |
+| `golem-atomic-block-ts` | Atomic blocks, persistence control, and idempotency |
+| `golem-add-transactions-ts` | Saga-pattern transactions with compensation |
 
 # Golem Application Development Guide (TypeScript)
 
@@ -218,185 +226,7 @@ err("oops")   // explicit err
 
 ## Defining Agents
 
-Agents are defined using the `@agent()` decorator on classes extending `BaseAgent` from `@golemcloud/golem-ts-sdk`:
-
-```typescript
-import {
-    BaseAgent,
-    agent,
-    prompt,
-    description,
-} from '@golemcloud/golem-ts-sdk';
-
-@agent()
-class CounterAgent extends BaseAgent {
-    private readonly name: string;
-    private value: number = 0;
-
-    constructor(name: string) {
-        super();
-        this.name = name;
-    }
-
-    @prompt("Increase the count by one")
-    @description("Increments the counter and returns the new value")
-    async increment(): Promise<number> {
-        this.value += 1;
-        return this.value;
-    }
-
-    async getCount(): Promise<number> {
-        return this.value;
-    }
-}
-```
-
-### Ephemeral agents
-
-By default agents are durable (state persists indefinitely). For stateless per-invocation agents:
-
-```typescript
-@agent({ mode: "ephemeral" })
-class StatelessAgent extends BaseAgent {
-    async handle(input: string): Promise<string> {
-        return `processed: ${input}`;
-    }
-}
-```
-
-### Custom types
-
-Use TypeScript type aliases or interfaces for parameters and return types. Although not required, using **named types** (type aliases or interfaces) instead of anonymous inline object types leads to better interoperability with other Golem features. **TypeScript enums are not supported** — use string literal unions instead:
-
-```typescript
-type Coordinates = { lat: number; lon: number };
-type WeatherReport = { temperature: number; description: string };
-type Priority = "low" | "medium" | "high";
-
-@agent()
-class WeatherAgent extends BaseAgent {
-    constructor(apiKey: string) {
-        super();
-    }
-
-    async getWeather(coords: Coordinates): Promise<WeatherReport> {
-        // ...
-    }
-}
-```
-
-### Method annotations
-
-```typescript
-import { BaseAgent, agent, prompt, description } from '@golemcloud/golem-ts-sdk';
-
-@agent()
-class MyAgent extends BaseAgent {
-    constructor(name: string) {
-        super();
-    }
-
-    @prompt("Increment the counter")
-    @description("Increments the counter by 1 and returns the new value")
-    async increment(): Promise<number> {
-        // ...
-    }
-}
-```
-
-## Agent-to-Agent Communication (RPC)
-
-The `@agent()` decorator auto-generates a static `get()` method for calling agents remotely. The returned `Client<T>` type exposes each method along with `trigger` (fire-and-forget) and `schedule` (delayed invocation) variants:
-
-```typescript
-// Awaited call (blocks until result)
-const other = OtherAgent.get("param");
-const result = await other.someMethod(arg);
-
-// Fire-and-forget (returns immediately)
-other.someMethod.trigger(arg);
-
-// Scheduled invocation
-import { Datetime } from 'golem:rpc/types@0.2.2';
-other.someMethod.schedule({ seconds: BigInt(ts), nanoseconds: 0 }, arg);
-
-// Phantom agents (multiple instances with same constructor params)
-const phantom = OtherAgent.newPhantom("param"); // new random phantom ID
-const knownPhantom = OtherAgent.getPhantom(existingUuid, "param"); // existing phantom
-```
-
-Avoid RPC cycles (A calls B calls A) — use `.trigger()` to break deadlocks.
-
-## Durability Features
-
-Golem provides **automatic durable execution** — all agents are durable by default without any special code. State is persisted via an oplog (operation log) and agents survive failures, restarts, and updates transparently.
-
-The APIs below are **advanced controls** that most agents will never need. Only use them when you have specific requirements around persistence granularity, idempotency, or transactional compensation:
-
-```typescript
-import {
-    withPersistenceLevel,
-    withIdempotenceMode,
-    atomically,
-    withRetryPolicy,
-    oplogCommit,
-    generateIdempotencyKey,
-} from '@golemcloud/golem-ts-sdk';
-
-// Atomic operations — retried together on failure
-const result = atomically(() => {
-    const a = sideEffect1();
-    const b = sideEffect2(a);
-    return [a, b];
-});
-
-// Control persistence level
-withPersistenceLevel({ tag: 'persist-nothing' }, () => {
-    // No oplog entries — side effects replayed on recovery
-});
-
-// Control idempotence mode
-withIdempotenceMode(false, () => {
-    // HTTP requests won't be retried if result is uncertain
-});
-
-// Ensure oplog is replicated
-oplogCommit(3); // Wait for 3 replicas
-
-// Generate a durable idempotency key
-const key = generateIdempotencyKey();
-```
-
-### Transactions
-
-For saga-pattern compensation:
-
-```typescript
-import {
-    operation,
-    fallibleTransaction,
-    infallibleTransaction,
-    Result,
-} from '@golemcloud/golem-ts-sdk';
-
-const op1 = operation<string, string, string>(
-    (input) => Result.ok(`executed: ${input}`),
-    (input, result) => Result.ok(undefined),
-);
-
-// Fallible: compensates on failure, returns error
-const result = fallibleTransaction((tx) => {
-    const r = tx.execute(op1, "input");
-    if (r.isErr()) return r;
-    return Result.ok(r.val);
-});
-
-// Infallible: compensates and retries on failure
-const result2 = infallibleTransaction((tx) => {
-    const r = tx.execute(op1, "input");
-    return r;
-});
-```
+Load the `golem-add-agent-ts` skill for defining agents and custom types. See also the skill table above for durability configuration, annotations, RPC, atomic blocks, and transactions.
 
 ## Application Manifest (golem.yaml)
 

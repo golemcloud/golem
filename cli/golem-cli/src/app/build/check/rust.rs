@@ -436,8 +436,8 @@ mod test {
         CargoDependencyMatcher, CargoDependencyRequirement, build_cargo_update_spec,
         evaluate_cargo_dependency_compliance, rust_dependency_requirements,
     };
-    use crate::app::template::TEMPLATES_DIR;
     use crate::app::edit::cargo_toml::DependencySpec;
+    use crate::app::template::TEMPLATES_DIR;
     use crate::sdk_overrides::sdk_overrides;
     use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, BTreeSet};
