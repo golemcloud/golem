@@ -78,7 +78,7 @@ use inquire::Confirm;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::Write;
+use std::io::{Stdout, Write};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -844,8 +844,7 @@ impl WorkerCommandHandler {
         interval_ms: u64,
     ) -> anyhow::Result<()> {
         let duration = Duration::from_millis(interval_ms);
-        let mut stdout = std::io::stdout();
-        execute!(stdout, EnterAlternateScreen, Hide)?;
+        let mut screen = AlternateScreenGuard::enter()?;
         let result: anyhow::Result<()> = async {
             loop {
                 let term_height = terminal_size()
@@ -865,10 +864,9 @@ impl WorkerCommandHandler {
                 };
 
                 // Clear and write in one buffered flush — no blank-screen gap
-                use std::io::Write;
-                queue!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
-                write!(stdout, "{output}")?;
-                stdout.flush()?;
+                queue!(screen.stdout_mut(), MoveTo(0, 0), Clear(ClearType::All))?;
+                write!(screen.stdout_mut(), "{output}")?;
+                screen.stdout_mut().flush()?;
 
                 tokio::select! {
                     _ = sleep(duration) => {}
@@ -877,7 +875,7 @@ impl WorkerCommandHandler {
             }
         }
         .await;
-        execute!(stdout, Show, LeaveAlternateScreen)?;
+        screen.leave()?;
         result
     }
 
@@ -2268,6 +2266,45 @@ impl WorkerCommandHandler {
         .prompt()?;
 
         Ok(result)
+    }
+}
+
+struct AlternateScreenGuard {
+    stdout: Stdout,
+    active: bool,
+}
+
+impl AlternateScreenGuard {
+    fn enter() -> anyhow::Result<Self> {
+        let mut stdout = std::io::stdout();
+        execute!(stdout, EnterAlternateScreen, Hide)?;
+
+        Ok(Self {
+            stdout,
+            active: true,
+        })
+    }
+
+    fn stdout_mut(&mut self) -> &mut Stdout {
+        &mut self.stdout
+    }
+
+    fn leave(&mut self) -> anyhow::Result<()> {
+        if self.active {
+            execute!(self.stdout, Show, LeaveAlternateScreen)?;
+            self.active = false;
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for AlternateScreenGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = execute!(self.stdout, Show, LeaveAlternateScreen);
+            self.active = false;
+        }
     }
 }
 
