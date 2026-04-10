@@ -55,6 +55,11 @@ const CLASSIFICATION_MAP: Record<
     guidance:
       "HTTP request failed. Check the URL, ensure the server is available, and verify expected response status.",
   },
+  CREATE_PROJECT_FAILED: {
+    category: "infra",
+    guidance:
+      "Failed to create a new project with 'golem new'. Verify the Golem CLI is installed and the template name is valid.",
+  },
   CREATE_AGENT_FAILED: {
     category: "infra",
     guidance:

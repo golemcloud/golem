@@ -301,11 +301,15 @@ Options:
         const label = step.id ?? `step-${i + 1}`;
         const rawPrompt = step.tag === "prompt" ? step.prompt : undefined;
         const promptText = typeof rawPrompt === "string" ? rawPrompt : rawPrompt ? JSON.stringify(rawPrompt) : undefined;
-        const promptPreview = promptText
-          ? promptText.length > 60
-            ? promptText.slice(0, 57) + "..."
-            : promptText
-          : "(no prompt)";
+        let promptPreview: string;
+        if (promptText) {
+          promptPreview = promptText.length > 60 ? promptText.slice(0, 57) + "..." : promptText;
+        } else if (step.tag === "create_project") {
+          const cp = step.create_project as Record<string, unknown>;
+          promptPreview = `[create_project] ${JSON.stringify(cp)}`;
+        } else {
+          promptPreview = "(no prompt)";
+        }
         const rawSkills = step.expectedSkills;
         const skills = (Array.isArray(rawSkills) ? rawSkills.join(", ") : rawSkills ? JSON.stringify(rawSkills) : "") || "(none)";
         const timeoutVal =
@@ -331,7 +335,9 @@ Options:
   // Start Golem server
   const golemServer = new GolemServer();
   const runId = randomUUID();
-  const workspacesRoot = path.join(process.cwd(), "workspaces", runId);
+  const workspacesRoot = workspaceOverride
+    ? path.join(path.resolve(process.cwd(), workspaceOverride), runId)
+    : path.join(process.cwd(), "workspaces", runId);
   log.dim(`Run ID: ${runId}`);
   const serverDataDir = path.join(workspacesRoot, "golem-server-data");
   log.info("Starting Golem server...");
@@ -385,13 +391,8 @@ Options:
         isFirstScenario = false;
 
         log.heading(`Running scenario: ${spec.name} [${currentAgent} x ${currentLanguage}]`);
-        const workspace = workspaceOverride
-          ? path.resolve(process.cwd(), workspaceOverride)
-          : path.join(
-              workspacesRoot,
-              spec.name.replace(/\s+/g, "-").toLowerCase(),
-              currentLanguage,
-            );
+        const scenarioDir = spec.name.replace(/\s+/g, "-").toLowerCase();
+        const workspace = path.join(workspacesRoot, scenarioDir, currentLanguage);
         const watcher = new SkillWatcher(workspace);
         const executor = new ScenarioExecutor(
           driver,

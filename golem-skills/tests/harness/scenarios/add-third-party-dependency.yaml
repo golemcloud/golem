@@ -1,0 +1,82 @@
+name: "add-third-party-dependency"
+settings:
+  timeout_per_subprompt: 300
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-dependency"
+    prompt:
+      rust: "Add the 'base64' crate (version 0.22) to the test-app project. Make sure it builds and deploys successfully."
+      ts: "Add the 'change-case' npm package to the test-app project. Make sure it builds and deploys successfully."
+      scala: "Add the 'com.lihaoyi::upickle::4.1.0' library to the test-app project. Make sure it builds and deploys successfully."
+    expectedSkills:
+      rust:
+        - "golem-add-rust-crate"
+      ts:
+        - "golem-add-npm-package"
+      scala:
+        - "golem-add-scala-dependency"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "use-dependency"
+    continue_session: true
+    prompt:
+      rust: >
+        Modify the CounterAgent in test-app so the 'increment' function base64-encodes the current counter
+        value as a string before returning it. Use the 'base64' crate with the STANDARD engine.
+        The function should return a string (change the WIT return type to string if needed).
+        For example, if the counter is 1, return the base64 encoding of "1" which is "MQ==".
+        Make sure it builds and deploys successfully.
+      ts: >
+        Modify the CounterAgent in test-app so the 'increment' function converts the string
+        "hello world" to camelCase using the 'change-case' package and returns the result as a string
+        instead of the counter value. Change the WIT return type to string if needed.
+        Make sure it builds and deploys successfully.
+      scala: >
+        Modify the CounterAgent in test-app so the 'increment' function uses upickle to serialize
+        the counter value into a JSON string like {"count":1} and returns that string.
+        Change the WIT return type to string if needed.
+        Make sure it builds and deploys successfully.
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-result-rust"
+    only_if:
+      language: "rust"
+    invoke_json:
+      agent: 'CounterAgent("dep-test")'
+      method: 'increment'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "MQ=="
+
+  - id: "verify-result-ts"
+    only_if:
+      language: "ts"
+    invoke_json:
+      agent: 'CounterAgent("dep-test")'
+      method: 'increment'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "helloWorld"
+
+  - id: "verify-result-scala"
+    only_if:
+      language: "scala"
+    invoke_json:
+      agent: 'CounterAgent("dep-test")'
+      method: 'increment'
+    expect:
+      result_json:
+        - path: "$"
+          contains: '"count"'

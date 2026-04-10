@@ -150,6 +150,7 @@ const ACTION_FIELDS = [
   "trigger",
   "create_agent",
   "delete_agent",
+  "create_project",
   "sleep",
   "http",
 ] as const;
@@ -158,6 +159,11 @@ const ACTION_FIELDS = [
 function langConditional<T extends z.ZodType>(schema: T) {
   return z.union([schema, z.record(z.string(), schema)]);
 }
+
+const CreateProjectSchema = z.object({
+  name: z.string(),
+  presets: langConditional(z.array(z.string())).optional(),
+});
 
 const VerifySchema = z.object({
   build: z.boolean().optional(),
@@ -183,6 +189,7 @@ const StepSpecSchema = z
     trigger: TriggerSchema.optional(),
     create_agent: CreateAgentSchema.optional(),
     delete_agent: DeleteAgentSchema.optional(),
+    create_project: CreateProjectSchema.optional(),
     http: HttpSchema.optional(),
     retry: RetrySchema.optional(),
     only_if: StepConditionSchema.optional(),
@@ -266,6 +273,7 @@ type CreateAgentSpec = {
   config?: Record<string, string>;
 };
 type DeleteAgentSpec = { name: string };
+type CreateProjectSpec = { name: string; presets?: LangConditional<string[]> };
 type HttpSpec = {
   url: string;
   method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
@@ -282,6 +290,7 @@ type ShellStep = StepCommon & { tag: "shell"; shell: ShellSpec };
 type TriggerStep = StepCommon & { tag: "trigger"; trigger: TriggerSpec };
 type CreateAgentStep = StepCommon & { tag: "create_agent"; create_agent: CreateAgentSpec };
 type DeleteAgentStep = StepCommon & { tag: "delete_agent"; delete_agent: DeleteAgentSpec };
+type CreateProjectStep = StepCommon & { tag: "create_project"; create_project: CreateProjectSpec };
 type SleepStep = StepCommon & { tag: "sleep"; sleep: number };
 type HttpStep = StepCommon & { tag: "http"; http: HttpSpec };
 
@@ -293,6 +302,7 @@ export type StepSpec =
   | TriggerStep
   | CreateAgentStep
   | DeleteAgentStep
+  | CreateProjectStep
   | SleepStep
   | HttpStep;
 
@@ -339,6 +349,7 @@ export function parseStep(raw: RawStepSpec): StepSpec {
     case "trigger": return { ...common, tag, trigger: raw.trigger! };
     case "create_agent": return { ...common, tag, create_agent: raw.create_agent! };
     case "delete_agent": return { ...common, tag, delete_agent: raw.delete_agent! };
+    case "create_project": return { ...common, tag, create_project: raw.create_project! };
     case "sleep": return { ...common, tag, sleep: raw.sleep! };
     case "http": return { ...common, tag, http: raw.http! };
   }
@@ -548,6 +559,8 @@ export class ScenarioExecutor {
             )
             : step.http.headers,
         }};
+      case "create_project":
+        return { ...step };
       case "sleep":
         return { ...step };
     }
@@ -816,6 +829,9 @@ export class ScenarioExecutor {
       case "delete_agent":
         await this.executeDeleteAgent(stepLabel, step.delete_agent, stepTimeoutSeconds, commandEnv, fail);
         break;
+      case "create_project":
+        await this.executeCreateProject(stepLabel, step.create_project, stepTimeoutSeconds, commandEnv, fail);
+        break;
       case "shell":
         await this.executeShell(stepLabel, step.shell, step.expect, stepTimeoutSeconds, commandEnv, fail);
         break;
@@ -904,6 +920,32 @@ export class ScenarioExecutor {
       "golem", ["agent", "delete", spec.name], timeout, projectDir, commandEnv,
     );
     if (!result.success) fail(`DELETE_AGENT_FAILED: ${result.output}`);
+  }
+
+  private async executeCreateProject(
+    stepLabel: string,
+    spec: CreateProjectSpec,
+    timeout: number,
+    commandEnv: Record<string, string>,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    const template = this.options.language;
+    if (!template) {
+      fail("CREATE_PROJECT_FAILED: language must be specified for create_project steps");
+      return;
+    }
+    log.stepAction(stepLabel, `creating project "${spec.name}" with template "${template}"`);
+    const args = ["new", spec.name, "--template", template, "--yes"];
+    const presets = resolveByLanguage(spec.presets, this.options.language);
+    if (presets) {
+      for (const preset of presets) {
+        args.push("--preset", preset);
+      }
+    }
+    const result = await this.runLocalCommand(
+      "golem", args, timeout, this.workspace, commandEnv,
+    );
+    if (!result.success) fail(`CREATE_PROJECT_FAILED: ${result.output}`);
   }
 
   private async executeShell(

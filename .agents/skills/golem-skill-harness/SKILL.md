@@ -105,7 +105,7 @@ npx tsx src/run.ts --merge-reports ./ci-results --output ./merged
 
 ### Workspace Directory
 
-Each harness run generates a unique run ID (UUID). Without `--workspace`, each scenario gets its own directory at `<cwd>/workspaces/<run-id>/<scenario-name>/<language>/`. Workspace directories are never deleted, so you can inspect the results after the run. With `--workspace`, the specified directory is used directly.
+Each harness run generates a unique run ID (UUID). Without `--workspace`, each scenario gets its own directory at `<cwd>/workspaces/<run-id>/<scenario-name>/<language>/`. With `--workspace`, the same structure is created under the specified root: `<workspace>/<run-id>/<scenario-name>/<language>/`. Workspace directories are never deleted, so you can inspect the results after the run.
 
 ### Golem Server Lifecycle
 
@@ -228,6 +228,33 @@ Every step must have **exactly one** action field. Common fields available on al
     deploy: true                   # Run `golem build` + `golem deploy --yes`
 ```
 
+#### `create_project` — Create a Golem project directly (without an agent prompt)
+
+Runs `golem new <name> --template <language> --yes` in the workspace, automatically using the current language as the template. Useful when a scenario needs a pre-existing project without involving the agent.
+
+```yaml
+- id: "setup-project"
+  create_project:
+    name: "my-app"
+  verify:
+    build: true
+    deploy: true
+```
+
+With language-conditional presets:
+
+```yaml
+- id: "setup-project"
+  create_project:
+    name: "my-app"
+    presets:
+      rust: ["some-rust-preset"]
+      ts: ["some-ts-preset"]
+  verify:
+    build: true
+    deploy: true
+```
+
 #### `shell` — Run a shell command
 
 ```yaml
@@ -344,7 +371,7 @@ Available assertion fields:
 
 ### Language-Conditional Fields
 
-`prompt`, `expectedSkills`, `allowedExtraSkills`, and `verify` can be language-conditional:
+`prompt`, `expectedSkills`, `allowedExtraSkills`, `verify`, and `create_project` can be language-conditional:
 
 ```yaml
 - id: "create-project"
@@ -400,6 +427,7 @@ Failed steps are automatically classified:
 | `INVOKE_JSON_FAILED` | deploy | JSON agent invocation failed |
 | `SHELL_FAILED` | infra | Shell command returned non-zero exit |
 | `HTTP_FAILED` | network | HTTP request failed or timed out |
+| `CREATE_PROJECT_FAILED` | infra | `golem new` project creation failed |
 | `CREATE_AGENT_FAILED` | infra | `golem agent new` failed |
 | `DELETE_AGENT_FAILED` | infra | `golem agent delete` failed |
 | `ASSERTION_FAILED` | assertion | Output didn't match expect assertions |
@@ -418,9 +446,8 @@ Skills in `golem-skills/skills/` (see [Skill Directory Structure](#skill-directo
 - `common/golem-new-project` — scaffolding with `golem new`
 - `rust/golem-add-rust-crate` — adding Rust crate dependencies
 - `ts/golem-add-npm-package` — adding npm package dependencies
+- `scala/golem-add-scala-dependency` — adding Scala library dependencies
 
 Scenarios in `golem-skills/tests/harness/scenarios/`:
-- `golem-new-project-ts.yaml` / `golem-new-project-rust.yaml` — project creation
-- `golem-build-deploy-ts.yaml` / `golem-build-deploy-rust.yaml` — build + deploy + HTTP verification
-- `golem-db-app-ts.yaml` / `golem-db-app-rust.yaml` — database app end-to-end
-- `golem-agent-invoke-rust.yaml` — agent function invocation
+- `create-a-new-project.yaml` — project creation, build, deploy, and invoke
+- `add-third-party-dependency.yaml` — add a third-party dependency, use it in code, and verify
