@@ -1,6 +1,6 @@
 # Schema for IDEA:
 # $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
-
+manifestVersion: 1.5.0
 app: otlp-exporter
 
 includes:

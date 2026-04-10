@@ -41,6 +41,7 @@ pub mod plugin_registration;
 pub mod quota;
 pub mod regions;
 pub mod reports;
+pub mod retry_policy;
 pub mod security_scheme;
 pub mod worker;
 pub mod worker_filter;
@@ -176,7 +177,12 @@ impl From<Timestamp> for golem_wasm::wasi::clocks::wall_clock::Datetime {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[cfg_attr(
     feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+    derive(
+        desert_rust::BinaryCodec,
+        poem_openapi::Object,
+        golem_wasm_derive::IntoValue,
+        golem_wasm_derive::FromValue
+    )
 )]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]

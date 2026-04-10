@@ -17,8 +17,6 @@ import {
   SearchOplog as RawSearchOplog,
   enrichOplogEntries as rawEnrichOplogEntries,
   PublicOplogEntry as RawPublicOplogEntry,
-  CreateParameters as RawCreateParameters_Public,
-  OplogProcessorCheckpointParameters as RawOplogProcessorCheckpointParameters_Public,
   AgentId as RawAgentId,
   EnvironmentId as RawEnvironmentId,
 } from 'golem:api/oplog@1.5.0';
@@ -31,7 +29,7 @@ import type {
   AgentInvocationFinishedParameters,
   ErrorParameters,
   JumpParameters,
-  ChangeRetryPolicyParameters,
+  SetRetryPolicyParameters,
   EndAtomicRegionParameters,
   EndRemoteWriteParameters,
   PendingAgentInvocationParameters,
@@ -78,7 +76,6 @@ export type {
   ComponentRevision,
   OplogIndex,
   PersistenceLevel,
-  RetryPolicy,
   Snapshot,
   Attribute,
   AttributeValue,
@@ -95,7 +92,7 @@ export type {
   ErrorParameters,
   OplogRegion,
   JumpParameters,
-  ChangeRetryPolicyParameters,
+  SetRetryPolicyParameters,
   EndAtomicRegionParameters,
   EndRemoteWriteParameters,
   TypedDataValue,
@@ -173,7 +170,6 @@ export type CreateParameters = {
   timestamp: Datetime;
   agentId: AgentId;
   componentRevision: ComponentRevision;
-  args: string[];
   env: [string, string][];
   createdBy: AccountId;
   environmentId: EnvironmentId;
@@ -205,7 +201,7 @@ export type PublicOplogEntry =
   | { tag: 'jump'; val: JumpParameters }
   | { tag: 'interrupted'; val: Timestamp }
   | { tag: 'exited'; val: Timestamp }
-  | { tag: 'change-retry-policy'; val: ChangeRetryPolicyParameters }
+  | { tag: 'set-retry-policy'; val: SetRetryPolicyParameters }
   | { tag: 'begin-atomic-region'; val: Timestamp }
   | { tag: 'end-atomic-region'; val: EndAtomicRegionParameters }
   | { tag: 'begin-remote-write'; val: Timestamp }

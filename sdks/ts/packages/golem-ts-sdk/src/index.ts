@@ -22,8 +22,7 @@ import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { setAgentId } from './internal/registry/agentId';
 import { encodeMultipart, decodeMultipart } from './internal/multipart';
-import { AgentClassName } from './agentClassName';
-import { clearAgentValidationError, getAgentValidationError } from './decorators/agent';
+import { getAgentValidationError } from './decorators/agent';
 
 export { BaseAgent } from './baseAgent';
 export { Uuid } from './uuid';
@@ -50,6 +49,7 @@ export * from './webhook';
 export * from './host/hostapi';
 export * as oplog from './host/oplog';
 export * from './host/guard';
+export * from './host/retry';
 export * from './host/result';
 export * from './host/transaction';
 export * from './host/checkpoint';
@@ -136,7 +136,7 @@ async function getDefinition(): Promise<AgentType> {
   return resolvedAgent.getAgentType();
 }
 
-async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
+async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
   if (!resolvedAgent) {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
@@ -168,7 +168,7 @@ async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
 
     const { data, boundary: newBoundary } = encodeMultipart(parts);
     return {
-      data,
+      payload: data,
       mimeType: `multipart/mixed; boundary=${newBoundary}`,
     };
   } else if (mimeType === 'application/json') {
@@ -176,7 +176,7 @@ async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
     const state = JSON.parse(new TextDecoder().decode(agentSnapshot));
     const envelope = { version: 1, principal, state };
     return {
-      data: new TextEncoder().encode(JSON.stringify(envelope)),
+      payload: new TextEncoder().encode(JSON.stringify(envelope)),
       mimeType: 'application/json',
     };
   } else {
@@ -192,12 +192,12 @@ async function save(): Promise<{ data: Uint8Array; mimeType: string }> {
     fullSnapshot.set(principalBytes, 5);
     fullSnapshot.set(agentSnapshot, 5 + principalBytes.length);
 
-    return { data: fullSnapshot, mimeType: 'application/octet-stream' };
+    return { payload: fullSnapshot, mimeType: 'application/octet-stream' };
   }
 }
 
-async function load(snapshot: { data: Uint8Array; mimeType: string }): Promise<void> {
-  const bytes = snapshot.data;
+async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promise<void> {
+  const bytes = snapshot.payload;
 
   if (resolvedAgent) {
     throw `Agent is already initialized in this container`;

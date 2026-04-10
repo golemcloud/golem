@@ -73,6 +73,7 @@ cargo make build
 ```
 
 WIT changes affect generated bindings in multiple crates. A full build ensures all bindings are regenerated correctly.
+If the change affects SDK-facing types, also run the relevant SDK test suites before considering the work complete.
 
 ## Adding a New WIT Dependency
 
@@ -107,7 +108,8 @@ If WIT changes affect SDK interfaces:
 
 1. **Rust SDK**: Rebuild `golem-rust` (bindings are generated via `wit_bindgen::generate!`)
 2. **TS SDK**: Rebuild packages (`npx pnpm run build` in `sdks/ts/`), then rebuild agent template WASM (`npx pnpm run build-agent-template`)
-3. **Test components**: Rebuild any test components that use the changed interfaces (see their `AGENTS.md`)
+3. **Scala SDK**: Regenerate `agent_guest.wasm`, adjust Scala SDK types or codecs if the WIT shape changed, and run the relevant Scala test suites
+4. **Test components**: Rebuild any test components that use the changed interfaces (see their `AGENTS.md`)
 
 ## Checklist
 
@@ -117,5 +119,6 @@ If WIT changes affect SDK interfaces:
 4. `Makefile.toml` sync tasks updated if a new dependency was added
 5. `cargo make build` succeeds
 6. SDKs rebuilt if SDK interfaces changed
-7. Test components rebuilt if their interfaces changed
-8. `cargo make fix` run before PR
+7. Relevant SDK tests run when WIT files change
+8. Test components rebuilt if their interfaces changed
+9. `cargo make fix` run before PR

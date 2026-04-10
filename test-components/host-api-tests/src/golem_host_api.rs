@@ -4,11 +4,19 @@ use golem_rust::bindings::golem::api::host::{
     resolve_agent_id_strict, resolve_component_id, set_oplog_index, update_agent,
 };
 use golem_rust::{
-    Checkpoint, CheckpointResultExt, ForkResult, PersistenceLevel, PromiseId, RetryPolicy, Schema,
-    Transaction, Uuid, agent_definition, agent_implementation, atomically, fallible_transaction,
-    fork, generate_idempotency_key, get_promise, golem_operation, infallible_transaction,
-    oplog_commit, use_idempotence_mode, use_persistence_level, use_retry_policy,
-    with_persistence_level,
+    agent_definition, agent_implementation, generate_idempotency_key, golem_operation, Schema,
+    atomically, get_promise, fork, oplog_commit,
+    fallible_transaction, infallible_transaction,
+    use_idempotence_mode, use_persistence_level,
+    with_persistence_level, Checkpoint, CheckpointResultExt, PersistenceLevel,
+    ForkResult, PromiseId, Transaction, Uuid,
+};
+use golem_rust::retry::{
+    get_retry_policies, get_retry_policy_by_name, set_retry_policy, remove_retry_policy,
+    use_retry_policy, NamedRetryPolicy, RetryPolicy, RetryPredicate,
+};
+use golem_rust::bindings::golem::api::retry::{
+    PolicyNode, PredicateNode, CountBoxConfig,
 };
 use golem_wasi_http::{Client, Response};
 use serde::{Deserialize, Serialize};
@@ -59,6 +67,12 @@ pub trait GolemHostApi {
         update_mode: UpdateMode,
     );
     fn generate_idempotency_keys(&self) -> (Uuid, Uuid);
+
+    fn list_retry_policy_names(&self) -> Vec<String>;
+    fn get_retry_policy_count(&self) -> u64;
+    fn set_simple_count_retry_policy(&self, name: String, priority: u32, max_retries: u32);
+    fn remove_named_retry_policy(&self, name: String);
+    fn has_retry_policy(&self, name: String) -> bool;
 }
 
 pub struct GolemHostApiImpl {
@@ -95,13 +109,23 @@ impl GolemHostApi for GolemHostApiImpl {
     }
 
     fn fail_with_custom_max_retries(&self, max_retries: u64) {
-        let _guard = use_retry_policy(RetryPolicy {
-            max_attempts: max_retries as u32,
-            min_delay: std::time::Duration::from_secs(1),
-            max_delay: std::time::Duration::from_secs(1),
-            multiplier: 1.0,
-            max_jitter_factor: None,
-        });
+        let policy = NamedRetryPolicy {
+            name: "__fail_with_custom_max_retries".to_string(),
+            priority: 0,
+            predicate: RetryPredicate {
+                nodes: vec![PredicateNode::PredTrue],
+            },
+            policy: RetryPolicy {
+                nodes: vec![
+                    PolicyNode::CountBox(CountBoxConfig {
+                        max_retries: max_retries as u32,
+                        inner: 1,
+                    }),
+                    PolicyNode::Periodic(1_000_000_000u64), // 1 second
+                ],
+            },
+        };
+        let _guard = use_retry_policy(policy);
 
         panic!("Fail now");
     }
@@ -334,6 +358,47 @@ impl GolemHostApi for GolemHostApiImpl {
         let key1 = generate_idempotency_key();
         let key2 = generate_idempotency_key();
         (key1, key2)
+    }
+
+    fn list_retry_policy_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = get_retry_policies()
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn get_retry_policy_count(&self) -> u64 {
+        get_retry_policies().len() as u64
+    }
+
+    fn set_simple_count_retry_policy(&self, name: String, priority: u32, max_retries: u32) {
+        let policy = NamedRetryPolicy {
+            name,
+            priority,
+            predicate: RetryPredicate {
+                nodes: vec![PredicateNode::PredTrue],
+            },
+            policy: RetryPolicy {
+                nodes: vec![
+                    PolicyNode::CountBox(CountBoxConfig {
+                        max_retries,
+                        inner: 1,
+                    }),
+                    PolicyNode::Periodic(1_000_000_000u64),
+                ],
+            },
+        };
+        set_retry_policy(&policy);
+    }
+
+    fn remove_named_retry_policy(&self, name: String) {
+        remove_retry_policy(&name);
+    }
+
+    fn has_retry_policy(&self, name: String) -> bool {
+        get_retry_policy_by_name(&name).is_some()
     }
 }
 

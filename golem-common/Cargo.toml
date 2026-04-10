@@ -81,6 +81,7 @@ derive_more = { workspace = true }
 desert_rust = { workspace = true, optional = true }
 figment = { workspace = true, optional = true }
 fred = { workspace = true, optional = true }
+glob-match = { workspace = true }
 heck = { workspace = true, optional = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }

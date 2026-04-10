@@ -23,6 +23,7 @@ use super::route_compilation::{
 };
 use crate::model::agent_secret::{DeploymentAgentSecretCreation, DeploymentAgentSecretUpdate};
 use crate::model::api_definition::UnboundCompiledRoute;
+use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::{
     AgentConfigSource, AgentType, AgentTypeName, DeployedRegisteredAgentType,
@@ -30,16 +31,18 @@ use golem_common::model::agent::{
 };
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::ComponentName;
-use golem_common::model::deployment::DeploymentAgentSecretDefault;
+use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
 use golem_common::model::diff::{self, HashOf, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionCreation, ResourceName};
+use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
+use golem_service_base::model::retry_policy::StoredRetryPolicy;
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use heck::ToKebabCase;
@@ -467,6 +470,63 @@ impl DeploymentContext {
                 creations.push(resource_default);
             }
         }
+        creations
+    }
+
+    /// Get all environment level retry policy creations that need to be executed as part of the deployment.
+    /// Policies that already exist by name in the environment are skipped (warn+skip, never overwrite).
+    pub fn deployment_retry_policy_creations(
+        &self,
+        retry_policies_in_environment: Vec<StoredRetryPolicy>,
+        retry_policy_defaults_in_deployment: Vec<DeploymentRetryPolicyDefault>,
+        actor: AccountId,
+        errors: &mut Vec<DeployValidationError>,
+    ) -> Vec<RetryPolicyCreationRecord> {
+        let existing_names: HashSet<String> = retry_policies_in_environment
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+
+        let mut creations = Vec::new();
+        let mut seen_names = HashSet::new();
+
+        for rpd in retry_policy_defaults_in_deployment {
+            if !seen_names.insert(rpd.name.clone()) {
+                ok_or_continue!(
+                    Err(DeployValidationError::ConflictingRetryPolicyDefaults {
+                        name: rpd.name.clone()
+                    }),
+                    errors
+                );
+            }
+
+            if existing_names.contains(&rpd.name) {
+                tracing::warn!(
+                    "Retry policy '{}' already exists in environment, skipping deployment default",
+                    rpd.name
+                );
+                continue;
+            }
+
+            // Convert API types back to core types for DB storage
+            let predicate: golem_common::model::retry_policy::Predicate = rpd.predicate.into();
+            let policy: golem_common::model::retry_policy::RetryPolicy = rpd.policy.into();
+            let predicate_json =
+                serde_json::to_string(&predicate).expect("Predicate serialization cannot fail");
+            let policy_json =
+                serde_json::to_string(&policy).expect("RetryPolicy serialization cannot fail");
+
+            creations.push(RetryPolicyCreationRecord::new(
+                RetryPolicyId::new(),
+                self.environment.id,
+                rpd.name,
+                rpd.priority,
+                predicate_json,
+                policy_json,
+                actor,
+            ));
+        }
+
         creations
     }
 }

@@ -459,39 +459,6 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
             }
-            PublicOplogEntry::ChangeRetryPolicy(params) => {
-                logln(format_message_highlight("CHANGE RETRY POLICY"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}max attempts:      {}",
-                    format_id(&params.new_policy.max_attempts),
-                ));
-                logln(format!(
-                    "{pad}min delay:         {} ms",
-                    format_id(&params.new_policy.min_delay.as_millis()),
-                ));
-                logln(format!(
-                    "{pad}max delay:         {} ms",
-                    format_id(&params.new_policy.max_delay.as_millis()),
-                ));
-                logln(format!(
-                    "{pad}multiplier:        {}",
-                    format_id(&params.new_policy.multiplier),
-                ));
-                logln(format!(
-                    "{pad}max jitter factor: {}",
-                    format_id(
-                        &params
-                            .new_policy
-                            .max_jitter_factor
-                            .map(|x| x.to_string())
-                            .unwrap_or("-".to_string()),
-                    ),
-                ));
-            }
             PublicOplogEntry::BeginAtomicRegion(params) => {
                 logln(format_message_highlight("BEGIN ATOMIC REGION"));
                 logln(format!(
@@ -952,6 +919,32 @@ impl TextView for PublicOplogEntry {
                 logln(format!(
                     "{pad}sending up to:     {}",
                     format_id(&params.sending_up_to)
+                ));
+            }
+            PublicOplogEntry::SetRetryPolicy(params) => {
+                logln(format_message_highlight("SET RETRY POLICY"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}name:              {}",
+                    format_id(&params.policy.name)
+                ));
+                logln(format!(
+                    "{pad}priority:          {}",
+                    format_id(&params.policy.priority)
+                ));
+            }
+            PublicOplogEntry::RemoveRetryPolicy(params) => {
+                logln(format_message_highlight("REMOVE RETRY POLICY"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}name:              {}",
+                    format_id(&params.name)
                 ));
             }
         }

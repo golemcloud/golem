@@ -70,7 +70,7 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
     val ts = s"${e.timestamp.seconds}s"
     e match {
       case OplogApi.OplogEntry.Create(p) =>
-        s"CREATE @ $ts revision=${p.componentRevision} args=${p.args.mkString(",")}"
+        s"CREATE @ $ts revision=${p.componentRevision}"
 
       case OplogApi.OplogEntry.HostCall(p) =>
         val reqSummary = summarizeVat(p.request)
@@ -91,7 +91,8 @@ final class OplogInspectorImpl(@unused private val name: String) extends OplogIn
       case OplogApi.OplogEntry.Jump(p)                   => s"JUMP @ $ts range=[${p.jump.start},${p.jump.end}]"
       case OplogApi.OplogEntry.Interrupted(t)            => s"INTERRUPTED @ ${t.seconds}s"
       case OplogApi.OplogEntry.Exited(t)                 => s"EXITED @ ${t.seconds}s"
-      case OplogApi.OplogEntry.ChangeRetryPolicy(p)      => s"RETRY_POLICY @ $ts max=${p.newPolicy.maxAttempts}"
+      case OplogApi.OplogEntry.SetRetryPolicy(p)         => s"SET_RETRY_POLICY @ $ts name=${p.name}"
+      case OplogApi.OplogEntry.RemoveRetryPolicy(p)      => s"REMOVE_RETRY_POLICY @ $ts name=${p.name}"
       case OplogApi.OplogEntry.BeginAtomicRegion(t)      => s"BEGIN_ATOMIC @ ${t.seconds}s"
       case OplogApi.OplogEntry.EndAtomicRegion(p)        => s"END_ATOMIC @ $ts begin=${p.beginIndex}"
       case OplogApi.OplogEntry.BeginRemoteWrite(t)       => s"BEGIN_REMOTE_WRITE @ ${t.seconds}s"

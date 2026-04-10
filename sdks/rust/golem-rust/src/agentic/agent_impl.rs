@@ -104,7 +104,7 @@ impl LoadSnapshotGuest for Component {
     fn load(
         snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
     ) -> Result<(), String> {
-        let bytes = snapshot.data;
+        let bytes = snapshot.payload;
         let is_json = snapshot.mime_type == "application/json";
         wasi_logger::Logger::install().expect("failed to install wasi_logger::Logger");
         log::set_max_level(log::LevelFilter::Trace);
@@ -216,7 +216,7 @@ impl SaveSnapshotGuest for Component {
                 let data =
                     serde_json::to_vec(&envelope).expect("Failed to serialize snapshot envelope");
                 crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
-                    data,
+                    payload: data,
                     mime_type: "application/json".to_string(),
                 }
             } else {
@@ -229,7 +229,7 @@ impl SaveSnapshotGuest for Component {
                 full_snapshot.extend_from_slice(&principal_bytes);
                 full_snapshot.extend_from_slice(&snapshot_data.data);
                 crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
-                    data: full_snapshot,
+                    payload: full_snapshot,
                     mime_type: "application/octet-stream".to_string(),
                 }
             }

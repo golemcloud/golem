@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
@@ -39,5 +40,12 @@ impl EnvironmentStateService for DisabledEnvironmentStateService {
         _environment_id: EnvironmentId,
     ) -> Result<HashMap<CanonicalAgentSecretPath, AgentSecret>, WorkerExecutorError> {
         Ok(HashMap::new())
+    }
+
+    async fn get_retry_policies(
+        &self,
+        _environment_id: EnvironmentId,
+    ) -> Result<Vec<NamedRetryPolicy>, WorkerExecutorError> {
+        Ok(vec![])
     }
 }

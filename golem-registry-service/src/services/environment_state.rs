@@ -14,6 +14,7 @@
 
 use super::agent_secret::{AgentSecretError, AgentSecretService};
 use super::deployment::{DeploymentError, DeploymentService};
+use super::retry_policy::{RetryPolicyError, RetryPolicyService};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::AgentDeploymentDetails;
@@ -34,21 +35,29 @@ impl SafeDisplay for EnvironmentStateError {
     }
 }
 
-error_forwarding!(EnvironmentStateError, DeploymentError, AgentSecretError);
+error_forwarding!(
+    EnvironmentStateError,
+    DeploymentError,
+    AgentSecretError,
+    RetryPolicyError
+);
 
 pub struct EnvironmentStateService {
     pub deployment_service: Arc<DeploymentService>,
     pub agent_secret_service: Arc<AgentSecretService>,
+    pub retry_policy_service: Arc<RetryPolicyService>,
 }
 
 impl EnvironmentStateService {
     pub fn new(
         deployment_service: Arc<DeploymentService>,
         agent_secret_service: Arc<AgentSecretService>,
+        retry_policy_service: Arc<RetryPolicyService>,
     ) -> Self {
         Self {
             deployment_service,
             agent_secret_service,
+            retry_policy_service,
         }
     }
 
@@ -79,9 +88,28 @@ impl EnvironmentStateService {
             .map(|sec| (sec.path.clone(), sec))
             .collect();
 
+        let retry_policies =
+            self.retry_policy_service
+                .list_in_environment_unchecked(environment_id)
+                .await?
+                .into_iter()
+                .filter_map(|stored| {
+                    match golem_common::model::retry_policy::NamedRetryPolicy::try_from(stored) {
+                        Ok(p) => Some(p),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Skipping invalid retry policy in environment {environment_id}: {e}"
+                            );
+                            None
+                        }
+                    }
+                })
+                .collect();
+
         Ok(EnvironmentState {
             agent_deployment_details,
             agent_secrets,
+            retry_policies,
         })
     }
 }

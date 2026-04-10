@@ -48,7 +48,6 @@ object OplogApi {
     timestamp: ContextApi.DateTime,
     agentId: AgentHostApi.AgentIdLiteral,
     componentRevision: BigInt,
-    args: List[String],
     env: Map[String, String],
     createdBy: String,
     environmentId: String,
@@ -123,9 +122,22 @@ object OplogApi {
     jump: OplogRegion
   )
 
-  final case class ChangeRetryPolicyParameters(
+  final case class SetRetryPolicyParameters(
     timestamp: ContextApi.DateTime,
-    newPolicy: HostApi.RetryPolicy
+    name: String,
+    priority: Int,
+    predicateJson: String,
+    policyJson: String
+  )
+
+  final case class RemoveRetryPolicyParameters(
+    timestamp: ContextApi.DateTime,
+    name: String
+  )
+
+  final case class FilesystemStorageUsageUpdateParameters(
+    timestamp: ContextApi.DateTime,
+    delta: BigInt
   )
 
   final case class EndAtomicRegionParameters(
@@ -341,7 +353,13 @@ object OplogApi {
     final case class Exited(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
-    final case class ChangeRetryPolicy(params: ChangeRetryPolicyParameters) extends OplogEntry {
+    final case class SetRetryPolicy(params: SetRetryPolicyParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
+    final case class RemoveRetryPolicy(params: RemoveRetryPolicyParameters) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = params.timestamp
+    }
+    final case class FilesystemStorageUsageUpdate(params: FilesystemStorageUsageUpdateParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
     final case class BeginAtomicRegion(ts: ContextApi.DateTime) extends OplogEntry {
@@ -453,8 +471,14 @@ object OplogApi {
         case "jump"                => Jump(parseJumpParameters(v.asInstanceOf[JsJumpParameters]))
         case "interrupted"         => Interrupted(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "exited"              => Exited(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "change-retry-policy" =>
-          ChangeRetryPolicy(parseChangeRetryPolicyParameters(v.asInstanceOf[JsChangeRetryPolicyParameters]))
+        case "set-retry-policy" =>
+          SetRetryPolicy(parseSetRetryPolicyParameters(v.asInstanceOf[JsSetRetryPolicyParameters]))
+        case "remove-retry-policy" =>
+          RemoveRetryPolicy(parseRemoveRetryPolicyParameters(v.asInstanceOf[JsRemoveRetryPolicyParameters]))
+        case "filesystem-storage-usage-update" =>
+          FilesystemStorageUsageUpdate(
+            parseFilesystemStorageUsageUpdateParameters(v.asInstanceOf[JsFilesystemStorageUsageUpdateParameters])
+          )
         case "begin-atomic-region" => BeginAtomicRegion(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "end-atomic-region"   =>
           EndAtomicRegion(parseEndAtomicRegionParameters(v.asInstanceOf[JsEndAtomicRegionParameters]))
@@ -508,8 +532,8 @@ object OplogApi {
           val sp = v.asInstanceOf[JsSnapshotParameters]
           Snapshot(
             ts = parseDateTime(sp.timestamp),
-            data = new scala.scalajs.js.typedarray.Int8Array(sp.data.buffer).toArray,
-            mimeType = sp.mimeType
+            data = new scala.scalajs.js.typedarray.Int8Array(sp.data.data.buffer).toArray,
+            mimeType = sp.data.mimeType
           )
         case "oplog-processor-checkpoint" =>
           val cp = v.asInstanceOf[JsOplogProcessorCheckpointParameters]
@@ -544,8 +568,8 @@ object OplogApi {
 
   private def parsePluginInstallationDescription(raw: JsPluginInstallationDescription): PluginInstallationDescription =
     PluginInstallationDescription(
-      name = raw.name,
-      version = raw.version,
+      name = raw.pluginName,
+      version = raw.pluginVersion,
       parameters = raw.parameters.toSeq.map(t => t._1 -> t._2).toMap
     )
 
@@ -557,7 +581,6 @@ object OplogApi {
       timestamp = parseDateTime(raw.timestamp),
       agentId = parseAgentId(raw.agentId),
       componentRevision = BigInt(raw.componentRevision.toString),
-      args = raw.args.toList,
       env = raw.env.toSeq.map(t => t._1 -> t._2).toMap,
       createdBy = raw.createdBy.toString,
       environmentId = raw.environmentId.toString,
@@ -574,7 +597,7 @@ object OplogApi {
       functionName = raw.functionName,
       request = WitValueTypes.ValueAndType.fromJs(raw.request),
       response = WitValueTypes.ValueAndType.fromJs(raw.response),
-      wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.wrappedFunctionType)
+      wrappedFunctionType = DurabilityApi.DurableFunctionType.fromJs(raw.durableFunctionType)
     )
 
   private def parseSpanData(raw: JsSpanData): SpanData =
@@ -681,7 +704,7 @@ object OplogApi {
   private def parseAgentInvocationFinishedParameters(
     raw: JsAgentInvocationFinishedParameters
   ): AgentInvocationFinishedParameters = {
-    val result   = raw.invocationResult
+    val result   = raw.result
     val response = result.tag match {
       case "agent-initialization" | "agent-method" =>
         val p =
@@ -709,19 +732,30 @@ object OplogApi {
       jump = OplogRegion(BigInt(raw.jump.start.toString), BigInt(raw.jump.end.toString))
     )
 
-  private def parseChangeRetryPolicyParameters(raw: JsChangeRetryPolicyParameters): ChangeRetryPolicyParameters = {
-    val p = raw.newPolicy
-    ChangeRetryPolicyParameters(
+  private def parseSetRetryPolicyParameters(raw: JsSetRetryPolicyParameters): SetRetryPolicyParameters = {
+    val p = raw.policy
+    SetRetryPolicyParameters(
       timestamp = parseDateTime(raw.timestamp),
-      newPolicy = HostApi.RetryPolicy(
-        maxAttempts = p.maxAttempts,
-        minDelayNanos = BigInt(p.minDelay.toString),
-        maxDelayNanos = BigInt(p.maxDelay.toString),
-        multiplier = p.multiplier,
-        maxJitterFactor = p.maxJitterFactor.toOption
-      )
+      name = p.name,
+      priority = p.priority,
+      predicateJson = js.JSON.stringify(p.predicate.asInstanceOf[js.Any]),
+      policyJson = js.JSON.stringify(p.policy.asInstanceOf[js.Any])
     )
   }
+
+  private def parseRemoveRetryPolicyParameters(raw: JsRemoveRetryPolicyParameters): RemoveRetryPolicyParameters =
+    RemoveRetryPolicyParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      name = raw.name
+    )
+
+  private def parseFilesystemStorageUsageUpdateParameters(
+    raw: JsFilesystemStorageUsageUpdateParameters
+  ): FilesystemStorageUsageUpdateParameters =
+    FilesystemStorageUsageUpdateParameters(
+      timestamp = parseDateTime(raw.timestamp),
+      delta = BigInt(raw.delta.toString)
+    )
 
   private def parseEndAtomicRegionParameters(raw: JsEndAtomicRegionParameters): EndAtomicRegionParameters =
     EndAtomicRegionParameters(
@@ -772,12 +806,12 @@ object OplogApi {
   }
 
   private def parsePendingUpdateParameters(raw: JsPendingUpdateParameters): PendingUpdateParameters = {
-    val desc = raw.updateDescription
+    val desc = raw.description
     val ud   = desc.tag match {
       case "auto-update"    => UpdateDescription.AutoUpdate
       case "snapshot-based" =>
         val snapshot = desc.asInstanceOf[JsUpdateDescriptionSnapshotBased].value
-        UpdateDescription.SnapshotBased(new scala.scalajs.js.typedarray.Int8Array(snapshot.data.buffer).toArray)
+        UpdateDescription.SnapshotBased(new scala.scalajs.js.typedarray.Int8Array(snapshot.payload.buffer).toArray)
       case other =>
         throw new IllegalArgumentException(s"Unknown UpdateDescription tag: $other")
     }
@@ -812,7 +846,7 @@ object OplogApi {
   private def parseCreateResourceParameters(raw: JsCreateResourceParameters): CreateResourceParameters =
     CreateResourceParameters(
       timestamp = parseDateTime(raw.timestamp),
-      resourceId = BigInt(raw.resourceId.toString),
+      resourceId = BigInt(raw.id.toString),
       name = raw.name,
       owner = raw.owner
     )
@@ -820,7 +854,7 @@ object OplogApi {
   private def parseDropResourceParameters(raw: JsDropResourceParameters): DropResourceParameters =
     DropResourceParameters(
       timestamp = parseDateTime(raw.timestamp),
-      resourceId = BigInt(raw.resourceId.toString),
+      resourceId = BigInt(raw.id.toString),
       name = raw.name,
       owner = raw.owner
     )

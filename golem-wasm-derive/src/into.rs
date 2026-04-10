@@ -357,7 +357,7 @@ fn record_or_tuple(
 ) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
     let all_fields_has_names = fields.iter().all(|field| field.ident.is_some());
 
-    if all_fields_has_names {
+    if all_fields_has_names && !wit.as_tuple {
         let wit_fields = fields
             .iter()
             .map(|field| {
@@ -433,9 +433,13 @@ fn record_or_tuple(
         let tuple_field_values = fields
             .iter()
             .enumerate()
-            .map(|(idx, _field)| {
-                let idx = Index::from(idx);
-                quote! { self.#idx.into_value() }
+            .map(|(idx, field)| {
+                if let Some(field_name) = &field.ident {
+                    quote! { self.#field_name.into_value() }
+                } else {
+                    let idx = Index::from(idx);
+                    quote! { self.#idx.into_value() }
+                }
             })
             .collect::<Vec<_>>();
 
@@ -449,7 +453,11 @@ fn record_or_tuple(
             })
             .collect::<Vec<_>>();
 
-        let naming = apply_naming(wit, default_name);
+        let naming = if wit.as_tuple {
+            quote! {}
+        } else {
+            apply_naming(wit, default_name)
+        };
         let into_value = quote! {
             golem_wasm::Value::Tuple(vec![
                 #(#tuple_field_values),*
@@ -468,12 +476,14 @@ fn record_or_tuple(
 fn get_field_type(ty: &Type, wit_field: &WitField) -> proc_macro2::TokenStream {
     match (
         &wit_field.convert,
+        &wit_field.try_convert,
         &wit_field.convert_vec,
         &wit_field.convert_option,
     ) {
-        (Some(convert_to), None, None) => quote! { #convert_to },
-        (None, Some(convert_to), None) => quote! { Vec<#convert_to> },
-        (None, None, Some(convert_to)) => quote! { Option<#convert_to> },
+        (Some(convert_to), None, None, None) => quote! { #convert_to },
+        (None, Some(convert_to), None, None) => quote! { #convert_to },
+        (None, None, Some(convert_to), None) => quote! { Vec<#convert_to> },
+        (None, None, None, Some(convert_to)) => quote! { Option<#convert_to> },
         _ => {
             quote! { #ty }
         }

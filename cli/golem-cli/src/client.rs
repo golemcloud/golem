@@ -20,7 +20,7 @@ use golem_client::api::{
     AgentTypesClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
     ApplicationClientLive, ComponentClientLive, DeploymentClientLive, EnvironmentClientLive,
     HealthCheckClientLive, LoginClientLive, McpDeploymentClientLive, PluginClientLive,
-    TokenClientLive, WorkerClientLive,
+    RetryPoliciesClientLive, TokenClientLive, WorkerClientLive,
 };
 use golem_client::{Context as ClientContext, Security};
 use golem_common::base_model::api;
@@ -256,6 +256,7 @@ pub struct GolemClients {
     pub agent: AgentClientLive,
     pub agent_secrets: AgentSecretsClientLive,
     pub agent_types: AgentTypesClientLive,
+    pub retry_policies: RetryPoliciesClientLive,
     pub api_deployment: ApiDeploymentClientLive,
     pub api_domain: ApiDomainClientLive,
     pub api_security: ApiSecurityClientLive,
@@ -346,6 +347,9 @@ impl GolemClients {
                 context: worker_invoke_context(),
             },
             agent_secrets: AgentSecretsClientLive {
+                context: registry_context(),
+            },
+            retry_policies: RetryPoliciesClientLive {
                 context: registry_context(),
             },
             agent_types: AgentTypesClientLive {

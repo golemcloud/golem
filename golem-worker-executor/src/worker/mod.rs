@@ -1390,54 +1390,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
+        let status = self.last_known_status.read().await.clone();
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
             result.cache(&self.owned_agent_id, self).await;
-            match result {
-                InvocationResult::Cached {
-                    result: Ok(values), ..
-                } => LookupResult::Complete(Ok(values)),
-                InvocationResult::Cached {
-                    result:
-                        Err(FailedInvocationResult {
-                            trap_type: TrapType::Interrupt(InterruptKind::Interrupt(_)),
-                            ..
-                        }),
-                    ..
-                } => LookupResult::Interrupted,
-                InvocationResult::Cached {
-                    result:
-                        Err(FailedInvocationResult {
-                            trap_type: TrapType::Interrupt(_),
-                            ..
-                        }),
-                    ..
-                } => LookupResult::Pending,
-                InvocationResult::Cached {
-                    result:
-                        Err(FailedInvocationResult {
-                            trap_type: TrapType::Error { error, .. },
-                            stderr,
-                        }),
-                    ..
-                } => LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed {
-                    error,
-                    stderr,
-                })),
-                InvocationResult::Cached {
-                    result:
-                        Err(FailedInvocationResult {
-                            trap_type: TrapType::Exit,
-                            ..
-                        }),
-                    ..
-                } => LookupResult::Complete(Err(WorkerExecutorError::runtime("Process exited"))),
-                InvocationResult::Lazy { .. } => {
-                    panic!("Unexpected lazy result after InvocationResult.cache")
-                }
-            }
+            lookup_result_from_cached_result(&status, key, result)
         } else {
-            let status = self.last_known_status.read().await;
             let is_pending = status
                 .pending_invocations
                 .iter()
@@ -2717,6 +2675,132 @@ impl InvocationResult {
             };
 
             *self = Self::Cached { result }
+        }
+    }
+}
+
+fn lookup_result_from_cached_result(
+    status: &AgentStatusRecord,
+    key: &IdempotencyKey,
+    result: InvocationResult,
+) -> LookupResult {
+    match result {
+        InvocationResult::Cached {
+            result: Ok(values), ..
+        } => LookupResult::Complete(Ok(values)),
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    // Retry marker error entries are persisted before the invocation has
+                    // actually finished. While the same idempotency key is still current
+                    // and the worker has not entered a terminal state, report it as
+                    // pending so lookup callers can observe the eventual terminal result.
+                    trap_type: TrapType::Error { .. },
+                    ..
+                }),
+        } if status.current_idempotency_key.as_ref() == Some(key)
+            && !matches!(status.status, AgentStatus::Failed | AgentStatus::Exited) =>
+        {
+            LookupResult::Pending
+        }
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    trap_type: TrapType::Interrupt(InterruptKind::Interrupt(_)),
+                    ..
+                }),
+            ..
+        } => LookupResult::Interrupted,
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    trap_type: TrapType::Interrupt(_),
+                    ..
+                }),
+            ..
+        } => LookupResult::Pending,
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    trap_type: TrapType::Error { error, .. },
+                    stderr,
+                }),
+            ..
+        } => LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed { error, stderr })),
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    trap_type: TrapType::Exit,
+                    ..
+                }),
+            ..
+        } => LookupResult::Complete(Err(WorkerExecutorError::runtime("Process exited"))),
+        InvocationResult::Lazy { .. } => {
+            panic!("Unexpected lazy result after InvocationResult.cache")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::oplog::AgentError;
+    use test_r::test;
+
+    fn status_with_current_key(status: AgentStatus, key: &IdempotencyKey) -> AgentStatusRecord {
+        AgentStatusRecord {
+            status,
+            current_idempotency_key: Some(key.clone()),
+            ..AgentStatusRecord::default()
+        }
+    }
+
+    #[test]
+    fn lookup_keeps_retrying_error_pending() {
+        let key = IdempotencyKey::fresh();
+        let lookup = lookup_result_from_cached_result(
+            &status_with_current_key(AgentStatus::Retrying, &key),
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult {
+                    trap_type: TrapType::Error {
+                        error: AgentError::TransientError("in-function retry".to_string()),
+                        retry_from: OplogIndex::from_u64(17),
+                    },
+                    stderr: String::new(),
+                }),
+            },
+        );
+
+        assert!(matches!(lookup, LookupResult::Pending));
+    }
+
+    #[test]
+    fn lookup_reports_terminal_error_as_failure() {
+        let key = IdempotencyKey::fresh();
+        let lookup = lookup_result_from_cached_result(
+            &status_with_current_key(AgentStatus::Failed, &key),
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult {
+                    trap_type: TrapType::Error {
+                        error: AgentError::TransientError("in-function retry".to_string()),
+                        retry_from: OplogIndex::from_u64(17),
+                    },
+                    stderr: String::new(),
+                }),
+            },
+        );
+
+        match lookup {
+            LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed {
+                error: AgentError::TransientError(details),
+                stderr,
+            })) => {
+                assert_eq!(details, "in-function retry");
+                assert!(stderr.is_empty());
+            }
+            other => panic!("expected terminal lookup failure, got {other:?}"),
         }
     }
 }
