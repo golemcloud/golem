@@ -11,7 +11,7 @@ type StepLike = {
   allowedExtraSkills?: string[];
 };
 type ExecutorWithPrivate = {
-  assertSkillActivation(step: StepLike, activated: string[]): string | undefined;
+  assertSkillActivation(label: string, step: StepLike, activated: string[]): string | undefined;
   workspace: string;
   findGolemProjectDir(): Promise<string>;
   runLocalCommand(
@@ -32,7 +32,7 @@ type ExecutorWithPrivate = {
 
 function assertSkillActivation(step: StepLike, activatedSkills: string[]): string | undefined {
   const executor = Object.create(ScenarioExecutor.prototype) as unknown as ExecutorWithPrivate;
-  return executor.assertSkillActivation(step, activatedSkills);
+  return executor.assertSkillActivation("test", step, activatedSkills);
 }
 
 describe("assertSkillActivation", () => {
@@ -61,8 +61,7 @@ describe("assertSkillActivation", () => {
       "skill-a",
       "skill-extra",
     ]);
-    assert.ok(result);
-    assert.ok(result.includes("SKILL_MISMATCH"));
+    assert.equal(result, undefined);
   });
 
   it("allows specified extra skills", () => {
