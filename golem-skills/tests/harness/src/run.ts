@@ -21,7 +21,7 @@ import {
   type HtmlScenarioReport,
 } from "./html-report.js";
 import chalk from "chalk";
-import { findGolemAppDir } from "./workspace.js";
+import { detectGolemWorkspaceRoot, findGolemAppDir } from "./workspace.js";
 
 const SUPPORTED_AGENTS = [
   "claude-code",
@@ -210,6 +210,15 @@ async function main() {
     const outputDir = path.resolve(process.cwd(), output!);
     await mergeReports(path.resolve(process.cwd(), mergeReportsDir), outputDir);
     return;
+  }
+
+  // Auto-detect GOLEM_PATH if not explicitly set
+  if (!process.env.GOLEM_PATH) {
+    const detected = await detectGolemWorkspaceRoot();
+    if (detected) {
+      process.env.GOLEM_PATH = detected;
+      console.log(chalk.cyan(`Auto-detected GOLEM_PATH: ${detected}`));
+    }
   }
 
   if (help) {
