@@ -145,7 +145,7 @@ export class GolemServer {
       ["server", "run", "--data-dir", dataDir, "--clean"],
       {
         stdio: ["ignore", "pipe", "pipe"],
-        detached: false,
+        detached: true,
       },
     );
 
@@ -186,7 +186,7 @@ export class GolemServer {
     }
 
     // Timed out — kill and fail
-    this.stop();
+    await this.stop();
     throw new Error(
       `Golem server did not become ready on port ${port} within ${(maxAttempts * delayMs) / 1000}s.`,
     );
@@ -194,26 +194,49 @@ export class GolemServer {
 
   /**
    * Stop the server if we started it. No-op if not running.
+   * Returns a promise that resolves once the process has exited.
    */
-  stop(): void {
+  async stop(): Promise<void> {
     if (!this.serverProcess) return;
 
     const proc = this.serverProcess;
     this.serverProcess = null;
 
-    proc.kill("SIGTERM");
+    // Register the exit listener before sending signals to avoid race conditions
+    const exited = new Promise<void>((resolve) => {
+      if (proc.exitCode !== null || proc.signalCode !== null) {
+        resolve();
+      } else {
+        proc.on("exit", () => resolve());
+      }
+    });
+
+    // Kill the process tree if possible (negative PID sends to process group),
+    // otherwise fall back to killing just the process.
+    try {
+      if (proc.pid) {
+        process.kill(-proc.pid, "SIGTERM");
+      } else {
+        proc.kill("SIGTERM");
+      }
+    } catch {
+      proc.kill("SIGTERM");
+    }
 
     // Force kill after 5 seconds if still alive
     const forceKill = setTimeout(() => {
       try {
-        proc.kill("SIGKILL");
+        if (proc.pid) {
+          process.kill(-proc.pid, "SIGKILL");
+        } else {
+          proc.kill("SIGKILL");
+        }
       } catch {
         // Already dead
       }
     }, 5000);
 
-    proc.on("exit", () => {
-      clearTimeout(forceKill);
-    });
+    await exited;
+    clearTimeout(forceKill);
   }
 }

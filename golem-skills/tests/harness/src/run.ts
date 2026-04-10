@@ -378,9 +378,11 @@ Options:
 
   process.on("SIGINT", () => {
     if (interrupted) {
-      golemServer.stop();
-      console.log(chalk.red("\nForce exit."));
-      process.exit(130);
+      golemServer.stop().finally(() => {
+        console.log(chalk.red("\nForce exit."));
+        process.exit(130);
+      });
+      return;
     }
     interrupted = true;
     console.log(
@@ -631,14 +633,14 @@ Options:
   }
 
   if (hasFailures) {
-    process.exit(1);
+    process.exitCode = 1;
   }
   } finally {
-    golemServer.stop();
+    await golemServer.stop();
   }
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error(chalk.red("Fatal error:"));
   console.error(err);
   process.exit(1);
