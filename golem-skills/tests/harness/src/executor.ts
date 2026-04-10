@@ -3,14 +3,14 @@ import { spawn } from "node:child_process";
 import * as path from "node:path";
 import * as yaml from "yaml";
 import { z } from "zod";
-import { AgentDriver } from "./driver/base.js";
+import { AgentDriver, killProcessTree } from "./driver/base.js";
 import { SkillWatcher } from "./watcher.js";
 import { evaluate, ExpectSchema, type AssertionContext } from "./assertions.js";
 import { classifyFailure, type FailureClassification } from "./failure-classification.js";
 import { findGolemAppDir } from "./workspace.js";
 import * as log from "./log.js";
 
-export const DEFAULT_STEP_TIMEOUT_SECONDS = 300;
+export const DEFAULT_STEP_TIMEOUT_SECONDS = 1800;
 const WATCHER_SNAPSHOT_SETTLE_MS = 25;
 
 // --- Language-conditional resolution ---
@@ -1410,34 +1410,33 @@ export class ScenarioExecutor {
     cwd: string,
     extraEnv?: Record<string, string>,
   ): Promise<LocalCommandResult> {
-    const controller = new AbortController();
-    const { signal } = controller;
-
     return new Promise((resolve) => {
       const child = spawn(command, args, {
         cwd,
-        signal,
+        detached: true,
         env: { ...process.env, ...extraEnv },
         stdio: ["ignore", "pipe", "pipe"],
       });
 
       let stdout = "";
       let stderr = "";
+      let timedOut = false;
       child.stdout?.on("data", (data) => (stdout += data.toString()));
       child.stderr?.on("data", (data) => (stderr += data.toString()));
 
       const timeoutId = setTimeout(() => {
-        controller.abort();
+        timedOut = true;
+        killProcessTree(child);
       }, timeoutSeconds * 1000);
 
       child.on("close", (exitCode) => {
         clearTimeout(timeoutId);
         resolve({
-          success: exitCode === 0,
+          success: !timedOut && exitCode === 0,
           stdout,
           stderr,
           output: stdout + stderr,
-          exitCode,
+          exitCode: timedOut ? null : exitCode,
         });
       });
 

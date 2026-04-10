@@ -1,7 +1,41 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import * as log from "../log.js";
+
+/**
+ * Kill a child process and its entire process tree.
+ * Uses negative PID to send SIGTERM to the process group, falling back to
+ * killing just the process. Schedules a SIGKILL if the tree doesn't exit
+ * within 5 seconds.
+ */
+export function killProcessTree(child: ChildProcess): void {
+  try {
+    if (child.pid) {
+      process.kill(-child.pid, "SIGTERM");
+    } else {
+      child.kill("SIGTERM");
+    }
+  } catch {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Already dead
+    }
+  }
+
+  setTimeout(() => {
+    try {
+      if (child.pid) {
+        process.kill(-child.pid, "SIGKILL");
+      } else {
+        child.kill("SIGKILL");
+      }
+    } catch {
+      // Already dead
+    }
+  }, 5000);
+}
 
 export interface AgentResult {
   success: boolean;
@@ -60,13 +94,11 @@ export abstract class BaseAgentDriver implements AgentDriver {
     cwd?: string,
   ): Promise<AgentResult> {
     const startTime = Date.now();
-    const controller = new AbortController();
-    const { signal } = controller;
 
     return new Promise((resolve) => {
       const child = spawn(command, args, {
         cwd: cwd || this.workspace,
-        signal,
+        detached: true,
         env: { ...process.env },
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -74,6 +106,7 @@ export abstract class BaseAgentDriver implements AgentDriver {
       let output = "";
       let stdoutBuf = "";
       let stderrBuf = "";
+      let timedOut = false;
       const prefix = this.logPrefix;
 
       child.stdout?.on("data", (data) => {
@@ -98,7 +131,8 @@ export abstract class BaseAgentDriver implements AgentDriver {
       });
 
       const timeoutId = setTimeout(() => {
-        controller.abort();
+        timedOut = true;
+        killProcessTree(child);
       }, timeoutSeconds * 1000);
 
       child.on("close", (exitCode) => {
@@ -107,10 +141,10 @@ export abstract class BaseAgentDriver implements AgentDriver {
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
         const durationSeconds = (Date.now() - startTime) / 1000;
         resolve({
-          success: exitCode === 0,
-          output,
+          success: !timedOut && exitCode === 0,
+          output: timedOut ? `Timed out after ${timeoutSeconds}s. ${output}` : output,
           durationSeconds,
-          exitCode,
+          exitCode: timedOut ? null : exitCode,
         });
       });
 
