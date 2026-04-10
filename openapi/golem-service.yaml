@@ -16582,9 +16582,6 @@ components:
         componentLimit:
           type: integer
           format: uint64
-        workerLimit:
-          type: integer
-          format: uint64
         workerConnectionLimit:
           type: integer
           format: uint64
@@ -16630,7 +16627,6 @@ components:
       - appLimit
       - envLimit
       - componentLimit
-      - workerLimit
       - workerConnectionLimit
       - storageLimit
       - monthlyGasLimit

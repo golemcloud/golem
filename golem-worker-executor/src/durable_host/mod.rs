@@ -2937,7 +2937,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
         for worker in workers {
             let owned_agent_id = worker.initial_worker_metadata.owned_agent_id();
-            let created_by = worker.initial_worker_metadata.created_by;
             let latest_worker_status = calculate_last_known_status_for_existing_worker(
                 this,
                 &owned_agent_id,
@@ -2953,7 +2952,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 | AgentStatus::Interrupted => {
                     let _ = Worker::get_or_create_running(
                         this,
-                        created_by,
                         &owned_agent_id,
                         None,
                         None,

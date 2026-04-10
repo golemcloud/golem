@@ -336,14 +336,6 @@ mod tests {
         ) -> Result<golem_service_base::model::ResourceLimits, RegistryServiceError> {
             unimplemented!()
         }
-        async fn update_worker_limit(
-            &self,
-            _: AccountId,
-            _: &golem_common::base_model::AgentId,
-            _: bool,
-        ) -> Result<(), RegistryServiceError> {
-            unimplemented!()
-        }
         async fn update_worker_connection_limit(
             &self,
             _: AccountId,
