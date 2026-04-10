@@ -518,15 +518,15 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let initial_source_worker_metadata = source_worker_instance.get_initial_worker_metadata();
 
-        // TODO: Should `created_by` use `component.account_id` (the component
-        // owner) instead of `fork_account_id` (the caller)?  The same issue
-        // fixed in `get_or_create_worker_metadata` for RPC-created workers
-        // (golemcloud/golem#3099) likely applies here — the forked worker's
-        // resource consumption would be attributed to the caller rather than
-        // the component owner?
+        // Use the source worker's `created_by` (the component owner) rather
+        // than `fork_account_id` (the fork caller). This ensures the forked
+        // worker's metadata is consistent with its initial oplog entry (which
+        // preserves the source's `created_by`), and that resource consumption
+        // is attributed to the component owner, not the caller.
+        // See https://github.com/golemcloud/golem/issues/3099
         let target_worker_metadata = AgentMetadata {
             agent_id: target_agent_id.clone(),
-            created_by: fork_account_id,
+            created_by: initial_source_worker_metadata.created_by,
             environment_id,
             env: initial_source_worker_metadata.env,
             config_vars: initial_source_worker_metadata.config_vars,
