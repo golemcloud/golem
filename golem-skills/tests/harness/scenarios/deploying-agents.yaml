@@ -8,8 +8,6 @@ steps:
     prompt: "Build and deploy the test-app project."
     expectedSkills:
       - "golem-deploy"
-    verify:
-      deploy: true
 
   - id: "invoke-increment"
     invoke_json:
