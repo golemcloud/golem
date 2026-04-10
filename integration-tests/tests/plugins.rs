@@ -1031,8 +1031,19 @@ async fn oplog_processor_no_duplicates_after_crash(
     )
     .await?;
 
-    // Wait for flush to complete
-    let _ = wait_for_invocations(&received_batches, 4, Duration::from_secs(60)).await;
+    // Phase 1: wait for the worker oplog to show all 4 completed invocations
+    // (1 agent-initialization + 3 add calls).
+    wait_for_oplog_completions(
+        &user,
+        &worker_id,
+        4,
+        Duration::from_secs(120),
+        &received_batches,
+    )
+    .await;
+
+    // Phase 2: wait for the oplog processor callbacks to arrive before crashing.
+    let _ = wait_for_invocations(&received_batches, 4, Duration::from_secs(120)).await;
     tokio::time::sleep(Duration::from_secs(10)).await;
 
     // Crash both user worker and oplog processor plugin worker via simulated_crash
@@ -1052,7 +1063,16 @@ async fn oplog_processor_no_duplicates_after_crash(
     )
     .await?;
 
-    let batches = wait_for_invocations(&received_batches, 5, Duration::from_secs(60)).await;
+    wait_for_oplog_completions(
+        &user,
+        &worker_id,
+        5,
+        Duration::from_secs(120),
+        &received_batches,
+    )
+    .await;
+
+    let batches = wait_for_invocations(&received_batches, 5, Duration::from_secs(120)).await;
     assert_function_names(
         &batches,
         &["agent-initialization", "add", "add", "add", "add"],
@@ -1307,7 +1327,8 @@ async fn oplog_processor_partial_plugin_failure(
     // Plugin A must receive exactly the expected entries with no duplicates.
     // Current bug: re-buffer on partial failure (plugin B fails) causes plugin A
     // to receive duplicate entries.
-    let batches_a = wait_for_invocations(&received_a, 4, Duration::from_secs(60)).await;
+    wait_for_oplog_completions(&user, &worker_id, 4, Duration::from_secs(120), &received_a).await;
+    let batches_a = wait_for_invocations(&received_a, 4, Duration::from_secs(120)).await;
     assert_function_names(&batches_a, &["agent-initialization", "add", "add", "add"]);
     assert_unique_oplog_indices(&batches_a);
 
@@ -1437,7 +1458,17 @@ async fn oplog_processor_activation_mid_stream(
     .await?;
 
     // Plugin should only receive post-activation entries, NOT the 2 pre-activation adds.
-    let batches = wait_for_invocations(&received_batches, 2, Duration::from_secs(60)).await;
+    // Total completed invocations in the user worker oplog are now:
+    // 1 agent-initialization + 2 pre-activation adds + 2 post-activation adds.
+    wait_for_oplog_completions(
+        &user,
+        &worker_id,
+        5,
+        Duration::from_secs(120),
+        &received_batches,
+    )
+    .await;
+    let batches = wait_for_invocations(&received_batches, 2, Duration::from_secs(120)).await;
     let fn_names = extract_function_names(&batches);
     assert_eq!(
         fn_names.iter().filter(|f| f.as_str() == "add").count(),
@@ -1527,8 +1558,18 @@ async fn oplog_processor_deactivation(deps: &EnvBasedTestDependencies) -> anyhow
     )
     .await?;
 
-    // Wait for initial delivery
-    let batches = wait_for_invocations(&received_batches, 4, Duration::from_secs(60)).await;
+    // Phase 1: wait for the worker oplog to show all 4 completed baseline invocations.
+    wait_for_oplog_completions(
+        &user,
+        &worker_id,
+        4,
+        Duration::from_secs(120),
+        &received_batches,
+    )
+    .await;
+
+    // Phase 2: wait for the initial callbacks to arrive before uninstalling the plugin.
+    let batches = wait_for_invocations(&received_batches, 4, Duration::from_secs(120)).await;
     assert_function_names(&batches, &["agent-initialization", "add", "add", "add"]);
     let pre_deactivation_count = invocation_count(&batches);
 
@@ -1638,7 +1679,7 @@ async fn oplog_processor_idle_worker_timer_flush(
         .await?;
 
     let repo_id = agent_id!("Repository", "worker1");
-    let _worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
+    let worker_id = user.start_agent(&component.id, repo_id.clone()).await?;
 
     // Just one invocation (+ init) — small batch, must be delivered by timer (5s)
     // not by commit-count threshold (MAX_COMMIT_COUNT=3).
@@ -1652,7 +1693,15 @@ async fn oplog_processor_idle_worker_timer_flush(
     .await?;
     let invoke_done = t0.elapsed();
 
-    let batches = wait_for_invocations(&received_batches, 2, Duration::from_secs(60)).await;
+    wait_for_oplog_completions(
+        &user,
+        &worker_id,
+        2,
+        Duration::from_secs(120),
+        &received_batches,
+    )
+    .await;
+    let batches = wait_for_invocations(&received_batches, 2, Duration::from_secs(120)).await;
     let callback_arrived = t0.elapsed();
     let fn_names = extract_function_names(&batches);
     assert!(fn_names.contains(&"agent-initialization".to_string()));

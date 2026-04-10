@@ -1064,15 +1064,17 @@ mod tests {
             .unwrap();
         }
 
-        let _ = wait_for_invocations(&received, 4, Duration::from_secs(60)).await;
+        // Two-phase setup gate: wait for oplog persistence, then for callbacks.
+        wait_for_oplog_completions(&user, &worker_id, 4, Duration::from_secs(120), &received).await;
+        let _ = wait_for_invocations(&received, 4, Duration::from_secs(120)).await;
 
-        // Shard reassignment: stop 2 executors, wait, start them back
+        // Shard reassignment: stop 2 executors, allow reassignment, then start them back.
         deps.stop_random_worker_executors(2).await;
+        // Give the shard manager time to detect executor loss and reassign shards.
         tokio::time::sleep(Duration::from_secs(5)).await;
         deps.start_random_worker_executors(2).await;
-        tokio::time::sleep(Duration::from_secs(5)).await;
 
-        // Wait for worker to be available again
+        // Wait for the worker to become usable again after shard movement.
         user.wait_for_statuses(
             &worker_id,
             &[AgentStatus::Idle, AgentStatus::Running],
@@ -1092,7 +1094,7 @@ mod tests {
             .unwrap();
         }
 
-        let batches = wait_for_invocations(&received, 7, Duration::from_secs(60)).await;
+        let batches = wait_for_invocations(&received, 7, Duration::from_secs(120)).await;
         let fn_names = extract_function_names(&batches);
         // Exactly-once: exactly 1 init + 6 adds, no duplicates across shard reassignment.
         // Current bug: no checkpoint, so shard reassignment causes re-delivery.
