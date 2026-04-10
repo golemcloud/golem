@@ -22,8 +22,8 @@ use golem_service_base::service::compiled_component::CompiledComponentServiceCon
 use golem_worker_executor::services::golem_config::{
     ActiveWorkersConfig, AgentTypesServiceConfig, AgentWebhooksServiceConfig, ComponentCacheConfig,
     EngineConfig, EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, IndexedStorageConfig,
-    KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, RdbmsConfig, ResourceLimitsConfig,
-    SchedulerConfig, SuspendConfig, WorkerServiceGrpcConfig,
+    KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig, QuotaServiceConfig, RdbmsConfig,
+    ResourceLimitsConfig, SchedulerConfig, SuspendConfig, WorkerServiceGrpcConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -93,6 +93,7 @@ impl DebugConfig {
             registry_service: self.registry_service,
             max_in_function_retry_delay: std::time::Duration::from_secs(20),
             max_websocket_connections: 100,
+            quota_service: QuotaServiceConfig::default(),
         }
     }
 }

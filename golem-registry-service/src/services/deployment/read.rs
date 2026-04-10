@@ -268,8 +268,8 @@ impl DeploymentService {
 
     pub async fn get_latest_deployed_agent_type_by_component_revision(
         &self,
-        environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
         agent_type_name: &AgentTypeName,
     ) -> Result<DeployedRegisteredAgentType, DeploymentError> {
@@ -292,8 +292,8 @@ impl DeploymentService {
 
     pub async fn list_latest_deployed_agent_types_by_component_revision(
         &self,
-        environment_id: &EnvironmentId,
-        component_id: &ComponentId,
+        environment_id: EnvironmentId,
+        component_id: ComponentId,
         component_revision: ComponentRevision,
     ) -> Result<Vec<DeployedRegisteredAgentType>, DeploymentError> {
         let agent_types = self

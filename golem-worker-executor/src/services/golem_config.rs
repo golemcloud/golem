@@ -64,6 +64,7 @@ pub struct GolemConfig {
     pub environment_state_service: EnvironmentStateServiceConfig,
     pub agent_webhooks_service: AgentWebhooksServiceConfig,
     pub registry_service: GrpcRegistryServiceConfig,
+    pub quota_service: QuotaServiceConfig,
     pub engine: EngineConfig,
     pub grpc: GrpcApiConfig,
     pub http_client: HttpClientConfig,
@@ -164,6 +165,12 @@ impl SafeDisplay for GolemConfig {
             "{}",
             self.registry_service.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "quota service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.quota_service.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "component cache:");
         let _ = writeln!(
             &mut result,
@@ -250,6 +257,7 @@ impl Default for GolemConfig {
                 },
                 ..GrpcRegistryServiceConfig::default()
             },
+            quota_service: QuotaServiceConfig::default(),
             engine: EngineConfig::default(),
             grpc: GrpcApiConfig::default(),
             http_client: HttpClientConfig::default(),
@@ -1583,6 +1591,43 @@ impl SafeDisplay for HttpClientEnabledConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HttpClientDisabledConfig {}
+
+/// Configuration for the executor-side quota enforcement service.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QuotaServiceConfig {
+    /// How often to renew quota leases with the shard manager.
+    #[serde(with = "humantime_serde")]
+    pub renewal_interval: Duration,
+    /// Maximum wait time for inline throttling before returning
+    /// `InsufficientAllocation` to the caller (which may then suspend).
+    /// Reservations whose estimated wait exceeds this threshold are not
+    /// held in the waiter queue.
+    #[serde(with = "humantime_serde")]
+    pub inline_wait_threshold: Duration,
+}
+
+impl SafeDisplay for QuotaServiceConfig {
+    fn to_safe_string(&self) -> String {
+        use std::fmt::Write;
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "renewal interval: {:?}", self.renewal_interval);
+        let _ = writeln!(
+            &mut result,
+            "inline wait threshold: {:?}",
+            self.inline_wait_threshold
+        );
+        result
+    }
+}
+
+impl Default for QuotaServiceConfig {
+    fn default() -> Self {
+        Self {
+            renewal_interval: Duration::from_secs(10),
+            inline_wait_threshold: Duration::from_mins(1),
+        }
+    }
+}
 
 pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
     ConfigLoader::new_with_examples(Path::new("config/worker-executor.toml"))
