@@ -16,6 +16,7 @@ export class SkillWatcher {
   private extraDirs: string[] = [];
   private atimeBaselines: Map<string, { skillName: string; atimeMs: number }> =
     new Map();
+  private warnedMissingTool = false;
 
   constructor(skillsDir: string) {
     this.skillsDir = path.resolve(skillsDir);
@@ -54,7 +55,18 @@ export class SkillWatcher {
       });
 
       child.on("error", (err) => {
-        console.error(`SkillWatcher error: ${err.message}`);
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          if (!this.warnedMissingTool) {
+            this.warnedMissingTool = true;
+            const tool = platform === "darwin" ? "fswatch" : "inotifywait";
+            console.warn(
+              `SkillWatcher: "${tool}" not found; falling back to atime-based detection. ` +
+              `Install ${tool} for real-time skill activation tracking.`,
+            );
+          }
+        } else {
+          console.error(`SkillWatcher error: ${err.message}`);
+        }
       });
     }
   }
