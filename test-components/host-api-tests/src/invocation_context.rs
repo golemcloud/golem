@@ -1,7 +1,7 @@
-use golem_rust::bindings::golem::api::context::{current_context, start_span, AttributeValue};
+use golem_rust::bindings::golem::api::context::{AttributeValue, current_context, start_span};
 use golem_rust::{agent_definition, agent_implementation};
 use golem_wasi_http::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 #[agent_definition]
@@ -86,13 +86,19 @@ pub struct InvocationContextRestartImpl {
 #[agent_implementation]
 impl InvocationContextRestart for InvocationContextRestartImpl {
     fn new(name: String) -> Self {
-        Self { _name: name, count: 0 }
+        Self {
+            _name: name,
+            count: 0,
+        }
     }
 
     fn long_running(&mut self) -> u32 {
         self.count += 1;
         let span = start_span("restart-span");
-        span.set_attribute("invocation-count", &AttributeValue::String(self.count.to_string()));
+        span.set_attribute(
+            "invocation-count",
+            &AttributeValue::String(self.count.to_string()),
+        );
         broadcast_current_invocation_context("restart-before-sleep");
         std::thread::sleep(std::time::Duration::from_secs(10));
         broadcast_current_invocation_context("restart-after-sleep");

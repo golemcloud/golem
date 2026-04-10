@@ -30,9 +30,8 @@ message GetRoutingTableResponse {
 }
 
 message RegisterRequest {
-  string host = 1;
-  int32 port = 2;
-  optional string pod_name = 3;
+  int32 port = 1;
+  optional string pod_name = 2;
 }
 
 message RegisterResponse {
@@ -52,7 +51,7 @@ message RegisterSuccess {
 message AcquireQuotaLeaseRequest {
   golem.common.EnvironmentId environment_id = 1;
   string resource_name = 2;
-  golem.shardmanager.Pod pod = 3;
+  int32 port = 3;
 }
 
 message AcquireQuotaLeaseResponse {
@@ -66,18 +65,31 @@ message AcquireQuotaLeaseSuccessResponse {
   golem.common.QuotaLease lease = 1;
 }
 
+// A pending reservation request from an agent on this executor.
+// Included in RenewQuotaLeaseRequest so the shard manager can
+// weight allocations across executors based on demand.
+message PendingReservation {
+  uint64 amount = 1;
+  // Priority score: credit / amount_requested.  Higher values
+  // indicate more deserving requests.
+  double priority = 2;
+}
+
 // Renews an existing lease before it expires.
 // The executor reports how much of its previous allocation was unused
 // so the shard manager can reclaim and reallocate.
 message RenewQuotaLeaseRequest {
   golem.common.ResourceDefinitionId resource_definition_id = 1;
-  golem.shardmanager.Pod pod = 2;
+  int32 port = 2;
   // Epoch of the lease being renewed. Used for fencing — the shard
   // manager rejects renewals for stale epochs.
   uint64 epoch = 3;
   // Units from the previous allocation that were not consumed.
-  // Ignored for Unlimited and Exhausted allocations.
   uint64 unused = 4;
+  // Outstanding reservation requests on this executor, ordered by
+  // priority (highest first).  The shard manager may use this to
+  // weight allocations between executors.
+  repeated PendingReservation pending_reservations = 5;
 }
 
 message RenewQuotaLeaseResponse {
@@ -96,7 +108,7 @@ message RenewQuotaLeaseSuccessResponse {
 // agents using this resource on this executor).
 message ReleaseQuotaLeaseRequest {
   golem.common.ResourceDefinitionId resource_definition_id = 1;
-  golem.shardmanager.Pod pod = 2;
+  int32 port = 2;
   uint64 epoch = 3;
   uint64 unused = 4;
 }

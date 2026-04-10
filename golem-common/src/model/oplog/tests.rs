@@ -283,6 +283,7 @@ fn error_serialization_poem_serde_equivalence() {
         timestamp: Timestamp::now_utc().rounded(),
         error: "test".to_string(),
         retry_from: OplogIndex::INITIAL,
+        inside_atomic_region: false,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

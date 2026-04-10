@@ -9,6 +9,7 @@ import "golem/common/environment.proto";
 import "golem/shardmanager/pod.proto";
 import "wasm/rpc/type.proto";
 import "wasm/rpc/val.proto";
+import "google/protobuf/timestamp.proto";
 
 message ResourceDefinitionId {
   golem.common.UUID value = 1;
@@ -66,21 +67,6 @@ message ResourceDefinition {
   string units = 8;
 }
 
-message QuotaAllocation {
-  oneof kind {
-    Budget budget = 1;
-    Exhausted exhausted = 2;
-  }
-
-  message Budget {
-    uint64 amount = 1;
-  }
-
-  message Exhausted {
-    uint64 retry_after_nanos = 1;
-  }
-}
-
 message QuotaLease {
   oneof kind {
     Bounded bounded = 1;
@@ -91,14 +77,17 @@ message QuotaLease {
     ResourceDefinitionId resource_definition_id = 1;
     golem.shardmanager.Pod pod = 2;
     uint64 epoch = 3;
-    QuotaAllocation allocation = 4;
-    uint64 expires_after_nanos = 5;
+    uint64 allocation = 4;
+    google.protobuf.Timestamp expires_at = 5;
     ResourceLimit resource_limit = 6;
     EnforcementAction enforcement_action = 7;
+    // Total available capacity for this resource across all executors
+    // (remaining pool + all current lease allocations).
+    uint64 total_available_amount = 8;
   }
 
   message Unlimited {
     golem.shardmanager.Pod pod = 1;
-    uint64 expires_after_nanos = 2;
+    google.protobuf.Timestamp expires_at = 2;
   }
 }

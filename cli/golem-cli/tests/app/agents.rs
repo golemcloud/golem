@@ -64,7 +64,7 @@ async fn test_rust_counter() {
                 flag::LANGUAGE,
                 "ts",
                 flag::SCRIPT,
-                &format!("CounterAgent.get(\"{uuid}\").increment()"),
+                &format!("(await CounterAgent.get(\"{uuid}\")).increment()"),
             ])
             .await;
         assert!(outputs.success_or_dump());
@@ -83,7 +83,9 @@ async fn test_rust_counter() {
                 flag::LANGUAGE,
                 "rust",
                 flag::SCRIPT,
-                &format!("CounterAgent::get(\"{uuid}\".to_string()).increment().await"),
+                &format!(
+                    "CounterAgent::get(\"{uuid}\".to_string()).await.unwrap().increment().await"
+                ),
             ])
             .await;
         assert!(outputs.success_or_dump());
@@ -519,7 +521,7 @@ async fn test_ts_counter() {
                 flag::LANGUAGE,
                 "ts",
                 flag::SCRIPT,
-                &format!("CounterAgent.get(\"{uuid}\").increment()"),
+                &format!("(await CounterAgent.get(\"{uuid}\")).increment()"),
             ])
             .await;
         assert!(outputs.success_or_dump());
@@ -538,7 +540,9 @@ async fn test_ts_counter() {
                 flag::LANGUAGE,
                 "rust",
                 flag::SCRIPT,
-                &format!("CounterAgent::get(\"{uuid}\".to_string()).increment().await"),
+                &format!(
+                    "CounterAgent::get(\"{uuid}\".to_string()).await.unwrap().increment().await"
+                ),
             ])
             .await;
         assert!(outputs.success_or_dump());
@@ -793,9 +797,8 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     run_and_assert(&ctx, "funResultLikeWithVoid", &[r#"{error: null}"#]).await;
     run_and_assert(&ctx, "funResultLikeWithVoid", &[r#"{ok: null}"#]).await;
 
-    // TODO: fix root cause for this
     // An arrow function
-    // run_and_assert(&ctx, "funArrowSync", &[r#""foo""#]).await;
+    run_and_assert(&ctx, "funArrowSync", &[r#""foo""#]).await;
 
     // A function that takes many inputs
     run_and_assert(
@@ -1209,7 +1212,7 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
             "json",
             flag::SCRIPT,
             r#"
-                LongAgentName.get({oneField: "1212", anotherField: 100}).ask({oneField: "1", anotherField: 2})
+                (await LongAgentName.get({oneField: "1212", anotherField: 100})).ask({oneField: "1", anotherField: 2})
             "#,
         ])
         .await;

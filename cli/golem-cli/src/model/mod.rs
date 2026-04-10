@@ -58,6 +58,7 @@ use url::Url;
 pub enum GuestLanguage {
     TypeScript,
     Rust,
+    Scala,
 }
 
 impl GuestLanguage {
@@ -65,6 +66,7 @@ impl GuestLanguage {
         match s.as_ref().to_lowercase().as_str() {
             "rust" => Some(GuestLanguage::Rust),
             "ts" | "typescript" => Some(GuestLanguage::TypeScript),
+            "scala" => Some(GuestLanguage::Scala),
             _ => None,
         }
     }
@@ -73,6 +75,7 @@ impl GuestLanguage {
         match s.as_ref().to_lowercase().as_str() {
             "rust" => Some(GuestLanguage::Rust),
             "ts" => Some(GuestLanguage::TypeScript),
+            "scala" => Some(GuestLanguage::Scala),
             _ => None,
         }
     }
@@ -81,6 +84,14 @@ impl GuestLanguage {
         match self {
             GuestLanguage::Rust => "rust",
             GuestLanguage::TypeScript => "ts",
+            GuestLanguage::Scala => "scala",
+        }
+    }
+
+    pub fn supports_bridge_generation(&self) -> bool {
+        match self {
+            GuestLanguage::Rust | GuestLanguage::TypeScript => true,
+            GuestLanguage::Scala => false,
         }
     }
 
@@ -88,6 +99,7 @@ impl GuestLanguage {
         match self {
             GuestLanguage::Rust => "Rust",
             GuestLanguage::TypeScript => "TypeScript",
+            GuestLanguage::Scala => "Scala",
         }
     }
 }

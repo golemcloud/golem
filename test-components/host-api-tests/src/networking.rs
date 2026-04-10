@@ -26,7 +26,9 @@ impl Networking for NetworkingImpl {
 
         let mut result = Vec::new();
         loop {
-            let next = resolve_stream.resolve_next_address().expect("resolve_next_address");
+            let next = resolve_stream
+                .resolve_next_address()
+                .expect("resolve_next_address");
             if let Some(next) = next {
                 result.push(format!("{:?}", next));
             } else {

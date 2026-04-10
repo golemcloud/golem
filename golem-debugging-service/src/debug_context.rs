@@ -67,9 +67,9 @@ use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{HasAll, worker_enumeration};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, InvocationContextManagement,
-    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, StatusManagement,
-    UpdateManagement, WorkerCtx,
+    CallCountManagement, ExternalOperations, FileSystemReading, FuelManagement,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use std::collections::HashSet;
 use std::future::Future;
@@ -102,6 +102,20 @@ impl FuelManagement for DebugContext {
 
     fn return_fuel(&mut self, _current_level: u64) -> u64 {
         0
+    }
+}
+
+impl CallCountManagement for DebugContext {
+    fn reset_invocation_call_counts(&mut self) {
+        self.durable_ctx.reset_invocation_call_counts();
+    }
+
+    fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
+        Ok(()) // debug context: monthly limits are always unlimited
+    }
+
+    fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
+        Ok(()) // debug context: monthly limits are always unlimited
     }
 }
 
@@ -428,6 +442,10 @@ impl HostFutureInvokeResult for DebugContext {
         HostFutureInvokeResult::get(&mut self.durable_ctx, self_).await
     }
 
+    async fn cancel(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
+        HostFutureInvokeResult::cancel(&mut self.durable_ctx, this).await
+    }
+
     async fn drop(&mut self, rep: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         HostFutureInvokeResult::drop(&mut self.durable_ctx, rep).await
     }
@@ -548,6 +566,7 @@ impl WorkerCtx for DebugContext {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<uuid::Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
@@ -555,6 +574,7 @@ impl WorkerCtx for DebugContext {
             u64::MAX,
             usize::MAX,
             usize::MAX,
+            u64::MAX,
             u64::MAX,
         ));
 
@@ -586,8 +606,11 @@ impl WorkerCtx for DebugContext {
             agent_webhooks_service,
             shard_service,
             http_connection_pool,
+            websocket_connection_pool,
             pending_update,
             original_phantom_id,
+            u64::MAX,
+            u64::MAX,
         )
         .await?;
         Ok(Self {

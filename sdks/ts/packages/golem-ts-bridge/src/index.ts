@@ -142,11 +142,98 @@ export interface AgentInvocationResult {
   result?: DataValue;
 }
 
+export interface WorkerAgentConfigEntry {
+  path: string[];
+  value: unknown;
+}
+
+export interface CreateAgentRequest {
+  appName: ApplicationName;
+  envName: EnvironmentName;
+  agentTypeName: AgentTypeName;
+  parameters: DataValue;
+  phantomId?: PhantomId;
+  agentConfig?: WorkerAgentConfigEntry[];
+}
+
+export interface AgentId {
+  componentId: string;
+  agentId: string;
+}
+
+export interface CreateAgentResponse {
+  agentId: AgentId;
+  componentRevision: number;
+}
+
+export async function createAgent(
+  server: GolemServer,
+  request: CreateAgentRequest,
+): Promise<CreateAgentResponse> {
+  let baseUrl: string;
+  let token: string;
+
+  switch (server.type) {
+    case 'local':
+      baseUrl = 'http://localhost:9881';
+      token = LOCAL_WELL_KNOWN_TOKEN;
+      break;
+    case 'cloud':
+      baseUrl = 'https://api.golem.cloud';
+      token = server.token;
+      break;
+    case 'custom':
+      baseUrl = server.url;
+      token = server.token;
+      break;
+  }
+
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json',
+  };
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const rawResponse = await fetch(`${baseUrl}/v1/agents/create-agent`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(request),
+  });
+
+  if (!rawResponse.ok) {
+    const body = await rawResponse.text().catch(() => undefined);
+    if (body) {
+      throw new Error(`Agent creation failed: ${rawResponse.statusText}, ${body}`);
+    } else {
+      throw new Error(`Agent creation failed: ${rawResponse.statusText}`);
+    }
+  }
+
+  return await (rawResponse.json() as Promise<CreateAgentResponse>);
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+
+  if (signal.reason !== undefined) {
+    throw signal.reason;
+  }
+
+  const err = new Error('The operation was aborted.');
+  err.name = 'AbortError';
+  throw err;
+}
+
 export async function invokeAgent(
   server: GolemServer,
   request: AgentInvocationRequest,
   aroundInvokeHook: AroundInvokeHook | undefined = undefined,
+  signal?: AbortSignal,
 ): Promise<AgentInvocationResult> {
+  throwIfAborted(signal);
+
   let baseUrl: string;
   let token: string;
 
@@ -181,11 +268,14 @@ export async function invokeAgent(
     await aroundInvokeHook.beforeInvoke(request);
   }
 
+  throwIfAborted(signal);
+
   try {
     const rawResponse = await fetch(`${baseUrl}/v1/agents/invoke-agent`, {
       method: 'POST',
       headers,
       body: JSON.stringify(request),
+      signal,
     });
 
     if (!rawResponse.ok) {
@@ -215,6 +305,14 @@ export type JsonResult<Ok, Err> = { ok: Ok; err?: undefined } | { ok?: undefined
 
 export type RemoteMethod<Args extends any[], R> = {
   (...args: Args): Promise<R>;
+  /**
+   * Invoke the remote method with abort support. When the signal is aborted,
+   * the HTTP request is cancelled and the promise rejects.
+   *
+   * **Important:** Aborting cancels the HTTP request but the remote agent
+   * may still execute the invoked method if the request was already dispatched.
+   */
+  abortable: (signal: AbortSignal, ...args: Args) => Promise<R>;
   trigger: (...args: Args) => void;
   schedule: (scheduleAt: string, ...args: Args) => void;
 };
@@ -254,6 +352,22 @@ export function createRemoteMethod<Args extends any[], R>(
       mode: 'schedule',
       scheduleAt,
     });
+  };
+  result.abortable = async function (signal: AbortSignal, ...args: Args): Promise<R> {
+    throwIfAborted(signal);
+
+    const invokeResult = await invokeAgent(
+      getServer(),
+      {
+        ...getRequest(),
+        methodParameters: encode(args),
+        mode: 'await',
+        scheduleAt: undefined,
+      },
+      aroundInvokeHook(),
+      signal,
+    );
+    return decode(invokeResult);
   };
   return result;
 }

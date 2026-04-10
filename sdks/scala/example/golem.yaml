@@ -1,0 +1,12 @@
+app: scala-demo
+
+environments:
+  local:
+    server: local
+
+includes:
+- ../scala-js-template.yaml
+
+components:
+  scala:demo:
+    templates: scala.js

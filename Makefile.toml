@@ -107,12 +107,15 @@ script_runner = "@duckscript"
 script = """
 rm -r sdks/rust/golem-rust/wit/deps
 rm -r sdks/ts/wit/deps
+rm -r sdks/scala/wit/deps
 mkdir sdks/rust/golem-rust/wit/deps
 mkdir sdks/ts/wit/deps
+mkdir sdks/scala/wit/deps
 glob_cp wit/deps/**/* sdks/rust/golem-rust/wit/deps
 glob_cp sdks/rust/golem-rust/wit/golem-ai/**/* sdks/rust/golem-rust/wit/deps
 glob_cp wit/deps/**/* sdks/ts/wit/deps
 glob_cp sdks/ts/wit/golem-ai/**/* sdks/ts/wit/deps
+glob_cp wit/deps/**/* sdks/scala/wit/deps
 """
 
 [tasks.wit-golem-cli]
@@ -280,20 +283,43 @@ args = [
 [tasks.build-sdk-ts]
 description = "Builds the TypeScript SDK if dist or agent_guest.wasm doesn't exist"
 cwd = "./sdks/ts"
-condition_script = ["test ! -d packages/golem-ts-sdk/dist || test ! -f packages/golem-ts-sdk/wasm/agent_guest.wasm"]
+script_runner = "@duckscript"
+env = { PNPM_BIN = "pnpm" }
 script = '''
-pnpm clean
-pnpm install
-pnpm run build
-pnpm run build-agent-template
+dist_exists = is_path_exists packages/golem-ts-sdk/dist
+agent_wasm_exists = is_path_exists packages/golem-ts-sdk/wasm/agent_guest.wasm
+
+build_required = set true
+if ${dist_exists}
+    if ${agent_wasm_exists}
+        build_required = set false
+    end
+end
+
+if ${build_required}
+    exec --fail-on-error %{PNPM_BIN} clean
+    exec --fail-on-error %{PNPM_BIN} install
+    exec --fail-on-error %{PNPM_BIN} run build
+    exec --fail-on-error %{PNPM_BIN} run build-agent-template
+else
+    echo "TypeScript SDK already built, skipping"
+end
 '''
+
+[tasks.build-sdk-ts.windows]
+env = { PNPM_BIN = "pnpm.cmd" }
 
 [tasks.clean-sdk-ts]
 description = "Cleans the TypeScript SDK"
 cwd = "./sdks/ts"
+script_runner = "@duckscript"
+env = { PNPM_BIN = "pnpm" }
 script = '''
-pnpm clean
+exec --fail-on-error %{PNPM_BIN} clean
 '''
+
+[tasks.clean-sdk-ts.windows]
+env = { PNPM_BIN = "pnpm.cmd" }
 
 ## ** CHECK **
 

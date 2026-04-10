@@ -13,3 +13,4 @@
 // limitations under the License.
 
 pub mod registry;
+pub mod shard_manager;

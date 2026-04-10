@@ -14,7 +14,6 @@
 
 use super::model::oauth2_webflow_state::OAuth2WebFlowStateRecord;
 use crate::model::login::OAuth2WebflowStateMetadata;
-use crate::repo::model::datetime::SqlDateTime;
 use crate::repo::model::new_repo_uuid;
 use crate::repo::model::token::TokenRecord;
 use async_trait::async_trait;
@@ -23,6 +22,7 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::RepoResult;
+use golem_service_base::repo::SqlDateTime;
 use indoc::indoc;
 use sqlx::Database;
 use sqlx::types::Json;

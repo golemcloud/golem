@@ -22,8 +22,12 @@ steps:
       url: "http://localhost:9881/healthcheck"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.steps[0].http?.url, "http://localhost:9881/healthcheck");
-    assert.equal(spec.steps[0].http?.method, "GET");
+    const step = spec.steps[0];
+    assert.equal(step.tag, "http");
+    if (step.tag === "http") {
+      assert.equal(step.http.url, "http://localhost:9881/healthcheck");
+      assert.equal(step.http.method, "GET");
+    }
   });
 
   it("loads step with http POST and body", async () => {
@@ -42,12 +46,16 @@ steps:
       body_contains: "success"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.steps[0].http?.method, "POST");
-    assert.equal(spec.steps[0].http?.body, '{"key": "value"}');
-    assert.deepEqual(spec.steps[0].http?.headers, {
-      "Content-Type": "application/json",
-    });
-    assert.equal(spec.steps[0].expect?.status, 200);
+    const step = spec.steps[0];
+    assert.equal(step.tag, "http");
+    if (step.tag === "http") {
+      assert.equal(step.http.method, "POST");
+      assert.equal(step.http.body, '{"key": "value"}');
+      assert.deepEqual(step.http.headers, {
+        "Content-Type": "application/json",
+      });
+    }
+    assert.equal(step.expect?.status, 200);
   });
 
   it("rejects step with both http and prompt", async () => {
@@ -117,7 +125,11 @@ steps:
       method: "${method}"
 `);
       const spec = await ScenarioLoader.load(filePath);
-      assert.equal(spec.steps[0].http?.method, method);
+      const step = spec.steps[0];
+      assert.equal(step.tag, "http");
+      if (step.tag === "http") {
+        assert.equal(step.http.method, method);
+      }
     }
   });
 });

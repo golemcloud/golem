@@ -32,9 +32,10 @@ use crate::service::worker::{WorkerClient, WorkerExecutorWorkerClient, WorkerSer
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
+use golem_service_base::clients::shard_manager::{GrpcShardManager, ShardManager};
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
-use golem_service_base::service::routing_table::{RoutingTableService, RoutingTableServiceDefault};
+use golem_service_base::service::routing_table::RoutingTableService;
 use std::sync::Arc;
 use tonic::codec::CompressionEncoding;
 
@@ -71,9 +72,13 @@ impl Services {
         let limit_service: Arc<dyn LimitService> =
             Arc::new(RemoteLimitService::new(registry_service_client.clone()));
 
-        let routing_table_service: Arc<dyn RoutingTableService> = Arc::new(
-            RoutingTableServiceDefault::new(config.routing_table.clone()),
-        );
+        let shard_manager_service: Arc<dyn ShardManager> =
+            Arc::new(GrpcShardManager::new(&config.shard_manager));
+
+        let routing_table_service: Arc<RoutingTableService> = Arc::new(RoutingTableService::new(
+            config.routing_table.clone(),
+            shard_manager_service,
+        ));
 
         let worker_executor_clients = MultiTargetGrpcClient::new(
             "worker_executor",

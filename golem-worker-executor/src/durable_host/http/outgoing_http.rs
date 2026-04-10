@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durability::InFunctionRetryHost;
+use crate::durable_host::http::inline_retry::spawn_http_request_with_retry;
 use crate::durable_host::{
-    DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState,
+    DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState, HttpRetryEligibility,
 };
+use crate::services::HasWorker;
 use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
 use golem_common::model::IdempotencyKey;
 use golem_common::model::invocation_context::AttributeValue;
 use golem_common::model::oplog::types::SerializableHttpMethod;
-use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest};
+use golem_common::model::oplog::{DurableFunctionType, HostRequestHttpRequest, PersistenceLevel};
 use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
 use std::collections::HashMap;
@@ -27,8 +30,86 @@ use std::str::FromStr;
 use wasmtime::component::Resource;
 use wasmtime_wasi_http::bindings::http::outgoing_handler::Host;
 use wasmtime_wasi_http::bindings::http::types;
+use wasmtime_wasi_http::bindings::http::types::Scheme;
 use wasmtime_wasi_http::types::{HostFutureIncomingResponse, HostOutgoingRequest};
 use wasmtime_wasi_http::{HttpError, HttpResult};
+
+fn is_method_idempotent(method: &SerializableHttpMethod) -> bool {
+    matches!(
+        method,
+        SerializableHttpMethod::Get
+            | SerializableHttpMethod::Head
+            | SerializableHttpMethod::Put
+            | SerializableHttpMethod::Delete
+            | SerializableHttpMethod::Options
+    )
+}
+
+pub(crate) fn maybe_enable_http_background_retry<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    handle: u32,
+) -> HttpResult<()> {
+    let state = match ctx.state.open_http_requests.get(&handle) {
+        Some(state) => state.clone(),
+        None => return Ok(()),
+    };
+
+    if state.retry.has_background_retry {
+        return Ok(());
+    }
+
+    let durable_state = ctx.durable_execution_state();
+    let retry_config = ctx.retry_config();
+    let method_eligible =
+        durable_state.assume_idempotence || is_method_idempotent(&state.request.method);
+    let body_ready_for_retry = state.retry.body_finished || state.output_stream_rep.is_none();
+    let delay_eligible = retry_config.min_delay <= durable_state.max_in_function_retry_delay;
+
+    let enable_background_retry = durable_state.is_live
+        && durable_state.snapshotting_mode.is_none()
+        && durable_state.persistence_level != PersistenceLevel::PersistNothing
+        && !ctx.in_atomic_region()
+        && delay_eligible
+        && method_eligible
+        && body_ready_for_retry
+        && !state.retry.has_unreconstructable_body
+        && !state.retry.has_outgoing_trailers
+        && !state.retry.output_stream_subscribed;
+
+    if !enable_background_retry {
+        return Ok(());
+    }
+
+    let future_res = ctx
+        .table()
+        .get_mut(&Resource::<HostFutureIncomingResponse>::new_borrow(handle))?;
+    let old = std::mem::replace(future_res, HostFutureIncomingResponse::Consumed);
+    let wrapped = if let HostFutureIncomingResponse::Pending(orig_handle) = old {
+        let retry_handle = spawn_http_request_with_retry(
+            orig_handle,
+            state.request.clone(),
+            state.outgoing_request_config(),
+            ctx.wasi_http.connection_pool.clone(),
+            ctx.public_state.worker(),
+            ctx.retry_config(),
+            durable_state.max_in_function_retry_delay,
+            state.begin_index,
+            ctx.execution_status.clone(),
+        );
+        HostFutureIncomingResponse::pending(retry_handle)
+    } else {
+        old
+    };
+    let wrapped_is_pending = matches!(&wrapped, HostFutureIncomingResponse::Pending(_));
+    *ctx.table()
+        .get_mut(&Resource::<HostFutureIncomingResponse>::new_borrow(handle))? = wrapped;
+
+    if let Some(state) = ctx.state.open_http_requests.get_mut(&handle) {
+        state.retry.has_background_retry = wrapped_is_pending;
+    }
+
+    Ok(())
+}
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn handle(
@@ -38,6 +119,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     ) -> HttpResult<Resource<HostFutureIncomingResponse>> {
         self.observe_function_call("http::outgoing_handler", "handle");
 
+        // Check the per-invocation HTTP call limit before initiating the call.
+        // Only counted in live mode; replay is a no-op.
+        self.state
+            .check_and_increment_http_call_count()
+            .map_err(|trap| HttpError::trap(wasmtime::Error::from(trap)))?;
+
+        // Record against the monthly account-level HTTP call quota (live mode only).
+        // Returns Err(WorkerMonthlyHttpCallBudgetExhausted) when exhausted,
+        // which maps to RetryDecision::TryStop — suspending the worker until
+        // the registry replenishes the budget (e.g. next billing month).
+        self.record_monthly_http_call()
+            .map_err(|e| HttpError::trap(wasmtime::Error::from_anyhow(e)))?;
+
         // Durability is handled by the WasiHttpView send_request method and the follow-up calls to await/poll the response future
         let begin_index = self
             .begin_durable_function(&DurableFunctionType::WriteRemoteBatched(None))
@@ -45,8 +139,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .map_err(|err| HttpError::trap(wasmtime::Error::msg(err.to_string())))?;
 
         let host_request = self.table().get(&request)?;
+        let scheme = match host_request.scheme.as_ref().unwrap_or(&Scheme::Https) {
+            Scheme::Http => "http",
+            Scheme::Https | Scheme::Other(_) => "https",
+        };
         let uri = format!(
-            "{}{}",
+            "{}://{}{}",
+            scheme,
             host_request.authority.as_ref().unwrap_or(&String::new()),
             host_request
                 .path_with_query
@@ -116,6 +215,43 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let request_rep = request.rep();
 
+        let host_request = self.table().get(&request)?;
+        let use_tls = match host_request.scheme.as_ref().unwrap_or(&Scheme::Https) {
+            Scheme::Http => false,
+            Scheme::Https | Scheme::Other(_) => true,
+        };
+
+        let default_timeout = std::time::Duration::from_secs(600);
+        let opts = options.as_ref().and_then(|o| self.table().get(o).ok());
+        let connect_timeout = opts
+            .and_then(|o| o.connect_timeout)
+            .unwrap_or(default_timeout);
+        let first_byte_timeout = opts
+            .and_then(|o| o.first_byte_timeout)
+            .unwrap_or(default_timeout);
+        let between_bytes_timeout = opts
+            .and_then(|o| o.between_bytes_timeout)
+            .unwrap_or(default_timeout);
+
+        // Capture pending request/body/stream mappings before calling handle().
+        // The WASI implementation may drop the outgoing request resource as part of
+        // handle(), which would otherwise clear these pending entries before we can
+        // transfer them into HttpRequestState.
+        let pending_outgoing_body_rep = self
+            .state
+            .pending_http_outgoing_request_body
+            .remove(&request_rep);
+        let pending_retry = self
+            .state
+            .pending_http_retry_eligibility
+            .remove(&request_rep)
+            .unwrap_or_default();
+        let pending_output_stream_rep = pending_outgoing_body_rep.and_then(|body_rep| {
+            self.state
+                .pending_http_outgoing_body_stream
+                .remove(&body_rep)
+        });
+
         let result = Host::handle(&mut self.as_wasi_http_view(), request, options).await;
 
         match &result {
@@ -130,11 +266,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 };
 
                 let handle = future_incoming_response.rep();
-                // Resolve any pending outgoing body mapping from outgoing_request::body()
-                let outgoing_body_rep = self
-                    .state
-                    .pending_http_outgoing_request_body
-                    .remove(&request_rep);
+                let outgoing_body_rep = pending_outgoing_body_rep;
+                let output_stream_rep = pending_output_stream_rep;
 
                 self.state.open_http_requests.insert(
                     handle,
@@ -144,10 +277,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         request,
                         span_id: span.span_id().clone(),
                         body_handle: None,
+                        response_status: None,
                         outgoing_body_rep,
-                        output_stream_rep: None,
+                        output_stream_rep,
+                        use_tls,
+                        connect_timeout,
+                        first_byte_timeout,
+                        between_bytes_timeout,
+                        retry: HttpRetryEligibility {
+                            has_background_retry: false,
+                            ..pending_retry
+                        },
                     },
                 );
+
+                maybe_enable_http_background_retry(self, handle)?;
             }
             Err(err) => {
                 tracing::error!("!!! ERROR FROM handle(): {err:?}");

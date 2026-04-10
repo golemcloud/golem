@@ -28,10 +28,16 @@ pub mod workerctx;
 #[cfg(test)]
 test_r::enable!();
 
+use self::durable_host::{DurableWorkerCtx, DurableWorkerCtxView};
 use self::services::agent_webhooks::AgentWebhooksService;
-use self::services::environment_state::{EnvironmentStateService, GrpcEnvironmentStateService};
+use self::services::environment_state::EnvironmentStateService;
 use self::services::golem_config::EnvironmentStateServiceConfig;
 use self::services::promise::LazyPromiseService;
+use self::services::rdbms::RdbmsService;
+use self::services::resource_limits::ResourceLimits;
+use self::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
+use self::services::worker_fork::DefaultWorkerFork;
+use self::wasi_host::create_linker;
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
@@ -51,6 +57,8 @@ use crate::services::oplog::{
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
 use crate::services::promise::{DefaultPromiseService, DefaultPromiseWorkerAccess, PromiseService};
+use crate::services::quota::QuotaService;
+use crate::services::registry_event_subscriber::WorkerExecutorRegistryInvalidationHandler;
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
 use crate::services::shard_manager::ShardManagerService;
@@ -64,7 +72,6 @@ use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasComponentService, HasConfig,
     HasEnvironmentStateService, HasOplogService, HasWorkerActivator, HasWorkerService, rdbms,
-    shard_manager,
 };
 use crate::storage::indexed::IndexedStorage;
 use crate::storage::indexed::multi_sqlite::MultiSqliteIndexedStorage;
@@ -105,12 +112,13 @@ use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tokio_stream::wrappers::TcpListenerStream;
+use tokio_util::sync::CancellationToken;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
 use tonic_tracing_opentelemetry::middleware;
 use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::{Instrument, info};
-use wasmtime::component::Linker;
+use wasmtime::component::{HasSelf, Linker};
 use wasmtime::{Config, Engine, WasmBacktraceDetails};
 
 pub struct RunDetails {
@@ -142,78 +150,41 @@ impl Drop for RunDetails {
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
-    /// Allows customizing the `ActiveWorkers` service.
-    fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>>;
+    fn create_shard_manager_service(
+        &self,
+        shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+    ) -> Arc<dyn ShardManagerService> {
+        Arc::new(crate::services::shard_manager::GrpcShardManagerService::new(shard_manager_client))
+    }
+
+    fn create_quota_service(
+        &self,
+        shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        golem_config: &GolemConfig,
+        shutdown_token: tokio_util::sync::CancellationToken,
+    ) -> Arc<dyn QuotaService> {
+        crate::services::quota::GrpcQuotaService::new(
+            shard_manager_client,
+            golem_config.grpc.port,
+            shutdown_token,
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(60),
+        )
+    }
 
     fn create_environment_state_service(
         &self,
         config: &EnvironmentStateServiceConfig,
         registry_service: Arc<dyn RegistryService>,
     ) -> Arc<dyn EnvironmentStateService> {
-        Arc::new(GrpcEnvironmentStateService::new(
-            registry_service,
-            config.cache_capacity,
-            config.cache_ttl,
-            config.cache_eviction_interval,
-        ))
-    }
-
-    async fn run_grpc_server(
-        &self,
-        service_dependencies: All<Ctx>,
-        lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
-        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-    ) -> anyhow::Result<u16> {
-        let golem_config = service_dependencies.config();
-        let (health_reporter, health_service) = tonic_health::server::health_reporter();
-        health_reporter
-            .set_serving::<WorkerExecutorServer<WorkerExecutorImpl<Ctx, All<Ctx>>>>()
-            .await;
-
-        let reflection_service = tonic_reflection::server::Builder::configure()
-            .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
-            .build_v1()?;
-
-        let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), golem_config.grpc.port);
-        let listener = TcpListener::bind(addr).await?;
-
-        let grpc_port = listener.local_addr()?.port();
-
-        let worker_impl = WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
-            service_dependencies,
-            lazy_worker_activator,
-            grpc_port,
+        Arc::new(
+            crate::services::environment_state::GrpcEnvironmentStateService::new(
+                registry_service,
+                config.cache_capacity,
+                config.cache_ttl,
+                config.cache_eviction_interval,
+            ),
         )
-        .await?;
-
-        let service = WorkerExecutorServer::new(worker_impl)
-            .accept_compressed(CompressionEncoding::Gzip)
-            .send_compressed(CompressionEncoding::Gzip);
-
-        join_set.spawn({
-            let mut server = Server::builder();
-
-            if let GrpcServerTlsConfig::Enabled(tls) = &golem_config.grpc.tls {
-                server = server.tls_config(tls.to_tonic())?;
-            };
-
-            server
-                .layer(
-                    middleware::server::OtelGrpcLayer::default()
-                        .filter(filters::reject_healthcheck),
-                )
-                .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
-                .add_service(reflection_service)
-                .add_service(service)
-                .add_service(health_service)
-                .serve_with_incoming(TcpListenerStream::new(listener))
-                .map_err(anyhow::Error::from)
-                .in_current_span()
-        });
-
-        info!("Started worker service on ports: grpc: {grpc_port}");
-
-        Ok(grpc_port)
     }
 
     fn create_component_service(
@@ -221,12 +192,63 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         golem_config: &GolemConfig,
         registry_service: Arc<dyn RegistryService>,
         blob_storage: Arc<dyn BlobStorage>,
-    ) -> Arc<dyn ComponentService>;
+    ) -> Arc<dyn ComponentService> {
+        crate::services::component::configured(
+            &golem_config.component_cache,
+            &golem_config.compiled_component_service,
+            registry_service.clone(),
+            blob_storage,
+        )
+    }
 
-    /// Allows customizing the `All` service.
-    /// This is the place to initialize additional services and store them in `All`'s `extra_deps`
-    /// field.
-    #[allow(clippy::too_many_arguments)]
+    fn create_resource_limits(
+        &self,
+        golem_config: &GolemConfig,
+        registry_service: Arc<dyn RegistryService>,
+        shutdown_token: CancellationToken,
+    ) -> Arc<dyn ResourceLimits> {
+        crate::services::resource_limits::configured(
+            &golem_config.resource_limits,
+            registry_service.clone(),
+            shutdown_token.clone(),
+        )
+    }
+
+    fn create_worker_proxy(&self, golem_config: &GolemConfig) -> Arc<dyn WorkerProxy> {
+        Arc::new(RemoteWorkerProxy::new(&golem_config.public_worker_api))
+    }
+
+    fn create_key_value_service(
+        &self,
+        key_value_storage: &Arc<dyn KeyValueStorage + Send + Sync>,
+    ) -> Arc<dyn KeyValueService> {
+        Arc::new(DefaultKeyValueService::new(key_value_storage.clone()))
+    }
+
+    fn create_blob_store_service(
+        &self,
+        blob_storage: &Arc<dyn BlobStorage>,
+    ) -> Arc<dyn BlobStoreService> {
+        Arc::new(DefaultBlobStoreService::new(blob_storage.clone()))
+    }
+
+    fn create_additional_deps(&self, registry_service: Arc<dyn RegistryService>) -> Ctx::ExtraDeps;
+
+    fn create_rdbms_service(
+        &self,
+        golem_config: &GolemConfig,
+        _additional_deps: &Ctx::ExtraDeps,
+    ) -> Arc<dyn RdbmsService> {
+        Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms))
+    }
+
+    fn wrap_rpc(
+        &self,
+        rpc: Arc<dyn crate::services::rpc::Rpc>,
+    ) -> Arc<dyn crate::services::rpc::Rpc> {
+        rpc
+    }
+
     async fn create_services(
         &self,
         active_workers: Arc<ActiveWorkers<Ctx>>,
@@ -251,14 +273,133 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
-        agent_type_service: Arc<dyn AgentTypesService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
-        registry_service: Arc<dyn RegistryService>,
+        resource_limits: Arc<dyn ResourceLimits>,
+        quota_service: Arc<dyn QuotaService>,
+        additional_deps: Ctx::ExtraDeps,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: crate::durable_host::websocket::WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
-    ) -> anyhow::Result<All<Ctx>>;
+    ) -> anyhow::Result<All<Ctx>> {
+        let worker_fork = Arc::new(DefaultWorkerFork::new(
+            Arc::new(RemoteInvocationRpc::new(
+                worker_proxy.clone(),
+                shard_service.clone(),
+            )),
+            active_workers.clone(),
+            engine.clone(),
+            linker.clone(),
+            runtime.clone(),
+            component_service.clone(),
+            shard_manager_service.clone(),
+            quota_service.clone(),
+            worker_service.clone(),
+            worker_proxy.clone(),
+            worker_enumeration_service.clone(),
+            running_worker_enumeration_service.clone(),
+            promise_service.clone(),
+            golem_config.clone(),
+            shard_service.clone(),
+            key_value_service.clone(),
+            blob_store_service.clone(),
+            rdbms_service.clone(),
+            oplog_service.clone(),
+            scheduler_service.clone(),
+            worker_activator.clone(),
+            events.clone(),
+            file_loader.clone(),
+            oplog_processor_plugin.clone(),
+            resource_limits.clone(),
+            environment_state_service.clone(),
+            agent_types_service.clone(),
+            agent_webhooks_service.clone(),
+            shutdown_token.clone(),
+            http_connection_pool.clone(),
+            websocket_connection_pool.clone(),
+            additional_deps.clone(),
+            leak_sentinel.clone(),
+        ));
+
+        let rpc = Arc::new(DirectWorkerInvocationRpc::new(
+            Arc::new(RemoteInvocationRpc::new(
+                worker_proxy.clone(),
+                shard_service.clone(),
+            )),
+            active_workers.clone(),
+            engine.clone(),
+            linker.clone(),
+            runtime.clone(),
+            component_service.clone(),
+            worker_fork.clone(),
+            worker_service.clone(),
+            worker_enumeration_service.clone(),
+            running_worker_enumeration_service.clone(),
+            promise_service.clone(),
+            golem_config.clone(),
+            shard_service.clone(),
+            shard_manager_service.clone(),
+            quota_service.clone(),
+            key_value_service.clone(),
+            blob_store_service.clone(),
+            rdbms_service.clone(),
+            oplog_service.clone(),
+            scheduler_service.clone(),
+            worker_activator.clone(),
+            events.clone(),
+            file_loader.clone(),
+            oplog_processor_plugin.clone(),
+            resource_limits.clone(),
+            shutdown_token.clone(),
+            environment_state_service.clone(),
+            agent_types_service.clone(),
+            agent_webhooks_service.clone(),
+            http_connection_pool.clone(),
+            websocket_connection_pool.clone(),
+            additional_deps.clone(),
+            leak_sentinel.clone(),
+        ));
+        let rpc = self.wrap_rpc(rpc);
+
+        Ok(All::new(
+            active_workers,
+            agent_types_service,
+            agent_webhooks_service,
+            engine,
+            linker,
+            runtime.clone(),
+            component_service,
+            shard_manager_service,
+            quota_service,
+            worker_fork,
+            worker_service,
+            worker_enumeration_service,
+            running_worker_enumeration_service,
+            promise_service.clone(),
+            golem_config.clone(),
+            shard_service,
+            key_value_service,
+            blob_store_service,
+            rdbms_service.clone(),
+            oplog_service,
+            rpc,
+            scheduler_service,
+            worker_activator.clone(),
+            worker_proxy.clone(),
+            events.clone(),
+            file_loader.clone(),
+            oplog_processor_plugin.clone(),
+            resource_limits,
+            shutdown_token,
+            http_connection_pool,
+            websocket_connection_pool.clone(),
+            environment_state_service.clone(),
+            additional_deps,
+            leak_sentinel,
+        ))
+    }
 
     /// Can be overridden to customize the wasmtime configuration
     fn create_wasmtime_config(&self, engine_config: &EngineConfig) -> Config {
@@ -282,86 +423,42 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
     /// This method is responsible for linking all the host function implementations the worker
     /// executor supports.
-    fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Ctx>>;
-
-    /// Runs the worker executor
-    async fn run(
-        &self,
-        golem_config: GolemConfig,
-        prometheus_registry: Registry,
-        runtime: Handle,
-        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-    ) -> anyhow::Result<RunDetails> {
-        debug!("Initializing worker executor");
-
-        let total_system_memory = golem_config.memory.total_system_memory();
-        let system_memory = golem_config.memory.system_memory();
-        let worker_memory = golem_config.memory.worker_memory();
-        info!(
-            "Total system memory: {}, Available system memory: {}, Total memory available for workers: {}",
-            ISizeFormatter::new(total_system_memory, BINARY),
-            ISizeFormatter::new(system_memory, BINARY),
-            ISizeFormatter::new(worker_memory, BINARY)
-        );
-
-        let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
-        let shutdown = services::shutdown::Shutdown::new();
-
-        let (worker_executor_impl, epoch_thread, epoch_stop, registry_service) =
-            create_worker_executor_impl::<Ctx, Self>(
-                golem_config.clone(),
-                self,
-                runtime.clone(),
-                &lazy_worker_activator,
-                shutdown.token(),
-            )
-            .await?;
-
-        {
-            let registry_service = registry_service.clone();
-            let environment_state_service = worker_executor_impl.environment_state_service();
-            let agent_types_service = worker_executor_impl.agent_types();
-            let shutdown_token = shutdown.token();
-            join_set.spawn(async move {
-                services::registry_event_subscriber::run_registry_event_subscriber(
-                    registry_service,
-                    environment_state_service,
-                    agent_types_service,
-                    shutdown_token,
-                )
-                .await;
-                Ok(())
-            });
-        }
-
-        let leak_detector = worker_executor_impl.leak_detector();
-
-        let grpc_port = self
-            .run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set)
-            .await?;
-
-        let http_port = golem_service_base::observability::start_health_and_metrics_server(
-            golem_config.http_addr()?,
-            prometheus_registry,
-            "Worker executor is running",
-            join_set,
-        )
-        .await?;
-
-        Ok(RunDetails {
-            http_port,
-            grpc_port,
-            epoch_thread: std::sync::Mutex::new(Some(epoch_thread)),
-            epoch_stop,
-            shutdown,
-            leak_detector,
-        })
+    fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Ctx>> {
+        let mut linker = create_linker(engine, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+            &mut linker,
+            DurableWorkerCtxView::durable_ctx_mut,
+        )?;
+        crate::preview2::golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+            &mut linker,
+            DurableWorkerCtxView::durable_ctx_mut,
+        )?;
+        crate::preview2::golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+            &mut linker,
+            DurableWorkerCtxView::durable_ctx_mut,
+        )?;
+        crate::preview2::golem_durability::durability::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
+        crate::preview2::golem::agent::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+            &mut linker,
+            DurableWorkerCtxView::durable_ctx_mut,
+        )?;
+        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+            &mut linker,
+            DurableWorkerCtxView::durable_ctx_mut,
+        )?;
+        Ok(linker)
     }
 }
 
-pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Sized>(
+pub async fn create_worker_executor_impl<
+    Ctx: WorkerCtx,
+    BootstrapImpl: Bootstrap<Ctx> + ?Sized + Send + Sync,
+>(
     golem_config: GolemConfig,
-    bootstrap: &A,
+    bootstrap: &BootstrapImpl,
     runtime: Handle,
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
     shutdown_token: tokio_util::sync::CancellationToken,
@@ -495,7 +592,8 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             Arc::new(storage::indexed::memory::InMemoryIndexedStorage::new())
         }
     };
-    let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &golem_config.blob_storage {
+
+    let blob_storage: Arc<dyn BlobStorage> = match &golem_config.blob_storage {
         BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
         BlobStorageConfig::LocalFileSystem(config) => Arc::new(
             golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
@@ -568,6 +666,9 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         )),
         HttpClientConfig::Disabled(_) => None,
     };
+    let websocket_connection_pool = crate::durable_host::websocket::WebSocketConnectionPool::new(
+        golem_config.max_websocket_connections,
+    );
     let golem_config = Arc::new(golem_config);
 
     let shard_service = Arc::new(ShardServiceDefault::new());
@@ -619,7 +720,10 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         }
     };
 
-    let active_workers = bootstrap.create_active_workers(&golem_config);
+    let active_workers = Arc::new(ActiveWorkers::<Ctx>::new(
+        &golem_config.memory,
+        &golem_config.filesystem_storage,
+    ));
 
     let file_loader = Arc::new(FileLoader::new(
         initial_files_service.clone(),
@@ -630,7 +734,18 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         active_workers.clone(),
     ));
 
-    let shard_manager_service = shard_manager::configured(&golem_config.shard_manager_service);
+    let shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager> =
+        Arc::new(
+            golem_service_base::clients::shard_manager::GrpcShardManager::new(
+                &golem_config.shard_manager,
+            ),
+        );
+
+    let shard_manager_service =
+        bootstrap.create_shard_manager_service(shard_manager_client.clone());
+
+    let quota_service =
+        bootstrap.create_quota_service(shard_manager_client, &golem_config, shutdown_token.clone());
 
     let config = bootstrap.create_wasmtime_config(&golem_config.engine);
     let engine = Arc::new(Engine::new(&config)?);
@@ -650,15 +765,11 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
 
     let linker = Arc::new(linker);
 
-    let key_value_service = Arc::new(DefaultKeyValueService::new(key_value_storage.clone()));
+    let key_value_service = bootstrap.create_key_value_service(&key_value_storage);
 
-    let blob_store_service = Arc::new(DefaultBlobStoreService::new(blob_storage.clone()));
+    let blob_store_service = bootstrap.create_blob_store_service(&blob_storage);
 
-    let worker_proxy: Arc<dyn WorkerProxy> =
-        Arc::new(RemoteWorkerProxy::new(&golem_config.public_worker_api));
-
-    let rdbms_service: Arc<dyn rdbms::RdbmsService> =
-        Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms));
+    let worker_proxy = bootstrap.create_worker_proxy(&golem_config);
 
     let events = Arc::new(Events::new(
         golem_config.limits.invocation_result_broadcast_capacity,
@@ -705,6 +816,16 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         shutdown_token.clone(),
     );
 
+    let resource_limits = bootstrap.create_resource_limits(
+        &golem_config,
+        registry_service.clone(),
+        shutdown_token.clone(),
+    );
+
+    let additional_deps = bootstrap.create_additional_deps(registry_service.clone());
+
+    let rdbms_service = bootstrap.create_rdbms_service(&golem_config, &additional_deps);
+
     let leak_sentinel = Arc::new(());
 
     let all = bootstrap
@@ -734,9 +855,12 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             agent_type_service,
             environment_state_service,
             agent_webhooks_service,
-            registry_service.clone(),
+            resource_limits,
+            quota_service,
+            additional_deps,
             shutdown_token,
             http_connection_pool,
+            websocket_connection_pool,
             leak_sentinel,
         )
         .await?;
@@ -758,6 +882,136 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         .await;
 
     Ok((all, epoch_thread, epoch_stop, registry_service))
+}
+
+/// Runs the worker executor
+pub async fn bootstrap_and_run_worker_executor<
+    Ctx: WorkerCtx,
+    BootstrapImpl: Bootstrap<Ctx> + ?Sized + Send + Sync,
+>(
+    bootstrap: &BootstrapImpl,
+    golem_config: GolemConfig,
+    prometheus_registry: Registry,
+    runtime: Handle,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    start_registry_invalidation_handler: bool,
+) -> anyhow::Result<RunDetails> {
+    debug!("Initializing worker executor");
+
+    let total_system_memory = golem_config.memory.total_system_memory();
+    let system_memory = golem_config.memory.system_memory();
+    let worker_memory = golem_config.memory.worker_memory();
+    info!(
+        "Total system memory: {}, Available system memory: {}, Total memory available for workers: {}",
+        ISizeFormatter::new(total_system_memory, BINARY),
+        ISizeFormatter::new(system_memory, BINARY),
+        ISizeFormatter::new(worker_memory, BINARY)
+    );
+
+    let lazy_worker_activator = Arc::new(LazyWorkerActivator::new());
+    let shutdown = services::shutdown::Shutdown::new();
+
+    let (worker_executor_impl, epoch_thread, epoch_stop, registry_service) =
+        create_worker_executor_impl::<Ctx, BootstrapImpl>(
+            golem_config.clone(),
+            bootstrap,
+            runtime.clone(),
+            &lazy_worker_activator,
+            shutdown.token(),
+        )
+        .await?;
+
+    if start_registry_invalidation_handler {
+        let registry_service = registry_service.clone();
+        let environment_state_service = worker_executor_impl.environment_state_service();
+        let agent_types_service = worker_executor_impl.agent_types();
+        let shutdown_token = shutdown.token();
+        join_set.spawn(async move {
+            WorkerExecutorRegistryInvalidationHandler::run(
+                registry_service,
+                environment_state_service,
+                agent_types_service,
+                shutdown_token,
+            )
+            .await;
+            Ok(())
+        });
+    };
+
+    let leak_detector = worker_executor_impl.leak_detector();
+
+    let grpc_port = run_grpc_server(worker_executor_impl, lazy_worker_activator, join_set).await?;
+
+    let http_port = golem_service_base::observability::start_health_and_metrics_server(
+        golem_config.http_addr()?,
+        prometheus_registry,
+        "Worker executor is running",
+        join_set,
+    )
+    .await?;
+
+    Ok(RunDetails {
+        http_port,
+        grpc_port,
+        epoch_thread: std::sync::Mutex::new(Some(epoch_thread)),
+        epoch_stop,
+        shutdown,
+        leak_detector,
+    })
+}
+
+pub async fn run_grpc_server<Ctx: WorkerCtx>(
+    service_dependencies: All<Ctx>,
+    lazy_worker_activator: Arc<LazyWorkerActivator<Ctx>>,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> anyhow::Result<u16> {
+    let golem_config = service_dependencies.config();
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_serving::<WorkerExecutorServer<WorkerExecutorImpl<Ctx, All<Ctx>>>>()
+        .await;
+
+    let reflection_service = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
+        .build_v1()?;
+
+    let addr = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), golem_config.grpc.port);
+    let listener = TcpListener::bind(addr).await?;
+
+    let grpc_port = listener.local_addr()?.port();
+
+    let worker_impl = WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
+        service_dependencies,
+        lazy_worker_activator,
+        grpc_port,
+    )
+    .await?;
+
+    let service = WorkerExecutorServer::new(worker_impl)
+        .accept_compressed(CompressionEncoding::Gzip)
+        .send_compressed(CompressionEncoding::Gzip);
+
+    join_set.spawn({
+        let mut server = Server::builder();
+
+        if let GrpcServerTlsConfig::Enabled(tls) = &golem_config.grpc.tls {
+            server = server.tls_config(tls.to_tonic())?;
+        };
+
+        server
+            .layer(middleware::server::OtelGrpcLayer::default().filter(filters::reject_healthcheck))
+            .max_concurrent_streams(Some(golem_config.limits.max_concurrent_streams))
+            .add_service(reflection_service)
+            .add_service(service)
+            .add_service(health_service)
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .map_err(anyhow::Error::from)
+            .in_current_span()
+    });
+
+    info!("Started worker service on ports: grpc: {grpc_port}");
+
+    Ok(grpc_port)
 }
 
 async fn build_inner_key_value_storage(

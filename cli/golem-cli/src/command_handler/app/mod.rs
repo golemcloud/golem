@@ -63,8 +63,8 @@ use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
-    CurrentDeployment, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDeploymentEntry,
-    DeploymentRevision, DeploymentVersion,
+    CurrentDeployment, DeploymentAgentSecretDefault, DeploymentPlanComponentEntry,
+    DeploymentPlanHttpApiDeploymentEntry, DeploymentRevision, DeploymentVersion,
 };
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
@@ -1473,10 +1473,11 @@ impl AppCommandHandler {
     ) -> anyhow::Result<CurrentDeployment> {
         let agent_secret_defaults = {
             let app_ctx = self.ctx.app_context_lock().await;
-            app_ctx
+            let defaults = app_ctx
                 .some_or_err()?
                 .application()
-                .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name)
+                .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name);
+            resolve_secret_defaults(defaults)?
         };
 
         let clients = self.ctx.golem_clients().await?;
@@ -2112,4 +2113,22 @@ impl AppCommandHandler {
             log_error(format!("Failed to show available deployments: {}", err));
         }
     }
+}
+
+fn resolve_secret_defaults(
+    defaults: Vec<DeploymentAgentSecretDefault>,
+) -> anyhow::Result<Vec<DeploymentAgentSecretDefault>> {
+    let renderer = crate::command_handler::template::EnvVarRenderer::new();
+
+    defaults
+        .into_iter()
+        .map(|default| {
+            let resolved_value = renderer.render_json_value(&default.secret_value)
+                .map_err(|err| anyhow!("Failed to substitute environment variable(s) in secret default value: {err}"))?;
+            Ok(DeploymentAgentSecretDefault {
+                path: default.path,
+                secret_value: resolved_value,
+            })
+        })
+        .collect()
 }

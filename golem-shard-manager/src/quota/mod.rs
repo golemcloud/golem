@@ -13,17 +13,13 @@
 // limitations under the License.
 
 mod quota_lease;
+pub mod quota_repo;
 mod quota_service;
-pub mod resource_definition_fetcher;
-
 #[cfg(test)]
 mod quota_service_tests;
+mod quota_state;
+pub mod resource_definition_fetcher;
 
-#[allow(unused)]
-pub use quota_lease::QuotaLease;
-#[allow(unused)]
-pub use quota_service::QuotaError;
-pub use quota_service::QuotaService;
-#[allow(unused)]
-pub use resource_definition_fetcher::FetchError;
+pub use quota_repo::{DbQuotaRepo, QuotaRepo};
+pub use quota_service::{QuotaError, QuotaService};
 pub use resource_definition_fetcher::{GrpcResourceDefinitionFetcher, ResourceDefinitionFetcher};

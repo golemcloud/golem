@@ -20,6 +20,7 @@ use golem_common::model::RetryConfig;
 use golem_common::model::base64::Base64;
 use golem_common::tracing::TracingConfig;
 use golem_service_base::clients::registry::GrpcRegistryServiceConfig;
+use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
@@ -36,6 +37,7 @@ pub struct WorkerServiceConfig {
     pub port: u16,
     pub custom_request_port: u16,
     pub grpc: GrpcApiConfig,
+    pub shard_manager: GrpcShardManagerConfig,
     pub routing_table: RoutingTableConfig,
     pub worker_executor: WorkerExecutorClientConfig,
     pub workspace: String,
@@ -79,6 +81,12 @@ impl SafeDisplay for WorkerServiceConfig {
         let _ = writeln!(&mut result, "grpc:");
         let _ = writeln!(&mut result, "{}", self.grpc.to_safe_string_indented());
 
+        let _ = writeln!(&mut result, "shard manager:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.shard_manager.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "routing table:");
         let _ = writeln!(
             &mut result,
@@ -147,6 +155,7 @@ impl Default for WorkerServiceConfig {
             custom_request_port: 9006,
             mcp_port: 9007,
             grpc: GrpcApiConfig::default(),
+            shard_manager: GrpcShardManagerConfig::default(),
             routing_table: RoutingTableConfig::default(),
             worker_executor: WorkerExecutorClientConfig::default(),
             workspace: "release".to_string(),

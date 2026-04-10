@@ -14,7 +14,7 @@
 
 use golem_common::SafeDisplay;
 use golem_common::tracing::init_tracing_with_default_env_filter;
-use golem_shard_manager::shard_manager_config::{ShardManagerConfig, make_config_loader};
+use golem_shard_manager::config::{ShardManagerConfig, make_config_loader};
 use prometheus::default_registry;
 use tokio::task::JoinSet;
 use tracing::info;

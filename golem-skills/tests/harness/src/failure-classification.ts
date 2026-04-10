@@ -38,7 +38,12 @@ const CLASSIFICATION_MAP: Record<
   INVOKE_FAILED: {
     category: "deploy",
     guidance:
-      "Function invocation failed. Verify the component is deployed and the function name matches the WIT interface.",
+      "Function invocation failed. Verify the component is deployed and the function name matches the interface.",
+  },
+  INVOKE_JSON_FAILED: {
+    category: "deploy",
+    guidance:
+      "JSON function invocation failed. Verify the component is deployed and the function name matches the interface.",
   },
   SHELL_FAILED: {
     category: "infra",

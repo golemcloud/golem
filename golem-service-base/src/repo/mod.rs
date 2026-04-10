@@ -12,8 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod blob;
-pub mod numeric;
+mod blob;
+mod datetime;
+mod numeric;
+
+pub use self::blob::Blob;
+pub use self::datetime::SqlDateTime;
+pub use self::numeric::NumericU64;
 
 use crate::db::{LabelledPoolApi, Pool};
 use golem_common::{SafeDisplay, error_forwarding};

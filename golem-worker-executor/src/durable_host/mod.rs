@@ -31,6 +31,7 @@ pub mod rdbms;
 mod replay_state;
 mod sockets;
 pub mod wasm_rpc;
+pub mod websocket;
 
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
@@ -124,6 +125,38 @@ use std::time::{Duration, Instant, SystemTime};
 use std::vec;
 use tempfile::TempDir;
 use tokio::sync::RwLock as TRwLock;
+
+/// A worker's filesystem root directory. Either a random OS temp directory
+/// (the default) or a deterministic path derived from the agent id.
+///
+/// In both cases the directory is removed when this value is dropped.
+enum WorkerDir {
+    /// Random temp dir created by `tempfile`. Auto-deleted on drop.
+    Temp(TempDir),
+    /// Deterministic directory. Deleted explicitly on drop.
+    Deterministic(PathBuf),
+}
+
+impl WorkerDir {
+    fn path(&self) -> &Path {
+        match self {
+            WorkerDir::Temp(td) => td.path(),
+            WorkerDir::Deterministic(p) => p,
+        }
+    }
+}
+
+impl Drop for WorkerDir {
+    fn drop(&mut self) {
+        if let WorkerDir::Deterministic(p) = self
+            && p.exists()
+        {
+            let _ = std::fs::remove_dir_all(p);
+        }
+        // WorkerDir::Temp is dropped automatically by TempDir's own Drop impl
+    }
+}
+
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, info, span, warn};
 use try_match::try_match;
@@ -152,8 +185,9 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub owned_agent_id: OwnedAgentId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
-    temp_dir: Arc<TempDir>,
+    worker_dir: Arc<WorkerDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
+    pub websocket_connection_pool: websocket::WebSocketConnectionPool,
     resource_limits: Arc<AtomicResourceEntry>,
 }
 
@@ -187,16 +221,36 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         agent_webhooks_service: Arc<AgentWebhooksService>,
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<HttpConnectionPool>,
+        websocket_connection_pool: websocket::WebSocketConnectionPool,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
+        per_invocation_http_call_limit: u64,
+        per_invocation_rpc_call_limit: u64,
     ) -> Result<Self, WorkerExecutorError> {
-        let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
-            |e| WorkerExecutorError::runtime(format!("Failed to create temporary directory: {e}")),
-        )?);
-        debug!(
-            "Created temporary file system root at {:?}",
-            temp_dir.path()
+        let worker_dir = Arc::new(
+            if let Some(root) = &config.filesystem_storage.deterministic_root_dir {
+                let dir = root
+                    .join(owned_agent_id.environment_id.to_string())
+                    .join(owned_agent_id.agent_id.component_id.to_string())
+                    .join(owned_agent_id.agent_id.agent_name_encoded());
+                std::fs::create_dir_all(&dir).map_err(|e| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to create deterministic directory {}: {e}",
+                        dir.display()
+                    ))
+                })?;
+                WorkerDir::Deterministic(dir)
+            } else {
+                WorkerDir::Temp(tempfile::Builder::new().prefix("golem").tempdir().map_err(
+                    |e| {
+                        WorkerExecutorError::runtime(format!(
+                            "Failed to create temporary directory: {e}",
+                        ))
+                    },
+                )?)
+            },
         );
+        debug!("Created file system root at {:?}", worker_dir.path());
 
         debug!(
             "Worker {} initialized with deleted regions {}",
@@ -218,7 +272,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let files = prepare_filesystem(
             &file_loader,
             owned_agent_id.environment_id,
-            temp_dir.path(),
+            worker_dir.path(),
             &component_metadata.files,
         )
         .await?;
@@ -269,7 +323,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
-            temp_dir.path().to_path_buf(),
+            worker_dir.path().to_path_buf(),
             stdin,
             stdout,
             stderr,
@@ -285,6 +339,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             io_ctx: Arc::new(Mutex::new(io_ctx)),
             wasi_http,
             owned_agent_id: owned_agent_id.clone(),
+            websocket_connection_pool,
             public_state: PublicDurableWorkerState {
                 promise_service: promise_service.clone(),
                 event_service,
@@ -327,9 +382,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 pending_update,
                 original_phantom_id,
                 worker_config.last_snapshot_index,
+                per_invocation_http_call_limit,
+                per_invocation_rpc_call_limit,
+                resource_limits.clone(),
             )
             .await,
-            temp_dir,
+            worker_dir,
             execution_status,
             resource_limits,
         })
@@ -340,6 +398,43 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .expect("ResourceTable is shared and cannot be borrowed mutably")
             .get_mut()
             .expect("ResourceTable mutex must never fail")
+    }
+
+    /// Resets the per-invocation HTTP and RPC call counters to zero.
+    ///
+    /// Delegates to `PrivateDurableWorkerState::reset_invocation_call_counts`.
+    pub fn reset_invocation_call_counts(&mut self) {
+        self.state.reset_invocation_call_counts();
+    }
+
+    /// Records one outgoing HTTP call against the monthly account quota.
+    ///
+    /// Returns `Err(WorkerMonthlyHttpCallBudgetExhausted)` if the monthly budget
+    /// is exhausted. This trap maps to `RetryDecision::TryStop` — the worker is
+    /// suspended (same as filesystem `NodeOutOfFilesystemStorage` -> `ReacquirePermits`),
+    /// and will be resumed when the registry replenishes the budget.
+    pub fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
+        if self.state.is_live() && !self.state.resource_limit_entry.record_http_call() {
+            Err(anyhow!(
+                GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Records one outgoing RPC call against the monthly account quota.
+    ///
+    /// Returns `Err(WorkerMonthlyRpcCallBudgetExhausted)` if the monthly budget
+    /// is exhausted.
+    pub fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
+        if self.state.is_live() && !self.state.resource_limit_entry.record_rpc_call() {
+            Err(anyhow!(
+                GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     fn check_if_file_is_readonly(
@@ -565,6 +660,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         retry_config: &RetryConfig,
         previous_tries: &HashMap<OplogIndex, u32>,
         trap_type: &TrapType,
+        in_atomic_region: bool,
     ) -> RetryDecision {
         match trap_type {
             TrapType::Interrupt(InterruptKind::Interrupt(ts)) => RetryDecision::TryStop(*ts),
@@ -605,7 +701,38 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } => RetryDecision::None,
             TrapType::Error {
-                error: AgentError::Unknown(_),
+                error: AgentError::ExceededHttpCallLimit,
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::ExceededRpcCallLimit,
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::DeterministicTrap(_),
+                retry_from,
+            } if in_atomic_region => {
+                let previous_tries = previous_tries.get(retry_from).copied().unwrap_or_default();
+                let retryable = previous_tries < retry_config.max_attempts;
+                if retryable {
+                    match get_delay(retry_config, previous_tries) {
+                        Some(delay) => RetryDecision::Delayed(delay),
+                        None => RetryDecision::None,
+                    }
+                } else {
+                    RetryDecision::None
+                }
+            }
+            TrapType::Error {
+                error: AgentError::DeterministicTrap(_),
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::PermanentError(_),
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: AgentError::Unknown(_) | AgentError::TransientError(_),
                 retry_from,
             } => {
                 let previous_tries = previous_tries.get(retry_from).copied().unwrap_or_default();
@@ -704,7 +831,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             } else {
                 let (begin_index, _) =
                     crate::get_oplog_entry!(self.state.replay_state, OplogEntry::BeginRemoteWrite)?;
-                if !self.state.assume_idempotence {
+                if !self.state.assume_idempotence
+                    && !matches!(
+                        *function_type,
+                        DurableFunctionType::WriteRemoteBatched(None)
+                    )
+                {
                     let end_index = self
                         .state
                         .replay_state
@@ -752,7 +884,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
-                        } => {
+                        } if self.state.assume_idempotence => {
                             // We need to jump to the end of the oplog
                             self.state.replay_state.switch_to_live().await;
 
@@ -772,6 +904,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             // TODO: this recomputation should not be necessary.
                             self.public_state.worker().reattach_worker_status().await;
                             Ok(begin_index)
+                        }
+                        OplogEntryLookupResult::NotFound { .. } => {
+                            // assume_idempotence is false and the operation was not completed —
+                            // we cannot safely retry a non-idempotent batched write.
+                            self.state.replay_state.switch_to_live().await;
+                            Err(WorkerExecutorError::runtime(
+                                "Non-idempotent remote write operation was not completed, cannot retry",
+                            ))
                         }
                     }
                 } else {
@@ -1114,7 +1254,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn finalize_pending_snapshot_update(
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
@@ -1459,6 +1599,31 @@ enum SnapshotRecoveryResult {
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    pub(crate) fn register_open_websocket(
+        &mut self,
+        rep: u32,
+        url: String,
+        headers: Option<Vec<(String, String)>>,
+    ) {
+        self.state
+            .open_websocket_connections
+            .insert(rep, WebSocketConnectionState { url, headers });
+    }
+
+    pub(crate) fn unregister_open_websocket(&mut self, rep: u32) {
+        self.state.open_websocket_connections.remove(&rep);
+    }
+
+    pub(crate) fn websocket_connection_info(&self, rep: u32) -> Option<WebSocketConnectionInfo> {
+        self.state
+            .open_websocket_connections
+            .get(&rep)
+            .map(|state| WebSocketConnectionInfo {
+                url: state.url.clone(),
+                headers: state.headers.clone(),
+            })
+    }
+
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
         let replay_events = self.state.replay_state.take_new_replay_events().await;
         if !replay_events.is_empty() {
@@ -1477,7 +1642,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
-
                     let pending_update = self.state.pending_update.lock().await.take();
 
                     let pending_update = if let Some(pending_update) = pending_update {
@@ -1561,7 +1725,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &mut current_files,
             &self.state.file_loader,
             self.owned_agent_id.environment_id,
-            self.temp_dir.path(),
+            self.worker_dir.path(),
             &new_metadata.files,
         )
         .await?;
@@ -1772,7 +1936,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 ..
             } => current_idempotency_key.map(OplogEntry::cancel_pending_invocation),
             TrapType::Error { error, retry_from } => {
-                Some(OplogEntry::error(error.clone(), *retry_from))
+                let inside_atomic_region = self.state.outermost_atomic_region_has_side_effects();
+                Some(OplogEntry::error(
+                    error.clone(),
+                    *retry_from,
+                    inside_atomic_region,
+                ))
             }
         };
 
@@ -1826,14 +1995,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .unwrap_or(default_retry_config)
             .clone();
 
+        let in_atomic_region = !self.state.active_atomic_regions.is_empty();
         let decision = Self::get_recovery_decision_on_trap(
             &retry_config,
             &latest_status.current_retry_count,
             trap_type,
+            in_atomic_region,
         );
 
         debug!(
-            "Recovery decision for {trap_type:?} with {:?} retries: {:?}",
+            "Recovery decision for {trap_type:?} with {:?} retries (in_atomic_region={in_atomic_region}): {:?}",
             latest_status.current_retry_count, decision
         );
 
@@ -1905,8 +2076,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_current_retry_point(&self) -> OplogIndex {
-        if let Some(idx) = self.state.active_atomic_regions.last() {
-            *idx
+        if let Some(region) = self.state.active_atomic_regions.last() {
+            region.begin_index
         } else {
             self.state.current_retry_point
         }
@@ -2170,7 +2341,7 @@ pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
     type ExtraDeps = Ctx::ExtraDeps;
 
     async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
@@ -2626,12 +2797,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
     async fn get_file_system_node(
         &self,
         path: &ComponentFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
-        let root = self.temp_dir.path();
+        let root = self.worker_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
@@ -2742,7 +2913,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
         &self,
         path: &ComponentFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
-        let root = self.temp_dir.path();
+        let root = self.worker_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
         {
@@ -2974,9 +3145,45 @@ pub(crate) enum HttpRequestCloseOwner {
     FutureTrailersDrop,
 }
 
+/// Tracks conditions that affect whether an HTTP request is eligible for
+/// transparent inline retry. Each flag records an event during the request
+/// lifecycle that disqualifies one or more retry zones.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HttpRetryEligibility {
+    /// Whether this request has an in-task retry loop running in the background.
+    /// When true, transient errors that reach `get()` are the final result and
+    /// should not trigger trap+replay.
+    pub has_background_retry: bool,
+    /// Set to true when splice()/blocking_splice() is called on the outgoing body stream.
+    /// When true, body bytes cannot be fully reconstructed from the oplog.
+    pub has_unreconstructable_body: bool,
+    /// Set to true when subscribe() is called on the outgoing body output stream.
+    /// When true, output stream inline retry is disabled because the pollable
+    /// would become stale after resource replacement.
+    pub output_stream_subscribed: bool,
+    /// Set to true when skip()/blocking_skip() is called on the response body.
+    /// When true, resuming-response-body inline retry is disabled because we
+    /// cannot verify
+    /// the skipped bytes against the retry response.
+    pub had_body_skip: bool,
+    /// Set to true when OutgoingBody::finish() is called with Some(trailers).
+    /// When true, inline retry is disabled because trailers are not persisted
+    /// in the oplog and cannot be reconstructed.
+    pub has_outgoing_trailers: bool,
+    /// Set to true when OutgoingBody::finish() is called.
+    /// Awaiting-response retry requires the body to be fully finished before
+    /// retrying.
+    pub body_finished: bool,
+    /// Set to true when outgoing body stream writes are replayed from oplog
+    /// (rather than executed live). When true, the actual body pipe does NOT
+    /// contain the replayed bytes, so the request must be rebuilt from oplog
+    /// before finishing the body.
+    pub replayed_body_writes: bool,
+}
+
 /// State associated with ongoing http requests, on top of the underlying wasi-http implementation
 #[derive(Debug, Clone)]
-struct HttpRequestState {
+pub(crate) struct HttpRequestState {
     /// Who is responsible for calling end_function and removing entries from the table
     pub close_owner: HttpRequestCloseOwner,
     /// The BeginRemoteWrite entry's index
@@ -2989,20 +3196,49 @@ struct HttpRequestState {
     /// this records the IncomingBody handle so that on stream close we can transfer
     /// tracking back to the body (enabling finish() to then transfer to FutureTrailers).
     pub body_handle: Option<u32>,
+    /// The original response status observed by the guest before body consumption.
+    /// Response-body resumption only swaps the body stream, so inline retry must
+    /// not resume from a retried response that changes the status code visible via
+    /// IncomingResponse.
+    pub response_status: Option<u16>,
     /// The outgoing body resource handle associated with this request, set when
     /// outgoing_handler::handle() resolves the pending body mapping.
     pub outgoing_body_rep: Option<u32>,
     /// The outgoing body output stream resource handle, set when outgoing_body::write()
     /// creates the stream from the outgoing body.
     pub output_stream_rep: Option<u32>,
+    pub use_tls: bool,
+    pub connect_timeout: std::time::Duration,
+    pub first_byte_timeout: std::time::Duration,
+    pub between_bytes_timeout: std::time::Duration,
+    /// Retry eligibility flags tracked during the request lifecycle.
+    pub retry: HttpRetryEligibility,
+}
+
+impl HttpRequestState {
+    pub fn outgoing_request_config(&self) -> OutgoingRequestConfig {
+        OutgoingRequestConfig {
+            use_tls: self.use_tls,
+            connect_timeout: self.connect_timeout,
+            first_byte_timeout: self.first_byte_timeout,
+            between_bytes_timeout: self.between_bytes_timeout,
+        }
+    }
 }
 
 /// Extracted view of the begin_index and request from an HttpRequestState,
 /// used when processing outgoing body output stream operations.
 #[derive(Debug, Clone)]
 pub(crate) struct HttpOutputStreamState {
+    pub request_handle: u32,
     pub begin_index: OplogIndex,
     pub request: HostRequestHttpRequest,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveAtomicRegion {
+    begin_index: OplogIndex,
+    has_side_effects: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -3016,6 +3252,18 @@ pub(crate) struct FilesystemOutputStreamState {
 pub(crate) struct PendingFilesystemReservation {
     pub base_size: u64,
     pub reserved_growth: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WebSocketConnectionState {
+    pub url: String,
+    pub headers: Option<Vec<(String, String)>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WebSocketConnectionInfo {
+    pub url: String,
+    pub headers: Option<Vec<(String, String)>>,
 }
 
 struct PrivateDurableWorkerState {
@@ -3050,6 +3298,9 @@ struct PrivateDurableWorkerState {
     /// State of ongoing http requests, key is the resource id it is most recently associated with (one state object can belong to multiple resources, but just one at once)
     open_http_requests: HashMap<u32, HttpRequestState>,
 
+    /// WebSocket connection state indexed by websocket resource rep.
+    open_websocket_connections: HashMap<u32, WebSocketConnectionState>,
+
     /// Maps outgoing request rep → outgoing body rep, set during outgoing_request::body()
     /// before outgoing_handler::handle() is called and the HttpRequestState is created.
     pending_http_outgoing_request_body: HashMap<u32, u32>,
@@ -3057,6 +3308,15 @@ struct PrivateDurableWorkerState {
     /// Tracks file-backed wasi output streams so quota charging can be based on
     /// actual file growth instead of requested write size.
     open_filesystem_output_streams: HashMap<u32, FilesystemOutputStreamState>,
+
+    /// Maps outgoing body rep → output stream rep, set during outgoing_body::write()
+    /// before outgoing_handler::handle() is called. Used by handle() to populate
+    /// output_stream_rep in HttpRequestState for streams created before dispatch.
+    pending_http_outgoing_body_stream: HashMap<u32, u32>,
+
+    /// Retry eligibility flags accumulated before outgoing_handler::handle() creates
+    /// the HttpRequestState. Keyed by outgoing request rep.
+    pending_http_retry_eligibility: HashMap<u32, HttpRetryEligibility>,
 
     snapshotting_mode: Option<PersistenceLevel>,
 
@@ -3106,7 +3366,7 @@ struct PrivateDurableWorkerState {
     /// persisted host call, if there is an active atomic region, the error is associated with that. Otherwise retried
     /// failures within atomic regions would not be grouped by the same retry point as the whole atomic region gets retried
     /// from scratch.
-    active_atomic_regions: Vec<OplogIndex>,
+    active_atomic_regions: Vec<ActiveAtomicRegion>,
 
     // Update that is pending and should be applied at the end of replay.
     // Other parts of the worker configuration already reflect the worker state implied by the update (component version, env vars, ifs, etc.)
@@ -3115,6 +3375,22 @@ struct PrivateDurableWorkerState {
     /// Stores the phantom ID associated with the currently replayed oplog region. Forks can change it
     current_phantom_id: Option<Uuid>,
     last_snapshot_index: Option<OplogIndex>,
+
+    /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
+    /// Reset to 0 at the start of each exported function invocation.
+    http_call_count: u64,
+    /// Per-invocation HTTP call limit from the account's Plan.
+    per_invocation_http_call_limit: u64,
+
+    /// Number of RPC calls made in the current invocation (live only, not replayed).
+    /// Reset to 0 at the start of each exported function invocation.
+    rpc_call_count: u64,
+    /// Per-invocation RPC call limit from the account's Plan.
+    per_invocation_rpc_call_limit: u64,
+
+    /// Shared per-account resource limit entry. Used to record monthly HTTP/RPC call consumption
+    /// and to check remaining budgets from the epoch callback.
+    resource_limit_entry: Arc<AtomicResourceEntry>,
 }
 
 impl PrivateDurableWorkerState {
@@ -3155,6 +3431,9 @@ impl PrivateDurableWorkerState {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
         last_snapshot_index: Option<OplogIndex>,
+        per_invocation_http_call_limit: u64,
+        per_invocation_rpc_call_limit: u64,
+        resource_limit_entry: Arc<AtomicResourceEntry>,
     ) -> Self {
         let deleted_regions = if let Some(snapshot_idx) = last_snapshot_index {
             let mut regions = deleted_regions;
@@ -3177,6 +3456,10 @@ impl PrivateDurableWorkerState {
             oplog_service,
             oplog,
             agent_id,
+            http_call_count: 0,
+            per_invocation_http_call_limit,
+            rpc_call_count: 0,
+            per_invocation_rpc_call_limit,
             promise_service,
             scheduler_service,
             worker_service,
@@ -3199,7 +3482,10 @@ impl PrivateDurableWorkerState {
             persistence_level: PersistenceLevel::Smart,
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
+            open_websocket_connections: HashMap::new(),
             pending_http_outgoing_request_body: HashMap::new(),
+            pending_http_outgoing_body_stream: HashMap::new(),
+            pending_http_retry_eligibility: HashMap::new(),
             open_filesystem_output_streams: HashMap::new(),
             snapshotting_mode: None,
             component_metadata,
@@ -3227,6 +3513,21 @@ impl PrivateDurableWorkerState {
             active_atomic_regions: Vec::new(),
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
+            resource_limit_entry,
+        }
+    }
+
+    /// Returns whether the outermost active atomic region has side effects
+    pub fn outermost_atomic_region_has_side_effects(&self) -> bool {
+        self.active_atomic_regions
+            .first()
+            .is_some_and(|region| region.has_side_effects)
+    }
+
+    /// Mark the outermost active atomic region as having side effects
+    pub fn mark_atomic_region_has_side_effects(&mut self) {
+        if let Some(region) = self.active_atomic_regions.first_mut() {
+            region.has_side_effects = true;
         }
     }
 
@@ -3246,6 +3547,28 @@ impl PrivateDurableWorkerState {
             .map(|(&handle, _)| handle)
     }
 
+    /// Find the pending outgoing request rep for a given outgoing body rep.
+    fn find_pending_request_rep_by_outgoing_body(&self, body_rep: u32) -> Option<u32> {
+        self.pending_http_outgoing_request_body
+            .iter()
+            .find(|(_, pending_body_rep)| **pending_body_rep == body_rep)
+            .map(|(&request_rep, _)| request_rep)
+    }
+
+    /// Find the pending outgoing body rep for a given output stream rep.
+    fn find_pending_body_rep_by_output_stream(&self, stream_rep: u32) -> Option<u32> {
+        self.pending_http_outgoing_body_stream
+            .iter()
+            .find(|(_, pending_stream_rep)| **pending_stream_rep == stream_rep)
+            .map(|(&body_rep, _)| body_rep)
+    }
+
+    /// Find the pending outgoing request rep for a given output stream rep.
+    fn find_pending_request_rep_by_output_stream(&self, stream_rep: u32) -> Option<u32> {
+        let body_rep = self.find_pending_body_rep_by_output_stream(stream_rep)?;
+        self.find_pending_request_rep_by_outgoing_body(body_rep)
+    }
+
     /// In live mode it returns the last oplog index (index of the entry last added).
     /// In replay mode it returns the current replay index (index of the entry last read).
     pub async fn current_oplog_index(&self) -> OplogIndex {
@@ -3254,6 +3577,46 @@ impl PrivateDurableWorkerState {
         } else {
             self.replay_state.last_replayed_index()
         }
+    }
+
+    /// Increments the HTTP call counter for the current invocation if in live mode.
+    ///
+    /// Returns `Err` if the per-invocation HTTP call limit would be exceeded.
+    /// The check and increment are performed only during live execution; replay
+    /// mode is a no-op so that recovering workers are not penalised for calls
+    /// already made in a prior execution.
+    pub fn check_and_increment_http_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
+        if !self.is_live() {
+            return Ok(());
+        }
+        if self.per_invocation_http_call_limit != u64::MAX
+            && self.http_call_count >= self.per_invocation_http_call_limit
+        {
+            return Err(GolemSpecificWasmTrap::WorkerExceededHttpCallLimit);
+        }
+        self.http_call_count = self.http_call_count.saturating_add(1);
+        Ok(())
+    }
+
+    /// Increments the RPC call counter for the current invocation if in live mode.
+    ///
+    /// Returns `Err` if the per-invocation RPC call limit would be exceeded.
+    pub fn check_and_increment_rpc_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
+        if !self.is_live() {
+            return Ok(());
+        }
+        if self.per_invocation_rpc_call_limit != u64::MAX
+            && self.rpc_call_count >= self.per_invocation_rpc_call_limit
+        {
+            return Err(GolemSpecificWasmTrap::WorkerExceededRpcCallLimit);
+        }
+        self.rpc_call_count = self.rpc_call_count.saturating_add(1);
+        Ok(())
+    }
+
+    pub fn reset_invocation_call_counts(&mut self) {
+        self.http_call_count = 0;
+        self.rpc_call_count = 0;
     }
 
     /// Returns whether we are in live mode where we are executing new calls.

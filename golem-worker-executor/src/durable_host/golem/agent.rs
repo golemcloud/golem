@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::durability::HostFailureKind;
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::host::Host;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
@@ -143,20 +144,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_all_agent_types(&mut self) -> anyhow::Result<Vec<RegisteredAgentType>> {
-        let durability =
+        let mut durability =
             Durability::<GolemAgentGetAllAgentTypes>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
         let result = if durability.is_live() {
-            let result = self
-                .agent_types_service()
-                .get_all(
-                    self.owned_agent_id.environment_id,
-                    self.owned_agent_id.agent_id.component_id,
-                    self.state.component_metadata.revision,
-                )
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            let result = loop {
+                let result = self
+                    .agent_types_service()
+                    .get_all(
+                        self.owned_agent_id.environment_id,
+                        self.owned_agent_id.agent_id.component_id,
+                        self.state.component_metadata.revision,
+                    )
+                    .await
+                    .map_err(|err| err.to_string());
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
             durability
                 .persist(
                     self,
@@ -179,22 +188,30 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         agent_type_name: String,
     ) -> anyhow::Result<Option<RegisteredAgentType>> {
         let agent_type_name = AgentTypeName(agent_type_name);
-        let durability =
+        let mut durability =
             Durability::<GolemAgentGetAgentType>::new(self, DurableFunctionType::ReadRemote)
                 .await?;
         let result = if durability.is_live() {
             let component_revision = self.state.component_metadata.revision;
-            let result = self
-                .agent_types_service()
-                .get(
-                    self.owned_agent_id.environment_id,
-                    self.owned_agent_id.agent_id.component_id,
-                    component_revision,
-                    &agent_type_name,
-                )
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            let result = loop {
+                let result = self
+                    .agent_types_service()
+                    .get(
+                        self.owned_agent_id.environment_id,
+                        self.owned_agent_id.agent_id.component_id,
+                        component_revision,
+                        &agent_type_name,
+                    )
+                    .await
+                    .map_err(|err| err.to_string());
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
             durability
                 .persist(
                     self,

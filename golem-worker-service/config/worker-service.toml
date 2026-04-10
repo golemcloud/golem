@@ -56,6 +56,10 @@ host = "localhost"
 max_message_size = 52428800
 port = 8080
 
+[registry_service.invalidation_event_subscriber]
+initial_backoff = "100ms"
+max_backoff = "30s"
+
 [registry_service.retries_on_unavailable]
 max_attempts = 5
 max_delay = "2s"
@@ -74,22 +78,31 @@ router_cache_max_capacity = 1024
 router_cache_ttl = "10m"
 
 [routing_table]
+invalidation_min_delay = "500ms"
+
+[shard_manager]
 connect_timeout = "10s"
 host = "localhost"
-invalidation_min_delay = "500ms"
 port = 9002
 
-[routing_table.retries_on_unavailable]
+[shard_manager.retries]
 max_attempts = 5
 max_delay = "2s"
 max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 2.0
 
-[routing_table.tls]
+[shard_manager.retries_on_unavailable]
+max_attempts = 5
+max_delay = "2s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 2.0
+
+[shard_manager.tls]
 type = "Disabled"
 
-[routing_table.tls.config]
+[shard_manager.tls.config]
 
 [tracing]
 console = false

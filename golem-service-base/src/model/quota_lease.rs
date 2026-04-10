@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use chrono::{DateTime, Utc};
 use golem_common::model::Pod;
 use golem_common::model::resource_definition::{
     EnforcementAction, ResourceDefinitionId, ResourceLimit,
 };
 use std::fmt;
-use std::time::Duration;
 
 /// Monotonically increasing identifier for a lease on a (resource, pod) pair.
 /// Used for fencing: an executor must reject operations from a stale epoch.
@@ -40,28 +40,6 @@ impl fmt::Display for LeaseEpoch {
     }
 }
 
-/// The allocation granted to an executor within a bounded lease.
-#[derive(Debug, Clone, PartialEq)]
-pub enum QuotaAllocation {
-    /// A fixed budget of units the executor may consume before
-    /// renewing the lease or requesting a new.
-    Budget { amount: u64 },
-    /// No capacity is currently available. The executor should
-    /// wait for the suggested duration before requesting a new lease.
-    /// Agents should be suspended (throttle) or rejected depending
-    /// on the enforcement action.
-    Exhausted { retry_after: Duration },
-}
-
-impl QuotaAllocation {
-    pub fn amount(&self) -> u64 {
-        match self {
-            Self::Budget { amount } => *amount,
-            _ => 0,
-        }
-    }
-}
-
 /// A lease granted by the shard manager to a worker executor.
 #[derive(Debug, Clone, PartialEq)]
 pub enum QuotaLease {
@@ -70,36 +48,34 @@ pub enum QuotaLease {
         resource_definition_id: ResourceDefinitionId,
         pod: Pod,
         epoch: LeaseEpoch,
-        allocation: QuotaAllocation,
-        expires_after: Duration,
+        allocation: u64,
+        expires_at: DateTime<Utc>,
         resource_limit: ResourceLimit,
         enforcement_action: EnforcementAction,
+        /// Total available capacity for this resource across all executors
+        /// (remaining pool + all current lease allocations).
+        total_available_amount: u64,
     },
     /// The resource definition does not exist or was deleted.
     /// The executor may use unlimited capacity but must renew
     /// to detect if a limit is later imposed.
-    Unlimited { pod: Pod, expires_after: Duration },
+    Unlimited { pod: Pod, expires_at: DateTime<Utc> },
+}
+
+/// A pending reservation request from an agent on an executor.
+/// Sent to the shard manager during lease renewal so it can weight
+/// allocations across executors based on demand.
+#[derive(Debug, Clone, desert_rust::BinaryCodec)]
+pub struct PendingReservation {
+    pub amount: u64,
+    pub priority: f64,
 }
 
 mod protobuf {
     use super::*;
-    use golem_api_grpc::proto::golem::common::{
-        QuotaAllocation as GrpcQuotaAllocation, QuotaLease as GrpcQuotaLease, quota_allocation,
-        quota_lease,
-    };
-
-    impl TryFrom<GrpcQuotaAllocation> for QuotaAllocation {
-        type Error = String;
-
-        fn try_from(value: GrpcQuotaAllocation) -> Result<Self, Self::Error> {
-            match value.kind.ok_or("QuotaAllocation.kind missing")? {
-                quota_allocation::Kind::Budget(b) => Ok(Self::Budget { amount: b.amount }),
-                quota_allocation::Kind::Exhausted(e) => Ok(Self::Exhausted {
-                    retry_after: Duration::from_nanos(e.retry_after_nanos),
-                }),
-            }
-        }
-    }
+    use applying::Apply;
+    use golem_api_grpc::proto::golem::common::{QuotaLease as GrpcQuotaLease, quota_lease};
+    use std::time::SystemTime;
 
     impl TryFrom<GrpcQuotaLease> for QuotaLease {
         type Error = String;
@@ -107,42 +83,76 @@ mod protobuf {
         fn try_from(value: GrpcQuotaLease) -> Result<Self, Self::Error> {
             match value.kind.ok_or("QuotaLease.kind missing")? {
                 quota_lease::Kind::Bounded(b) => {
-                    let pod: Pod = b.pod.ok_or("BoundedQuotaLease.pod missing")?.into();
+                    let pod: Pod = b.pod.ok_or("BoundedQuotaLease.pod missing")?.try_into()?;
                     let resource_definition_id = b
                         .resource_definition_id
                         .ok_or("BoundedQuotaLease.resource_definition_id missing")?
                         .try_into()?;
-                    let allocation: QuotaAllocation = b
-                        .allocation
-                        .ok_or("BoundedQuotaLease.allocation missing")?
-                        .try_into()?;
+
+                    let expires_at = b
+                        .expires_at
+                        .ok_or("missing expires_at")?
+                        .apply(SystemTime::try_from)
+                        .map_err(|_| "Failed to convert timestamp".to_string())?
+                        .into();
+
                     let resource_limit = b
                         .resource_limit
                         .ok_or("BoundedQuotaLease.resource_limit missing")?
                         .try_into()?;
+
                     let enforcement_action =
                         golem_api_grpc::proto::golem::common::EnforcementAction::try_from(
                             b.enforcement_action,
                         )
                         .map_err(|_| "Unknown enforcement_action value")?
                         .try_into()?;
+
                     Ok(Self::Bounded {
                         resource_definition_id,
                         pod,
                         epoch: LeaseEpoch(b.epoch),
-                        allocation,
-                        expires_after: Duration::from_nanos(b.expires_after_nanos),
+                        allocation: b.allocation,
+                        expires_at,
                         resource_limit,
                         enforcement_action,
+                        total_available_amount: b.total_available_amount,
                     })
                 }
                 quota_lease::Kind::Unlimited(u) => {
-                    let pod: Pod = u.pod.ok_or("UnlimitedQuotaLease.pod missing")?.into();
-                    Ok(Self::Unlimited {
-                        pod,
-                        expires_after: Duration::from_nanos(u.expires_after_nanos),
-                    })
+                    let pod: Pod = u.pod.ok_or("UnlimitedQuotaLease.pod missing")?.try_into()?;
+
+                    let expires_at = u
+                        .expires_at
+                        .ok_or("missing expires_at")?
+                        .apply(SystemTime::try_from)
+                        .map_err(|_| "Failed to convert timestamp".to_string())?
+                        .into();
+
+                    Ok(Self::Unlimited { pod, expires_at })
                 }
+            }
+        }
+    }
+
+    impl From<golem_api_grpc::proto::golem::shardmanager::v1::PendingReservation>
+        for PendingReservation
+    {
+        fn from(value: golem_api_grpc::proto::golem::shardmanager::v1::PendingReservation) -> Self {
+            Self {
+                amount: value.amount,
+                priority: value.priority,
+            }
+        }
+    }
+
+    impl From<PendingReservation>
+        for golem_api_grpc::proto::golem::shardmanager::v1::PendingReservation
+    {
+        fn from(value: PendingReservation) -> Self {
+            Self {
+                amount: value.amount,
+                priority: value.priority,
             }
         }
     }

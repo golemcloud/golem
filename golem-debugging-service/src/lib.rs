@@ -28,12 +28,10 @@ use crate::debug_context::DebugContext;
 use crate::debug_session::{DebugSessions, DebugSessionsDefault};
 use crate::oplog::debug_oplog_service::DebugOplogService;
 use crate::services::auth::{AuthService, GrpcAuthService};
-use anyhow::{Error, anyhow};
+use anyhow::Error;
 use async_trait::async_trait;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_worker_executor::durable_host::DurableWorkerCtx;
-use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
@@ -47,6 +45,8 @@ use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::OplogService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::promise::PromiseService;
+use golem_worker_executor::services::quota::QuotaService;
+use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use golem_worker_executor::services::scheduler::SchedulerService;
 use golem_worker_executor::services::shard::ShardService;
@@ -58,9 +58,8 @@ use golem_worker_executor::services::worker_enumeration::{
 };
 use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{All, rdbms, resource_limits};
-use golem_worker_executor::wasi_host::create_linker;
-use golem_worker_executor::{Bootstrap, RunDetails, create_worker_executor_impl};
+use golem_worker_executor::services::{All, rdbms};
+use golem_worker_executor::{Bootstrap, create_worker_executor_impl};
 use humansize::ISizeFormatter;
 use poem::EndpointExt;
 use poem::Route;
@@ -69,29 +68,53 @@ use poem::listener::{Acceptor, Listener};
 use poem::middleware::{CookieJarManager, Cors};
 use prometheus::Registry;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, info};
 use wasmtime::Engine;
-use wasmtime::component::{HasSelf, Linker};
+use wasmtime::component::Linker;
 
 #[cfg(test)]
 test_r::enable!();
 
-pub struct ServerBootstrap {
+pub struct RunDetails {
+    pub http_port: u16,
+    pub epoch_thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+    pub epoch_stop: Arc<AtomicBool>,
+    pub shutdown: golem_worker_executor::services::shutdown::Shutdown,
+}
+
+impl Drop for RunDetails {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+        self.epoch_stop.store(true, Ordering::Release);
+        if let Some(handle) = self.epoch_thread.lock().unwrap().take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+pub struct DebugServerBootstrap {
     pub debug_config: DebugConfig,
 }
 
 #[async_trait]
-impl Bootstrap<DebugContext> for ServerBootstrap {
-    fn create_active_workers(
+impl Bootstrap<DebugContext> for DebugServerBootstrap {
+    fn create_shard_manager_service(
         &self,
-        golem_config: &GolemConfig,
-    ) -> Arc<ActiveWorkers<DebugContext>> {
-        Arc::new(ActiveWorkers::<DebugContext>::new(
-            &golem_config.memory,
-            &golem_config.filesystem_storage,
-        ))
+        _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+    ) -> Arc<dyn ShardManagerService> {
+        Arc::new(golem_worker_executor::services::shard_manager::ShardManagerServiceSingleShard)
+    }
+
+    fn create_quota_service(
+        &self,
+        _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _golem_config: &GolemConfig,
+        _shutdown_token: tokio_util::sync::CancellationToken,
+    ) -> Arc<dyn golem_worker_executor::services::quota::QuotaService> {
+        Arc::new(golem_worker_executor::services::quota::UnlimitedQuotaService)
     }
 
     fn create_component_service(
@@ -108,13 +131,12 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         )
     }
 
-    async fn run_grpc_server(
-        &self,
-        _service_dependencies: All<DebugContext>,
-        _lazy_worker_activator: Arc<LazyWorkerActivator<DebugContext>>,
-        _join_set: &mut JoinSet<Result<(), Error>>,
-    ) -> anyhow::Result<u16> {
-        Err(anyhow!("No grpc server in debugging service"))
+    fn create_additional_deps(&self, registry_service: Arc<dyn RegistryService>) -> AdditionalDeps {
+        let auth_service: Arc<dyn AuthService> =
+            Arc::new(GrpcAuthService::new(registry_service.clone()));
+        let debug_sessions: Arc<dyn DebugSessions> = Arc::new(DebugSessionsDefault::default());
+
+        AdditionalDeps::new(auth_service, debug_sessions)
     }
 
     async fn create_services(
@@ -144,167 +166,213 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
-        registry_service: Arc<dyn RegistryService>,
+        resource_limits: Arc<dyn ResourceLimits>,
+        quota_service: Arc<dyn QuotaService>,
+        additional_deps: AdditionalDeps,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+        websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<DebugContext>> {
-        let auth_service: Arc<dyn AuthService> =
-            Arc::new(GrpcAuthService::new(registry_service.clone()));
-
-        let debug_sessions: Arc<dyn DebugSessions> = Arc::new(DebugSessionsDefault::default());
-
-        let debug_oplog_service = Arc::new(DebugOplogService::new(
-            Arc::clone(&oplog_service),
-            Arc::clone(&debug_sessions),
-        ));
-
-        let additional_deps = AdditionalDeps::new(auth_service, debug_sessions);
-
-        let resource_limits = resource_limits::configured(
-            &golem_config.resource_limits,
-            registry_service,
-            shutdown_token.clone(),
-        );
-
-        // When it comes to fork, we need the original oplog service
-        let worker_fork = Arc::new(DefaultWorkerFork::new(
-            Arc::new(RemoteInvocationRpc::new(
-                worker_proxy.clone(),
-                shard_service.clone(),
-            )),
-            active_workers.clone(),
-            engine.clone(),
-            linker.clone(),
-            runtime.clone(),
-            component_service.clone(),
-            shard_manager_service.clone(),
-            worker_service.clone(),
-            worker_proxy.clone(),
-            worker_enumeration_service.clone(),
-            running_worker_enumeration_service.clone(),
-            promise_service.clone(),
-            golem_config.clone(),
-            shard_service.clone(),
-            key_value_service.clone(),
-            blob_store_service.clone(),
-            rdbms_service.clone(),
-            // When it comes to fork, it reads using the debug oplog service
-            // (the worker instance's oplog) but writes using the live oplog service)
-            oplog_service.clone(),
-            scheduler_service.clone(),
-            worker_activator.clone(),
-            events.clone(),
-            file_loader.clone(),
-            oplog_processor_plugin.clone(),
-            resource_limits.clone(),
-            environment_state_service.clone(),
-            agent_types_service.clone(),
-            agent_webhooks_service.clone(),
-            shutdown_token.clone(),
-            http_connection_pool.clone(),
-            additional_deps.clone(),
-            leak_sentinel.clone(),
-        ));
-
-        let rpc = Arc::new(DirectWorkerInvocationRpc::new(
-            Arc::new(RemoteInvocationRpc::new(
-                worker_proxy.clone(),
-                shard_service.clone(),
-            )),
-            active_workers.clone(),
-            engine.clone(),
-            linker.clone(),
-            runtime.clone(),
-            component_service.clone(),
-            worker_fork.clone(),
-            worker_service.clone(),
-            worker_enumeration_service.clone(),
-            running_worker_enumeration_service.clone(),
-            promise_service.clone(),
-            golem_config.clone(),
-            shard_service.clone(),
-            shard_manager_service.clone(),
-            key_value_service.clone(),
-            blob_store_service.clone(),
-            rdbms_service.clone(),
-            debug_oplog_service.clone(),
-            scheduler_service.clone(),
-            worker_activator.clone(),
-            events.clone(),
-            file_loader.clone(),
-            oplog_processor_plugin.clone(),
-            resource_limits.clone(),
-            shutdown_token.clone(),
-            environment_state_service.clone(),
-            agent_types_service.clone(),
-            agent_webhooks_service.clone(),
-            http_connection_pool.clone(),
-            additional_deps.clone(),
-            leak_sentinel.clone(),
-        ));
-
-        Ok(All::new(
+        create_debugging_service_services(
             active_workers,
-            agent_types_service,
-            agent_webhooks_service,
             engine,
             linker,
-            runtime.clone(),
+            runtime,
             component_service,
             shard_manager_service,
-            worker_fork,
             worker_service,
             worker_enumeration_service,
             running_worker_enumeration_service,
             promise_service,
-            golem_config.clone(),
+            golem_config,
             shard_service,
             key_value_service,
             blob_store_service,
             rdbms_service,
-            debug_oplog_service,
-            rpc,
+            worker_activator,
+            oplog_service,
             scheduler_service,
-            worker_activator.clone(),
-            worker_proxy.clone(),
-            events.clone(),
-            file_loader.clone(),
-            oplog_processor_plugin.clone(),
+            worker_proxy,
+            events,
+            file_loader,
+            oplog_processor_plugin,
+            agent_types_service,
+            environment_state_service,
+            agent_webhooks_service,
             resource_limits,
+            quota_service,
+            additional_deps,
             shutdown_token,
             http_connection_pool,
-            environment_state_service,
-            additional_deps,
+            websocket_connection_pool,
             leak_sentinel,
-        ))
-    }
-
-    fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<DebugContext>> {
-        create_debug_wasmtime_linker(engine)
-    }
-
-    async fn run(
-        &self,
-        golem_config: GolemConfig,
-        prometheus_registry: Registry,
-        runtime: Handle,
-        join_set: &mut JoinSet<Result<(), Error>>,
-    ) -> anyhow::Result<RunDetails> {
-        run_debug_worker_executor(
-            self,
-            golem_config,
-            &self.debug_config.cors_origin_regex,
-            prometheus_registry,
-            runtime,
-            join_set,
         )
-        .await
     }
 }
 
-pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized>(
-    bootstrap: &T,
+#[allow(clippy::too_many_arguments)]
+pub fn create_debugging_service_services(
+    active_workers: Arc<ActiveWorkers<DebugContext>>,
+    engine: Arc<Engine>,
+    linker: Arc<Linker<DebugContext>>,
+    runtime: Handle,
+    component_service: Arc<dyn ComponentService>,
+    shard_manager_service: Arc<dyn ShardManagerService>,
+    worker_service: Arc<dyn WorkerService>,
+    worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
+    running_worker_enumeration_service: Arc<dyn RunningWorkerEnumerationService>,
+    promise_service: Arc<dyn PromiseService>,
+    golem_config: Arc<GolemConfig>,
+    shard_service: Arc<dyn ShardService>,
+    key_value_service: Arc<dyn KeyValueService>,
+    blob_store_service: Arc<dyn BlobStoreService>,
+    rdbms_service: Arc<dyn rdbms::RdbmsService>,
+    worker_activator: Arc<dyn WorkerActivator<DebugContext>>,
+    oplog_service: Arc<dyn OplogService>,
+    scheduler_service: Arc<dyn SchedulerService>,
+    worker_proxy: Arc<dyn WorkerProxy>,
+    events: Arc<Events>,
+    file_loader: Arc<FileLoader>,
+    oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+    agent_types_service: Arc<dyn AgentTypesService>,
+    environment_state_service: Arc<dyn EnvironmentStateService>,
+    agent_webhooks_service: Arc<AgentWebhooksService>,
+    resource_limits: Arc<dyn ResourceLimits>,
+    quota_service: Arc<dyn QuotaService>,
+    additional_deps: AdditionalDeps,
+    shutdown_token: tokio_util::sync::CancellationToken,
+    http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
+    websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
+    leak_sentinel: Arc<()>,
+) -> anyhow::Result<All<DebugContext>> {
+    let debug_oplog_service = Arc::new(DebugOplogService::new(
+        oplog_service.clone(),
+        additional_deps.debug_session(),
+    ));
+
+    let worker_fork = Arc::new(DefaultWorkerFork::new(
+        Arc::new(RemoteInvocationRpc::new(
+            worker_proxy.clone(),
+            shard_service.clone(),
+        )),
+        active_workers.clone(),
+        engine.clone(),
+        linker.clone(),
+        runtime.clone(),
+        component_service.clone(),
+        shard_manager_service.clone(),
+        quota_service.clone(),
+        worker_service.clone(),
+        worker_proxy.clone(),
+        worker_enumeration_service.clone(),
+        running_worker_enumeration_service.clone(),
+        promise_service.clone(),
+        golem_config.clone(),
+        shard_service.clone(),
+        key_value_service.clone(),
+        blob_store_service.clone(),
+        rdbms_service.clone(),
+        // When it comes to fork, it reads using the debug oplog service
+        // (the worker instance's oplog) but writes using the live oplog service)
+        oplog_service.clone(),
+        scheduler_service.clone(),
+        worker_activator.clone(),
+        events.clone(),
+        file_loader.clone(),
+        oplog_processor_plugin.clone(),
+        resource_limits.clone(),
+        environment_state_service.clone(),
+        agent_types_service.clone(),
+        agent_webhooks_service.clone(),
+        shutdown_token.clone(),
+        http_connection_pool.clone(),
+        websocket_connection_pool.clone(),
+        additional_deps.clone(),
+        leak_sentinel.clone(),
+    ));
+
+    let rpc = Arc::new(DirectWorkerInvocationRpc::new(
+        Arc::new(RemoteInvocationRpc::new(
+            worker_proxy.clone(),
+            shard_service.clone(),
+        )),
+        active_workers.clone(),
+        engine.clone(),
+        linker.clone(),
+        runtime.clone(),
+        component_service.clone(),
+        worker_fork.clone(),
+        worker_service.clone(),
+        worker_enumeration_service.clone(),
+        running_worker_enumeration_service.clone(),
+        promise_service.clone(),
+        golem_config.clone(),
+        shard_service.clone(),
+        shard_manager_service.clone(),
+        quota_service.clone(),
+        key_value_service.clone(),
+        blob_store_service.clone(),
+        rdbms_service.clone(),
+        debug_oplog_service.clone(),
+        scheduler_service.clone(),
+        worker_activator.clone(),
+        events.clone(),
+        file_loader.clone(),
+        oplog_processor_plugin.clone(),
+        resource_limits.clone(),
+        shutdown_token.clone(),
+        environment_state_service.clone(),
+        agent_types_service.clone(),
+        agent_webhooks_service.clone(),
+        http_connection_pool.clone(),
+        websocket_connection_pool.clone(),
+        additional_deps.clone(),
+        leak_sentinel.clone(),
+    ));
+
+    Ok(All::new(
+        active_workers,
+        agent_types_service,
+        agent_webhooks_service,
+        engine,
+        linker,
+        runtime,
+        component_service,
+        shard_manager_service,
+        quota_service,
+        worker_fork,
+        worker_service,
+        worker_enumeration_service,
+        running_worker_enumeration_service,
+        promise_service,
+        golem_config,
+        shard_service,
+        key_value_service,
+        blob_store_service,
+        rdbms_service,
+        debug_oplog_service,
+        rpc,
+        scheduler_service,
+        worker_activator,
+        worker_proxy,
+        events,
+        file_loader,
+        oplog_processor_plugin,
+        resource_limits,
+        shutdown_token,
+        http_connection_pool,
+        websocket_connection_pool,
+        environment_state_service,
+        additional_deps,
+        leak_sentinel,
+    ))
+}
+
+pub async fn bootstrap_and_run_debug_worker_executor<
+    BootstrapImpl: Bootstrap<DebugContext> + ?Sized + Send + Sync,
+>(
+    bootstrap: &BootstrapImpl,
     golem_config: GolemConfig,
     cors_origin_regex: &str,
     prometheus_registry: Registry,
@@ -327,7 +395,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized>(
     let shutdown = golem_worker_executor::services::shutdown::Shutdown::new();
 
     let (worker_executor_impl, epoch_thread, epoch_stop, _registry_service) =
-        create_worker_executor_impl::<DebugContext, T>(
+        create_worker_executor_impl::<DebugContext, BootstrapImpl>(
             golem_config.clone(),
             bootstrap,
             runtime.clone(),
@@ -347,46 +415,10 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized>(
 
     Ok(RunDetails {
         http_port,
-        // TODO: no grpc config running, this should not be exposed here
-        grpc_port: golem_config.grpc.port,
         epoch_thread: std::sync::Mutex::new(Some(epoch_thread)),
         epoch_stop,
         shutdown,
-        leak_detector: worker_executor_impl.leak_detector(),
     })
-}
-
-fn get_durable_ctx(ctx: &mut DebugContext) -> &mut DurableWorkerCtx<DebugContext> {
-    &mut ctx.durable_ctx
-}
-
-pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<DebugContext>> {
-    let mut linker = create_linker(engine, get_durable_ctx)?;
-    golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
-        &mut linker,
-        get_durable_ctx,
-    )?;
-    golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
-        &mut linker,
-        get_durable_ctx,
-    )?;
-    golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
-        &mut linker,
-        get_durable_ctx,
-    )?;
-    golem_durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
-        &mut linker,
-        get_durable_ctx,
-    )?;
-    golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
-        _,
-        HasSelf<DurableWorkerCtx<DebugContext>>,
-    >(&mut linker, get_durable_ctx)?;
-    golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
-        &mut linker,
-        get_durable_ctx,
-    )?;
-    Ok(linker)
 }
 
 async fn start_http_server(
@@ -442,11 +474,15 @@ pub async fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("Golem Debug Worker Executor starting up...");
     let mut join_set = JoinSet::new();
-    ServerBootstrap {
-        debug_config: debug_config.clone(),
-    }
-    .run(
+
+    let cors_origin_regex = debug_config.cors_origin_regex.clone();
+
+    bootstrap_and_run_debug_worker_executor(
+        &DebugServerBootstrap {
+            debug_config: debug_config.clone(),
+        },
         debug_config.into_golem_config(),
+        &cors_origin_regex,
         prometheus_registry,
         runtime,
         &mut join_set,

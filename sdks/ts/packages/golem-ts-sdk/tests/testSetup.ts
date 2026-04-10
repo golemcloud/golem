@@ -78,6 +78,18 @@ vi.mock('golem:core/types@1.5.0', () => ({
       lowBits: BigInt('0x' + parts.slice(16)),
     };
   },
+  uuidToString: (uuid: { highBits: bigint; lowBits: bigint }) => {
+    const hi = BigInt.asUintN(64, uuid.highBits).toString(16).padStart(16, '0');
+    const lo = BigInt.asUintN(64, uuid.lowBits).toString(16).padStart(16, '0');
+    const hex = hi + lo;
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  },
+}));
+
+vi.mock('golem:api/oplog@1.5.0', () => ({
+  GetOplog: vi.fn(),
+  SearchOplog: vi.fn(),
+  enrichOplogEntries: vi.fn(),
 }));
 
 (globalThis as any).currentAgentId = 'foo-agent(123)';

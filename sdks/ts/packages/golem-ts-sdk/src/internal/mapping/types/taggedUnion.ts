@@ -35,10 +35,6 @@ export type TaggedUnion =
   | { tag: 'result'; val: UserDefinedResultType };
 
 export const TaggedUnion = {
-  getTagNames(tu: TaggedUnion): string[] {
-    return tu.tag === 'custom' ? tu.val.map((t) => t.tagLiteralName) : ['ok', 'err'];
-  },
-
   getTaggedTypes(tu: TaggedUnion): TaggedTypeMetadata[] {
     if (tu.tag === 'custom') return tu.val;
 
@@ -46,10 +42,6 @@ export const TaggedUnion = {
       { tagLiteralName: 'ok', valueType: tu.val.okType ?? undefined },
       { tagLiteralName: 'err', valueType: tu.val.errType ?? undefined },
     ];
-  },
-
-  isResult(tu: TaggedUnion): tu is { tag: 'result'; val: UserDefinedResultType } {
-    return tu.tag === 'result';
   },
 };
 
@@ -79,8 +71,10 @@ export function tryTaggedUnion(unionTypes: TsType[]): Try<TaggedUnion> {
       });
     } else {
       const node = nextSymbol.getDeclarations()[0];
-      const propType = nextSymbol.getTypeAtLocation(nextSymbol.getValueDeclarationOrThrow());
-      propType.optional = node.hasQuestionToken();
+      const propType = withOptionality(
+        nextSymbol.getTypeAtLocation(nextSymbol.getValueDeclarationOrThrow()),
+        node.hasQuestionToken(),
+      );
 
       taggedTypeMetadata.push({
         tagLiteralName: tagValueTrimmed,
@@ -134,6 +128,10 @@ function tryResultType(taggedTypes: TaggedTypeMetadata[]): Try<UserDefinedResult
   }
 
   return Either.right({ okType, errType });
+}
+
+function withOptionality(type: TsType, optional: boolean): TsType {
+  return { ...type, optional };
 }
 
 export type UnionOfLiteral = { literals: string[] };

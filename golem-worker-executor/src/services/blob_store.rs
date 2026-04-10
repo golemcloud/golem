@@ -12,13 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::types::ObjectMetadata;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// Typed errors for blob store operations, enabling semantic retry classification
+#[derive(Debug, Clone)]
+pub enum BlobStoreError {
+    /// The requested object or container was not found
+    NotFound(String),
+    /// The container or object already exists
+    AlreadyExists(String),
+    /// Permission denied
+    PermissionDenied(String),
+    /// Invalid input (bad name, bad range, etc.)
+    InvalidInput(String),
+    /// Transient backend failure (network, timeout, etc.)
+    TransientBackend(String),
+    /// Other/unknown error
+    Other(String),
+}
+
+impl std::fmt::Display for BlobStoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound(msg) => write!(f, "Not found: {msg}"),
+            Self::AlreadyExists(msg) => write!(f, "Already exists: {msg}"),
+            Self::PermissionDenied(msg) => write!(f, "Permission denied: {msg}"),
+            Self::InvalidInput(msg) => write!(f, "Invalid input: {msg}"),
+            Self::TransientBackend(msg) => write!(f, "Backend error: {msg}"),
+            Self::Other(msg) => write!(f, "{msg}"),
+        }
+    }
+}
 
 /// Interface for storing blobs in a persistent storage.
 #[async_trait]
@@ -27,13 +56,13 @@ pub trait BlobStoreService: Send + Sync {
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), BlobStoreError>;
 
     async fn container_exists(
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> anyhow::Result<bool>;
+    ) -> Result<bool, BlobStoreError>;
 
     async fn copy_object(
         &self,
@@ -42,39 +71,39 @@ pub trait BlobStoreService: Send + Sync {
         source_object_name: String,
         destination_container_name: String,
         destination_object_name: String,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), BlobStoreError>;
 
     async fn create_container(
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), BlobStoreError>;
 
     async fn delete_container(
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), BlobStoreError>;
 
     async fn delete_object(
         &self,
         environment_id: EnvironmentId,
         container_name: String,
         object_name: String,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), BlobStoreError>;
 
     async fn delete_objects(
         &self,
         environment_id: EnvironmentId,
         container_name: String,
         object_names: Vec<String>,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), BlobStoreError>;
 
     async fn get_container(
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> anyhow::Result<Option<u64>>;
+    ) -> Result<Option<u64>, BlobStoreError>;
 
     async fn get_data(
         &self,
@@ -83,20 +112,20 @@ pub trait BlobStoreService: Send + Sync {
         object_name: String,
         start: u64,
         end: u64,
-    ) -> anyhow::Result<Vec<u8>>;
+    ) -> Result<Vec<u8>, BlobStoreError>;
 
     async fn has_object(
         &self,
         environment_id: EnvironmentId,
         container_name: String,
         object_name: String,
-    ) -> anyhow::Result<bool>;
+    ) -> Result<bool, BlobStoreError>;
 
     async fn list_objects(
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> anyhow::Result<Vec<String>>;
+    ) -> Result<Vec<String>, BlobStoreError>;
 
     async fn move_object(
         &self,
@@ -105,14 +134,14 @@ pub trait BlobStoreService: Send + Sync {
         source_object_name: String,
         destination_container_name: String,
         destination_object_name: String,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), BlobStoreError>;
 
     async fn object_info(
         &self,
         environment_id: EnvironmentId,
         container_name: String,
         object_name: String,
-    ) -> anyhow::Result<ObjectMetadata>;
+    ) -> Result<ObjectMetadata, BlobStoreError>;
 
     async fn write_data(
         &self,
@@ -120,7 +149,7 @@ pub trait BlobStoreService: Send + Sync {
         container_name: String,
         object_name: String,
         data: Vec<u8>,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), BlobStoreError>;
 }
 
 pub struct DefaultBlobStoreService {
@@ -139,7 +168,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), BlobStoreError> {
         self.blob_storage
             .delete_dir(
                 "blob_store",
@@ -148,7 +177,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 Path::new(&container_name),
             )
             .await
-            .map_err(|err| anyhow!(err))?;
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
         Ok(())
     }
 
@@ -156,7 +185,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool, BlobStoreError> {
         self.blob_storage
             .exists(
                 "blob_store",
@@ -165,7 +194,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 Path::new(&container_name),
             )
             .await
-            .map_err(|err| anyhow!(err))
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
             .map(|result| match result {
                 ExistsResult::Directory => true,
                 ExistsResult::File => false,
@@ -180,7 +209,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         source_object_name: String,
         destination_container_name: String,
         destination_object_name: String,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), BlobStoreError> {
         self.blob_storage
             .copy(
                 "blob_store",
@@ -190,14 +219,14 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &Path::new(&destination_container_name).join(&destination_object_name),
             )
             .await
-            .map_err(|err| anyhow!(err))
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
     }
 
     async fn create_container(
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), BlobStoreError> {
         self.blob_storage
             .create_dir(
                 "blob_store",
@@ -206,7 +235,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 Path::new(&container_name),
             )
             .await
-            .map_err(|err| anyhow!(err))?;
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
         Ok(())
     }
 
@@ -214,7 +243,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), BlobStoreError> {
         self.blob_storage
             .delete_dir(
                 "blob_store",
@@ -223,7 +252,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 Path::new(&container_name),
             )
             .await
-            .map_err(|err| anyhow!(err))?;
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
         Ok(())
     }
 
@@ -232,7 +261,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
         object_name: String,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), BlobStoreError> {
         self.blob_storage
             .delete_dir(
                 "blob_store",
@@ -241,7 +270,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &Path::new(&container_name).join(&object_name),
             )
             .await
-            .map_err(|err| anyhow!(err))?;
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
         Ok(())
     }
 
@@ -250,7 +279,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
         object_names: Vec<String>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), BlobStoreError> {
         let paths: Vec<PathBuf> = object_names
             .iter()
             .map(|object_name| Path::new(&container_name).join(object_name))
@@ -263,14 +292,14 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &paths,
             )
             .await
-            .map_err(|err| anyhow!(err))
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
     }
 
     async fn get_container(
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> anyhow::Result<Option<u64>> {
+    ) -> Result<Option<u64>, BlobStoreError> {
         self.blob_storage
             .get_metadata(
                 "blob_store",
@@ -279,7 +308,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 Path::new(&container_name),
             )
             .await
-            .map_err(|err| anyhow!(err))
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
             .map(|result| result.map(|metadata| metadata.last_modified_at.to_millis()))
     }
 
@@ -290,7 +319,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         object_name: String,
         start: u64,
         end: u64,
-    ) -> anyhow::Result<Vec<u8>> {
+    ) -> Result<Vec<u8>, BlobStoreError> {
         let data = self
             .blob_storage
             .get_raw_slice(
@@ -302,11 +331,13 @@ impl BlobStoreService for DefaultBlobStoreService {
                 end,
             )
             .await
-            .map_err(|err| anyhow!(err))?;
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
 
         match data {
             Some(data) => Ok(data.to_vec()),
-            None => anyhow::bail!("Object does not exist"),
+            None => Err(BlobStoreError::NotFound(
+                "Object does not exist".to_string(),
+            )),
         }
     }
 
@@ -315,7 +346,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
         object_name: String,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool, BlobStoreError> {
         self.blob_storage
             .exists(
                 "blob_store",
@@ -324,7 +355,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &Path::new(&container_name).join(&object_name),
             )
             .await
-            .map_err(|err| anyhow!(err))
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
             .map(|result| match result {
                 ExistsResult::Directory => false,
                 ExistsResult::File => true,
@@ -336,7 +367,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> anyhow::Result<Vec<String>> {
+    ) -> Result<Vec<String>, BlobStoreError> {
         self.blob_storage
             .list_dir(
                 "blob_store",
@@ -345,7 +376,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 Path::new(&container_name),
             )
             .await
-            .map_err(|err| anyhow!(err))
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
             .map(|paths| {
                 paths
                     .iter()
@@ -361,7 +392,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         source_object_name: String,
         destination_container_name: String,
         destination_object_name: String,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), BlobStoreError> {
         self.blob_storage
             .r#move(
                 "blob_store",
@@ -371,7 +402,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &Path::new(&destination_container_name).join(&destination_object_name),
             )
             .await
-            .map_err(|err| anyhow!(err))
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
     }
 
     async fn object_info(
@@ -379,7 +410,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
         object_name: String,
-    ) -> anyhow::Result<ObjectMetadata> {
+    ) -> Result<ObjectMetadata, BlobStoreError> {
         match self
             .blob_storage
             .get_metadata(
@@ -389,7 +420,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &Path::new(&container_name).join(&object_name),
             )
             .await
-            .map_err(|err| anyhow!(err))?
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?
         {
             Some(metadata) => Ok(ObjectMetadata {
                 name: object_name,
@@ -397,7 +428,9 @@ impl BlobStoreService for DefaultBlobStoreService {
                 created_at: metadata.last_modified_at.to_millis(),
                 size: metadata.size,
             }),
-            None => anyhow::bail!("Object does not exist"),
+            None => Err(BlobStoreError::NotFound(
+                "Object does not exist".to_string(),
+            )),
         }
     }
 
@@ -407,7 +440,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         container_name: String,
         object_name: String,
         data: Vec<u8>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), BlobStoreError> {
         self.blob_storage
             .put_raw(
                 "blob_store",
@@ -417,7 +450,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &data,
             )
             .await
-            .map_err(|err| anyhow!(err))
+            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
     }
 }
 

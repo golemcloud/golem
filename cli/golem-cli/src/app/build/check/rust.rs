@@ -62,7 +62,7 @@ pub(super) fn plan_rust_cargo_fix_steps(
             }
 
             let compliance =
-                evaluate_cargo_dependency_compliance(found, requirement, cargo_toml_path.parent());
+                evaluate_cargo_dependency_compliance(found, requirement, cargo_toml_path.parent())?;
 
             match compliance {
                 DependencySpecCompliance::Compatible => {}
@@ -74,7 +74,7 @@ pub(super) fn plan_rust_cargo_fix_steps(
                         continue;
                     }
                     let update_spec =
-                        build_cargo_update_spec(found, requirement, cargo_toml_path.parent());
+                        build_cargo_update_spec(found, requirement, cargo_toml_path.parent())?;
                     working = edit::cargo_toml::upsert_dependency_auto(
                         &working,
                         requirement.name,
@@ -111,7 +111,7 @@ pub(super) fn plan_rust_cargo_fix_steps(
                 found,
                 requirement,
                 workspace_cargo_toml_path.parent(),
-            );
+            )?;
 
             match compliance {
                 DependencySpecCompliance::Compatible => {}
@@ -130,7 +130,7 @@ pub(super) fn plan_rust_cargo_fix_steps(
                         found,
                         requirement,
                         workspace_cargo_toml_path.parent(),
-                    );
+                    )?;
                     working = edit::cargo_toml::upsert_dependency_in_workspace_dependencies(
                         &working,
                         requirement.name,
@@ -261,7 +261,7 @@ fn build_cargo_update_spec(
     found: Option<&DependencySpec>,
     requirement: &CargoDependencyRequirement,
     base_dir: Option<&Path>,
-) -> DependencySpec {
+) -> anyhow::Result<DependencySpec> {
     let base_spec = match (&requirement.matcher, found) {
         (
             CargoDependencyMatcher::Kind {
@@ -269,7 +269,7 @@ fn build_cargo_update_spec(
                 semantics,
             },
             Some(DependencySpec::Version { version, features }),
-        ) if evaluate_dependency_spec_compliance(version, expected, *semantics)
+        ) if evaluate_dependency_spec_compliance(version, expected, *semantics)?
             == DependencySpecCompliance::Compatible =>
         {
             DependencySpec::Version {
@@ -285,7 +285,7 @@ fn build_cargo_update_spec(
             Some(DependencySpec::Path { path, features }),
         ) if matches!(expected, ExpectedDependencyKind::ExactPath(expected_path)
             if path_matches_expected(path, expected_path, base_dir))
-            || evaluate_dependency_spec_compliance(path, expected, *semantics)
+            || evaluate_dependency_spec_compliance(path, expected, *semantics)?
                 == DependencySpecCompliance::Compatible =>
         {
             DependencySpec::Path {
@@ -296,7 +296,11 @@ fn build_cargo_update_spec(
         _ => requirement.expected_spec.clone(),
     };
 
-    merge_dependency_features(&base_spec, found, Some(&requirement.expected_spec))
+    Ok(merge_dependency_features(
+        &base_spec,
+        found,
+        Some(&requirement.expected_spec),
+    ))
 }
 
 fn merge_dependency_features(
@@ -341,20 +345,20 @@ fn evaluate_cargo_dependency_compliance(
     found: Option<&DependencySpec>,
     requirement: &CargoDependencyRequirement,
     base_dir: Option<&Path>,
-) -> DependencySpecCompliance {
+) -> anyhow::Result<DependencySpecCompliance> {
     let Some(found) = found else {
-        return if requirement.required {
+        return Ok(if requirement.required {
             DependencySpecCompliance::NeedsUpdate
         } else {
             DependencySpecCompliance::Compatible
-        };
+        });
     };
 
     if !has_required_features(found, &requirement.expected_spec) {
-        return DependencySpecCompliance::NeedsUpdate;
+        return Ok(DependencySpecCompliance::NeedsUpdate);
     }
 
-    match (&requirement.matcher, found) {
+    Ok(match (&requirement.matcher, found) {
         (_, DependencySpec::Unsupported(raw)) => DependencySpecCompliance::SkipWarn(format!(
             "Skipped dependency check for complex Cargo spec '{}'",
             raw
@@ -372,7 +376,7 @@ fn evaluate_cargo_dependency_compliance(
                 semantics,
             },
             DependencySpec::Version { version, .. },
-        ) => evaluate_dependency_spec_compliance(version, expected, *semantics),
+        ) => evaluate_dependency_spec_compliance(version, expected, *semantics)?,
         (
             CargoDependencyMatcher::Kind {
                 expected,
@@ -383,12 +387,12 @@ fn evaluate_cargo_dependency_compliance(
             if let ExpectedDependencyKind::ExactPath(expected_path) = expected
                 && path_matches_expected(path, expected_path, base_dir)
             {
-                return DependencySpecCompliance::Compatible;
+                return Ok(DependencySpecCompliance::Compatible);
             }
 
-            evaluate_dependency_spec_compliance(path, expected, *semantics)
+            evaluate_dependency_spec_compliance(path, expected, *semantics)?
         }
-    }
+    })
 }
 
 fn path_matches_expected(found: &str, expected: &str, base_dir: Option<&Path>) -> bool {
@@ -462,7 +466,7 @@ mod test {
             features: vec!["extra-feature".to_string()],
         };
 
-        let updated = build_cargo_update_spec(Some(&found), &requirement, None);
+        let updated = build_cargo_update_spec(Some(&found), &requirement, None).unwrap();
 
         assert_eq!(
             updated,
@@ -504,7 +508,8 @@ mod test {
             Some(std::path::Path::new(
                 "/repo/test-components/oplog-processor",
             )),
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             compliance,
@@ -599,7 +604,7 @@ mod test {
             required: false,
         };
 
-        let compliance = evaluate_cargo_dependency_compliance(None, &requirement, None);
+        let compliance = evaluate_cargo_dependency_compliance(None, &requirement, None).unwrap();
         assert_eq!(
             compliance,
             crate::app::build::check::DependencySpecCompliance::Compatible

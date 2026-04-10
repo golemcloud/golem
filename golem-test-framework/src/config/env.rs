@@ -124,15 +124,6 @@ impl EnvBasedTestDependenciesConfig {
     fn debug_targets_dirs(&self) -> PathBuf {
         self.golem_repo_root.join("target/debug")
     }
-
-    fn storage_dir(&self) -> PathBuf {
-        self.golem_repo_root.join("target/test_dependencies")
-    }
-
-    async fn canonicalize_dirs(&mut self) -> anyhow::Result<()> {
-        self.golem_repo_root = tokio::fs::canonicalize(&self.golem_repo_root).await?;
-        Ok(())
-    }
 }
 
 impl Default for EnvBasedTestDependenciesConfig {
@@ -175,11 +166,11 @@ impl Debug for EnvBasedTestDependencies {
 }
 
 impl EnvBasedTestDependencies {
-    async fn make_rdb(config: &EnvBasedTestDependenciesConfig) -> Arc<dyn Rdb> {
+    async fn make_rdb(config: &EnvBasedTestDependenciesConfig, temp_dir: &Path) -> Arc<dyn Rdb> {
         match config.db_type {
             DbType::Sqlite => {
-                let sqlite_path = &config.storage_dir().join("golem_test_db");
-                Arc::new(SqliteRdb::new(sqlite_path))
+                let sqlite_db_dir = &temp_dir.join("sqlite");
+                Arc::new(SqliteRdb::new(sqlite_db_dir))
             }
             DbType::Postgres => {
                 Arc::new(DockerPostgresRdb::new(&config.unique_network_id, false).await)
@@ -239,7 +230,8 @@ impl EnvBasedTestDependencies {
 
     async fn make_shard_manager(
         config: &EnvBasedTestDependenciesConfig,
-        redis: Arc<dyn Redis>,
+        rdb: Arc<dyn Rdb>,
+        registry_service: Arc<dyn RegistryService>,
     ) -> Arc<dyn ShardManager> {
         Arc::new(
             SpawnedShardManager::new(
@@ -248,7 +240,8 @@ impl EnvBasedTestDependencies {
                 config.number_of_shards_override,
                 9021,
                 9020,
-                redis,
+                rdb,
+                registry_service,
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
@@ -285,6 +278,7 @@ impl EnvBasedTestDependencies {
         config: &EnvBasedTestDependenciesConfig,
         shard_manager: &Arc<dyn ShardManager>,
         rdb: &Arc<dyn Rdb>,
+        redis: &Arc<dyn Redis>,
         registry_service: &Arc<dyn RegistryService>,
     ) -> Arc<dyn WorkerService> {
         Arc::new(
@@ -296,6 +290,7 @@ impl EnvBasedTestDependencies {
                 9093,
                 shard_manager,
                 rdb,
+                redis,
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
@@ -311,7 +306,7 @@ impl EnvBasedTestDependencies {
         config: &EnvBasedTestDependenciesConfig,
         shard_manager: Arc<dyn ShardManager>,
         worker_service: Arc<dyn WorkerService>,
-        redis: Arc<dyn Redis>,
+        rdb: Arc<dyn Rdb>,
         registry_service: Arc<dyn RegistryService>,
     ) -> Arc<dyn WorkerExecutorCluster> {
         Arc::new(
@@ -321,7 +316,7 @@ impl EnvBasedTestDependencies {
                 9100,
                 &config.debug_targets_dirs().join("worker-executor"),
                 &config.golem_repo_root.join("golem-worker-executor"),
-                redis,
+                rdb,
                 shard_manager,
                 worker_service,
                 config.default_verbosity(),
@@ -334,10 +329,11 @@ impl EnvBasedTestDependencies {
         )
     }
 
-    pub async fn new(mut config: EnvBasedTestDependenciesConfig) -> anyhow::Result<Self> {
-        config.canonicalize_dirs().await?;
+    pub async fn new(config: EnvBasedTestDependenciesConfig) -> anyhow::Result<Self> {
+        let temp_directory =
+            Arc::new(TempDir::new().expect("Failed to create temporary directory"));
 
-        let blob_storage_root = &config.storage_dir().join("blob_storage");
+        let blob_storage_root = &temp_directory.path().join("blob_storage");
         tokio::fs::create_dir_all(&blob_storage_root).await?;
 
         let blob_storage = Arc::new(FileSystemBlobStorage::new(blob_storage_root).await.unwrap());
@@ -353,23 +349,25 @@ impl EnvBasedTestDependencies {
 
         let redis_monitor = Self::make_redis_monitor(&config, redis.clone()).await;
 
-        let rdb = Self::make_rdb(&config).await;
-
-        let shard_manager = Self::make_shard_manager(&config, redis.clone()).await;
+        let rdb = Self::make_rdb(&config, temp_directory.path()).await;
 
         let component_compilation_service = Self::make_component_compilation_service(&config).await;
 
-        let registry_service: Arc<dyn RegistryService> =
+        let registry_service =
             Self::make_registry_service(&config, &rdb, &component_compilation_service).await;
 
+        let shard_manager =
+            Self::make_shard_manager(&config, rdb.clone(), registry_service.clone()).await;
+
         let worker_service =
-            Self::make_worker_service(&config, &shard_manager, &rdb, &registry_service).await;
+            Self::make_worker_service(&config, &shard_manager, &rdb, &redis, &registry_service)
+                .await;
 
         let worker_executor_cluster = Self::make_worker_executor_cluster(
             &config,
             shard_manager.clone(),
             worker_service.clone(),
-            redis.clone(),
+            rdb.clone(),
             registry_service.clone(),
         )
         .await;
@@ -381,7 +379,7 @@ impl EnvBasedTestDependencies {
             blob_storage,
             initial_component_files_service,
             registry_service,
-            temp_directory: Arc::new(TempDir::new().expect("Failed to create temporary directory")),
+            temp_directory,
             shard_manager,
             component_compilation_service,
             worker_executor_cluster,

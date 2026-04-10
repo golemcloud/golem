@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
+use crate::durable_host::durability::HostFailureKind;
+use crate::durable_host::{
+    ActiveAtomicRegion, Durability, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
+};
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
     PublicOplogEntryOps, find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
@@ -26,6 +29,7 @@ use crate::preview2::golem_api_1_x::oplog::{
 use crate::preview2::{Pollable, golem_api_1_x};
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
+use crate::services::worker_proxy::WorkerProxyError;
 use crate::services::{HasOplogService, HasWorker};
 use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
@@ -61,6 +65,36 @@ use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{IoView, subscribe};
+
+fn classify_worker_proxy_error(err: &WorkerProxyError) -> HostFailureKind {
+    match err {
+        WorkerProxyError::BadRequest(_)
+        | WorkerProxyError::Unauthorized(_)
+        | WorkerProxyError::LimitExceeded(_)
+        | WorkerProxyError::NotFound(_)
+        | WorkerProxyError::AlreadyExists(_) => HostFailureKind::Permanent,
+        WorkerProxyError::InternalError(_) => HostFailureKind::Transient,
+    }
+}
+
+fn classify_worker_executor_error(err: &WorkerExecutorError) -> HostFailureKind {
+    match err {
+        WorkerExecutorError::InvalidRequest { .. }
+        | WorkerExecutorError::AgentAlreadyExists { .. }
+        | WorkerExecutorError::AgentNotFound { .. }
+        | WorkerExecutorError::PromiseNotFound { .. }
+        | WorkerExecutorError::PromiseDropped { .. }
+        | WorkerExecutorError::PromiseAlreadyCompleted { .. }
+        | WorkerExecutorError::ParamTypeMismatch { .. }
+        | WorkerExecutorError::NoValueInMessage
+        | WorkerExecutorError::ValueMismatch { .. }
+        | WorkerExecutorError::UnexpectedOplogEntry { .. }
+        | WorkerExecutorError::InvalidAccount
+        | WorkerExecutorError::PreviousInvocationFailed { .. }
+        | WorkerExecutorError::PreviousInvocationExited => HostFailureKind::Permanent,
+        _ => HostFailureKind::Transient,
+    }
+}
 
 impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
     async fn new(
@@ -302,7 +336,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .add(OplogEntry::begin_atomic_region())
                 .await;
             let begin_index = self.state.current_oplog_index().await;
-            self.state.active_atomic_regions.push(begin_index);
+            self.state.active_atomic_regions.push(ActiveAtomicRegion {
+                begin_index,
+                has_side_effects: false,
+            });
             Ok(begin_index.into())
         } else {
             let (begin_index, _) =
@@ -347,7 +384,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            self.state.active_atomic_regions.push(begin_index);
+            self.state.active_atomic_regions.push(ActiveAtomicRegion {
+                begin_index,
+                has_side_effects: false,
+            });
             Ok(begin_index.into())
         }
     }
@@ -368,7 +408,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         self.state
             .active_atomic_regions
-            .retain(|idx| *idx != OplogIndex::from_u64(begin));
+            .retain(|region| region.begin_index != OplogIndex::from_u64(begin));
 
         Ok(())
     }
@@ -511,7 +551,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         target_version: u64,
         mode: golem_api_1_x::host::UpdateMode,
     ) -> anyhow::Result<()> {
-        let durability =
+        let mut durability =
             Durability::<GolemApiUpdateWorker>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let agent_id: AgentId = agent_id.into();
@@ -530,19 +570,27 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             target_version.try_into().map_err(|e: String| anyhow!(e))?;
 
         let result = if durability.is_live() {
-            let result = self
-                .state
-                .worker_proxy
-                .update(
-                    &owned_agent_id,
-                    target_revision,
-                    mode,
-                    false,
-                    self.created_by(),
-                )
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            let result = loop {
+                let result = self
+                    .state
+                    .worker_proxy
+                    .update(
+                        &owned_agent_id,
+                        target_revision,
+                        mode,
+                        false,
+                        self.created_by(),
+                    )
+                    .await;
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, classify_worker_proxy_error)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
+            let result = result.map_err(|err| err.to_string());
             durability
                 .persist(
                     self,
@@ -640,7 +688,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         target_agent_id: golem_api_1_x::host::AgentId,
         oplog_idx_cut_off: golem_api_1_x::host::OplogIndex,
     ) -> anyhow::Result<()> {
-        let durability =
+        let mut durability =
             Durability::<GolemApiForkWorker>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let source_agent_id: AgentId = source_agent_id.into();
@@ -649,18 +697,26 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let oplog_index_cut_off: OplogIndex = OplogIndex::from_u64(oplog_idx_cut_off);
 
         let result = if durability.is_live() {
-            let result = self
-                .state
-                .worker_proxy
-                .fork_worker(
-                    &source_agent_id,
-                    &target_agent_id,
-                    &oplog_index_cut_off,
-                    self.created_by(),
-                )
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            let result = loop {
+                let result = self
+                    .state
+                    .worker_proxy
+                    .fork_worker(
+                        &source_agent_id,
+                        &target_agent_id,
+                        &oplog_index_cut_off,
+                        self.created_by(),
+                    )
+                    .await;
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, classify_worker_proxy_error)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
+            let result = result.map_err(|err| err.to_string());
             durability
                 .persist(
                     self,
@@ -684,19 +740,27 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         agent_id: golem_api_1_x::host::AgentId,
         revert_target: golem_api_1_x::host::RevertAgentTarget,
     ) -> anyhow::Result<()> {
-        let durability =
+        let mut durability =
             Durability::<GolemApiRevertWorker>::new(self, DurableFunctionType::WriteRemote).await?;
 
-        let result = if durability.is_live() {
-            let agent_id: AgentId = agent_id.into();
-            let target: golem_common::model::worker::RevertWorkerTarget = revert_target.into();
+        let agent_id: AgentId = agent_id.into();
+        let target: golem_common::model::worker::RevertWorkerTarget = revert_target.into();
 
-            let result = self
-                .worker_proxy()
-                .revert(&agent_id, target.clone(), self.created_by())
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+        let result = if durability.is_live() {
+            let result = loop {
+                let result = self
+                    .worker_proxy()
+                    .revert(&agent_id, target.clone(), self.created_by())
+                    .await;
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, classify_worker_proxy_error)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
+            let result = result.map_err(|err| err.to_string());
             durability
                 .persist(
                     self,
@@ -715,23 +779,31 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         component_slug: String,
     ) -> anyhow::Result<Option<golem_api_1_x::host::ComponentId>> {
-        let durability =
+        let mut durability =
             Durability::<GolemApiResolveComponentId>::new(self, DurableFunctionType::WriteRemote)
                 .await?;
 
         let result = if durability.is_live() {
-            let result = self
-                .state
-                .component_service
-                .resolve_component(
-                    component_slug.clone(),
-                    self.state.component_metadata.environment_id,
-                    self.state.component_metadata.application_id,
-                    self.state.component_metadata.account_id,
-                )
-                .await
-                .map_err(|err| err.to_string());
-            durability.try_trigger_retry(self, &result).await?;
+            let result = loop {
+                let result = self
+                    .state
+                    .component_service
+                    .resolve_component(
+                        component_slug.clone(),
+                        self.state.component_metadata.environment_id,
+                        self.state.component_metadata.application_id,
+                        self.state.component_metadata.account_id,
+                    )
+                    .await;
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, classify_worker_executor_error)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
+            let result = result.map_err(|err| err.to_string());
             durability
                 .persist(
                     self,
@@ -768,17 +840,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         component_slug: String,
         agent_name: String,
     ) -> anyhow::Result<Option<golem_api_1_x::host::AgentId>> {
-        let durability =
+        let mut durability =
             Durability::<GolemApiResolveAgentIdStrict>::new(self, DurableFunctionType::WriteRemote)
                 .await?;
 
         let result = if durability.is_live() {
-            let result = self
-                .resolve_agent_id_strict_internal(component_slug.clone(), agent_name.clone())
-                .await
-                .map_err(|err| err.to_string());
+            let result = loop {
+                let result = self
+                    .resolve_agent_id_strict_internal(component_slug.clone(), agent_name.clone())
+                    .await;
 
-            durability.try_trigger_retry(self, &result).await?;
+                match durability
+                    .try_trigger_retry_or_loop(self, &result, classify_worker_executor_error)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
+            let result = result.map_err(|err| err.to_string());
             durability
                 .persist(
                     self,
@@ -800,7 +880,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn fork(&mut self) -> anyhow::Result<ForkResult> {
-        let durability =
+        let mut durability =
             Durability::<GolemApiFork>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let result = if durability.is_live() {
@@ -829,21 +909,30 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await;
 
             let created_by = self.created_by();
-            let fork_result = self
-                .state
-                .worker_fork
-                .fork_and_write_fork_result(
-                    created_by,
-                    &self.owned_agent_id,
-                    &target_agent_id,
-                    oplog_index_cut_off,
-                    forked_phantom_id,
-                )
-                .await
+            let fork_result = loop {
+                let fork_result = self
+                    .state
+                    .worker_fork
+                    .fork_and_write_fork_result(
+                        created_by,
+                        &self.owned_agent_id,
+                        &target_agent_id,
+                        oplog_index_cut_off,
+                        forked_phantom_id,
+                    )
+                    .await;
+                match durability
+                    .try_trigger_retry_or_loop(self, &fork_result, classify_worker_executor_error)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break fork_result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
+
+            let fork_result = fork_result
                 .map(|_| golem_common::model::ForkResult::Original)
                 .map_err(|err| err.to_string());
-
-            durability.try_trigger_retry(self, &fork_result).await?;
             Ok(durability
                 .persist(
                     self,
