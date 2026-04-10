@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { accessSync, constants } from "node:fs";
 
 /**
  * Detect if the current working directory is within a checked-out golem repository.
@@ -63,4 +64,36 @@ export async function findGolemAppDir(workspace: string): Promise<string> {
 
   // Fall back to workspace root
   return workspace;
+}
+
+/**
+ * Given a GOLEM_PATH, find the target directory containing the `golem` binary.
+ * Prefers `target/release` if a `golem` executable exists there, otherwise
+ * falls back to `target/debug`. Throws if neither contains the binary.
+ */
+export function resolveGolemTargetDir(golemPath: string): string {
+  const releaseDir = path.join(golemPath, "target", "release");
+  const debugDir = path.join(golemPath, "target", "debug");
+
+  try {
+    accessSync(path.join(releaseDir, "golem"), constants.X_OK);
+    return releaseDir;
+  } catch {
+    // No release build
+  }
+
+  try {
+    accessSync(path.join(debugDir, "golem"), constants.X_OK);
+    return debugDir;
+  } catch {
+    // No debug build either
+  }
+
+  throw new Error(
+    `No golem binary found in GOLEM_PATH (${golemPath}).\n` +
+    `Checked:\n` +
+    `  - ${path.join(releaseDir, "golem")}\n` +
+    `  - ${path.join(debugDir, "golem")}\n` +
+    `Build golem first with: cargo build -p golem`,
+  );
 }

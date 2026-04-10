@@ -21,7 +21,7 @@ import {
   type HtmlScenarioReport,
 } from "./html-report.js";
 import chalk from "chalk";
-import { detectGolemWorkspaceRoot, findGolemAppDir } from "./workspace.js";
+import { detectGolemWorkspaceRoot, findGolemAppDir, resolveGolemTargetDir } from "./workspace.js";
 
 const SUPPORTED_AGENTS = [
   "claude-code",
@@ -220,6 +220,23 @@ async function main() {
       console.log(chalk.cyan(`Auto-detected GOLEM_PATH: ${detected}`));
     }
   }
+
+  if (!process.env.GOLEM_PATH) {
+    console.error(
+      chalk.red(
+        "GOLEM_PATH is not set and could not be auto-detected.\n" +
+        "Set GOLEM_PATH to the root of your golem repository checkout, or run the harness from within the golem repo tree.",
+      ),
+    );
+    process.exit(1);
+  }
+
+  // Resolve the target directory containing the golem binary and prepend it
+  // to PATH so all spawned processes (including agent drivers) use the correct binary.
+  const golemTargetDir = resolveGolemTargetDir(process.env.GOLEM_PATH);
+  const pathSep = process.platform === "win32" ? ";" : ":";
+  process.env.PATH = golemTargetDir + pathSep + (process.env.PATH ?? "");
+  console.log(chalk.cyan(`Using golem binary from: ${golemTargetDir}`));
 
   if (help) {
     const usage = `
