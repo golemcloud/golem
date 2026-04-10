@@ -11,7 +11,7 @@ The skill test harness lives in `golem-skills/tests/harness/`. It drives coding 
 
 - **Node.js 20+** and npm
 - **Golem binary** pre-built: the harness requires a `golem` binary in `$GOLEM_PATH/target/release/` or `$GOLEM_PATH/target/debug/`. Build with `cargo build -p golem` (debug) or `cargo build -p golem --release` (release). The harness prefers the release build and falls back to debug.
-- **Golem server** running locally (`golem server run`)
+- **No pre-running Golem server**: the harness starts its own server automatically using `golem server run --data-dir <workspaces/golem-server-data> --clean` and stops it when done. If a server is already running on port 9881, the harness **fails with an error** to avoid conflicts.
 - **Agent CLI** installed: one of `claude` (Claude Code), `opencode`, or `codex`
 - **Filesystem watcher**: `fswatch` on macOS, `inotify-tools` on Linux
 - **GOLEM_PATH** env var set to the golem repo root. If not set, the harness auto-detects it by walking up from `cwd` looking for `sdks/rust/golem-rust` and `sdks/ts/packages` directories (same markers as `golem-cli`). If auto-detection also fails, the harness exits with an error. The resolved target directory (`target/release` or `target/debug`) is prepended to `PATH` so all spawned processes — including agent drivers — use the correct `golem` and `golem-cli` binaries.
@@ -79,11 +79,12 @@ npx tsx src/run.ts --merge-reports ./ci-results --output ./merged
 
 Without `--workspace`, each scenario gets its own directory at `<cwd>/workspaces/<scenario-name>/`. The harness creates the directory, sets up skill symlinks/copies, and initializes a git repo. With `--workspace`, the specified directory is reused and cleanup is skipped.
 
-### Golem Connectivity
+### Golem Server Lifecycle
 
-Before executing any scenario, the harness verifies:
-1. A `local` Golem profile exists (`golem profile get --profile local`)
-2. The Golem server is reachable (`curl http://localhost:<router_port>/healthcheck`, default port 9881)
+The harness manages the Golem server automatically:
+1. **Startup**: Before running scenarios, the harness checks port 9881. If a server is already running, it **fails with an error**. Otherwise it starts `golem server run --data-dir <workspaces/golem-server-data> --clean` and waits up to 60 seconds for the healthcheck to pass.
+2. **Per-scenario check**: Before each scenario, the harness verifies that a `local` Golem profile exists and the server is still reachable.
+3. **Teardown**: After all scenarios complete (or on Ctrl+C), the harness stops the server process.
 
 ## Adding a New Skill
 

@@ -155,25 +155,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: golem-binaries
-          path: /tmp/golem-bin
+          path: ${{ github.workspace }}
 
-      - name: Install Golem
-        run: |
-          chmod +x /tmp/golem-bin/golem-cli /tmp/golem-bin/golem
-          sudo mv /tmp/golem-bin/golem-cli /usr/local/bin/golem-cli
-          sudo mv /tmp/golem-bin/golem /usr/local/bin/golem
-          golem-cli --version || golem --version
-
-      - name: Start Golem Server
-        run: |
-          golem server run &
-          for i in {1..30}; do
-            if curl -fsS http://localhost:9881/healthcheck > /dev/null 2>&1; then
-              echo "Golem server is ready"
-              break
-            fi
-            sleep 2
-          done
+      - name: Make golem binaries executable
+        run: chmod +x ${{ github.workspace }}/target/release/golem-cli ${{ github.workspace }}/target/release/golem
 
       - name: Install Filesystem Watcher
         run: sudo apt-get update && sudo apt-get install -y inotify-tools
@@ -262,7 +247,7 @@ jobs:
 
       - name: Clean workspace build artifacts before upload
         if: always()
-        run: find /tmp/harness-run/workspaces -name 'golem-temp' -type d -exec rm -rf {} + 2>/dev/null; find /tmp/harness-run/workspaces -name 'target' -type d -exec rm -rf {} + 2>/dev/null; find /tmp/harness-run/workspaces -name 'node_modules' -type d -exec rm -rf {} + 2>/dev/null; true
+        run: find /tmp/harness-run/workspaces -name 'golem-temp' -type d -exec rm -rf {} + 2>/dev/null; find /tmp/harness-run/workspaces -name 'target' -type d -exec rm -rf {} + 2>/dev/null; find /tmp/harness-run/workspaces -name 'node_modules' -type d -exec rm -rf {} + 2>/dev/null; rm -rf /tmp/harness-run/workspaces/golem-server-data 2>/dev/null; true
 
       - name: Upload Workspaces
         if: always()

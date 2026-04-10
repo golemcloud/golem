@@ -21,7 +21,7 @@ import {
   type HtmlScenarioReport,
 } from "./html-report.js";
 import chalk from "chalk";
-import { detectGolemWorkspaceRoot, findGolemAppDir, resolveGolemTargetDir } from "./workspace.js";
+import { detectGolemWorkspaceRoot, findGolemAppDir, resolveGolemTargetDir, GolemServer } from "./workspace.js";
 
 const SUPPORTED_AGENTS = [
   "claude-code",
@@ -365,12 +365,20 @@ Options:
     return;
   }
 
+  // Start Golem server
+  const golemServer = new GolemServer();
+  const serverDataDir = path.join(process.cwd(), "workspaces", "golem-server-data");
+  console.log(chalk.cyan("Starting Golem server..."));
+  await golemServer.start(9881, serverDataDir);
+  console.log(chalk.green("Golem server is ready."));
+
   // Set up graceful Ctrl+C handling
   const abortController = new AbortController();
   let interrupted = false;
 
   process.on("SIGINT", () => {
     if (interrupted) {
+      golemServer.stop();
       console.log(chalk.red("\nForce exit."));
       process.exit(130);
     }
@@ -388,6 +396,7 @@ Options:
   let isFirstScenario = true;
   let lastWorkspace: string | undefined;
 
+  try {
   for (const currentAgent of agents) {
     for (const currentLanguage of languages) {
       const driver = createDriver(currentAgent);
@@ -623,6 +632,9 @@ Options:
 
   if (hasFailures) {
     process.exit(1);
+  }
+  } finally {
+    golemServer.stop();
   }
 }
 

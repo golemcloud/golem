@@ -218,6 +218,20 @@ private = true
 condition = { env_not_set = ["CI"] }
 run_task = [{ name = ["build-registry-service"] }]
 
+[tasks.build-release-full]
+dependencies = [
+    "wit",
+    "set-version",
+]
+command = "cargo"
+args = [
+    "build",
+    "--workspace",
+    "--release",
+    "--exclude",
+    "integration-tests",
+]
+
 [tasks.build-release]
 description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
 to build for other target than the current one, can be linux/amd64 or linux/arm64. This is used for cross-compiling
