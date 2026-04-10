@@ -1,6 +1,6 @@
 // Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.1 (the "License");
+// Licensed under the Golem Source Available License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -13,67 +13,13 @@
 // limitations under the License.
 
 use applying::Apply;
-use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::component::{
-    ComponentId, ComponentName, ComponentRevision, InitialComponentFile, InstalledPlugin,
-};
+use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentId;
-use golem_wasm::ValueAndType;
-use golem_wasm::json::ValueAndTypeJsonExtensions;
-use std::collections::BTreeMap;
 use std::time::SystemTime;
-
-#[derive(Debug, Clone, PartialEq, BinaryCodec)]
-#[desert(evolution())]
-pub struct AgentConfigEntry {
-    pub agent: AgentTypeName,
-    pub path: Vec<String>,
-    pub value: ValueAndType,
-}
-
-impl From<AgentConfigEntry> for golem_common::model::component::AgentConfigEntry {
-    fn from(value: AgentConfigEntry) -> Self {
-        Self {
-            agent: value.agent,
-            path: value.path,
-            value: value
-                .value
-                .to_json_value()
-                .expect("ValueAndType produced by service must be valid JSON"),
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::AgentConfigEntry> for AgentConfigEntry {
-    type Error = String;
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::AgentConfigEntry,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            agent: AgentTypeName(value.agent),
-            path: value.key,
-            value: value
-                .value
-                .ok_or_else(|| "Missing field: value".to_string())?
-                .try_into()?,
-        })
-    }
-}
-
-impl From<AgentConfigEntry> for golem_api_grpc::proto::golem::component::AgentConfigEntry {
-    fn from(value: AgentConfigEntry) -> Self {
-        Self {
-            agent: value.agent.0,
-            key: value.path,
-            value: Some(value.value.into()),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct Component {
@@ -87,11 +33,6 @@ pub struct Component {
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub files: Vec<InitialComponentFile>,
-    pub installed_plugins: Vec<InstalledPlugin>,
-    pub env: BTreeMap<String, String>,
-    pub config_vars: BTreeMap<String, String>,
-    pub agent_config: Vec<AgentConfigEntry>,
     /// Hash of the wasm before any transformations
     pub wasm_hash: diff::Hash,
     pub object_store_key: String,
@@ -109,15 +50,6 @@ impl From<Component> for golem_common::model::component::ComponentDto {
             component_size: value.component_size,
             metadata: value.metadata,
             created_at: value.created_at,
-            files: value.files,
-            installed_plugins: value.installed_plugins,
-            env: value.env,
-            config_vars: value.config_vars,
-            agent_config: value
-                .agent_config
-                .into_iter()
-                .map(golem_common::model::component::AgentConfigEntry::from)
-                .collect(),
             wasm_hash: value.wasm_hash,
             hash: value.hash,
         }
@@ -170,28 +102,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             .map_err(|_| "Failed to convert timestamp".to_string())?
             .into();
 
-        let files = value
-            .files
-            .into_iter()
-            .map(|f| f.try_into())
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let installed_plugins = value
-            .installed_plugins
-            .into_iter()
-            .map(|p| p.try_into())
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let env = value.env.into_iter().collect::<BTreeMap<_, _>>();
-
-        let config_vars = value.config_vars.into_iter().collect::<BTreeMap<_, _>>();
-
-        let agent_config = value
-            .agent_config
-            .into_iter()
-            .map(AgentConfigEntry::try_from)
-            .collect::<Result<Vec<_>, _>>()?;
-
         let hash = value.hash.ok_or("Missing hash field")?.try_into()?;
 
         let wasm_hash = value
@@ -209,11 +119,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             component_size,
             metadata,
             created_at,
-            files,
-            installed_plugins,
-            env,
-            config_vars,
-            agent_config,
             wasm_hash,
             hash,
             object_store_key: value.object_store_key,
@@ -235,19 +140,6 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
             created_at: Some(prost_types::Timestamp::from(SystemTime::from(
                 value.created_at,
             ))),
-            files: value.files.into_iter().map(|file| file.into()).collect(),
-            installed_plugins: value
-                .installed_plugins
-                .into_iter()
-                .map(|plugin| plugin.into())
-                .collect(),
-            env: value.env.into_iter().collect(),
-            config_vars: value.config_vars.into_iter().collect(),
-            agent_config: value
-                .agent_config
-                .into_iter()
-                .map(golem_api_grpc::proto::golem::component::AgentConfigEntry::from)
-                .collect(),
             wasm_hash: Some(value.wasm_hash.into()),
             hash: Some(value.hash.into()),
             object_store_key: value.object_store_key,

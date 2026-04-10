@@ -100,8 +100,8 @@ impl S3BlobStorage {
             BlobStorageNamespace::CompressedOplog { level, .. } => {
                 &self.config.compressed_oplog_buckets[*level]
             }
-            BlobStorageNamespace::InitialComponentFiles { .. } => {
-                &self.config.initial_component_files_bucket
+            BlobStorageNamespace::InitialAgentFiles { .. } => {
+                &self.config.initial_agent_files_bucket
             }
             BlobStorageNamespace::Components { .. } => &self.config.components_bucket,
         }
@@ -111,7 +111,7 @@ impl S3BlobStorage {
         match namespace {
             BlobStorageNamespace::CompilationCache { environment_id }
             | BlobStorageNamespace::CustomStorage { environment_id }
-            | BlobStorageNamespace::InitialComponentFiles { environment_id }
+            | BlobStorageNamespace::InitialAgentFiles { environment_id }
             | BlobStorageNamespace::Components { environment_id } => {
                 let environment_id_string = environment_id.to_string();
                 if self.config.object_prefix.is_empty() {

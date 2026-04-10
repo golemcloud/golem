@@ -363,7 +363,7 @@ pub enum BlobStorageNamespace {
     CompilationCache {
         environment_id: EnvironmentId,
     },
-    InitialComponentFiles {
+    InitialAgentFiles {
         environment_id: EnvironmentId,
     },
     CustomStorage {

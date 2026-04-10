@@ -24,11 +24,11 @@ use desert_rust::BinaryCodec;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType};
 use golem_common::model::component::{
-    ComponentFilePermissions, ComponentRevision, PluginInstallationAction,
+    AgentFilePermissions, ComponentRevision, PluginInstallationAction,
 };
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{
-    AgentUpdateMode, FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind,
+    AgentFileSystemNode, AgentFileSystemNodeKind, AgentUpdateMode,
 };
 use golem_common::model::{AgentFilter, AgentId, OplogIndex, ScanCursor};
 use poem_openapi::Object;
@@ -107,7 +107,7 @@ pub struct GetOplogResponse {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GetFilesResponse {
-    pub nodes: Vec<FlatComponentFileSystemNode>,
+    pub nodes: Vec<AgentFileSystemNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
@@ -258,7 +258,7 @@ pub enum GetFileSystemNodeResult {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ComponentFileSystemNodeDetails {
     File {
-        permissions: ComponentFilePermissions,
+        permissions: AgentFilePermissions,
         size: u64,
     },
     Directory,
@@ -271,7 +271,7 @@ pub struct ComponentFileSystemNode {
     pub details: ComponentFileSystemNodeDetails,
 }
 
-impl From<ComponentFileSystemNode> for FlatComponentFileSystemNode {
+impl From<ComponentFileSystemNode> for AgentFileSystemNode {
     fn from(value: ComponentFileSystemNode) -> Self {
         let last_modified = value
             .last_modified
@@ -282,14 +282,14 @@ impl From<ComponentFileSystemNode> for FlatComponentFileSystemNode {
             ComponentFileSystemNodeDetails::Directory => Self {
                 name: value.name,
                 last_modified,
-                kind: FlatComponentFileSystemNodeKind::Directory,
+                kind: AgentFileSystemNodeKind::Directory,
                 permissions: None,
                 size: None,
             },
             ComponentFileSystemNodeDetails::File { permissions, size } => Self {
                 name: value.name,
                 last_modified,
-                kind: FlatComponentFileSystemNodeKind::File,
+                kind: AgentFileSystemNodeKind::File,
                 permissions: Some(permissions),
                 size: Some(size),
             },
@@ -314,7 +314,7 @@ impl From<ComponentFileSystemNode> for golem_api_grpc::proto::golem::worker::Fil
                             last_modified,
                             size,
                             permissions:
-                            golem_api_grpc::proto::golem::component::ComponentFilePermissions::from(permissions).into(),
+                            golem_api_grpc::proto::golem::component::AgentFilePermissions::from(permissions).into(),
                         }
                     ))
                 },
@@ -360,7 +360,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for Component
                 last_modified: SystemTime::UNIX_EPOCH + Duration::from_secs(last_modified),
                 details: ComponentFileSystemNodeDetails::File {
                     permissions:
-                        golem_api_grpc::proto::golem::component::ComponentFilePermissions::try_from(
+                        golem_api_grpc::proto::golem::component::AgentFilePermissions::try_from(
                             permissions,
                         )?
                         .into(),
