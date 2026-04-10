@@ -121,7 +121,6 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                             monthly_http_call_limit, monthly_rpc_call_limit,
                             oplog_writes_per_second
                         )
-<<<<<<< HEAD
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                         ON CONFLICT (plan_id) DO UPDATE SET
                             name = $2,
@@ -132,7 +131,6 @@ impl PlanRepo for DbPlanRepo<PostgresPool> {
                             total_app_count = $7,
                             total_env_count = $8,
                             total_component_count = $9,
-<<<<<<< HEAD
                             total_worker_connection_count = $10,
                             total_component_storage_bytes = $11,
                             monthly_gas_limit = $12,
