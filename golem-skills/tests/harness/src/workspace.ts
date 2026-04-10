@@ -106,6 +106,8 @@ export function resolveGolemTargetDir(golemPath: string): string {
  */
 export class GolemServer {
   private serverProcess: ChildProcess | null = null;
+  private lastPort: number | null = null;
+  private lastDataDir: string | null = null;
 
   /**
    * Check whether a server is already listening on the given port.
@@ -137,6 +139,9 @@ export class GolemServer {
         `Please stop the existing server and try again.`,
       );
     }
+
+    this.lastPort = port;
+    this.lastDataDir = dataDir;
 
     await fs.mkdir(dataDir, { recursive: true });
 
@@ -238,5 +243,16 @@ export class GolemServer {
 
     await exited;
     clearTimeout(forceKill);
+  }
+
+  /**
+   * Stop the server and start it again with the same parameters.
+   */
+  async restart(): Promise<void> {
+    if (this.lastPort === null || this.lastDataDir === null) {
+      throw new Error("Cannot restart: server was never started.");
+    }
+    await this.stop();
+    await this.start(this.lastPort, this.lastDataDir);
   }
 }

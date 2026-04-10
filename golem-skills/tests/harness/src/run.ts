@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
-import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   ScenarioLoader,
   ScenarioExecutor,
@@ -22,7 +22,7 @@ import {
   type HtmlScenarioReport,
 } from "./html-report.js";
 import chalk from "chalk";
-import { detectGolemWorkspaceRoot, findGolemAppDir, resolveGolemTargetDir, GolemServer } from "./workspace.js";
+import { detectGolemWorkspaceRoot, resolveGolemTargetDir, GolemServer } from "./workspace.js";
 
 const SUPPORTED_AGENTS = [
   "amp",
@@ -58,34 +58,6 @@ function createDriver(agent: SupportedAgent): AgentDriver {
   }
 }
 
-async function cleanupGolemState(cwd: string): Promise<void> {
-  const appDir = await findGolemAppDir(cwd);
-  return new Promise((resolve) => {
-    const child = spawn("golem", ["deploy", "--reset", "--yes"], {
-      cwd: appDir,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let output = "";
-    child.stdout?.on("data", (data: Buffer) => (output += data.toString()));
-    child.stderr?.on("data", (data: Buffer) => (output += data.toString()));
-    child.on("close", (code) => {
-      if (code !== 0) {
-        console.warn(
-          chalk.yellow(
-            `Warning: golem deploy --reset failed (exit ${code}): ${output.trim()}`,
-          ),
-        );
-      }
-      resolve();
-    });
-    child.on("error", (err) => {
-      console.warn(
-        chalk.yellow(`Warning: golem deploy --reset error: ${err.message}`),
-      );
-      resolve();
-    });
-  });
-}
 
 async function mergeReports(
   reportsDir: string,
@@ -188,7 +160,6 @@ async function main() {
       "dry-run": { type: "boolean", default: false },
       "resume-from": { type: "string" },
       workspace: { type: "string" },
-      "no-cleanup": { type: "boolean", default: false },
       "merge-reports": { type: "string" },
     },
   });
@@ -203,7 +174,6 @@ async function main() {
     "dry-run": dryRun,
     "resume-from": resumeFrom,
     workspace: workspaceOverride,
-    "no-cleanup": noCleanup,
     "merge-reports": mergeReportsDir,
   } = values;
   const agentArg = values.agent ?? "all";
@@ -259,8 +229,7 @@ Options:
   --skills <dir>        Path to skills directory (default: ../../skills)
   --dry-run             Validate scenarios and print step summaries without executing
   --resume-from <id>    Resume execution from the given step ID
-  --workspace <path>    Override workspace directory (implies --no-cleanup)
-  --no-cleanup          Skip Golem state cleanup between scenarios
+  --workspace <path>    Override workspace directory
   --merge-reports <dir> Merge summary.json files from <dir> into aggregated report
   -h, --help            Show this help message
 `.trim();
@@ -303,8 +272,6 @@ Options:
   const globalTimeoutSeconds = timeout
     ? Number.parseInt(timeout, 10)
     : undefined;
-  const skipCleanup = noCleanup || !!workspaceOverride;
-
   if (resumeFrom && !scenarioFilter) {
     console.error(
       chalk.red("--resume-from requires --scenario to avoid aborting on unrelated scenarios"),
@@ -371,7 +338,10 @@ Options:
 
   // Start Golem server
   const golemServer = new GolemServer();
-  const serverDataDir = path.join(process.cwd(), "workspaces", "golem-server-data");
+  const runId = randomUUID();
+  const workspacesRoot = path.join(process.cwd(), "workspaces", runId);
+  console.log(chalk.gray(`Run ID: ${runId}`));
+  const serverDataDir = path.join(workspacesRoot, "golem-server-data");
   console.log(chalk.cyan("Starting Golem server..."));
   await golemServer.start(9881, serverDataDir);
   console.log(chalk.green("Golem server is ready."));
@@ -400,7 +370,6 @@ Options:
   const scenarioReports: ScenarioReport[] = [];
   let hasFailures = false;
   let isFirstScenario = true;
-  let lastWorkspace: string | undefined;
 
   try {
   for (const currentAgent of agents) {
@@ -426,12 +395,13 @@ Options:
 
         if (scenarioFilter && spec.name !== scenarioFilter) continue;
 
-        // Cleanup Golem state between scenarios (run in previous workspace where golem.yaml exists)
-        if (!isFirstScenario && !skipCleanup && lastWorkspace) {
+        // Restart Golem server between scenarios to get a clean state
+        if (!isFirstScenario) {
           console.log(
-            chalk.gray("Cleaning up Golem state between scenarios..."),
+            chalk.gray("Restarting Golem server for clean state..."),
           );
-          await cleanupGolemState(lastWorkspace);
+          await golemServer.restart();
+          console.log(chalk.green("Golem server restarted."));
         }
         isFirstScenario = false;
 
@@ -443,9 +413,9 @@ Options:
         const workspace = workspaceOverride
           ? path.resolve(process.cwd(), workspaceOverride)
           : path.join(
-              process.cwd(),
-              "workspaces",
+              workspacesRoot,
               spec.name.replace(/\s+/g, "-").toLowerCase(),
+              currentLanguage,
             );
         const executor = new ScenarioExecutor(
           driver,
@@ -458,12 +428,10 @@ Options:
             language: currentLanguage,
             abortSignal: abortController.signal,
             resumeFromStepId: resumeFrom,
-            skipCleanup,
           },
         );
 
         const scenarioResult = await executor.execute(spec);
-        lastWorkspace = workspace;
         const results = scenarioResult.stepResults;
 
         const allPassed = scenarioResult.status === "pass";

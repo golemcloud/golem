@@ -54,8 +54,7 @@ npx tsx src/run.ts [options]
 | `--skills <dir>` | Path to skills directory | `../../skills` |
 | `--dry-run` | Validate scenarios without executing | `false` |
 | `--resume-from <id>` | Resume from a specific step ID | — |
-| `--workspace <path>` | Override workspace directory (implies `--no-cleanup`) | — |
-| `--no-cleanup` | Skip Golem state cleanup between scenarios | `false` |
+| `--workspace <path>` | Override workspace directory | — |
 | `--merge-reports <dir>` | Merge summary.json files into aggregated report | — |
 
 ### Examples
@@ -67,9 +66,9 @@ npx tsx src/run.ts --agent claude-code --language rust --scenario golem-new-proj
 # Dry-run to validate YAML
 npx tsx src/run.ts --dry-run --scenario golem-db-app-ts
 
-# Resume a failed scenario from a specific step, reusing the workspace
+# Resume a failed scenario from a specific step, reusing a previous workspace
 npx tsx src/run.ts --agent claude-code --language ts --scenario golem-db-app-ts \
-  --resume-from build-and-deploy --workspace ./workspaces/golem-db-app-ts
+  --resume-from build-and-deploy --workspace ./workspaces/<run-id>/golem-db-app-ts/ts
 
 # Merge reports from multiple CI runs
 npx tsx src/run.ts --merge-reports ./ci-results --output ./merged
@@ -77,14 +76,15 @@ npx tsx src/run.ts --merge-reports ./ci-results --output ./merged
 
 ### Workspace Directory
 
-Without `--workspace`, each scenario gets its own directory at `<cwd>/workspaces/<scenario-name>/`. The harness creates the directory, sets up skill symlinks/copies, and initializes a git repo. With `--workspace`, the specified directory is reused and cleanup is skipped.
+Each harness run generates a unique run ID (UUID). Without `--workspace`, each scenario gets its own directory at `<cwd>/workspaces/<run-id>/<scenario-name>/<language>/`. Workspace directories are never deleted, so you can inspect the results after the run. With `--workspace`, the specified directory is used directly.
 
 ### Golem Server Lifecycle
 
 The harness manages the Golem server automatically:
-1. **Startup**: Before running scenarios, the harness checks port 9881. If a server is already running, it **fails with an error**. Otherwise it starts `golem server run --data-dir <workspaces/golem-server-data> --clean` and waits up to 60 seconds for the healthcheck to pass.
-2. **Per-scenario check**: Before each scenario, the harness verifies that a `local` Golem profile exists and the server is still reachable.
-3. **Teardown**: After all scenarios complete (or on Ctrl+C), the harness stops the server process.
+1. **Startup**: Before running scenarios, the harness checks port 9881. If a server is already running, it **fails with an error**. Otherwise it starts `golem server run --data-dir <workspaces/<run-id>/golem-server-data> --clean` and waits up to 60 seconds for the healthcheck to pass.
+2. **Between scenarios**: The server is restarted (stopped and started again with `--clean`) to ensure a fresh state for each scenario.
+3. **Per-scenario check**: Before each scenario, the harness verifies that a `local` Golem profile exists and the server is still reachable.
+4. **Teardown**: After all scenarios complete (or on Ctrl+C), the harness stops the server process.
 
 ## Adding a New Skill
 

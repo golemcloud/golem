@@ -329,7 +329,6 @@ export interface ScenarioExecutorOptions {
   language?: string;
   abortSignal?: AbortSignal;
   resumeFromStepId?: string;
-  skipCleanup?: boolean;
 }
 
 // --- Template variable substitution ---
@@ -517,9 +516,6 @@ export class ScenarioExecutor {
 
     const results: StepResult[] = [];
     const savedEnv: Record<string, string | undefined> = {};
-    const shouldCleanup =
-      spec.settings?.cleanup !== false && !this.options.skipCleanup;
-
     // Validate resumeFromStepId if set
     if (this.options.resumeFromStepId) {
       const found = spec.steps.some(
@@ -540,10 +536,7 @@ export class ScenarioExecutor {
       }
     }
 
-    // Clean and setup workspace
-    if (shouldCleanup) {
-      await fs.rm(this.workspace, { recursive: true, force: true });
-    }
+    // Setup workspace (each run gets a unique ID so no cleanup needed)
     await fs.mkdir(this.workspace, { recursive: true });
     await this.driver.setup(this.workspace, this.skillsDir);
     // Watch all agent skill directories — each agent reads skills from its own location
