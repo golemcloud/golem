@@ -55,14 +55,20 @@ async fn test_open_api_yaml_generation(agent: &HttpTestContext) -> anyhow::Resul
     let mut mint = Mint::new("tests/goldenfiles");
     let mut mint_goldenfile = mint.new_goldenfile("expected_openapi_yaml.yaml")?;
 
-    let response = agent.client.get(agent.base_url.join("/openapi.yaml")?).send().await?;
+    let response = agent
+        .client
+        .get(agent.base_url.join("/openapi.yaml")?)
+        .send()
+        .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
-    assert!(response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with("application/yaml")));
+    assert!(
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("application/yaml"))
+    );
 
     let bytes = response.bytes().await?;
     let yaml_value: serde_yaml::Value = serde_yaml::from_slice(&bytes)?;
@@ -75,14 +81,20 @@ async fn test_open_api_yaml_generation(agent: &HttpTestContext) -> anyhow::Resul
 #[test]
 #[tracing::instrument]
 async fn test_open_api_json_generation(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let response = agent.client.get(agent.base_url.join("/openapi.json")?).send().await?;
+    let response = agent
+        .client
+        .get(agent.base_url.join("/openapi.json")?)
+        .send()
+        .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
-    assert!(response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with("application/json")));
+    assert!(
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("application/json"))
+    );
 
     let bytes = response.bytes().await?;
     let json_value: serde_json::Value = serde_json::from_slice(&bytes)?;
@@ -98,8 +110,16 @@ async fn test_open_api_json_generation(agent: &HttpTestContext) -> anyhow::Resul
 #[test]
 #[tracing::instrument]
 async fn test_open_api_json_and_yaml_are_equivalent(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let yaml_response = agent.client.get(agent.base_url.join("/openapi.yaml")?).send().await?;
-    let json_response = agent.client.get(agent.base_url.join("/openapi.json")?).send().await?;
+    let yaml_response = agent
+        .client
+        .get(agent.base_url.join("/openapi.yaml")?)
+        .send()
+        .await?;
+    let json_response = agent
+        .client
+        .get(agent.base_url.join("/openapi.json")?)
+        .send()
+        .await?;
 
     assert_eq!(yaml_response.status(), reqwest::StatusCode::OK);
     assert_eq!(json_response.status(), reqwest::StatusCode::OK);
