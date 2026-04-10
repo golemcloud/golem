@@ -17,7 +17,7 @@ runs:
       shell: bash
       run: cargo binstall --force --locked cargo-test-r@2.2.4
     - name: Restore packaged binaries from cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         path: tmp/golem-binaries
         key: golem-binaries-${{ inputs.run-id }}

@@ -38,6 +38,7 @@ use crate::repo::plugin::{DbPluginRepo, PluginRepo};
 use crate::repo::registry_change::{DbRegistryChangeRepo, RegistryChangeRepo};
 use crate::repo::report::{DbReportRepo, ReportRepo};
 use crate::repo::resource_definition::{DbResourceDefinitionRepo, ResourceDefinitionRepo};
+use crate::repo::retry_policy::{DbRetryPolicyRepo, RetryPolicyRepo};
 use crate::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
 use crate::services::account::AccountService;
@@ -66,6 +67,7 @@ use crate::services::registry_change_notifier::{
 };
 use crate::services::reports::ReportsService;
 use crate::services::resource_definition::ResourceDefinitionService;
+use crate::services::retry_policy::RetryPolicyService;
 use crate::services::security_scheme::SecuritySchemeService;
 use crate::services::token::TokenService;
 use anyhow::{Context, anyhow};
@@ -113,6 +115,7 @@ pub struct Services {
     pub plan_service: Arc<PlanService>,
     pub plugin_registration_service: Arc<PluginRegistrationService>,
     pub resource_definition_service: Arc<ResourceDefinitionService>,
+    pub retry_policy_service: Arc<RetryPolicyService>,
     pub reports_service: Arc<ReportsService>,
     pub security_scheme_service: Arc<SecuritySchemeService>,
     pub token_service: Arc<TokenService>,
@@ -140,6 +143,7 @@ struct Repos {
     plan_repo: Arc<dyn PlanRepo>,
     plugin_repo: Arc<dyn PluginRepo>,
     resource_definition_repo: Arc<dyn ResourceDefinitionRepo>,
+    retry_policy_repo: Arc<dyn RetryPolicyRepo>,
     reports_repo: Arc<dyn ReportRepo>,
     security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
     token_repo: Arc<dyn TokenRepo>,
@@ -204,7 +208,7 @@ impl Services {
             let initial_tokens = config
                 .initial_accounts
                 .values()
-                .map(|v| (v.id, v.token.clone()))
+                .filter_map(|v| v.token.clone().map(|token| (v.id, token)))
                 .collect::<Vec<_>>();
             token_service
                 .create_initial_tokens(&initial_tokens)
@@ -314,6 +318,7 @@ impl Services {
             repos.security_scheme_repo.clone(),
             environment_service.clone(),
             registry_change_notifier.clone(),
+            config.security_scheme.strict_issuer_url_validation,
         ));
 
         let http_api_deployment_service = Arc::new(HttpApiDeploymentService::new(
@@ -341,6 +346,12 @@ impl Services {
             environment_service.clone(),
         ));
 
+        let retry_policy_service = Arc::new(RetryPolicyService::new(
+            repos.retry_policy_repo.clone(),
+            environment_service.clone(),
+            registry_change_notifier.clone(),
+        ));
+
         let deployment_write_service = Arc::new(DeploymentWriteService::new(
             environment_service.clone(),
             repos.deployment_repo.clone(),
@@ -351,6 +362,7 @@ impl Services {
             registry_change_notifier.clone(),
             security_scheme_service.clone(),
             resource_definition_service.clone(),
+            retry_policy_service.clone(),
         ));
 
         let deployed_routes_service =
@@ -364,6 +376,7 @@ impl Services {
         let environment_state_service = Arc::new(EnvironmentStateService::new(
             deployment_service.clone(),
             agent_secret_service.clone(),
+            retry_policy_service.clone(),
         ));
 
         Ok(Self {
@@ -381,6 +394,7 @@ impl Services {
             registry_change_notifier,
             registry_change_repo: repos.registry_change_repo,
             resource_definition_service,
+            retry_policy_service,
             deployment_service,
             deployment_write_service,
             domain_registration_service,
@@ -459,6 +473,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let registry_change_repo = Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
             let resource_definition_repo =
                 Arc::new(DbResourceDefinitionRepo::logged(db_pool.clone()));
+            let retry_policy_repo = Arc::new(DbRetryPolicyRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -479,6 +494,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 plan_repo,
                 plugin_repo,
                 resource_definition_repo,
+                retry_policy_repo,
                 reports_repo,
                 security_scheme_repo,
                 token_repo,
@@ -517,6 +533,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let registry_change_repo = Arc::new(DbRegistryChangeRepo::new(db_pool.clone()));
             let resource_definition_repo =
                 Arc::new(DbResourceDefinitionRepo::logged(db_pool.clone()));
+            let retry_policy_repo = Arc::new(DbRetryPolicyRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -537,6 +554,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 plan_repo,
                 plugin_repo,
                 resource_definition_repo,
+                retry_policy_repo,
                 reports_repo,
                 security_scheme_repo,
                 token_repo,

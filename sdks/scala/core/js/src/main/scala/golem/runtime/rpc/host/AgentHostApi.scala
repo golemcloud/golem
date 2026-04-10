@@ -33,7 +33,6 @@ object AgentHostApi {
 
   // --- Type aliases pointing to golem.host.js facades ---
   type AgentMetadata          = JsAgentMetadata
-  type RetryPolicy            = JsRetryPolicy
   type PersistenceLevel       = JsPersistenceLevel
   type AgentStatus            = JsAgentStatus
   type UpdateMode             = JsUpdateMode
@@ -175,12 +174,6 @@ object AgentHostApi {
   def oplogCommit(replicas: Int): Unit =
     HostModule.oplogCommit(replicas)
 
-  def getRetryPolicy(): RetryPolicy =
-    HostModule.getRetryPolicy().asInstanceOf[RetryPolicy]
-
-  def setRetryPolicy(policy: RetryPolicy): Unit =
-    HostModule.setRetryPolicy(policy)
-
   def getOplogPersistenceLevel(): PersistenceLevel =
     HostModule.getOplogPersistenceLevel().asInstanceOf[PersistenceLevel]
 
@@ -224,17 +217,6 @@ object AgentHostApi {
       highBits = _root_.scala.BigInt(uuid.highBits.toString),
       lowBits = _root_.scala.BigInt(uuid.lowBits.toString)
     )
-
-  object RetryPolicy {
-    def apply(
-      maxAttempts: Int,
-      minDelay: BigInt,
-      maxDelay: BigInt,
-      multiplier: Double,
-      maxJitterFactor: js.UndefOr[Double] = js.undefined
-    ): RetryPolicy =
-      JsRetryPolicy(maxAttempts, minDelay, maxDelay, multiplier, maxJitterFactor)
-  }
 
   object PersistenceLevel {
     def PersistNothing: PersistenceLevel =
@@ -411,10 +393,6 @@ object AgentHostApi {
     def markEndOperation(begin: OplogIndex): Unit = js.native
 
     def oplogCommit(replicas: Int): Unit = js.native
-
-    def getRetryPolicy(): js.Any = js.native
-
-    def setRetryPolicy(policy: RetryPolicy): Unit = js.native
 
     def getOplogPersistenceLevel(): js.Any = js.native
 

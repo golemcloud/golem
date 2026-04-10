@@ -16,6 +16,7 @@ use super::AgentDeploymentDetails;
 use super::agent_secret::AgentSecret;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+use golem_common::model::retry_policy::NamedRetryPolicy;
 use std::collections::HashMap;
 
 // The current, mutable state of the environment.
@@ -24,6 +25,7 @@ use std::collections::HashMap;
 pub struct EnvironmentState {
     pub agent_deployment_details: HashMap<AgentTypeName, AgentDeploymentDetails>,
     pub agent_secrets: HashMap<CanonicalAgentSecretPath, AgentSecret>,
+    pub retry_policies: Vec<NamedRetryPolicy>,
 }
 
 impl From<EnvironmentState> for golem_api_grpc::proto::golem::registry::EnvironmentState {
@@ -35,6 +37,7 @@ impl From<EnvironmentState> for golem_api_grpc::proto::golem::registry::Environm
                 .map(Into::into)
                 .collect(),
             agent_secrets: value.agent_secrets.into_values().map(Into::into).collect(),
+            retry_policies: value.retry_policies.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -50,6 +53,12 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::EnvironmentState> for Envir
             agent_secrets.insert(converted.path.clone(), converted);
         }
 
+        let retry_policies = value
+            .retry_policies
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Self {
             agent_deployment_details: value
                 .agent_deployment_details
@@ -58,6 +67,7 @@ impl TryFrom<golem_api_grpc::proto::golem::registry::EnvironmentState> for Envir
                 .map(|v| (v.agent_type_name.clone(), v))
                 .collect(),
             agent_secrets,
+            retry_policies,
         })
     }
 }

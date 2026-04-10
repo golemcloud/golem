@@ -26,6 +26,9 @@ use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_test_framework::dsl::{TestDsl, drain_connection, stderr_events, stdout_events};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::Value;
+use golem_worker_executor::metrics::storage::{
+    STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_TYPE_FILESYSTEM,
+};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
@@ -3942,6 +3945,54 @@ async fn http_timeout_and_restart(
 
     http_server.abort();
     drop(executor);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn filesystem_write_increments_storage_bytes_written_metric(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("FileSystem", "fs-metrics-test-1");
+    let account_id = context.account_id.to_string();
+    let environment_id = context.default_environment_id.to_string();
+
+    let bytes_before = STORAGE_BYTES_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_file",
+            data_value!("/fs-metrics-test.txt", "hello from metrics test"),
+        )
+        .await?;
+
+    drop(executor);
+
+    let bytes_after = STORAGE_BYTES_WRITTEN_TOTAL
+        .with_label_values(&[STORAGE_TYPE_FILESYSTEM, &account_id, &environment_id])
+        .get();
+
+    assert!(
+        bytes_after > bytes_before,
+        "filesystem bytes_written should have increased: before={bytes_before}, after={bytes_after}"
+    );
+
     Ok(())
 }
 

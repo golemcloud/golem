@@ -6,6 +6,7 @@ import "golem/component/agent.proto";
 import "golem/component/component_id.proto";
 import "golem/registry/agent.proto";
 import "golem/registry/agent_secret.proto";
+import "golem/worker/retry_policy.proto";
 
 message AgentDeploymentDetails {
   string agent_type_name = 1;
@@ -15,4 +16,5 @@ message AgentDeploymentDetails {
 message EnvironmentState {
   repeated AgentDeploymentDetails agent_deployment_details = 1;
   repeated AgentSecret agent_secrets = 2;
+  repeated golem.worker.retry.NamedRetryPolicy retry_policies = 3;
 }

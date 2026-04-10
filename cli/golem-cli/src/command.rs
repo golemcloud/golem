@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use self::api::agent_secret::AgentSecretSubcommand;
+use self::api::retry_policy::RetryPolicySubcommand;
 use crate::app::template::AppTemplateName;
 use crate::command::api::ApiSubcommand;
 use crate::command::cloud::CloudSubcommand;
@@ -762,6 +763,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: AgentSecretSubcommand,
     },
+    /// Manage Retry Policies
+    RetryPolicy {
+        #[clap(subcommand)]
+        subcommand: RetryPolicySubcommand,
+    },
     /// Generate shell completion
     Completion {
         /// Selects shell
@@ -1275,9 +1281,7 @@ pub mod api {
     pub mod agent_secret {
         use crate::args::parse_agent_secret_path;
         use clap::Subcommand;
-        use golem_common::model::agent_secret::{
-            AgentSecretId, AgentSecretPath, AgentSecretRevision,
-        };
+        use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath};
 
         #[derive(Debug, Subcommand)]
         pub enum AgentSecretSubcommand {
@@ -1299,22 +1303,16 @@ pub mod api {
                 /// Id of the secret to update
                 #[arg(long)]
                 id: AgentSecretId,
-                /// Current revision of the agent secret
-                #[arg(long)]
-                current_revision: AgentSecretRevision,
                 /// Value of the secret in json
                 #[arg(long)]
                 secret_value: Option<String>,
             },
 
-            /// Update Agent Secret
+            /// Delete Agent Secret
             Delete {
                 /// Id of the secret to delete
                 #[arg(long)]
                 id: AgentSecretId,
-                /// Current revision of the agent secret
-                #[arg(long)]
-                current_revision: AgentSecretRevision,
             },
 
             /// List Agent Secrets
@@ -1322,9 +1320,66 @@ pub mod api {
         }
     }
 
+    pub mod retry_policy {
+        use clap::Subcommand;
+        use golem_common::model::retry_policy::RetryPolicyId;
+
+        #[derive(Debug, Subcommand)]
+        pub enum RetryPolicySubcommand {
+            /// Create a retry policy in the environment
+            Create {
+                /// Name of the retry policy
+                #[arg(long)]
+                name: String,
+                /// Priority (higher = checked first)
+                #[arg(long)]
+                priority: u32,
+                /// Predicate as JSON string
+                #[arg(long)]
+                predicate_json: String,
+                /// Policy as JSON string
+                #[arg(long)]
+                policy_json: String,
+            },
+
+            /// List retry policies in the environment
+            List,
+
+            /// Get a retry policy by ID
+            Get {
+                /// ID of the retry policy
+                #[arg(long)]
+                id: RetryPolicyId,
+            },
+
+            /// Update a retry policy
+            Update {
+                /// ID of the retry policy to update
+                #[arg(long)]
+                id: RetryPolicyId,
+                /// New priority (optional)
+                #[arg(long)]
+                priority: Option<u32>,
+                /// New predicate as JSON string (optional)
+                #[arg(long)]
+                predicate_json: Option<String>,
+                /// New policy as JSON string (optional)
+                #[arg(long)]
+                policy_json: Option<String>,
+            },
+
+            /// Delete a retry policy
+            Delete {
+                /// ID of the retry policy to delete
+                #[arg(long)]
+                id: RetryPolicyId,
+            },
+        }
+    }
+
     pub mod security_scheme {
         use clap::Subcommand;
-        use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
+        use golem_common::model::security_scheme::{ProviderKind, SecuritySchemeName};
 
         #[derive(Debug, Subcommand)]
         pub enum ApiSecuritySchemeSubcommand {
@@ -1332,9 +1387,15 @@ pub mod api {
             Create {
                 /// Security Scheme name
                 security_scheme_name: SecuritySchemeName,
-                /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft)
+                /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft, Custom)
                 #[arg(long)]
-                provider_type: Provider,
+                provider_type: ProviderKind,
+                /// Custom provider display name (required when provider_type is custom)
+                #[arg(long, required_if_eq("provider_type", "custom"))]
+                custom_provider_name: Option<String>,
+                /// Custom provider OIDC issuer URL (required when provider_type is custom)
+                #[arg(long, required_if_eq("provider_type", "custom"))]
+                custom_issuer_url: Option<String>,
                 /// Security Scheme client ID
                 #[arg(long)]
                 client_id: String,
@@ -1351,6 +1412,39 @@ pub mod api {
 
             /// Get HTTP API Security Scheme
             Get {
+                /// Security Scheme name
+                security_scheme_name: SecuritySchemeName,
+            },
+
+            /// Update HTTP API Security Scheme
+            Update {
+                /// Security Scheme name
+                security_scheme_name: SecuritySchemeName,
+                /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft, Custom)
+                #[arg(long)]
+                provider_type: Option<ProviderKind>,
+                /// Custom provider display name (required when provider_type is custom)
+                #[arg(long, required_if_eq("provider_type", "custom"))]
+                custom_provider_name: Option<String>,
+                /// Custom provider OIDC issuer URL (required when provider_type is custom)
+                #[arg(long, required_if_eq("provider_type", "custom"))]
+                custom_issuer_url: Option<String>,
+                /// Security Scheme client ID
+                #[arg(long)]
+                client_id: Option<String>,
+                /// Security Scheme client secret
+                #[arg(long)]
+                client_secret: Option<String>,
+                /// Security Scheme Scopes (replaces existing scopes), can be defined multiple times
+                #[arg(long)]
+                scope: Option<Vec<String>>,
+                /// Security Scheme redirect URL
+                #[arg(long)]
+                redirect_url: Option<String>,
+            },
+
+            /// Delete HTTP API Security Scheme
+            Delete {
                 /// Security Scheme name
                 security_scheme_name: SecuritySchemeName,
             },

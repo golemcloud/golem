@@ -19,7 +19,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "v0.2.0"
+  WASM_RQUICKJS_VERSION: "v0.2.1"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 
@@ -55,7 +55,7 @@ jobs:
           tar --zstd -xvf tmp/golem-binaries.tar.zst -C tmp/golem-binaries
         timeout-minutes: 2
       - name: Save packaged binaries to cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: tmp/golem-binaries
           key: golem-binaries-${{ github.run_id }}
@@ -128,7 +128,7 @@ jobs:
           use-cache: 'false'
           install-cargo-binstall: 'true'
       - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
+        uses: shogo82148/actions-setup-redis@v1.49.0
         with:
           redis-version: latest
           auto-start: false
@@ -174,6 +174,10 @@ jobs:
             description: "IT #6"
           - name: integration-tests-group7
             description: "IT #7"
+          - name: integration-tests-group8
+            description: "IT #8"
+          - name: integration-tests-group9
+            description: "IT #9"
           - name: cli-integration-tests-group1
             description: "CLI tests #1"
           - name: cli-integration-tests-group2
@@ -202,7 +206,7 @@ jobs:
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-binstall: 'true'
       - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
+        uses: shogo82148/actions-setup-redis@v1.49.0
         with:
           redis-version: latest
           auto-start: false
@@ -251,7 +255,7 @@ jobs:
 
       - name: Restore built TS SDK
         if: startsWith(matrix.group.name, 'cli-integration-tests')
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             sdks/ts/packages/golem-ts-sdk/dist
@@ -335,7 +339,7 @@ jobs:
           copy-to-target: 'true'
 
       - name: Restore built TS SDK
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             sdks/ts/packages/golem-ts-sdk/dist
@@ -459,10 +463,7 @@ jobs:
           cache-all-crates: true
           save-if: false
       - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+        uses: dtolnay/rust-toolchain@stable
       - name: Check formatting
         run: cargo fmt -- --check
         working-directory: sdks/rust
@@ -536,7 +537,7 @@ jobs:
           pnpm run test
 
       - name: Save built TS SDK for test component builds
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             sdks/ts/packages/golem-ts-sdk/dist
@@ -592,7 +593,7 @@ jobs:
 
       - name: Restore built TS SDK
         if: matrix.chunk.needs-node
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             sdks/ts/packages/golem-ts-sdk/dist
@@ -634,7 +635,7 @@ jobs:
           test "$count" -gt 0
 
       - name: Upload chunk WASMs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: test-components-${{ matrix.chunk.name }}
           path: tmp/test-components-wasm/*.wasm
@@ -645,7 +646,7 @@ jobs:
     needs: build-test-components
     steps:
       - name: Download all chunk WASMs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: test-components-*
           path: tmp/test-components-wasm
@@ -659,7 +660,7 @@ jobs:
           echo "Total: $count WASM files"
 
       - name: Save merged WASMs to cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: tmp/test-components-wasm
           key: golem-test-components-${{ github.run_id }}
@@ -706,7 +707,7 @@ jobs:
         env:
           PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
         run: cargo make --profile ci package-release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         name: Upload Targets
         with:
           name: docker-targets-build-${{ env.PLATFORM_PAIR }}
@@ -857,93 +858,91 @@ jobs:
       - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }} ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
         if: matrix.cfg.os != 'windows-latest'
 
-      # - name: Import Code Signing Certificate
-      #   if: contains(matrix.cfg.rust-target, 'apple-darwin')
-      #   env:
-      #     CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-      #     CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      #   run: |
-      #     # Create temporary keychain
-      #     KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-      #     KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+      - name: Import Code Signing Certificate
+        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Create temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
 
-      #     # Create and unlock keychain
-      #     security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-      #     security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-      #     security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          # Create and unlock keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-      #     # Import certificate - use -T to allow codesign access
-      #     CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
-      #     echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
-      #     security import "$CERTIFICATE_PATH" \
-      #       -P "$CERTIFICATE_PASSWORD" \
-      #       -T /usr/bin/codesign \
-      #       -T /usr/bin/security \
-      #       -f pkcs12 \
-      #       -k "$KEYCHAIN_PATH"
+          # Import certificate - use -T to allow codesign access
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          security import "$CERTIFICATE_PATH" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
 
-      #     # Add keychain to search list (prepend to existing list)
-      #     security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | tr -d '"')
+          # Add keychain to search list (prepend to existing list)
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | tr -d '"')
 
-      #     # Set partition list to allow codesign to access the certificate
-      #     security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          # Set partition list to allow codesign to access the certificate
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-      #     # Debug: verify certificate was imported
-      #     echo "Imported certificates:"
-      #     security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          # Verify certificate was imported
+          echo "Imported certificates:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
-      # - name: Code Sign Binary
-      #   if: contains(matrix.cfg.rust-target, 'apple-darwin')
-      #   env:
-      #     APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      #   run: |
-      #     BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+          # Save keychain path for cleanup
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
 
-      #     # Debug: list available signing identities
-      #     echo "Available signing identities:"
-      #     security find-identity -v -p codesigning
+      - name: Code Sign Binary
+        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
 
-      #     # Sign with hardened runtime
-      #     codesign --force \
-      #       --options runtime \
-      #       --timestamp \
-      #       --sign "$APPLE_SIGNING_IDENTITY" \
-      #       "$BINARY_PATH"
+          # Sign with hardened runtime
+          codesign --force \
+            --options runtime \
+            --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            "$BINARY_PATH"
 
-      #     # Verify signature
-      #     codesign --verify --verbose "$BINARY_PATH"
-      #     codesign --display --verbose=4 "$BINARY_PATH"
+          # Verify signature
+          codesign --verify --verbose "$BINARY_PATH"
+          codesign --display --verbose=4 "$BINARY_PATH"
 
-      # - name: Create Notarization Archive
-      #   if: contains(matrix.cfg.rust-target, 'apple-darwin')
-      #   run: |
-      #     BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
-      #     ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
+      - name: Create Notarization Archive
+        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+        run: |
+          BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+          ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
 
-      #     # Create zip for notarization
-      #     zip -j "$ZIP_PATH" "$BINARY_PATH"
+          # Create zip for notarization
+          zip -j "$ZIP_PATH" "$BINARY_PATH"
 
-      # - name: Submit for Notarization
-      #   if: contains(matrix.cfg.rust-target, 'apple-darwin')
-      #   env:
-      #     APPLE_ID: ${{ secrets.APPLE_ID }}
-      #     APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      #     APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-      #   run: |
-      #     ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
+      - name: Submit for Notarization
+        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
 
-      #     # Submit for notarization and wait for completion
-      #     xcrun notarytool submit "$ZIP_PATH" \
-      #       --apple-id "$APPLE_ID" \
-      #       --team-id "$APPLE_TEAM_ID" \
-      #       --password "$APPLE_APP_PASSWORD" \
-      #       --wait false
+          # Submit for notarization (no --wait, returns immediately)
+          xcrun notarytool submit "$ZIP_PATH" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD"
 
-      # - name: Cleanup Keychain
-      #   if: contains(matrix.cfg.rust-target, 'apple-darwin') && always()
-      #   run: |
-      #     KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-      #     security delete-keychain "$KEYCHAIN_PATH" || true
+      - name: Cleanup Keychain
+        if: contains(matrix.cfg.rust-target, 'apple-darwin') && always()
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security delete-keychain "$KEYCHAIN_PATH" || true
 
       - name: Login GH CLI
         shell: bash

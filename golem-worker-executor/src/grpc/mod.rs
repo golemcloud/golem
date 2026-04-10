@@ -360,37 +360,38 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
             })?;
 
-        if Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
+        Worker::<Ctx>::get_latest_metadata(&self.services, &owned_agent_id)
             .await
-            .is_some()
-        {
-            let worker = Worker::get_or_create_suspended(
-                self,
-                auth_ctx.account_id(),
-                &owned_agent_id,
-                None,
-                None,
-                Vec::new(),
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-                principal,
-            )
-            .await?;
+            .ok_or(WorkerExecutorError::worker_not_found(
+                owned_agent_id.agent_id(),
+            ))?;
 
-            info!("Interrupting worker before deletion");
-            worker
-                .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-                .await;
-            info!("Marking worker for deletion");
-            worker.start_deleting().await?;
+        let worker = Worker::get_or_create_suspended(
+            self,
+            auth_ctx.account_id(),
+            &owned_agent_id,
+            None,
+            None,
+            Vec::new(),
+            None,
+            None,
+            &InvocationContextStack::fresh(),
+            principal,
+        )
+        .await?;
 
-            self.worker_service().remove(&owned_agent_id).await;
-            self.active_workers().remove(&owned_agent_id.agent_id).await;
+        info!("Interrupting worker before deletion");
+        worker
+            .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
+            .await;
+        info!("Marking worker for deletion");
+        worker.start_deleting().await?;
 
-            // ensure we are holding the worker while we are doing cleanup.
-            drop(worker);
-        }
+        self.worker_service().remove(&owned_agent_id).await;
+        self.active_workers().remove(&owned_agent_id.agent_id).await;
+
+        // ensure we are holding the worker while we are doing cleanup.
+        drop(worker);
 
         Ok(())
     }
@@ -775,6 +776,39 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ok(worker)
         }
         .instrument(info_span!("get_or_create_worker"))
+        .await
+    }
+
+    async fn get_or_create_pending_for_lookup<Req: CanStartWorker>(
+        &self,
+        request: &Req,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
+        let agent_id = request.agent_id()?;
+        let environment_id = request.environment_id()?;
+
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        self.ensure_worker_belongs_to_this_executor(&agent_id)?;
+
+        let auth_ctx = request.auth_ctx()?;
+
+        let invocation_context = request
+            .maybe_invocation_context()
+            .unwrap_or_else(InvocationContextStack::fresh);
+
+        // Lookup must be able to observe the current idempotency state even while the
+        // invocation is still retrying and has transient error entries in the oplog.
+        Worker::get_or_create_suspended(
+            self,
+            auth_ctx.account_id(),
+            &owned_agent_id,
+            request.env(),
+            request.config_vars()?,
+            request.agent_config(),
+            None,
+            request.parent(),
+            &invocation_context,
+            request.principal(),
+        )
         .await
     }
 
@@ -1662,10 +1696,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             mode,
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup
         ) {
-            let worker = self.get_or_create_pending(&request).await?;
+            let worker = self.get_or_create_pending_for_lookup(&request).await?;
             let lookup = worker.lookup_invocation_result(&ik).await;
             let inv_status = match lookup {
-                crate::model::LookupResult::Complete(_) => InvocationStatus::Complete,
+                crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
+                crate::model::LookupResult::Complete(Err(err)) => return Err(err),
                 crate::model::LookupResult::Pending => InvocationStatus::Pending,
                 crate::model::LookupResult::New | crate::model::LookupResult::Interrupted => {
                     InvocationStatus::Unknown
@@ -1848,9 +1883,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .as_ref()
                 .and_then(|last_error| {
                     latest_status
-                        .current_retry_count
+                        .current_retry_state
                         .get(&last_error.retry_from)
-                        .copied()
+                        .map(|s| s.retry_count())
                 })
                 .unwrap_or_default(),
             pending_invocation_count: latest_status.pending_invocations.len() as u64,

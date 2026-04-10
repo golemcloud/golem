@@ -36,19 +36,19 @@ runs:
   steps:
     - name: Setup Node
       if: inputs.registry-url == ''
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v5
       with:
         node-version: ${{ inputs.node-version }}
 
     - name: Setup Node with registry
       if: inputs.registry-url != ''
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v5
       with:
         node-version: ${{ inputs.node-version }}
         registry-url: ${{ inputs.registry-url }}
 
     - name: Setup pnpm
-      uses: pnpm/action-setup@v2
+      uses: pnpm/action-setup@v5.0.0
       with:
         version: ${{ inputs.pnpm-version }}
 

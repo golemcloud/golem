@@ -50,6 +50,8 @@ pub struct RegistryServiceConfig {
     pub builtin_plugins: BuiltinPluginsConfig,
     #[serde(default)]
     pub deployment_events: DeploymentEventsConfig,
+    #[serde(default)]
+    pub security_scheme: SecuritySchemeConfig,
 }
 
 impl SafeDisplay for RegistryServiceConfig {
@@ -111,6 +113,12 @@ impl SafeDisplay for RegistryServiceConfig {
             self.deployment_events.cleanup_interval
         );
 
+        let _ = writeln!(
+            &mut result,
+            "security scheme: strict_issuer_url_validation={}",
+            self.security_scheme.strict_issuer_url_validation
+        );
+
         result
     }
 }
@@ -123,10 +131,10 @@ impl Default for RegistryServiceConfig {
             PrecreatedAccount {
                 id: AccountId(uuid!("e71a6160-4144-4720-9e34-e5943458d129")),
                 name: "Initial User".to_string(),
-                email: AccountEmail("initial@user".to_string()),
-                token: TokenSecret::trusted(
+                email: AccountEmail::new("initial@user"),
+                token: Some(TokenSecret::trusted(
                     "lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28".to_string(),
-                ),
+                )),
                 role: AccountRole::Admin,
                 plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
             },
@@ -136,10 +144,10 @@ impl Default for RegistryServiceConfig {
             PrecreatedAccount {
                 id: AccountId(uuid!("0e8a0431-94b9-4644-89ca-fbf403edb6e7")),
                 name: "Marketing User".to_string(),
-                email: AccountEmail("marketing@user".to_string()),
-                token: TokenSecret::trusted(
+                email: AccountEmail::new("marketing@user"),
+                token: Some(TokenSecret::trusted(
                     "2dwnjEdx8a_bw8TTN7r6yqcvLY2jAQuoD1N6U3uRy9I".to_string(),
-                ),
+                )),
                 role: AccountRole::MarketingAdmin,
                 plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
             },
@@ -149,8 +157,8 @@ impl Default for RegistryServiceConfig {
             PrecreatedAccount {
                 id: AccountId(uuid!("adb2694f-cd9f-425d-905d-ca2888c9c5de")),
                 name: "Builtin Plugin Owner".to_string(),
-                email: AccountEmail("builtin-plugin-owner@golem.cloud".to_string()),
-                token: TokenSecret::trusted("32d6072d-64e9-4a4a-b8f9-fadf68bb446b".to_string()),
+                email: AccountEmail::new("builtin-plugin-owner@golem.cloud"),
+                token: None,
                 role: AccountRole::BuiltinPluginOwner,
                 plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
             },
@@ -178,6 +186,7 @@ impl Default for RegistryServiceConfig {
                 monthly_http_call_limit: 1_000_000_000_000_000_000,
                 monthly_rpc_call_limit: 1_000_000_000_000_000_000,
                 max_concurrent_agents_per_executor: 1_000_000_000_000_000_000, // unlimited sentinel
+                oplog_writes_per_second: 1_000_000_000_000_000_000,            // unlimited sentinel
             },
         );
 
@@ -200,6 +209,7 @@ impl Default for RegistryServiceConfig {
             initial_plans,
             builtin_plugins: BuiltinPluginsConfig::default(),
             deployment_events: DeploymentEventsConfig::default(),
+            security_scheme: SecuritySchemeConfig::default(),
         }
     }
 }
@@ -426,7 +436,8 @@ pub struct PrecreatedAccount {
     pub id: AccountId,
     pub name: String,
     pub email: AccountEmail,
-    pub token: TokenSecret,
+    #[serde(default)]
+    pub token: Option<TokenSecret>,
     pub plan_id: PlanId,
     pub role: AccountRole,
 }
@@ -477,6 +488,8 @@ pub struct PrecreatedPlan {
     pub monthly_rpc_call_limit: u64,
     #[serde(default = "default_unlimited")]
     pub max_concurrent_agents_per_executor: u64,
+    #[serde(default = "default_unlimited")]
+    pub oplog_writes_per_second: u64,
 }
 
 fn default_max_table_elements_per_worker() -> u64 {
@@ -489,6 +502,19 @@ fn default_max_disk_space_per_worker() -> u64 {
 
 fn default_unlimited() -> u64 {
     1_000_000_000_000_000_000 // 10^18, fits in i64 (TOML max), safe for SQLite REAL
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecuritySchemeConfig {
+    pub strict_issuer_url_validation: bool,
+}
+
+impl Default for SecuritySchemeConfig {
+    fn default() -> Self {
+        Self {
+            strict_issuer_url_validation: true,
+        }
+    }
 }
 
 pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {

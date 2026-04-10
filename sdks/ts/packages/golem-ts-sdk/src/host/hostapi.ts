@@ -43,8 +43,6 @@ export {
   oplogCommit,
   markBeginOperation,
   markEndOperation,
-  getRetryPolicy,
-  setRetryPolicy,
   getOplogPersistenceLevel,
   setOplogPersistenceLevel,
   getIdempotenceMode,
@@ -61,13 +59,11 @@ export { GetPromiseResult } from 'golem:api/host@1.5.0';
 
 // Re-export types (excluding those we shadow with rich classes or redefine)
 export type {
-  Duration,
   ValueAndType,
   PromiseId,
   OplogIndex,
   Pollable,
   ComponentRevision,
-  RetryPolicy,
   PersistenceLevel,
   UpdateMode,
   FilterComparator,

@@ -44,6 +44,8 @@ pub trait WorkerService: Send + Sync {
     fn custom_request_host(&self) -> String;
     fn custom_request_port(&self) -> u16;
 
+    fn mcp_port(&self) -> u16;
+
     async fn kill(&self);
 
     async fn base_http_client(&self) -> reqwest_middleware::ClientWithMiddleware;
@@ -104,6 +106,10 @@ async fn env_vars(
     enable_fs_cache: bool,
     otlp: bool,
 ) -> HashMap<String, String> {
+    // Keep the MCP listener on a dedicated test port so it does not inherit the
+    // production default and collide with other local Golem processes.
+    let mcp_port = custom_request_port + 2;
+
     EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
         .with_str(
@@ -141,6 +147,7 @@ async fn env_vars(
             "GOLEM__CUSTOM_REQUEST_PORT",
             custom_request_port.to_string(),
         )
+        .with("GOLEM__MCP_PORT", mcp_port.to_string())
         .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__PORT", http_port.to_string())
         .with(

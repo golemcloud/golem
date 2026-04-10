@@ -100,6 +100,7 @@ pub trait OplogProcessorPlugin: Send + Sync {
         environment_id: EnvironmentId,
         plugin: &InstalledPlugin,
         target_agent_id: &AgentId,
+        caller_account_id: AccountId,
         idempotency_key: &IdempotencyKey,
     ) -> Result<InvocationStatus, WorkerExecutorError>;
 }
@@ -350,17 +351,16 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
     async fn lookup_invocation_status(
         &self,
         environment_id: EnvironmentId,
-        plugin: &InstalledPlugin,
+        _plugin: &InstalledPlugin,
         target_agent_id: &AgentId,
+        caller_account_id: AccountId,
         idempotency_key: &IdempotencyKey,
     ) -> Result<InvocationStatus, WorkerExecutorError> {
-        let running_plugin = self.resolve_plugin_worker(environment_id, plugin).await?;
-
         self.worker_proxy
             .lookup_invocation_status(
                 target_agent_id,
                 idempotency_key.clone(),
-                running_plugin.account_id,
+                caller_account_id,
                 Some(environment_id),
             )
             .await
@@ -1122,6 +1122,7 @@ impl ForwardingOplogState {
                 let worker_event_service = self.worker_event_service.clone();
                 let oplog_plugins = self.oplog_plugins.clone();
                 let environment_id = metadata.environment_id;
+                let caller_account_id = metadata.created_by;
                 let plugin_clone = plugin.clone();
                 let target_clone = target_agent_id.clone();
                 let monitor = tokio::spawn(
@@ -1143,6 +1144,7 @@ impl ForwardingOplogState {
                                     environment_id,
                                     &plugin_clone,
                                     &target_clone,
+                                    caller_account_id,
                                     &idempotency_key,
                                 )
                                 .await
@@ -1384,7 +1386,13 @@ impl ForwardingOplogState {
 
             match self
                 .oplog_plugins
-                .lookup_invocation_status(environment_id, &plugin, &old_target, &last_key)
+                .lookup_invocation_status(
+                    environment_id,
+                    &plugin,
+                    &old_target,
+                    self.initial_worker_metadata.created_by,
+                    &last_key,
+                )
                 .await
             {
                 Ok(InvocationStatus::Complete | InvocationStatus::Pending) => {
@@ -1612,6 +1620,7 @@ mod tests {
     /// Records all `send()` calls for verification
     struct RecordingOplogProcessorPlugin {
         sends: async_lock::Mutex<Vec<RecordedSend>>,
+        lookups: async_lock::Mutex<Vec<RecordedLookup>>,
     }
 
     #[derive(Debug, Clone)]
@@ -1621,10 +1630,16 @@ mod tests {
         entry_count: usize,
     }
 
+    #[derive(Debug, Clone)]
+    struct RecordedLookup {
+        caller_account_id: AccountId,
+    }
+
     impl RecordingOplogProcessorPlugin {
         fn new() -> Self {
             Self {
                 sends: async_lock::Mutex::new(Vec::new()),
+                lookups: async_lock::Mutex::new(Vec::new()),
             }
         }
 
@@ -1634,6 +1649,10 @@ mod tests {
 
         async fn sends(&self) -> Vec<RecordedSend> {
             self.sends.lock().await.clone()
+        }
+
+        async fn lookups(&self) -> Vec<RecordedLookup> {
+            self.lookups.lock().await.clone()
         }
     }
 
@@ -1686,8 +1705,13 @@ mod tests {
             _environment_id: EnvironmentId,
             _plugin: &InstalledPlugin,
             _target_agent_id: &AgentId,
+            caller_account_id: AccountId,
             _idempotency_key: &IdempotencyKey,
         ) -> Result<InvocationStatus, WorkerExecutorError> {
+            self.lookups
+                .lock()
+                .await
+                .push(RecordedLookup { caller_account_id });
             Ok(InvocationStatus::Unknown)
         }
     }
@@ -2052,5 +2076,61 @@ mod tests {
         let sends = recording_plugin.sends().await;
         assert_eq!(sends.len(), 1, "Should have sent exactly one batch");
         assert_eq!(sends[0].entry_count, 2, "Batch should contain 2 entries");
+    }
+
+    #[test]
+    async fn plugin_monitor_looks_up_status_as_original_worker_owner() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (metadata, status_lock) = test_worker_metadata(HashSet::from([grant_id]));
+        let worker_owner = metadata.created_by;
+        let recording_plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+        let components: Arc<dyn ComponentService> = Arc::new(
+            FakeComponentService::with_one_oplog_processor_plugin(grant_id),
+        );
+        let inner: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
+
+        let entry = OplogEntry::GrowMemory {
+            timestamp: Timestamp::now_utc(),
+            delta: 100,
+        };
+        inner.add(entry.clone()).await;
+
+        let mut state = ForwardingOplogState {
+            buffer: VecDeque::from([entry]),
+            buffer_start_idx: OplogIndex::INITIAL,
+            commit_count: 0,
+            last_send: Instant::now(),
+            oplog_plugins: recording_plugin.clone(),
+            initial_worker_metadata: metadata,
+            last_known_status: status_lock,
+            last_oplog_idx: OplogIndex::from_u64(1),
+            last_committed_idx: OplogIndex::from_u64(1),
+            components,
+            inner,
+            plugin_state: HashMap::from([(
+                grant_id,
+                LivePluginState {
+                    target_agent_id: None,
+                    confirmed_up_to: OplogIndex::NONE,
+                    sending_up_to: OplogIndex::NONE,
+                    send_in_progress: false,
+                    last_batch_start: OplogIndex::NONE,
+                },
+            )]),
+            pending_direct_commits: BTreeMap::new(),
+            worker_event_service: None,
+            monitor_tasks: Vec::new(),
+        };
+
+        state.try_flush().await;
+
+        assert_eq!(state.monitor_tasks.len(), 1, "Expected a monitoring task");
+        for task in state.monitor_tasks.drain(..) {
+            let _ = task.await;
+        }
+
+        let lookups = recording_plugin.lookups().await;
+        assert_eq!(lookups.len(), 1, "Expected exactly one status lookup");
+        assert_eq!(lookups[0].caller_account_id, worker_owner);
     }
 }

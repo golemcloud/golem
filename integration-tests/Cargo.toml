@@ -71,6 +71,11 @@ name = "sharding"
 path = "tests/sharding.rs"
 harness = false
 
+[[test]]
+name = "agent-config-live-mutation"
+path = "tests/agent_config_live_mutation.rs"
+harness = false
+
 [[bin]]
 name = "benchmarks"
 path = "src/benchmarks/all.rs"

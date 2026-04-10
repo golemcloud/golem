@@ -1141,10 +1141,10 @@ impl From<AgentMetadata> for AgentMetadataForGuests {
             component_revision: value.last_known_status.component_revision,
             retry_count: value
                 .last_known_status
-                .current_retry_count
+                .current_retry_state
                 .iter()
                 .max_by_key(|(idx, _)| **idx)
-                .map(|(_, value)| *value)
+                .map(|(_, state)| state.retry_count())
                 .unwrap_or_default() as u64,
             environment_id: value.environment_id,
         }

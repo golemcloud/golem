@@ -55,7 +55,7 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
 
             match newtype_result {
                 Some(newtype_result) => newtype_result,
-                None => record_or_tuple_from_value(&data.fields),
+                None => record_or_tuple_from_value(&data.fields, wit.as_tuple),
             }
         }
         Data::Enum(data) => {
@@ -263,10 +263,10 @@ pub fn derive_from_value(input: TokenStream) -> TokenStream {
     result.into()
 }
 
-fn record_or_tuple_from_value(fields: &Fields) -> proc_macro2::TokenStream {
+fn record_or_tuple_from_value(fields: &Fields, as_tuple: bool) -> proc_macro2::TokenStream {
     let all_fields_has_names = fields.iter().all(|field| field.ident.is_some());
 
-    if all_fields_has_names {
+    if all_fields_has_names && !as_tuple {
         let wit_fields = fields
             .iter()
             .map(|field| {
@@ -308,6 +308,29 @@ fn record_or_tuple_from_value(fields: &Fields) -> proc_macro2::TokenStream {
                     #(#field_values),*
                 }),
                 _ => Err(format!("Expected Record value with {} fields, got {:?}", #expected_len, value)),
+            }
+        }
+    } else if as_tuple {
+        let field_values = fields.iter().enumerate().map(|(idx, field)| {
+            let ty = &field.ty;
+            let field_name = field
+                .ident
+                .as_ref()
+                .expect("Expected named field with as_tuple");
+            let field_from_value =
+                quote! { <#ty as golem_wasm::FromValue>::from_value(fields[#idx].clone())? };
+            quote! {
+                #field_name: #field_from_value
+            }
+        });
+
+        let expected_len = fields.len();
+        quote! {
+            match value {
+                golem_wasm::Value::Tuple(fields) if fields.len() == #expected_len => Ok(Self {
+                    #(#field_values),*
+                }),
+                _ => Err(format!("Expected Tuple value with {} fields, got {:?}", #expected_len, value)),
             }
         }
     } else {

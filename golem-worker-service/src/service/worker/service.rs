@@ -47,6 +47,14 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 
+fn required_environment_action_for_invocation_mode(mode: i32) -> EnvironmentAction {
+    if mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32 {
+        EnvironmentAction::ViewWorker
+    } else {
+        EnvironmentAction::UpdateWorker
+    }
+}
+
 pub struct WorkerService {
     component_service: Arc<dyn ComponentService>,
     auth_service: Arc<dyn AuthService>,
@@ -733,7 +741,7 @@ impl WorkerService {
             .auth_service
             .authorize_environment_actions(
                 environment_id,
-                EnvironmentAction::UpdateWorker,
+                required_environment_action_for_invocation_mode(mode),
                 &auth_ctx,
             )
             .await?;
@@ -1009,5 +1017,32 @@ impl WorkerService {
                 component_revision: output.component_revision,
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::required_environment_action_for_invocation_mode;
+    use golem_service_base::model::auth::EnvironmentAction;
+    use test_r::test;
+
+    #[test]
+    fn lookup_invocation_requires_view_worker_permission() {
+        assert_eq!(
+            required_environment_action_for_invocation_mode(
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
+            ),
+            EnvironmentAction::ViewWorker,
+        );
+    }
+
+    #[test]
+    fn non_lookup_invocation_requires_update_worker_permission() {
+        assert_eq!(
+            required_environment_action_for_invocation_mode(
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            ),
+            EnvironmentAction::UpdateWorker,
+        );
     }
 }

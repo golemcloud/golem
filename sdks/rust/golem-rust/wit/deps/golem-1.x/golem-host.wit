@@ -3,7 +3,6 @@ package golem:api@1.5.0;
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.
 interface host {
-    use wasi:clocks/monotonic-clock@0.2.3.{duration};
     use golem:core/types@1.5.0.{component-id, uuid, value-and-type, agent-id, promise-id, oplog-index};
     use wasi:io/poll@0.2.3.{pollable};
 
@@ -13,20 +12,6 @@ interface host {
     /// Represents a Golem environment
     record environment-id {
       uuid: uuid,
-    }
-
-    /// Configures how the executor retries failures
-    record retry-policy {
-        /// The maximum number of retries before the agent becomes permanently failed
-        max-attempts: u32,
-        /// The minimum delay between retries (applied to the first retry)
-        min-delay: duration,
-        /// The maximum delay between retries
-        max-delay: duration,
-        /// Multiplier applied to the delay on each retry to implement exponential backoff
-        multiplier: f64,
-        /// The maximum amount of jitter to add to the delay
-        max-jitter-factor: option<f64>
     }
 
     /// Configurable persistence level for agents
@@ -236,13 +221,6 @@ interface host {
     /// with the same parameter will do nothing.
     mark-end-operation: func(begin: oplog-index);
 
-    /// Gets the current retry policy associated with the agent
-    get-retry-policy: func() -> retry-policy;
-
-    /// Overrides the current retry policy associated with the agent. Following this call, `get-retry-policy` will return the
-    /// new retry policy.
-    set-retry-policy: func(new-retry-policy: retry-policy);
-
     /// Gets the agent's current persistence level.
     get-oplog-persistence-level: func() -> persistence-level;
 
@@ -307,7 +285,7 @@ interface host {
 
     /// Snapshot payload
     record snapshot {
-        data: list<u8>,
+        payload: list<u8>,
         mime-type: string
     }
 }

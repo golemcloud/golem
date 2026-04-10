@@ -262,27 +262,57 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         j.params.jump.end == BigInt(10)
       )
     },
-    test("ChangeRetryPolicy from dynamic") {
+    test("SetRetryPolicy from dynamic") {
       val raw = wrapEntry(
-        "change-retry-policy",
+        "set-retry-policy",
         js.Dynamic.literal(
           timestamp = ts(),
-          newPolicy = js.Dynamic.literal(
-            maxAttempts = 5,
-            minDelay = js.BigInt("1000000"),
-            maxDelay = js.BigInt("60000000000"),
-            multiplier = 2.0,
-            maxJitterFactor = 0.1
+          policy = js.Dynamic.literal(
+            name = "default",
+            priority = 10,
+            predicate = js.Dynamic.literal(nodes = js.Array[js.Any]()),
+            policy = js.Dynamic.literal(nodes = js.Array[js.Any]())
           )
         )
       )
       val parsed = OplogEntry.fromJs(raw)
-      val p      = parsed.asInstanceOf[OplogEntry.ChangeRetryPolicy].params.newPolicy
+      val p      = parsed.asInstanceOf[OplogEntry.SetRetryPolicy].params
       assertTrue(
-        parsed.isInstanceOf[OplogEntry.ChangeRetryPolicy],
-        p.maxAttempts == 5,
-        p.multiplier == 2.0,
-        p.maxJitterFactor == Some(0.1)
+        parsed.isInstanceOf[OplogEntry.SetRetryPolicy],
+        p.name == "default",
+        p.priority == 10,
+        p.predicateJson == """{"nodes":[]}""",
+        p.policyJson == """{"nodes":[]}"""
+      )
+    },
+    test("RemoveRetryPolicy from dynamic") {
+      val raw = wrapEntry(
+        "remove-retry-policy",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          name = "default"
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw)
+      val p      = parsed.asInstanceOf[OplogEntry.RemoveRetryPolicy].params
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.RemoveRetryPolicy],
+        p.name == "default"
+      )
+    },
+    test("FilesystemStorageUsageUpdate from dynamic") {
+      val raw = wrapEntry(
+        "filesystem-storage-usage-update",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          delta = js.BigInt("4096")
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw)
+      val p      = parsed.asInstanceOf[OplogEntry.FilesystemStorageUsageUpdate].params
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.FilesystemStorageUsageUpdate],
+        p.delta == BigInt(4096)
       )
     },
     test("Log from dynamic") {
@@ -313,7 +343,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "agent-invocation-finished",
         js.Dynamic.literal(
           timestamp = ts(),
-          invocationResult = js.Dynamic.literal(
+          result = js.Dynamic.literal(
             tag = "agent-method",
             `val` = js.Dynamic.literal(output = tdvDyn)
           ),
@@ -334,7 +364,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "agent-invocation-finished",
         js.Dynamic.literal(
           timestamp = ts(),
-          invocationResult = js.Dynamic.literal(tag = "manual-update"),
+          result = js.Dynamic.literal(tag = "manual-update"),
           consumedFuel = js.BigInt("0"),
           componentRevision = js.BigInt("1")
         )
@@ -362,7 +392,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           functionName = "wasi:io/read",
           request = vatDyn,
           response = vatDyn,
-          wrappedFunctionType = js.Dynamic.literal(tag = "read-remote")
+          durableFunctionType = js.Dynamic.literal(tag = "read-remote")
         )
       )
       val parsed = OplogEntry.fromJs(raw)
@@ -378,7 +408,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "create-resource",
         js.Dynamic.literal(
           timestamp = ts(),
-          resourceId = js.BigInt("1"),
+          id = js.BigInt("1"),
           name = "handle",
           owner = "golem:api"
         )
@@ -397,7 +427,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "drop-resource",
         js.Dynamic.literal(
           timestamp = ts(),
-          resourceId = js.BigInt("1"),
+          id = js.BigInt("1"),
           name = "handle",
           owner = "golem:api"
         )
@@ -411,8 +441,10 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         js.Dynamic.literal(
           timestamp = ts(),
           plugin = js.Dynamic.literal(
-            name = "my-plugin",
-            version = "1.0",
+            environmentPluginGrantId = js.Dynamic.literal(uuid = "00000000-0000-0000-0000-000000000001"),
+            pluginPriority = 10,
+            pluginName = "my-plugin",
+            pluginVersion = "1.0",
             parameters = js.Array(js.Tuple2("key", "val"))
           )
         )
@@ -431,8 +463,10 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         js.Dynamic.literal(
           timestamp = ts(),
           plugin = js.Dynamic.literal(
-            name = "my-plugin",
-            version = "2.0",
+            environmentPluginGrantId = js.Dynamic.literal(uuid = "00000000-0000-0000-0000-000000000002"),
+            pluginPriority = 20,
+            pluginName = "my-plugin",
+            pluginVersion = "2.0",
             parameters = js.Array[js.Any]()
           )
         )
@@ -553,7 +587,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         js.Dynamic.literal(
           timestamp = ts(),
           targetRevision = js.BigInt("5"),
-          updateDescription = js.Dynamic.literal(tag = "auto-update")
+          description = js.Dynamic.literal(tag = "auto-update")
         )
       )
       val parsed = OplogEntry.fromJs(raw)
@@ -569,9 +603,9 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         js.Dynamic.literal(
           timestamp = ts(),
           targetRevision = js.BigInt("5"),
-          updateDescription = js.Dynamic.literal(
+          description = js.Dynamic.literal(
             tag = "snapshot-based",
-            `val` = js.Dynamic.literal(data = snapshotData, mimeType = "application/octet-stream")
+            `val` = js.Dynamic.literal(payload = snapshotData, mimeType = "application/octet-stream")
           )
         )
       )
@@ -591,7 +625,13 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
           targetRevision = js.BigInt("3"),
           newComponentSize = js.BigInt("2048"),
           newActivePlugins = js.Array(
-            js.Dynamic.literal(name = "p1", version = "1.0", parameters = js.Array[js.Any]())
+            js.Dynamic.literal(
+              environmentPluginGrantId = js.Dynamic.literal(uuid = "00000000-0000-0000-0000-000000000003"),
+              pluginPriority = 30,
+              pluginName = "p1",
+              pluginVersion = "1.0",
+              parameters = js.Array[js.Any]()
+            )
           )
         )
       )

@@ -18,7 +18,7 @@ use golem_common::model::agent::{AgentTypeName, HttpMethod};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::component::ComponentName;
 use golem_common::model::domain_registration::Domain;
-use golem_common::model::resource_definition::ResourceName;
+use golem_common::model::quota::ResourceName;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_service_base::custom_api::PathSegment;
 use golem_wasm::analysis::AnalysedType;
@@ -135,6 +135,8 @@ pub enum DeployValidationError {
     AgentSecretTypeConflict { path: CanonicalAgentSecretPath },
     #[error("Multiple resource definitions for the name: {name}")]
     ConflictingResourceDefinitions { name: ResourceName },
+    #[error("Multiple retry policy defaults with the same name: {name}")]
+    ConflictingRetryPolicyDefaults { name: String },
 }
 
 impl SafeDisplay for DeployValidationError {

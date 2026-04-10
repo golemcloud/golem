@@ -889,6 +889,7 @@ async fn read_from_archive_impl(use_blob: bool) {
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
+                retry_policy_state: None,
             }
             .rounded()
         })
@@ -1155,6 +1156,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
+                retry_policy_state: None,
             }
             .rounded()
         })
@@ -1230,6 +1232,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
+                retry_policy_state: None,
             }
             .rounded()
         })
@@ -1306,6 +1309,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 error: AgentError::Unknown("last".to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
+                retry_policy_state: None,
             }
             .rounded(),
         )
@@ -1338,6 +1342,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             error: AgentError::Unknown("0".to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
+            retry_policy_state: None,
         }
         .rounded()
     );
@@ -1348,6 +1353,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             error: AgentError::Unknown("99".to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
+            retry_policy_state: None,
         }
         .rounded()
     );
@@ -1358,6 +1364,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             error: AgentError::Unknown("999".to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
+            retry_policy_state: None,
         }
         .rounded()
     );
@@ -1368,6 +1375,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             error: AgentError::Unknown("last".to_string()),
             retry_from: OplogIndex::NONE,
             inside_atomic_region: false,
+            retry_policy_state: None,
         }
         .rounded()
     );
@@ -1442,6 +1450,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
                     error: AgentError::Unknown(i.to_string()),
                     retry_from: OplogIndex::NONE,
                     inside_atomic_region: false,
+                    retry_policy_state: None,
                 }
                 .rounded()
             })
@@ -1541,6 +1550,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
                 error: AgentError::Unknown(i.to_string()),
                 retry_from: OplogIndex::NONE,
                 inside_atomic_region: false,
+                retry_policy_state: None,
             }
             .rounded()
         })

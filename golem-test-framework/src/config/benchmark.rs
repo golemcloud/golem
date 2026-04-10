@@ -213,6 +213,8 @@ pub enum TestMode {
         worker_executor_base_http_port: u16,
         #[arg(long, default_value = "9100")]
         worker_executor_base_grpc_port: u16,
+        #[arg(long)]
+        environment_state_cache_capacity: Option<usize>,
         #[arg(long, default_value = "false")]
         mute_child: bool,
         #[arg(long, default_value = "test-components")]
@@ -274,6 +276,7 @@ impl BenchmarkTestDependencies {
         worker_executor_base_grpc_port: u16,
         mute_child: bool,
         component_directory: &str,
+        environment_state_cache_capacity: Option<usize>,
         otlp: bool,
     ) -> Self {
         let workspace_root = Path::new(workspace_root).canonicalize().unwrap();
@@ -366,6 +369,7 @@ impl BenchmarkTestDependencies {
                 worker_service_http_port,
                 worker_service_grpc_port,
                 worker_service_custom_request_port,
+                worker_service_custom_request_port + 2,
                 &shard_manager,
                 &rdb,
                 &redis,
@@ -393,6 +397,7 @@ impl BenchmarkTestDependencies {
                 out_level,
                 Level::ERROR,
                 registry_service.clone(),
+                environment_state_cache_capacity,
                 otlp,
             )
             .await,
@@ -480,7 +485,7 @@ impl BenchmarkTestDependencies {
                         *registry_service_http_port,
                         *registry_service_grpc_port,
                         AccountId(*registry_service_admin_account_id),
-                        AccountEmail(registry_service_admin_account_email.clone()),
+                        AccountEmail::new(registry_service_admin_account_email.clone()),
                         TokenSecret::trusted(registry_service_admin_account_token.clone()),
                         PlanId(*registry_service_default_plan_id),
                         PlanId(*registry_service_low_fuel_plan_id),
@@ -509,6 +514,7 @@ impl BenchmarkTestDependencies {
                         *worker_service_http_port,
                         *worker_service_grpc_port,
                         *worker_service_custom_request_port,
+                        *worker_service_custom_request_port + 2,
                     )
                     .await,
                 );
@@ -549,6 +555,7 @@ impl BenchmarkTestDependencies {
                 worker_service_custom_request_port,
                 worker_executor_base_http_port,
                 worker_executor_base_grpc_port,
+                environment_state_cache_capacity,
                 mute_child,
                 component_directory,
             } => {
@@ -573,6 +580,7 @@ impl BenchmarkTestDependencies {
                     *worker_executor_base_grpc_port,
                     *mute_child,
                     component_directory,
+                    *environment_state_cache_capacity,
                     otlp,
                 )
                 .await

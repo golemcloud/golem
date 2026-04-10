@@ -77,6 +77,7 @@ use golem_worker_executor::model::{
 use golem_worker_executor::preview2::golem::agent::host::{
     CancellationToken, FutureInvokeResult, HostFutureInvokeResult, HostWasmRpc, RpcError, WasmRpc,
 };
+use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
@@ -96,6 +97,7 @@ use golem_worker_executor::services::golem_config::{
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
 use golem_worker_executor::services::promise::PromiseService;
+use golem_worker_executor::services::quota::QuotaService;
 use golem_worker_executor::services::rdbms::ignite::IgniteType;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
@@ -140,8 +142,8 @@ use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tower::ServiceBuilder;
 use tracing::{Level, debug, info};
 use uuid::Uuid;
-use wasmtime::component::{Instance, Resource, ResourceAny};
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
+use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
+use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
@@ -943,6 +945,7 @@ impl WorkerCtx for TestWorkerCtx {
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn rdbms::RdbmsService>,
+        quota_service: Arc<dyn QuotaService>,
         event_service: Arc<dyn WorkerEventService>,
         _active_workers: Arc<ActiveWorkers<TestWorkerCtx>>,
         oplog_service: Arc<dyn OplogService>,
@@ -990,6 +993,7 @@ impl WorkerCtx for TestWorkerCtx {
             key_value_service,
             blob_store_service,
             rdbms_service,
+            quota_service,
             event_service,
             oplog_service,
             oplog,
@@ -1457,6 +1461,49 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     ) -> NoAdditionalDeps {
         NoAdditionalDeps {}
     }
+
+    fn create_wasmtime_linker(
+        &self,
+        engine: &Engine,
+    ) -> anyhow::Result<Linker<golem_worker_executor::workerctx::default::Context>> {
+        use golem_worker_executor::workerctx::default::Context;
+        let mut linker = golem_worker_executor::wasi_host::create_linker(
+            engine,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_api_1_x::retry::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Context>>,
+        >(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<Context>>>(
+            &mut linker,
+            <Context as DurableWorkerCtxView<Context>>::durable_ctx_mut,
+        )?;
+        Ok(linker)
+    }
 }
 
 /// A `ResourceLimits` implementation that provides a fixed table element limit
@@ -1757,6 +1804,7 @@ impl ResourceLimits for FixedMonthlyCallLimitResourceLimits {
             self.monthly_http_calls,
             self.monthly_rpc_calls,
             AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+            AtomicResourceEntry::UNLIMITED_OPLOG_WRITES_PER_SECOND,
         )))
     }
 }

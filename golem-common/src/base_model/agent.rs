@@ -155,12 +155,17 @@ pub enum RegistryInvalidationEvent {
         event_id: u64,
         environment_id: EnvironmentId,
     },
+    /// An environment retry policy was created, updated, or deleted.
+    RetryPolicyChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+    },
     /// A resource definition was created, updated, or deleted.
     ResourceDefinitionChanged {
         event_id: u64,
         environment_id: EnvironmentId,
-        resource_definition_id: crate::base_model::resource_definition::ResourceDefinitionId,
-        resource_name: crate::base_model::resource_definition::ResourceName,
+        resource_definition_id: crate::base_model::quota::ResourceDefinitionId,
+        resource_name: crate::base_model::quota::ResourceName,
     },
 }
 
@@ -173,6 +178,7 @@ impl RegistryInvalidationEvent {
             Self::AccountTokensInvalidated { event_id, .. } => *event_id,
             Self::EnvironmentPermissionsChanged { event_id, .. } => *event_id,
             Self::SecuritySchemeChanged { event_id, .. } => *event_id,
+            Self::RetryPolicyChanged { event_id, .. } => *event_id,
             Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
         }
     }
@@ -203,6 +209,7 @@ pub enum AgentInvocationMode {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[wit(name = "binary-type", owner = "golem:core@1.5.0/types")]
 pub struct BinaryType {
     pub mime_type: String,
 }
@@ -215,6 +222,7 @@ pub struct BinaryType {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", wit_transparent)]
 pub struct ComponentModelElementSchema {
     pub element_type: AnalysedType,
 }
@@ -229,6 +237,7 @@ pub struct ComponentModelElementSchema {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[wit(name = "text-descriptor", owner = "golem:core@1.5.0/types")]
 pub struct TextDescriptor {
     pub restrictions: Option<Vec<TextType>>,
 }
@@ -243,6 +252,7 @@ pub struct TextDescriptor {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[wit(name = "text-type", owner = "golem:core@1.5.0/types")]
 pub struct TextType {
     pub language_code: String,
 }
@@ -268,6 +278,7 @@ pub struct Url {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[wit(name = "text-source", owner = "golem:core@1.5.0/types")]
 pub struct TextSource {
     pub data: String,
     pub text_type: Option<TextType>,
@@ -281,6 +292,7 @@ pub struct TextSource {
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[wit(name = "text-reference", owner = "golem:core@1.5.0/types")]
 pub enum TextReference {
     Url(Url),
     Inline(TextSource),
@@ -296,6 +308,7 @@ pub enum TextReference {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[wit(name = "binary-descriptor", owner = "golem:core@1.5.0/types")]
 pub struct BinaryDescriptor {
     pub restrictions: Option<Vec<BinaryType>>,
 }
@@ -308,6 +321,7 @@ pub struct BinaryDescriptor {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[wit(name = "binary-source", owner = "golem:core@1.5.0/types")]
 pub struct BinarySource {
     pub data: Vec<u8>,
     pub binary_type: BinaryType,
@@ -321,6 +335,7 @@ pub struct BinarySource {
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[wit(name = "binary-reference", owner = "golem:core@1.5.0/types")]
 pub enum BinaryReference {
     Url(Url),
     Inline(BinarySource),
@@ -334,6 +349,10 @@ pub enum BinaryReference {
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "element-schema", owner = "golem:core@1.5.0/types")
+)]
 pub enum ElementSchema {
     ComponentModel(ComponentModelElementSchema),
     UnstructuredText(TextDescriptor),
@@ -348,6 +367,7 @@ pub enum ElementSchema {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", wit(as_tuple))]
 pub struct NamedElementSchema {
     pub name: String,
     pub schema: ElementSchema,
@@ -361,6 +381,7 @@ pub struct NamedElementSchema {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", wit_transparent)]
 pub struct NamedElementSchemas {
     pub elements: Vec<NamedElementSchema>,
 }
@@ -373,6 +394,10 @@ pub struct NamedElementSchemas {
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "data-schema", owner = "golem:core@1.5.0/types")
+)]
 pub enum DataSchema {
     Tuple(NamedElementSchemas),
     Multimodal(NamedElementSchemas),
@@ -613,6 +638,10 @@ impl DataValue {
     feature = "full",
     derive(IntoValue, FromValue, desert_rust::BinaryCodec)
 )]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "data-value", owner = "golem:core@1.5.0/types")
+)]
 pub enum UntypedDataValue {
     Tuple(Vec<UntypedElementValue>),
     Multimodal(Vec<UntypedNamedElementValue>),
@@ -662,6 +691,10 @@ impl golem_wasm::IntoValue for UntypedNamedElementValue {
 #[cfg_attr(
     feature = "full",
     derive(IntoValue, FromValue, desert_rust::BinaryCodec)
+)]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "element-value", owner = "golem:core@1.5.0/types")
 )]
 pub enum UntypedElementValue {
     ComponentModel(Value),
@@ -783,6 +816,7 @@ impl From<ElementValue> for UntypedJsonElementValue {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", wit_transparent)]
 pub struct ElementValues {
     pub elements: Vec<ElementValue>,
 }
@@ -795,6 +829,7 @@ pub struct ElementValues {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "full", wit_transparent)]
 pub struct NamedElementValues {
     pub elements: Vec<NamedElementValue>,
 }
@@ -833,6 +868,13 @@ pub struct NamedElementValue {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    feature = "full",
+    wit(
+        name = "component-model-element-value",
+        owner = "golem:core@1.5.0/types"
+    )
+)]
 pub struct ComponentModelElementValue {
     #[cfg_attr(feature = "full", wit_field(convert = golem_wasm::WitValue))]
     pub value: ValueAndType,
@@ -846,6 +888,13 @@ pub struct ComponentModelElementValue {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    feature = "full",
+    wit(
+        name = "unstructured-text-element-value",
+        owner = "golem:core@1.5.0/types"
+    )
+)]
 pub struct UnstructuredTextElementValue {
     pub value: TextReference,
     #[cfg_attr(feature = "full", wit_field(skip))]
@@ -861,6 +910,13 @@ pub struct UnstructuredTextElementValue {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    feature = "full",
+    wit(
+        name = "unstructured-binary-element-value",
+        owner = "golem:core@1.5.0/types"
+    )
+)]
 pub struct UnstructuredBinaryElementValue {
     pub value: BinaryReference,
     #[cfg_attr(feature = "full", wit_field(skip))]
@@ -876,6 +932,10 @@ pub struct UnstructuredBinaryElementValue {
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "element-value", owner = "golem:core@1.5.0/types")
+)]
 pub enum ElementValue {
     ComponentModel(ComponentModelElementValue),
     UnstructuredText(UnstructuredTextElementValue),

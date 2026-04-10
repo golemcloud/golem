@@ -32,6 +32,7 @@ pub struct SpawnedWorkerService {
     http_port: u16,
     grpc_port: u16,
     custom_request_port: u16,
+    mcp_port: u16,
     child: Arc<Mutex<Option<Child>>>,
     _logger: ChildProcessLogger,
     base_http_client: OnceCell<reqwest_middleware::ClientWithMiddleware>,
@@ -44,6 +45,7 @@ impl SpawnedWorkerService {
         http_port: u16,
         grpc_port: u16,
         custom_request_port: u16,
+        mcp_port: u16,
         shard_manager: &Arc<dyn ShardManager>,
         rdb: &Arc<dyn Rdb>,
         redis: &Arc<dyn Redis>,
@@ -101,6 +103,7 @@ impl SpawnedWorkerService {
             http_port,
             grpc_port,
             custom_request_port,
+            mcp_port,
             child: Arc::new(Mutex::new(Some(child))),
             _logger: logger,
             base_http_client: OnceCell::new(),
@@ -136,6 +139,10 @@ impl WorkerService for SpawnedWorkerService {
     }
     fn custom_request_port(&self) -> u16 {
         self.custom_request_port
+    }
+
+    fn mcp_port(&self) -> u16 {
+        self.mcp_port
     }
 
     async fn base_http_client(&self) -> reqwest_middleware::ClientWithMiddleware {

@@ -2,6 +2,7 @@ use crate::api::common::ApiEndpointError;
 use crate::service::auth::AuthService;
 use crate::service::worker::WorkerService;
 use chrono::{DateTime, Utc};
+use golem_common::base_model::api;
 use golem_common::model::agent::{AgentTypeName, UntypedJsonDataValue};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentRevision;
@@ -51,9 +52,10 @@ impl AgentsApi {
         if let Some(ref mut email) = request.owner_account_email {
             let trimmed = email.trim().to_string();
             if trimmed.is_empty() {
-                return Err(ApiEndpointError::bad_request(golem_common::safe(
-                    "owner_account_email cannot be empty".to_string(),
-                )));
+                return Err(ApiEndpointError::bad_request(
+                    api::error_code::VALIDATION_ERROR,
+                    golem_common::safe("owner_account_email cannot be empty".to_string()),
+                ));
             }
             *email = trimmed;
         }

@@ -32,6 +32,10 @@ use crate::durable_host::blobstore::types::{
     ContainerEntry, IncomingValueEntry, OutgoingValueEntry, StreamObjectNamesEntry,
 };
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, InternalRetryResult};
+use crate::metrics::storage::{
+    STORAGE_TYPE_BLOB_STORE, record_storage_bytes_written, record_storage_objects_deleted,
+    record_storage_objects_written,
+};
 use crate::preview2::wasi::blobstore::container::{
     Container, ContainerMetadata, Error, Host, HostContainer, HostStreamObjectNames, IncomingValue,
     ObjectMetadata, ObjectName, OutgoingValue, StreamObjectNames,
@@ -180,6 +184,22 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
+            if result.is_ok() {
+                let account_id = self.created_by().to_string();
+                let environment_id_str = environment_id.to_string();
+                record_storage_bytes_written(
+                    STORAGE_TYPE_BLOB_STORE,
+                    &account_id,
+                    &environment_id_str,
+                    length,
+                );
+                record_storage_objects_written(
+                    STORAGE_TYPE_BLOB_STORE,
+                    &account_id,
+                    &environment_id_str,
+                    1,
+                );
+            }
             let result = HostResponseBlobStoreUnit {
                 result: result.map_err(|err| err.to_string()),
             };
@@ -291,6 +311,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
+            if result.is_ok() {
+                let account_id = self.created_by().to_string();
+                let environment_id_str = environment_id.to_string();
+                record_storage_objects_deleted(
+                    STORAGE_TYPE_BLOB_STORE,
+                    &account_id,
+                    &environment_id_str,
+                    1,
+                );
+            }
             let result = HostResponseBlobStoreUnit {
                 result: result.map_err(|err| err.to_string()),
             };
@@ -333,6 +363,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .map(|container_entry| container_entry.name.clone())?;
 
         let result = if durability.is_live() {
+            let count = names.len() as u64;
             let result = loop {
                 let result = self
                     .state
@@ -347,6 +378,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
+            if result.is_ok() {
+                let account_id = self.created_by().to_string();
+                let environment_id_str = environment_id.to_string();
+                record_storage_objects_deleted(
+                    STORAGE_TYPE_BLOB_STORE,
+                    &account_id,
+                    &environment_id_str,
+                    count,
+                );
+            }
             let result = HostResponseBlobStoreUnit {
                 result: result.map_err(|err| err.to_string()),
             };
@@ -519,7 +560,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             durability
                 .try_trigger_retry(self, &result, classify_blob_store_error)
                 .await?;
-
+            if result.is_ok() {
+                let account_id = self.created_by().to_string();
+                let environment_id_str = environment_id.to_string();
+                record_storage_objects_deleted(
+                    STORAGE_TYPE_BLOB_STORE,
+                    &account_id,
+                    &environment_id_str,
+                    1,
+                );
+            }
             let result = HostResponseBlobStoreUnit {
                 result: result.map_err(|err| err.to_string()),
             };

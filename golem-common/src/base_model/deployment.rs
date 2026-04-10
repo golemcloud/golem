@@ -19,7 +19,7 @@ use super::domain_registration::Domain;
 use super::environment::EnvironmentId;
 use super::http_api_deployment::{HttpApiDeploymentId, HttpApiDeploymentRevision};
 use super::mcp_deployment::{McpDeploymentId, McpDeploymentRevision};
-use super::resource_definition::ResourceDefinitionCreation;
+use super::quota::ResourceDefinitionCreation;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes};
 use derive_more::Display;
 
@@ -43,6 +43,18 @@ impl From<&str> for DeploymentVersion {
     fn from(value: &str) -> Self {
         Self(value.to_string())
     }
+}
+
+/// Default retry policy to create as part of deployment
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentRetryPolicyDefault {
+    pub name: String,
+    pub priority: u32,
+    pub predicate: crate::base_model::retry_policy::ApiPredicate,
+    pub policy: crate::base_model::retry_policy::ApiRetryPolicy,
 }
 
 declare_structs! {
@@ -73,7 +85,8 @@ declare_structs! {
         pub expected_deployment_hash: Hash,
         pub version: DeploymentVersion,
         pub agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
-        pub quota_resource_defaults: Vec<ResourceDefinitionCreation>
+        pub quota_resource_defaults: Vec<ResourceDefinitionCreation>,
+        pub retry_policy_defaults: Vec<DeploymentRetryPolicyDefault>
     }
 
     pub struct DeploymentRollback {

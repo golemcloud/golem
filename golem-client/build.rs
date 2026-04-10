@@ -100,6 +100,19 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "AgentSecretUpdate",
                 "golem_common::model::agent_secret::AgentSecretUpdate",
             ),
+            // retry policy
+            (
+                "RetryPolicyDto",
+                "golem_common::model::retry_policy::RetryPolicyDto",
+            ),
+            (
+                "RetryPolicyCreation",
+                "golem_common::model::retry_policy::RetryPolicyCreation",
+            ),
+            (
+                "RetryPolicyUpdate",
+                "golem_common::model::retry_policy::RetryPolicyUpdate",
+            ),
             // auth
             ("Token", "golem_common::model::auth::Token"),
             ("TokenCreation", "golem_common::model::auth::TokenCreation"),
@@ -247,6 +260,19 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "PluginRegistrationDto",
                 "golem_common::model::plugin_registration::PluginRegistrationDto",
             ),
+            // quotas
+            (
+                "ResourceDefinition",
+                "golem_common::model::quota::ResourceDefinition",
+            ),
+            (
+                "ResourceDefinitionCreation",
+                "golem_common::model::quota::ResourceDefinitionCreation",
+            ),
+            (
+                "ResourceDefinitionUpdate",
+                "golem_common::model::quota::ResourceDefinitionUpdate",
+            ),
             // reports
             (
                 "AccountCountsReport",
@@ -255,19 +281,6 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "AccountSummaryReport",
                 "golem_common::model::reports::AccountSummaryReport",
-            ),
-            // domain_registration
-            (
-                "ResourceDefinition",
-                "golem_common::model::resource_definition::ResourceDefinition",
-            ),
-            (
-                "ResourceDefinitionCreation",
-                "golem_common::model::resource_definition::ResourceDefinitionCreation",
-            ),
-            (
-                "ResourceDefinitionUpdate",
-                "golem_common::model::resource_definition::ResourceDefinitionUpdate",
             ),
             // security_scheme
             (

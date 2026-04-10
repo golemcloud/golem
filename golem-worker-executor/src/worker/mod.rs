@@ -24,6 +24,7 @@ use self::status::{
     calculate_last_known_status_for_existing_worker, update_status_with_new_entries,
 };
 use crate::durable_host::recover_stderr_logs;
+use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
@@ -35,8 +36,8 @@ use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasAgentWebhooksService, HasAll,
     HasBlobStoreService, HasComponentService, HasConfig, HasEnvironmentStateService, HasEvents,
     HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService, HasOplog,
-    HasOplogService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
-    HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool,
+    HasOplogService, HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits,
+    HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool,
     HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
     UsesAllDeps,
 };
@@ -883,12 +884,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // Dropping an OwnedSemaphorePermit returns its permits to the
             // semaphore automatically — no separate add_permits needed.
             let n = permits_to_release as usize;
-            let to_drop = if permit.num_permits() >= n {
-                permit.split(n)
-            } else {
-                // Defensive: releasing more than we hold — drop all.
-                permit.split(permit.num_permits())
-            };
+            let actual_n = n.min(permit.num_permits());
+            let to_drop = permit.split(actual_n);
+            let released_bytes =
+                crate::services::active_workers::filesystem_storage_permits_to_bytes(
+                    actual_n as u32,
+                );
+            record_filesystem_pool_released(released_bytes);
             drop(to_drop); // returns permits to the semaphore
         }
     }
@@ -1388,54 +1390,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
+        let status = self.last_known_status.read().await.clone();
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
             result.cache(&self.owned_agent_id, self).await;
-            match result {
-                InvocationResult::Cached {
-                    result: Ok(values), ..
-                } => LookupResult::Complete(Ok(values)),
-                InvocationResult::Cached {
-                    result:
-                        Err(FailedInvocationResult {
-                            trap_type: TrapType::Interrupt(InterruptKind::Interrupt(_)),
-                            ..
-                        }),
-                    ..
-                } => LookupResult::Interrupted,
-                InvocationResult::Cached {
-                    result:
-                        Err(FailedInvocationResult {
-                            trap_type: TrapType::Interrupt(_),
-                            ..
-                        }),
-                    ..
-                } => LookupResult::Pending,
-                InvocationResult::Cached {
-                    result:
-                        Err(FailedInvocationResult {
-                            trap_type: TrapType::Error { error, .. },
-                            stderr,
-                        }),
-                    ..
-                } => LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed {
-                    error,
-                    stderr,
-                })),
-                InvocationResult::Cached {
-                    result:
-                        Err(FailedInvocationResult {
-                            trap_type: TrapType::Exit,
-                            ..
-                        }),
-                    ..
-                } => LookupResult::Complete(Err(WorkerExecutorError::runtime("Process exited"))),
-                InvocationResult::Lazy { .. } => {
-                    panic!("Unexpected lazy result after InvocationResult.cache")
-                }
-            }
+            lookup_result_from_cached_result(&status, key, result)
         } else {
-            let status = self.last_known_status.read().await;
             let is_pending = status
                 .pending_invocations
                 .iter()
@@ -2295,6 +2255,19 @@ struct RunningWorker {
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
 }
 
+impl Drop for RunningWorker {
+    fn drop(&mut self) {
+        if let Some(ref permit) = self.filesystem_storage_permit {
+            let bytes = crate::services::active_workers::filesystem_storage_permits_to_bytes(
+                permit.num_permits() as u32,
+            );
+            if bytes > 0 {
+                record_filesystem_pool_released(bytes);
+            }
+        }
+    }
+}
+
 impl RunningWorker {
     pub async fn new<Ctx: WorkerCtx>(
         owned_agent_id: OwnedAgentId,
@@ -2491,6 +2464,7 @@ impl RunningWorker {
             parent.key_value_service(),
             parent.blob_store_service(),
             parent.rdbms_service(),
+            parent.quota_service(),
             parent.worker_event_service.clone(),
             parent.active_workers(),
             parent.oplog_service(),
@@ -2701,6 +2675,132 @@ impl InvocationResult {
             };
 
             *self = Self::Cached { result }
+        }
+    }
+}
+
+fn lookup_result_from_cached_result(
+    status: &AgentStatusRecord,
+    key: &IdempotencyKey,
+    result: InvocationResult,
+) -> LookupResult {
+    match result {
+        InvocationResult::Cached {
+            result: Ok(values), ..
+        } => LookupResult::Complete(Ok(values)),
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    // Retry marker error entries are persisted before the invocation has
+                    // actually finished. While the same idempotency key is still current
+                    // and the worker has not entered a terminal state, report it as
+                    // pending so lookup callers can observe the eventual terminal result.
+                    trap_type: TrapType::Error { .. },
+                    ..
+                }),
+        } if status.current_idempotency_key.as_ref() == Some(key)
+            && !matches!(status.status, AgentStatus::Failed | AgentStatus::Exited) =>
+        {
+            LookupResult::Pending
+        }
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    trap_type: TrapType::Interrupt(InterruptKind::Interrupt(_)),
+                    ..
+                }),
+            ..
+        } => LookupResult::Interrupted,
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    trap_type: TrapType::Interrupt(_),
+                    ..
+                }),
+            ..
+        } => LookupResult::Pending,
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    trap_type: TrapType::Error { error, .. },
+                    stderr,
+                }),
+            ..
+        } => LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed { error, stderr })),
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    trap_type: TrapType::Exit,
+                    ..
+                }),
+            ..
+        } => LookupResult::Complete(Err(WorkerExecutorError::runtime("Process exited"))),
+        InvocationResult::Lazy { .. } => {
+            panic!("Unexpected lazy result after InvocationResult.cache")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::oplog::AgentError;
+    use test_r::test;
+
+    fn status_with_current_key(status: AgentStatus, key: &IdempotencyKey) -> AgentStatusRecord {
+        AgentStatusRecord {
+            status,
+            current_idempotency_key: Some(key.clone()),
+            ..AgentStatusRecord::default()
+        }
+    }
+
+    #[test]
+    fn lookup_keeps_retrying_error_pending() {
+        let key = IdempotencyKey::fresh();
+        let lookup = lookup_result_from_cached_result(
+            &status_with_current_key(AgentStatus::Retrying, &key),
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult {
+                    trap_type: TrapType::Error {
+                        error: AgentError::TransientError("in-function retry".to_string()),
+                        retry_from: OplogIndex::from_u64(17),
+                    },
+                    stderr: String::new(),
+                }),
+            },
+        );
+
+        assert!(matches!(lookup, LookupResult::Pending));
+    }
+
+    #[test]
+    fn lookup_reports_terminal_error_as_failure() {
+        let key = IdempotencyKey::fresh();
+        let lookup = lookup_result_from_cached_result(
+            &status_with_current_key(AgentStatus::Failed, &key),
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult {
+                    trap_type: TrapType::Error {
+                        error: AgentError::TransientError("in-function retry".to_string()),
+                        retry_from: OplogIndex::from_u64(17),
+                    },
+                    stderr: String::new(),
+                }),
+            },
+        );
+
+        match lookup {
+            LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed {
+                error: AgentError::TransientError(details),
+                stderr,
+            })) => {
+                assert_eq!(details, "in-function retry");
+                assert!(stderr.is_empty());
+            }
+            other => panic!("expected terminal lookup failure, got {other:?}"),
         }
     }
 }

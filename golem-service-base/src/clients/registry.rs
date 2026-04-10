@@ -52,9 +52,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-use golem_common::model::resource_definition::{
-    ResourceDefinition, ResourceDefinitionId, ResourceName,
-};
+use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
 use serde::{Deserialize, Serialize};
@@ -1199,6 +1197,23 @@ fn proto_registry_event_to_model(
                 },
             )
         }
+        Some(Payload::RetryPolicyChanged(rpc)) => {
+            let environment_id = rpc
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in RetryPolicyChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::RetryPolicyChanged {
+                    event_id,
+                    environment_id,
+                },
+            )
+        }
         Some(Payload::ResourceDefinitionChanged(rdc)) => {
             let environment_id = rdc
                 .environment_id
@@ -1223,9 +1238,7 @@ fn proto_registry_event_to_model(
                     event_id,
                     environment_id,
                     resource_definition_id,
-                    resource_name: golem_common::model::resource_definition::ResourceName(
-                        rdc.resource_name,
-                    ),
+                    resource_name: golem_common::model::quota::ResourceName(rdc.resource_name),
                 },
             )
         }

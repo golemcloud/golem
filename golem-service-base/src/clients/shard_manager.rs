@@ -23,7 +23,7 @@ use golem_api_grpc::proto::golem::shardmanager::v1::{
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::resource_definition::{ResourceDefinitionId, ResourceName};
+use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::model::{RetryConfig, RoutingTable};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::with_retries;
