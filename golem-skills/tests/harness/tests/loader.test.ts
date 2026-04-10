@@ -169,10 +169,14 @@ steps:
       stdout_contains: "success"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.steps[0].invoke?.agent, "my-agent");
-    assert.equal(spec.steps[0].invoke?.function, "my-func");
-    assert.equal(spec.steps[0].expect?.exit_code, 0);
-    assert.equal(spec.steps[0].expect?.stdout_contains, "success");
+    const step = spec.steps[0];
+    assert.equal(step.tag, "invoke");
+    if (step.tag === "invoke") {
+      assert.equal(step.invoke.agent, "my-agent");
+      assert.equal(step.invoke.function, "my-func");
+    }
+    assert.equal(step.expect?.exit_code, 0);
+    assert.equal(step.expect?.stdout_contains, "success");
   });
 
   // Shell/sleep/trigger tests
@@ -185,7 +189,11 @@ steps:
     sleep: 5
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.steps[0].sleep, 5);
+    const step = spec.steps[0];
+    assert.equal(step.tag, "sleep");
+    if (step.tag === "sleep") {
+      assert.equal(step.sleep, 5);
+    }
   });
 
   it("loads step with shell command", async () => {
@@ -201,9 +209,13 @@ steps:
       stdout_contains: "hello"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.steps[0].shell?.command, "echo");
-    assert.deepEqual(spec.steps[0].shell?.args, ["hello"]);
-    assert.equal(spec.steps[0].shell?.cwd, "./subdir");
+    const step = spec.steps[0];
+    assert.equal(step.tag, "shell");
+    if (step.tag === "shell") {
+      assert.equal(step.shell.command, "echo");
+      assert.deepEqual(step.shell.args, ["hello"]);
+      assert.equal(step.shell.cwd, "./subdir");
+    }
   });
 
   it("loads step with trigger", async () => {
@@ -216,8 +228,12 @@ steps:
       function: "do-thing"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.steps[0].trigger?.agent, "my-agent");
-    assert.equal(spec.steps[0].trigger?.function, "do-thing");
+    const step = spec.steps[0];
+    assert.equal(step.tag, "trigger");
+    if (step.tag === "trigger") {
+      assert.equal(step.trigger.agent, "my-agent");
+      assert.equal(step.trigger.function, "do-thing");
+    }
   });
 
   // Validation: exactly one action per step
@@ -269,7 +285,11 @@ steps:
       name: "test-agent"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.steps[0].create_agent?.name, "test-agent");
+    const step = spec.steps[0];
+    assert.equal(step.tag, "create_agent");
+    if (step.tag === "create_agent") {
+      assert.equal(step.create_agent.name, "test-agent");
+    }
   });
 
   it("loads step with delete_agent", async () => {
@@ -281,7 +301,11 @@ steps:
       name: "test-agent"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.equal(spec.steps[0].delete_agent?.name, "test-agent");
+    const step = spec.steps[0];
+    assert.equal(step.tag, "delete_agent");
+    if (step.tag === "delete_agent") {
+      assert.equal(step.delete_agent.name, "test-agent");
+    }
   });
 
   // Tests for only_if/skip_if
@@ -309,13 +333,13 @@ steps:
     const filePath = await writeTempYaml(`
 name: "skip-if-test"
 steps:
-  - id: "skip-gemini"
+  - id: "skip-opencode"
     prompt: "do something"
     skip_if:
-      agent: "gemini"
+      agent: "opencode"
 `);
     const spec = await ScenarioLoader.load(filePath);
-    assert.deepEqual(spec.steps[0].skip_if, { agent: "gemini" });
+    assert.deepEqual(spec.steps[0].skip_if, { agent: "opencode" });
   });
 
   it("loads step with both only_if and skip_if", async () => {
@@ -332,5 +356,69 @@ steps:
     const spec = await ScenarioLoader.load(filePath);
     assert.deepEqual(spec.steps[0].only_if, { language: "ts" });
     assert.deepEqual(spec.steps[0].skip_if, { os: "windows" });
+  });
+
+  // HTTP step tests
+
+  it("loads step with http action", async () => {
+    const filePath = await writeTempYaml(`
+name: "http-test"
+steps:
+  - id: "healthcheck"
+    http:
+      url: "http://localhost:9881/healthcheck"
+      method: "GET"
+    expect:
+      status: 200
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    const step = spec.steps[0];
+    assert.equal(step.tag, "http");
+    if (step.tag === "http") {
+      assert.equal(step.http.url, "http://localhost:9881/healthcheck");
+      assert.equal(step.http.method, "GET");
+    }
+    assert.equal(step.expect?.status, 200);
+  });
+
+  it("loads step with http POST and headers", async () => {
+    const filePath = await writeTempYaml(`
+name: "http-post-test"
+steps:
+  - id: "post"
+    http:
+      url: "http://localhost:8080/api"
+      method: "POST"
+      body: '{"key":"value"}'
+      headers:
+        Content-Type: "application/json"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    const step = spec.steps[0];
+    assert.equal(step.tag, "http");
+    if (step.tag === "http") {
+      assert.equal(step.http.method, "POST");
+      assert.equal(step.http.body, '{"key":"value"}');
+      assert.deepEqual(step.http.headers, {
+        "Content-Type": "application/json",
+      });
+    }
+  });
+
+  // Retry schema tests
+
+  it("loads step with retry config", async () => {
+    const filePath = await writeTempYaml(`
+name: "retry-test"
+steps:
+  - id: "flaky"
+    prompt: "do something flaky"
+    retry:
+      attempts: 3
+      delay: 2
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    assert.equal(spec.steps[0].retry?.attempts, 3);
+    assert.equal(spec.steps[0].retry?.delay, 2);
   });
 });

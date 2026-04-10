@@ -158,6 +158,7 @@ impl AccountUsage {
             available_http_calls,
             available_rpc_calls,
             max_concurrent_agents_per_executor: self.plan.max_concurrent_agents_per_executor.get(),
+            oplog_writes_per_second: self.plan.oplog_writes_per_second.get(),
         }
     }
 }

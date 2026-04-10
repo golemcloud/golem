@@ -52,6 +52,7 @@ use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::plugin::{
     ForwardingOplogService, OplogProcessorPlugin, PerExecutorOplogProcessorPlugin,
 };
+use crate::services::oplog::rate_limited::RateLimitedOplogService;
 use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
@@ -786,13 +787,28 @@ pub async fn create_worker_executor_impl<
         worker_proxy.clone(),
     ));
 
-    let oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
+    let resource_limits = bootstrap.create_resource_limits(
+        &golem_config,
+        registry_service.clone(),
+        shutdown_token.clone(),
+    );
+
+    let forwarding_oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
         base_oplog_service,
         oplog_processor_plugin.clone(),
         component_service.clone(),
         golem_config.oplog.plugin_max_commit_count,
         golem_config.oplog.plugin_max_elapsed_time,
     ));
+
+    let oplog_service: Arc<dyn OplogService> = if golem_config.oplog.oplog_rate_limit_enabled {
+        Arc::new(RateLimitedOplogService::new(
+            forwarding_oplog_service,
+            resource_limits.clone(),
+        ))
+    } else {
+        forwarding_oplog_service
+    };
 
     let worker_service = Arc::new(DefaultWorkerService::new(
         key_value_storage.clone(),
@@ -817,12 +833,6 @@ pub async fn create_worker_executor_impl<
         oplog_service.clone(),
         worker_service.clone(),
         golem_config.scheduler.refresh_interval,
-        shutdown_token.clone(),
-    );
-
-    let resource_limits = bootstrap.create_resource_limits(
-        &golem_config,
-        registry_service.clone(),
         shutdown_token.clone(),
     );
 
