@@ -35,6 +35,12 @@ impl NormalizedJsonValue {
     pub fn into_inner(self) -> serde_json::Value {
         self.0
     }
+
+    /// Normalize a raw JSON value and return the inner `serde_json::Value`.
+    /// Useful when the normalized value is needed directly without the newtype wrapper.
+    pub fn normalize(value: serde_json::Value) -> serde_json::Value {
+        Self::new(value).0
+    }
 }
 
 impl From<serde_json::Value> for NormalizedJsonValue {

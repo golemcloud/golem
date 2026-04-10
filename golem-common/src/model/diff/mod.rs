@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod agent;
 mod component;
 mod deployment;
 mod environment;
@@ -22,6 +23,7 @@ mod plugin;
 mod resource_definition;
 mod ser;
 
+pub use agent::*;
 pub use component::*;
 pub use deployment::*;
 pub use environment::*;
@@ -260,30 +262,28 @@ where
     }
 }
 
-pub fn into_normalized_json(mut value: serde_json::Value) -> serde_json::Value {
-    normalize_json(&mut value);
-    value
+/// A normalized JSON value changed: the diff result is the new value itself.
+impl Diffable for crate::base_model::json::NormalizedJsonValue {
+    type DiffResult = crate::base_model::json::NormalizedJsonValue;
+
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        if new != current {
+            Some(new.clone())
+        } else {
+            None
+        }
+    }
 }
 
-fn normalize_json(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Number(n) => {
-            if let Some(f) = n.as_f64()
-                && f.fract() == 0.0
-            {
-                *value = serde_json::Value::Number(serde_json::Number::from(f as i64));
-            }
+/// A string value changed: the diff result is the new string.
+impl Diffable for String {
+    type DiffResult = String;
+
+    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+        if new != current {
+            Some(new.clone())
+        } else {
+            None
         }
-        serde_json::Value::Array(arr) => {
-            for v in arr {
-                normalize_json(v);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            for v in map.values_mut() {
-                normalize_json(v);
-            }
-        }
-        _ => {}
     }
 }

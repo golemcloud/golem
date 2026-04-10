@@ -12,77 +12,76 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::diff::VecDiffable;
 use crate::model::diff;
-use itertools::Itertools;
 use uuid::Uuid;
 
 pub use crate::base_model::component::*;
+pub use crate::base_model::path::{AgentFilePath, ArchiveFilePath, CanonicalFilePath};
 
 impl ComponentDto {
     pub fn to_diffable(&self) -> diff::Component {
+        let agent_type_provision_configs = self
+            .metadata
+            .agent_type_provision_configs()
+            .iter()
+            .map(|(name, config)| {
+                let state = diff::AgentTypeProvisionConfig {
+                    env: config.env.clone(),
+                    wasi_config: config.wasi_config.clone(),
+                    config: config
+                        .config
+                        .iter()
+                        .map(|e| {
+                            // Join path segments with '.' to form the map key.
+                            // Values are already normalized via NormalizedJsonValue.
+                            (e.path.join("."), e.value.clone())
+                        })
+                        .collect(),
+                    files_by_path: config
+                        .files
+                        .iter()
+                        .map(|file| {
+                            (
+                                file.path.to_abs_string(),
+                                diff::AgentFile {
+                                    hash: file.content_hash.0,
+                                    permissions: file.permissions,
+                                }
+                                .into(),
+                            )
+                        })
+                        .collect(),
+                    plugins_by_grant_id: config
+                        .plugins
+                        .iter()
+                        .map(|plugin| {
+                            (
+                                plugin.environment_plugin_grant_id.0,
+                                diff::PluginInstallation {
+                                    priority: plugin.priority.0,
+                                    name: plugin.plugin_name.clone(),
+                                    version: plugin.plugin_version.clone(),
+                                    grant_id: plugin.environment_plugin_grant_id.0,
+                                    parameters: plugin.parameters.clone(),
+                                },
+                            )
+                        })
+                        .collect(),
+                };
+                (name.0.clone(), state.into())
+            })
+            .collect();
+
         diff::Component {
-            metadata: diff::ComponentMetadata {
-                env: self
-                    .env
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-                config_vars: self
-                    .config_vars
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-            }
-            .into(),
             wasm_hash: self.wasm_hash,
-            files_by_path: self
-                .files
-                .iter()
-                .map(|file| {
-                    (
-                        file.path.to_abs_string(),
-                        diff::ComponentFile {
-                            hash: file.content_hash.0,
-                            permissions: file.permissions,
-                        }
-                        .into(),
-                    )
-                })
-                .collect(),
-            plugins_by_grant_id: self
-                .installed_plugins
-                .iter()
-                .map(|plugin| {
-                    (
-                        plugin.environment_plugin_grant_id.0,
-                        diff::PluginInstallation {
-                            priority: plugin.priority.0,
-                            name: plugin.plugin_name.clone(),
-                            version: plugin.plugin_version.clone(),
-                            grant_id: plugin.environment_plugin_grant_id.0,
-                            parameters: plugin.parameters.clone(),
-                        },
-                    )
-                })
-                .collect(),
-            ordered_agent_config: self
-                .agent_config
-                .iter()
-                .map(|lac| diff::AgentConfigEntry {
-                    agent: lac.agent.0.clone(),
-                    path: lac.path.clone(),
-                    value: diff::into_normalized_json(lac.value.clone()),
-                })
-                .sorted_by(|v1, v2| v1.ordering_key().cmp(&v2.ordering_key()))
-                .collect(),
+            agent_type_provision_configs,
         }
     }
 }
 
-impl InitialComponentFile {
+impl InitialAgentFile {
     pub fn is_read_only(&self) -> bool {
-        self.permissions == ComponentFilePermissions::ReadOnly
+        self.permissions == AgentFilePermissions::ReadOnly
     }
 }
 
