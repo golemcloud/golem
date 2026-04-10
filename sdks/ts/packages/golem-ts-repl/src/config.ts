@@ -37,6 +37,7 @@ export type AgentConfig = {
   clientPackageName: string;
   clientPackageImportedName: string;
   package: any;
+  mode: 'durable' | 'ephemeral';
   methodParameterNames?: Record<string, string[]>;
 };
 

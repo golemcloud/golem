@@ -34,6 +34,7 @@ use inquire::{Confirm, CustomType, InquireError, MultiSelect, Select, Text};
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -315,17 +316,6 @@ impl InteractiveHandler {
         .prompt()?)
     }
 
-    pub fn select_component_for_repl(
-        &self,
-        component_names: Vec<ComponentName>,
-    ) -> anyhow::Result<ComponentName> {
-        Ok(Select::new(
-            "Select a component to be used in Rib REPL:",
-            component_names,
-        )
-        .prompt()?)
-    }
-
     pub fn select_new_app_name(
         &self,
         placeholder: Option<&str>,
@@ -349,6 +339,60 @@ impl InteractiveHandler {
         };
 
         Ok(Some(ApplicationName(app_name)))
+    }
+
+    pub fn select_new_app_path(&self) -> anyhow::Result<Option<PathBuf>> {
+        let Some(location) = Select::new(
+            "Where should the application be created?",
+            vec![
+                NewAppLocationOption::CurrentDirectory,
+                NewAppLocationOption::NewDirectory,
+            ],
+        )
+        .prompt()
+        .none_if_not_interactive_logged()?
+        else {
+            return Ok(None);
+        };
+
+        match location {
+            NewAppLocationOption::CurrentDirectory => Ok(Some(PathBuf::from("."))),
+            NewAppLocationOption::NewDirectory => {
+                const NEW_APP_PATH_HINT: &str = "Use a relative path without '.' or '..' segments";
+
+                let Some(path) = Text::new("Application directory path:")
+                    .with_validator(|value: &str| {
+                        let value = value.trim();
+
+                        if value.is_empty() {
+                            return Ok(Validation::Invalid(ErrorMessage::from(
+                                "Please provide a directory path",
+                            )));
+                        }
+
+                        let parsed = PathBuf::from(value);
+                        if parsed.is_absolute() {
+                            return Ok(Validation::Invalid(ErrorMessage::from(NEW_APP_PATH_HINT)));
+                        }
+
+                        let is_single_name = parsed
+                            .components()
+                            .all(|component| matches!(component, Component::Normal(_)));
+                        if !is_single_name {
+                            return Ok(Validation::Invalid(ErrorMessage::from(NEW_APP_PATH_HINT)));
+                        }
+
+                        Ok(Validation::Valid)
+                    })
+                    .prompt()
+                    .none_if_not_interactive_logged()?
+                else {
+                    return Ok(None);
+                };
+
+                Ok(Some(PathBuf::from(path)))
+            }
+        }
     }
 
     pub fn select_new_app_templates_ts(&self) -> anyhow::Result<Option<Vec<AppTemplateName>>> {
@@ -431,6 +475,17 @@ impl InteractiveHandler {
             true,
             "The above dependency and configuration update steps will now be applied. Do you want to continue?",
             None,
+        )
+    }
+
+    pub fn confirm_new_app_in_non_empty_dir(&self, path: &Path) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            format!(
+                "Target directory {} is not empty. Do you want to continue creating a new application there?",
+                path.log_color_highlight()
+            ),
+            Some("Choose a new empty directory to skip this confirmation."),
         )
     }
 
@@ -585,6 +640,23 @@ fn confirm<M: AsRef<str>>(
 struct TemplateOption {
     pub template_name: AppTemplateName,
     pub description: String,
+}
+
+#[derive(Clone)]
+enum NewAppLocationOption {
+    CurrentDirectory,
+    NewDirectory,
+}
+
+impl Display for NewAppLocationOption {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NewAppLocationOption::CurrentDirectory => {
+                write!(f, "Use current directory (.)")
+            }
+            NewAppLocationOption::NewDirectory => write!(f, "Use a new directory"),
+        }
+    }
 }
 
 impl Display for TemplateOption {

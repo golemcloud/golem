@@ -30,6 +30,7 @@ export class CliReplInterop {
   private readonly cli: GolemCli;
   private builtinCommands: string[];
   private readonly agentStreams: Map<string, AgentStreamState>;
+  private replServer: repl.REPLServer | undefined;
 
   constructor(config: CliCommandsConfig) {
     this.config = config;
@@ -45,20 +46,57 @@ export class CliReplInterop {
   }
 
   defineCommands(replServer: repl.REPLServer) {
+    this.replServer = replServer;
     this.builtinCommands = Object.keys(replServer.commands);
+
+    // Wrap the built-in onSigInt listener so we can suppress the
+    // "To exit, press Ctrl+C again or Ctrl+D or type .exit" message when
+    // Ctrl-C cancels a running CLI command rather than acting as a bare keypress.
+    let suppressNextSigint = false;
+    const [builtinOnSigInt] = replServer.rawListeners('SIGINT') as [
+      ((...args: unknown[]) => void) | undefined,
+    ];
+    if (builtinOnSigInt) {
+      replServer.removeAllListeners('SIGINT');
+      replServer.on('SIGINT', function wrapper() {
+        if (suppressNextSigint) {
+          suppressNextSigint = false;
+          return;
+        }
+        builtinOnSigInt.call(replServer);
+      });
+    }
 
     const interop = this;
     for (const command of this.commands) {
       replServer.defineCommand(command.replCommand, {
         help: command.about,
         async action(rawArgs: string) {
-          this.pause();
+          // Do not call this.pause() — it blocks stdin which prevents the readline
+          // Interface from emitting 'SIGINT' events when the user presses Ctrl-C.
+          // Instead we suppress concurrent eval for the duration of the command.
+          const abortController = new AbortController();
+          suppressNextSigint = true;
+          const onSigint = () => abortController.abort();
+          replServer.once('SIGINT', onSigint);
 
-          await interop.runReplCliCommand(command, rawArgs);
+          const savedEval = (replServer as any).eval;
+          (replServer as any).eval = (
+            _: string,
+            __: unknown,
+            ___: string,
+            cb: (err: Error | null, result?: unknown) => void,
+          ) => cb(null, undefined);
 
-          this.resume();
-          this.displayPrompt();
-          this.clearBufferedCommand();
+          try {
+            await interop.runReplCliCommand(command, rawArgs, abortController.signal);
+          } finally {
+            suppressNextSigint = false;
+            (replServer as any).eval = savedEval;
+            replServer.off('SIGINT', onSigint);
+            this.displayPrompt();
+            this.clearBufferedCommand();
+          }
         },
       });
     }
@@ -174,8 +212,12 @@ export class CliReplInterop {
       },
     });
 
-    const state = createAgentStreamState(child);
+    const onSigint = () => {
+      void this.stopAgentStreamByKey(key, true);
+    };
+    const state = createAgentStreamState(child, onSigint);
     this.agentStreams.set(key, state);
+    this.replServer?.once('SIGINT', onSigint);
 
     child.stdout?.on('data', state.onStdout);
     child.stderr?.on('data', state.onStderr);
@@ -193,14 +235,17 @@ export class CliReplInterop {
     await this.stopAgentStreamByKey(key);
   }
 
-  private async stopAgentStreamByKey(key: string) {
+  private async stopAgentStreamByKey(key: string, immediate = false) {
     const state = this.agentStreams.get(key);
     if (!state) return;
-    await new Promise((resolve) => setTimeout(resolve, AGENT_STREAM_CLOSE_DELAY_MS));
-    if (this.agentStreams.get(key) !== state) return;
+    if (!immediate) {
+      await new Promise((resolve) => setTimeout(resolve, AGENT_STREAM_CLOSE_DELAY_MS));
+      if (this.agentStreams.get(key) !== state) return;
+    }
     this.agentStreams.delete(key);
+    this.replServer?.off('SIGINT', state.onSigint);
     state.stop();
-    if (state.hadOutput()) {
+    if (!immediate && state.hadOutput()) {
       writeFullLineSeparator();
     }
   }
@@ -208,6 +253,7 @@ export class CliReplInterop {
   private async runReplCliCommand(
     command: ReplCliCommand,
     rawArgs: string,
+    signal?: AbortSignal,
   ): Promise<{
     ok: boolean;
     code: number | null;
@@ -220,7 +266,11 @@ export class CliReplInterop {
       args = hook.adaptArgs(args);
     }
 
-    let result = await this.cli.run({ args: command.commandPath.concat(args), mode: 'inherit' });
+    let result = await this.cli.run({
+      args: command.commandPath.concat(args),
+      mode: 'inherit',
+      signal,
+    });
 
     if (hook) {
       await hook.handleResult(command.commandPath.concat(args), result);
@@ -268,9 +318,10 @@ type AgentStreamState = {
   onStdout: (chunk: Buffer) => void;
   onStderr: (chunk: Buffer) => void;
   hadOutput: () => boolean;
+  onSigint: () => void;
 };
 
-function createAgentStreamState(child: ChildProcess): AgentStreamState {
+function createAgentStreamState(child: ChildProcess, onSigint: () => void): AgentStreamState {
   let outputSeen = false;
 
   const onStdout = (chunk: Buffer) => {
@@ -298,6 +349,7 @@ function createAgentStreamState(child: ChildProcess): AgentStreamState {
     onStdout,
     onStderr,
     hadOutput: () => outputSeen,
+    onSigint,
   };
 }
 
@@ -395,7 +447,7 @@ class GolemCli {
     this.clientConfig = opts.clientConfig;
   }
 
-  async run(opts: { args: string[]; mode: 'inherit' | 'collect' }): Promise<{
+  async run(opts: { args: string[]; mode: 'inherit' | 'collect'; signal?: AbortSignal }): Promise<{
     ok: boolean;
     code: number | null;
     stdout: string;
@@ -431,9 +483,18 @@ class GolemCli {
         });
       }
 
-      child.once('exit', (code) => {
+      const onAbort = () => {
+        child.kill('SIGINT');
+      };
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+
+      const cleanup = (code: number | null) => {
+        opts.signal?.removeEventListener('abort', onAbort);
         resolve({ ok: code === 0, code, stdout, stderr });
-      });
+      };
+
+      child.once('exit', cleanup);
+      child.once('error', () => cleanup(null));
     });
   }
 

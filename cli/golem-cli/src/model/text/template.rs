@@ -12,33 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::template::AppTemplateName;
+use crate::model::TemplateDescription;
 use crate::model::text::fmt::*;
-use crate::model::{GuestLanguage, TemplateDescription};
-use cli_table::Table;
-
-#[derive(Table)]
-pub struct TemplateDescriptionTableView {
-    #[table(title = "Name")]
-    pub name: AppTemplateName,
-    #[table(title = "Language")]
-    pub language: GuestLanguage,
-    #[table(title = "Description")]
-    pub description: String,
-}
-
-impl From<&TemplateDescription> for TemplateDescriptionTableView {
-    fn from(value: &TemplateDescription) -> Self {
-        Self {
-            name: value.name.clone(),
-            language: value.language,
-            description: textwrap::wrap(&value.description, 30).join("\n"),
-        }
-    }
-}
 
 impl TextView for Vec<TemplateDescription> {
     fn log(&self) {
-        log_table::<_, TemplateDescriptionTableView>(self);
+        let mut table = new_table(vec![
+            Column::new("Name").fixed(),
+            Column::new("Language").fixed(),
+            Column::new("Description"),
+        ]);
+        for tmpl in self {
+            table.add_row(vec![
+                tmpl.name.to_string(),
+                tmpl.language.to_string(),
+                tmpl.description.clone(),
+            ]);
+        }
+        log_table(table);
     }
 }

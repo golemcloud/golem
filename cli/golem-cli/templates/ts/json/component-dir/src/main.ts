@@ -1,1 +1,1 @@
-export { TaskAgent } from './task-agent';
+import './task-agent';

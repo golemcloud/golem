@@ -24,14 +24,18 @@ use crate::model::worker::{
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use chrono::DateTime;
-use cli_table::{Table, format::Justify};
+
 use colored::Colorize;
-use golem_common::model::Timestamp;
+use comfy_table::{
+    Cell, CellAlignment, Color as ComfyColor, ColumnConstraint, ContentArrangement,
+    Table as ComfyTable,
+};
+use golem_common::model::AgentStatus;
 use golem_common::model::agent::{
     BinaryReference, ComponentModelElementValue, DataValue, ElementValue, TextReference,
     UnstructuredBinaryElementValue, UnstructuredTextElementValue,
 };
-use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::component::ComponentName;
 use golem_common::model::oplog::{
     PluginInstallationDescription, PublicAgentInvocation, PublicAttributeValue, PublicOplogEntry,
     PublicSnapshotData, PublicUpdateDescription, StringAttributeValue,
@@ -215,39 +219,16 @@ impl MessageWithFields for WorkerGetView {
     }
 }
 
-#[derive(Table)]
-struct WorkerMetadataTableView {
-    #[table(title = "Component name")]
-    pub component_name: ComponentName,
-    #[table(title = "Agent name")]
-    pub agent_name: String,
-    #[table(title = "Component\nrevision", justify = "Justify::Right")]
-    pub component_revision: ComponentRevision,
-    #[table(title = "Status", justify = "Justify::Right")]
-    pub status: String,
-    #[table(title = "Pending\ninvocations", justify = "Justify::Right")]
-    pub pending_invocations: u64,
-    #[table(title = "Created at")]
-    pub created_at: Timestamp,
-}
-
-impl From<&AgentMetadataView> for WorkerMetadataTableView {
-    fn from(value: &AgentMetadataView) -> Self {
-        Self {
-            component_name: value.component_name.clone(),
-            // TODO: pretty print, once we have "metadata-less" agent-type parsing
-            agent_name: textwrap::wrap(&value.agent_name.0, 30).join("\n"),
-            status: format_status(&value.status),
-            component_revision: value.component_revision,
-            created_at: value.created_at,
-            pending_invocations: value.pending_invocation_count,
-        }
-    }
-}
-
 impl TextView for AgentsMetadataResponseView {
     fn log(&self) {
-        log_table::<_, WorkerMetadataTableView>(&self.agents);
+        let colorize = colored::control::SHOULD_COLORIZE.should_colorize();
+        let term_width = terminal_width();
+        logln(Self::format_table_wide(
+            &self.agents,
+            term_width,
+            colorize,
+            false,
+        ));
 
         if !self.cursors.is_empty() {
             logln("");
@@ -259,6 +240,113 @@ impl TextView for AgentsMetadataResponseView {
                 cursor.log_color_highlight()
             ));
         }
+    }
+}
+
+impl AgentsMetadataResponseView {
+    fn status_color(status: &AgentStatus, colorize: bool) -> ComfyColor {
+        if colorize {
+            match status {
+                AgentStatus::Running => ComfyColor::Green,
+                AgentStatus::Idle => ComfyColor::Cyan,
+                AgentStatus::Suspended => ComfyColor::Yellow,
+                AgentStatus::Interrupted => ComfyColor::Red,
+                AgentStatus::Retrying => ComfyColor::Yellow,
+                AgentStatus::Failed => ComfyColor::Red,
+                AgentStatus::Exited => ComfyColor::White,
+            }
+        } else {
+            ComfyColor::Reset
+        }
+    }
+
+    fn format_table_wide(
+        agents: &[AgentMetadataView],
+        term_width: u16,
+        colorize: bool,
+        full_width: bool,
+    ) -> String {
+        use comfy_table::presets::{ASCII_FULL_CONDENSED, UTF8_FULL_CONDENSED};
+
+        let preset = if colorize {
+            UTF8_FULL_CONDENSED
+        } else {
+            ASCII_FULL_CONDENSED
+        };
+
+        let arrangement = if full_width {
+            ContentArrangement::DynamicFullWidth
+        } else {
+            ContentArrangement::Dynamic
+        };
+
+        let mut table = ComfyTable::new();
+        table
+            .load_preset(preset)
+            .set_content_arrangement(arrangement)
+            .set_width(term_width)
+            .set_header(vec![
+                "Component name",
+                "Agent name",
+                "Revision",
+                "Status",
+                "Pending",
+                "Created at",
+            ]);
+
+        // Pin fixed-width columns so component_name (0) and agent_name (1) absorb surplus width
+        for col_idx in 2..=5usize {
+            table
+                .column_mut(col_idx)
+                .unwrap()
+                .set_constraint(ColumnConstraint::ContentWidth);
+        }
+
+        for agent in agents {
+            table.add_row(vec![
+                Cell::new(agent.component_name.to_string()),
+                Cell::new(agent.agent_name.0.clone()),
+                Cell::new(agent.component_revision.to_string()).set_alignment(CellAlignment::Right),
+                Cell::new(agent.status.to_string())
+                    .set_alignment(CellAlignment::Right)
+                    .fg(Self::status_color(&agent.status, colorize)),
+                Cell::new(agent.pending_invocation_count.to_string())
+                    .set_alignment(CellAlignment::Right),
+                Cell::new(agent.created_at.to_string()),
+            ]);
+        }
+
+        table.to_string()
+    }
+}
+
+impl TruncatableTextView for AgentsMetadataResponseView {
+    fn render_truncated(&self, max_lines: usize, colorize: bool) -> String {
+        let cursor_lines = if self.cursors.is_empty() {
+            0
+        } else {
+            1 + self.cursors.len()
+        };
+        let available_for_table = max_lines.saturating_sub(cursor_lines);
+
+        let term_width = terminal_width();
+        let table_str = Self::format_table_wide(&self.agents, term_width, colorize, true);
+
+        let mut out = truncate_rendered(table_str, available_for_table);
+
+        if !self.cursors.is_empty() {
+            out.push('\n');
+            for (component_name, cursor) in &self.cursors {
+                out.push('\n');
+                out.push_str(&format!(
+                    "Cursor for more results for component {}: {}",
+                    component_name.log_color_highlight(),
+                    cursor.log_color_highlight()
+                ));
+            }
+        }
+
+        out
     }
 }
 
@@ -1054,38 +1142,28 @@ pub struct FileNodeView {
     pub size: u64,
 }
 
-#[derive(Table)]
-pub struct WorkerFileNodeTableView {
-    #[table(title = "Name")]
-    pub name: String,
-    #[table(title = "Kind")]
-    pub kind: String,
-    #[table(title = "Permissions")]
-    pub permissions: String,
-    #[table(title = "Size", justify = "Justify::Right")]
-    pub size: u64,
-    #[table(title = "Last Modified", justify = "Justify::Right")]
-    pub last_modified: String,
-}
-
-impl From<&FileNodeView> for WorkerFileNodeTableView {
-    fn from(value: &FileNodeView) -> Self {
-        Self {
-            name: value.name.clone(),
-            kind: value.kind.clone(),
-            permissions: value.permissions.clone(),
-            size: value.size,
-            last_modified: value.last_modified.clone(),
-        }
-    }
-}
-
 impl TextView for WorkerFilesView {
     fn log(&self) {
         if self.nodes.is_empty() {
             logln("No files found.");
         } else {
-            log_table::<_, WorkerFileNodeTableView>(&self.nodes);
+            let mut table = new_table(vec![
+                Column::new("Name"),
+                Column::new("Kind").fixed(),
+                Column::new("Permissions").fixed(),
+                Column::new("Size").fixed_right(),
+                Column::new("Last Modified").fixed_right(),
+            ]);
+            for node in &self.nodes {
+                table.add_row(vec![
+                    node.name.clone(),
+                    node.kind.clone(),
+                    node.permissions.clone(),
+                    format_binary_size(&node.size),
+                    node.last_modified.clone(),
+                ]);
+            }
+            log_table(table);
         }
     }
 }
