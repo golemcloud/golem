@@ -142,23 +142,22 @@ impl DefaultDirectInvocationAuthService {
     }
 
     /// Returns the cached owner of `environment_id`, fetching it on first call.
-    /// Populates the owner cache as a side-effect of the first auth-details fetch.
-    async fn get_env_owner(
+    /// Returns the auth details for the environment, fetching them on first call.
+    /// Populates the per-env owner cache as a side-effect so that subsequent
+    /// callers with different account IDs can skip the auth-details fetch on
+    /// the fast (owner) path.  Returns the full `AuthDetailsForEnvironment` so
+    /// the caller can reuse it on the slow path without a second cache lookup.
+    async fn get_env_auth_details(
         &self,
         environment_id: EnvironmentId,
         caller_account_id: AccountId,
-    ) -> Result<Option<AccountId>, RpcError> {
-        if let Some(owner) = self.env_owner_cache.get(&environment_id).await {
-            return Ok(Some(owner));
-        }
-
-        // Fetch auth details (cached per (env_id, caller)); the response carries the env owner.
+    ) -> Result<Option<AuthDetailsForEnvironment>, RpcError> {
         let auth_details = self
             .get_auth_details(environment_id, caller_account_id)
             .await?;
 
-        // Populate the per-env owner cache so subsequent callers with different account IDs can
-        // skip the auth-details fetch entirely on the fast path.
+        // Populate the per-env owner cache so subsequent callers with a different
+        // account_id can skip the full auth-details fetch on the owner fast path.
         if let Some(ref details) = auth_details {
             let owner = details.account_id_owning_environment;
             let _ = self
@@ -169,7 +168,7 @@ impl DefaultDirectInvocationAuthService {
                 .await;
         }
 
-        Ok(auth_details.map(|d| d.account_id_owning_environment))
+        Ok(auth_details)
     }
 }
 
@@ -182,31 +181,34 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
         action: EnvironmentAction,
     ) -> Result<EnvironmentOwnerAccountId, RpcError> {
         // Fast path: if the caller owns the target environment, allow immediately.
-        // We use account_id_owning_environment (from AuthDetailsForEnvironment) — not
-        // component/account/agent creator metadata — because deployer and env owner can differ.
-        let env_owner = self
-            .get_env_owner(environment_id, caller_account_id)
+        // First check the lightweight owner cache (populated as a side-effect of
+        // prior auth-details fetches for this environment).
+        if let Some(env_owner) = self.env_owner_cache.get(&environment_id).await
+            && caller_account_id == env_owner
+        {
+            return Ok(EnvironmentOwnerAccountId(env_owner));
+        }
+
+        // Cache miss or non-owner: fetch full auth details (one cache lookup).
+        // get_env_auth_details also populates the env_owner_cache as a side-effect.
+        let auth_details = self
+            .get_env_auth_details(environment_id, caller_account_id)
             .await?
             .ok_or_else(|| RpcError::Denied {
                 details: format!("The environment action {action} is not allowed"),
             })?;
 
+        let env_owner = auth_details.account_id_owning_environment;
         if caller_account_id == env_owner {
             return Ok(EnvironmentOwnerAccountId(env_owner));
         }
 
-        // Slow path: auth details already cached by get_env_owner above; re-fetch from cache.
-        let auth_details = self
-            .get_auth_details(environment_id, caller_account_id)
-            .await?
-            .ok_or_else(|| RpcError::Denied {
-                details: format!("The environment action {action} is not allowed"),
-            })?;
-
+        // Non-owner slow path: check environment shares. Auth details already
+        // in hand from the fetch above — no second cache lookup needed.
         let auth_ctx = AuthCtx::impersonated_user(caller_account_id);
         auth_ctx
             .authorize_environment_action(
-                auth_details.account_id_owning_environment,
+                env_owner,
                 &auth_details.environment_roles_from_shares,
                 action,
             )

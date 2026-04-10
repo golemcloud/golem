@@ -794,7 +794,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_id = request.agent_id()?;
         let environment_id = request.environment_id()?;
 
-        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let owned_agent_id = self
+            .canonicalize_owned_agent_id(&OwnedAgentId::new(environment_id, &agent_id))
+            .await?;
         self.ensure_worker_belongs_to_this_executor(&agent_id)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await;
@@ -864,6 +866,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<golem::worker::AgentMetadata, WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+        let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id)
