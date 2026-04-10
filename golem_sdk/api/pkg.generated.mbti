@@ -8,6 +8,8 @@ import {
 }
 
 // Values
+pub fn await_promise(@types.PromiseId) -> Bytes
+
 pub fn complete_promise(@types.PromiseId, Bytes) -> Bool
 
 pub fn create_promise() -> @types.PromiseId

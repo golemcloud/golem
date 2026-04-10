@@ -53,3 +53,17 @@ pub fn PromiseResult::get(self : PromiseResult) -> Bytes? {
 pub fn PromiseResult::drop(self : PromiseResult) -> Unit {
   self.inner.drop()
 }
+
+///|
+/// Blocks until the promise is completed and returns the payload.
+/// This is a synchronous blocking call — the agent is durably suspended
+/// by the Golem runtime until the promise is fulfilled.
+pub fn await_promise(promise_id : PromiseId) -> Bytes {
+  let promise = get_promise(promise_id)
+  let pollable = promise.subscribe()
+  pollable.block()
+  let result = promise.get().unwrap()
+  pollable.drop()
+  promise.drop()
+  result
+}

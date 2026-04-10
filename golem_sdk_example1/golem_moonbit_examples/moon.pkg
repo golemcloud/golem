@@ -11,6 +11,7 @@ import {
   "golemcloud/golem_sdk/logging" @logging,
   "golemcloud/golem_sdk/context" @context,
   "golemcloud/golem_sdk/config" @config,
+  "golemcloud/golem_sdk/webhook" @webhook,
 }
 
 options(
