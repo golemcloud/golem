@@ -454,9 +454,8 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
     switch (param.type.tag) {
       case 'analysed': {
         // If this is a QuotaToken, convert to its record representation first.
-        const serializableVal = param.type.tsType.kind === 'quota-token' ?
-          fnArg._toRecord() :
-          fnArg;
+        const serializableVal =
+          param.type.tsType.kind === 'quota-token' ? fnArg._toRecord() : fnArg;
 
         const witValue = WitValue.fromTsValueDefault(serializableVal, param.type.val);
         elementValues.push({ tag: 'component-model', val: witValue });

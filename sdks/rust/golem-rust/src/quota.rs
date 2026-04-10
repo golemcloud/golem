@@ -27,13 +27,13 @@
 //! });
 //! ```
 
-use crate::bindings::golem::quota::types;
-use std::time::Duration;
 use crate::bindings::golem::api::host::EnvironmentId;
+use crate::bindings::golem::quota::types;
 use crate::value_and_type::type_builder::TypeNodeBuilder;
 use crate::value_and_type::wasi::Datetime;
 use crate::value_and_type::{FromValueAndType, IntoValue};
 use golem_wasm::{NodeBuilder, WitValueExtractor};
+use std::time::Duration;
 
 /// Error returned when a reservation cannot be granted because the resource's
 /// enforcement policy is `reject`.

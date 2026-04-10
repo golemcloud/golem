@@ -300,9 +300,7 @@ export function serializeToDataValue(tsValue: any, typeInfoInternal: TypeInfoInt
 
       // If this is a QuotaToken, convert to its record representation first.
       const valueToSerialize =
-        typeInfoInternal.tsType.kind === 'quota-token'
-          ? tsValue._toRecord()
-          : tsValue;
+        typeInfoInternal.tsType.kind === 'quota-token' ? tsValue._toRecord() : tsValue;
 
       const witValue = WitValue.fromTsValueDefault(valueToSerialize, typeInfoInternal.val);
       const elementValue: ElementValue = {

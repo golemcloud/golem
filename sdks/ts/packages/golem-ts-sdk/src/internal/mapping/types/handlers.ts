@@ -72,8 +72,13 @@ const handlers: { [K in TsType['kind']]: Handler<K> } = {
 };
 
 function handleQuotaToken(): Either.Either<AnalysedType, string> {
-  const envIdType = record('EnvironmentId', [field('uuid', record("Uuid", [field('highBits', u64(true)), field('lowBits', u64(true))]))]);
-  const datetimeType = record('Datetime', [field('seconds', u64(true)), field('nanoseconds', u32())]);
+  const envIdType = record('EnvironmentId', [
+    field('uuid', record('Uuid', [field('highBits', u64(true)), field('lowBits', u64(true))])),
+  ]);
+  const datetimeType = record('Datetime', [
+    field('seconds', u64(true)),
+    field('nanoseconds', u32()),
+  ]);
   const analysedType = record('QuotaTokenRecord', [
     field('environmentId', envIdType),
     field('resourceName', str()),
