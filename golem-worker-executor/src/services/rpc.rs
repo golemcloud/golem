@@ -739,7 +739,6 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     /// target component's metadata rather than from the caller. This ensures
     /// that auth checks, shard routing, and all downstream code use the
     /// component-authoritative environment.
-    /// See https://github.com/golemcloud/golem/issues/3099
     async fn canonicalize_owned_agent_id(
         &self,
         owned_agent_id: &OwnedAgentId,

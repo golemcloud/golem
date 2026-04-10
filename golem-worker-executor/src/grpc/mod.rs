@@ -213,7 +213,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     /// target component's metadata rather than from the caller-supplied
     /// request data. This ensures that shard routing, auth checks, and all
     /// downstream code use the component-authoritative environment.
-    /// See https://github.com/golemcloud/golem/issues/3099
     async fn canonicalize_owned_agent_id(
         &self,
         owned_agent_id: &OwnedAgentId,
