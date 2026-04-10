@@ -348,12 +348,16 @@ Options:
   const abortController = new AbortController();
   let interrupted = false;
 
+  const stopServerAndExit = (code: number) => {
+    golemServer.stop().finally(() => {
+      process.exit(code);
+    });
+  };
+
   process.on("SIGINT", () => {
     if (interrupted) {
-      golemServer.stop().finally(() => {
-        log.error("\nForce exit.");
-        process.exit(130);
-      });
+      log.error("\nForce exit. Stopping Golem server...");
+      stopServerAndExit(130);
       return;
     }
     interrupted = true;
@@ -361,6 +365,18 @@ Options:
       "\nInterrupted. Finishing current step and writing partial results... (press Ctrl+C again to force exit)",
     );
     abortController.abort();
+  });
+
+  // Ensure server is stopped when the process exits for any reason
+  process.on("exit", () => {
+    // Synchronous best-effort: send SIGTERM to the server process group
+    if (golemServer["serverProcess"]?.pid) {
+      try {
+        process.kill(-golemServer["serverProcess"].pid, "SIGTERM");
+      } catch {
+        // Already dead
+      }
+    }
   });
 
   const scenarioReports: ScenarioReport[] = [];
@@ -577,5 +593,7 @@ Options:
 main().catch(async (err) => {
   log.fatal("Fatal error:");
   log.error(err instanceof Error ? (err.stack ?? `${err.name}: ${err.message}`) : String(err));
+  // Server cleanup is handled by the finally block in main(), but if main() itself
+  // throws before reaching it, we still need to exit.
   process.exit(1);
 });
