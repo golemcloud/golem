@@ -53,7 +53,8 @@ async fn async_main(
 ) -> Result<(), anyhow::Error> {
     let mut join_set = JoinSet::new();
 
-    bootstrap::run(config, prometheus, runtime.handle().clone(), &mut join_set).await?;
+    let _run_details =
+        bootstrap::run(config, prometheus, runtime.handle().clone(), &mut join_set).await?;
 
     while let Some(res) = join_set.join_next().await {
         res??
