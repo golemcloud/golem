@@ -1,6 +1,4 @@
 name: "add-third-party-dependency"
-settings:
-  timeout_per_subprompt: 300
 steps:
   - id: "create-project"
     create_project:

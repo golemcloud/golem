@@ -1,6 +1,4 @@
 name: "create-a-new-project"
-settings:
-  timeout_per_subprompt: 300
 steps:
   - id: "create-project"
     prompt: "Create a new {{language}} Golem application called test-app."

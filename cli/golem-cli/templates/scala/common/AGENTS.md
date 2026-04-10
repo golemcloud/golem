@@ -9,6 +9,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 |-------|-------------|
 | `golem-new-project` | Creating a new Golem application project with `golem new` |
 | `golem-build` | Building a Golem application with `golem build` |
+| `golem-deploy` | Deploying a Golem application with `golem deploy` |
 | `golem-add-scala-dependency` | Adding a library dependency to the project |
 
 # Golem Application Development Guide (Scala)
