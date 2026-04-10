@@ -104,6 +104,7 @@ struct WitTypeAttrs {
     name: Option<LitStr>,
     owner: Option<LitStr>,
     as_variant: bool,
+    as_tuple: bool,
 }
 
 fn parse_wit_type_attrs(attrs: &[Attribute]) -> WitTypeAttrs {
@@ -122,6 +123,9 @@ fn parse_wit_type_attrs(attrs: &[Attribute]) -> WitTypeAttrs {
             if parsed.as_variant {
                 result.as_variant = true;
             }
+            if parsed.as_tuple {
+                result.as_tuple = true;
+            }
         }
     }
     result
@@ -132,6 +136,7 @@ impl Parse for WitTypeAttrs {
         let mut name = None;
         let mut owner = None;
         let mut as_variant = false;
+        let mut as_tuple = false;
 
         while !input.is_empty() {
             let ident: Ident = input.parse()?;
@@ -143,6 +148,8 @@ impl Parse for WitTypeAttrs {
                 owner = Some(input.parse()?);
             } else if ident == "as_variant" {
                 as_variant = true;
+            } else if ident == "as_tuple" {
+                as_tuple = true;
             } else {
                 return Err(syn::Error::new(ident.span(), "unexpected wit attribute"));
             }
@@ -155,6 +162,7 @@ impl Parse for WitTypeAttrs {
             name,
             owner,
             as_variant,
+            as_tuple,
         })
     }
 }

@@ -52,6 +52,7 @@ pub mod load_snapshot {
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
+            "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
@@ -88,6 +89,7 @@ pub mod save_snapshot {
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
+            "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
@@ -125,6 +127,7 @@ pub mod golem_agentic {
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
+            "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
@@ -173,6 +176,7 @@ pub mod oplog_processor {
             "wasi:clocks/wall-clock@0.2.3": wasip2::clocks::wall_clock,
 
             "golem:api/host@1.5.0": crate::bindings::golem::api::host,
+            "golem:api/retry@1.5.0": crate::bindings::golem::api::retry,
             "golem:api/oplog@1.5.0": crate::bindings::golem::api::oplog,
             "golem:api/context@1.5.0": crate::bindings::golem::api::context,
             "golem:durability/durability@1.5.0": crate::bindings::golem::durability::durability,
@@ -252,36 +256,74 @@ pub async fn await_promise(promise_id: &PromiseId) -> Vec<u8> {
     promise.get().unwrap()
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct RetryPolicy {
-    pub max_attempts: u32,
-    pub min_delay: std::time::Duration,
-    pub max_delay: std::time::Duration,
-    pub multiplier: f64,
-    pub max_jitter_factor: Option<f64>,
-}
+pub mod retry {
+    use crate::bindings::golem::api::retry as retry_api;
 
-impl From<bindings::golem::api::host::RetryPolicy> for RetryPolicy {
-    fn from(value: bindings::golem::api::host::RetryPolicy) -> Self {
-        Self {
-            max_attempts: value.max_attempts,
-            min_delay: std::time::Duration::from_nanos(value.min_delay),
-            max_delay: std::time::Duration::from_nanos(value.max_delay),
-            multiplier: value.multiplier,
-            max_jitter_factor: value.max_jitter_factor,
+    pub use retry_api::{NamedRetryPolicy, PredicateValue, RetryPolicy, RetryPredicate};
+
+    /// Get all retry policies active for this agent.
+    pub fn get_retry_policies() -> Vec<NamedRetryPolicy> {
+        retry_api::get_retry_policies()
+    }
+
+    /// Get a specific retry policy by name.
+    pub fn get_retry_policy_by_name(name: &str) -> Option<NamedRetryPolicy> {
+        retry_api::get_retry_policy_by_name(name)
+    }
+
+    /// Resolve the matching retry policy for a given operation context.
+    /// Evaluates named policies in descending priority order; returns the
+    /// policy from the first rule whose predicate matches, or none.
+    pub fn resolve_retry_policy(
+        verb: &str,
+        noun_uri: &str,
+        properties: &[(String, PredicateValue)],
+    ) -> Option<RetryPolicy> {
+        let props: Vec<(String, PredicateValue)> = properties.to_vec();
+        retry_api::resolve_retry_policy(verb, noun_uri, &props)
+    }
+
+    /// Add or overwrite a named retry policy (persisted to oplog).
+    /// If a policy with the same name exists, it is replaced.
+    pub fn set_retry_policy(policy: &NamedRetryPolicy) {
+        retry_api::set_retry_policy(policy);
+    }
+
+    /// Remove a named retry policy by name (persisted to oplog).
+    pub fn remove_retry_policy(name: &str) {
+        retry_api::remove_retry_policy(name);
+    }
+
+    /// Guard that restores the previous state of a named retry policy on drop.
+    /// If the policy existed before, it is restored; if it was newly added, it is removed.
+    pub struct RetryPolicyGuard {
+        previous: Option<NamedRetryPolicy>,
+        name: String,
+    }
+
+    impl Drop for RetryPolicyGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(original) => set_retry_policy(&original),
+                None => remove_retry_policy(&self.name),
+            }
         }
     }
-}
 
-impl From<RetryPolicy> for bindings::golem::api::host::RetryPolicy {
-    fn from(val: RetryPolicy) -> Self {
-        bindings::golem::api::host::RetryPolicy {
-            max_attempts: val.max_attempts,
-            min_delay: val.min_delay.as_nanos() as u64,
-            max_delay: val.max_delay.as_nanos() as u64,
-            multiplier: val.multiplier,
-            max_jitter_factor: val.max_jitter_factor,
-        }
+    /// Temporarily sets a named retry policy. When the returned guard is dropped,
+    /// the previous policy with the same name is restored (or removed if it didn't exist).
+    #[must_use]
+    pub fn use_retry_policy(policy: NamedRetryPolicy) -> RetryPolicyGuard {
+        let previous = get_retry_policy_by_name(&policy.name);
+        let name = policy.name.clone();
+        set_retry_policy(&policy);
+        RetryPolicyGuard { previous, name }
+    }
+
+    /// Executes the given function with a named retry policy temporarily set.
+    pub fn with_retry_policy<R>(policy: NamedRetryPolicy, f: impl FnOnce() -> R) -> R {
+        let _guard = use_retry_policy(policy);
+        f()
     }
 }
 
@@ -342,32 +384,6 @@ pub fn with_idempotence_mode<R>(mode: bool, f: impl FnOnce() -> R) -> R {
 /// to introduce idempotence.
 pub fn generate_idempotency_key() -> uuid::Uuid {
     Into::into(bindings::golem::api::host::generate_idempotency_key())
-}
-
-pub struct RetryPolicyGuard {
-    original: RetryPolicy,
-}
-
-impl Drop for RetryPolicyGuard {
-    fn drop(&mut self) {
-        set_retry_policy(Into::into(self.original.clone()));
-    }
-}
-
-/// Temporarily sets the retry policy to the given value.
-///
-/// When the returned guard is dropped, the original retry policy is restored.
-#[must_use]
-pub fn use_retry_policy(policy: RetryPolicy) -> RetryPolicyGuard {
-    let original = Into::into(get_retry_policy());
-    set_retry_policy(Into::into(policy));
-    RetryPolicyGuard { original }
-}
-
-/// Executes the given function with the retry policy set to the given value.
-pub fn with_retry_policy<R>(policy: RetryPolicy, f: impl FnOnce() -> R) -> R {
-    let _guard = use_retry_policy(policy);
-    f()
 }
 
 pub struct AtomicOperationGuard {

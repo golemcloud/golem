@@ -18,6 +18,7 @@ macro_rules! oplog_entry {
         $($(#[$casemeta:meta])* $case:ident {
           hint: $hint:literal
           wit_raw_type: $wit_raw_type:literal
+          wit_public_type: $wit_public_type:literal
           raw {
             $($(#[$meta:meta])* $field:ident: $typ:ty),* $(,)?
           }
@@ -175,6 +176,7 @@ macro_rules! oplog_entry {
                 #[derive(Clone, Debug, serde::Serialize, PartialEq, serde::Deserialize)]
                 #[cfg_attr(feature = "full", derive(poem_openapi::Object, golem_wasm::derive::IntoValue))]
                 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+                #[cfg_attr(feature = "full", wit(name = $wit_public_type, owner = "golem:api@1.5.0/oplog"))]
                 #[serde(rename_all = "camelCase")]
                 pub struct $params_name {
                     pub timestamp: Timestamp,
@@ -186,6 +188,7 @@ macro_rules! oplog_entry {
         #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
         #[cfg_attr(feature = "full", derive(poem_openapi::Union, golem_wasm::derive::IntoValue))]
         #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+        #[cfg_attr(feature = "full", wit(name = "public-oplog-entry", owner = "golem:api@1.5.0/oplog"))]
         #[serde(tag = "type")]
         pub enum PublicOplogEntry {
             $($case(

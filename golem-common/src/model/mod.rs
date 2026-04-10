@@ -42,12 +42,18 @@ pub mod protobuf;
 pub mod quota;
 pub mod regions;
 pub mod reports;
+pub mod retry_policy;
 pub mod security_scheme;
 #[cfg(test)]
 mod tests;
 pub mod worker;
 
 pub use crate::base_model::*;
+pub use retry_policy::{
+    FixedRng, NamedRetryPolicy, Predicate, PredicateValue, PredicateValueType, RetryContext,
+    RetryEvaluationError, RetryPolicy, RetryPolicyState, RetryProperties, RetryVerdict, RngSource,
+    ThreadRng,
+};
 
 use self::component::ComponentId;
 use self::component::{ComponentFilePermissions, ComponentRevision};
@@ -718,9 +724,8 @@ pub struct AgentStatusRecord {
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update
     pub component_revision_for_replay: ComponentRevision,
-    /// The number of encountered error entries grouped by their 'retry_from' index, calculated from
-    /// the last invocation boundary.
-    pub current_retry_count: HashMap<OplogIndex, u32>,
+    /// Semantic retry policy state per `retry_from` oplog index.
+    pub current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
     /// Index of the last manual update snapshot index. Agent will call load_snapshot
     /// on this payload before starting replay.
     pub last_manual_update_snapshot_index: Option<OplogIndex>,
@@ -754,7 +759,7 @@ impl Default for AgentStatusRecord {
             oplog_processor_checkpoints: HashMap::new(),
             deleted_regions: DeletedRegions::new(),
             component_revision_for_replay: ComponentRevision::INITIAL,
-            current_retry_count: HashMap::new(),
+            current_retry_state: HashMap::new(),
             last_manual_update_snapshot_index: None,
             last_automatic_snapshot_index: None,
             last_automatic_snapshot_timestamp: None,

@@ -12,7 +12,7 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     AgentInvocation, AgentResourceDescription, AgentStatus, AgentStatusRecord, FailedUpdateRecord,
-    IdempotencyKey, OplogProcessorCheckpointState, OwnedAgentId, RetryConfig,
+    IdempotencyKey, OplogProcessorCheckpointState, OwnedAgentId, RetryConfig, RetryPolicyState,
     SuccessfulUpdateRecord, Timestamp, TimestampedAgentInvocation,
 };
 use golem_common::serialization::deserialize;
@@ -131,9 +131,9 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
 
     let active_plugins = last_known.active_plugins.clone();
 
-    let (status, current_retry_count, overridden_retry_config) = calculate_latest_worker_status(
+    let (status, current_retry_state, overridden_retry_config) = calculate_latest_worker_status(
         last_known.status,
-        last_known.current_retry_count,
+        last_known.current_retry_state,
         last_known.overridden_retry_config,
         default_retry_policy,
         &skipped_regions,
@@ -227,7 +227,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
         oplog_processor_checkpoints,
         deleted_regions,
         component_revision_for_replay,
-        current_retry_count,
+        current_retry_state,
         last_manual_update_snapshot_index,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
@@ -238,26 +238,29 @@ pub async fn update_status_with_new_entries<T: HasOplogService + Sync>(
 
 fn calculate_latest_worker_status(
     mut current_status: AgentStatus,
-    mut current_retry_count: HashMap<OplogIndex, u32>,
-    mut current_retry_policy: Option<RetryConfig>,
+    mut current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
+    current_retry_policy: Option<RetryConfig>,
     default_retry_policy: &RetryConfig,
     skipped_regions: &DeletedRegions,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> (AgentStatus, HashMap<OplogIndex, u32>, Option<RetryConfig>) {
+) -> (
+    AgentStatus,
+    HashMap<OplogIndex, RetryPolicyState>,
+    Option<RetryConfig>,
+) {
     for (idx, entry) in entries {
         // Errors are counted in skipped regions too (but not in deleted ones),
         // otherwise we would not be able to know how many times we retried failures in atomic regions.
         // This must happen before the skipped-region continue below.
         if !deleted_regions.is_in_deleted_region(*idx)
-            && let OplogEntry::Error { retry_from, .. } = entry
+            && let OplogEntry::Error {
+                retry_from,
+                retry_policy_state: Some(state),
+                ..
+            } = entry
         {
-            let new_count = current_retry_count
-                .get(retry_from)
-                .copied()
-                .unwrap_or_default()
-                + 1;
-            current_retry_count.insert(*retry_from, new_count);
+            current_retry_state.insert(*retry_from, state.clone());
         }
 
         // Skipping entries in skipped regions, as they are skipped during replay too
@@ -274,9 +277,9 @@ fn calculate_latest_worker_status(
                 ..
             } = entry
         {
-            let count = current_retry_count
+            let count = current_retry_state
                 .get(retry_from)
-                .copied()
+                .map(|s| s.retry_count())
                 .unwrap_or_default();
             if is_worker_error_retriable(
                 current_retry_policy
@@ -301,11 +304,11 @@ fn calculate_latest_worker_status(
             }
             OplogEntry::AgentInvocationStarted { .. } => {
                 current_status = AgentStatus::Running;
-                current_retry_count.clear();
+                current_retry_state.clear();
             }
             OplogEntry::AgentInvocationFinished { .. } => {
                 current_status = AgentStatus::Idle;
-                current_retry_count.clear();
+                current_retry_state.clear();
             }
             OplogEntry::Suspend { .. } => {
                 current_status = AgentStatus::Suspended;
@@ -322,8 +325,10 @@ fn calculate_latest_worker_status(
             OplogEntry::Exited { .. } => {
                 current_status = AgentStatus::Exited;
             }
-            OplogEntry::ChangeRetryPolicy { new_policy, .. } => {
-                current_retry_policy = Some(new_policy.clone());
+            OplogEntry::SetRetryPolicy { .. } => {
+                current_status = AgentStatus::Running;
+            }
+            OplogEntry::RemoveRetryPolicy { .. } => {
                 current_status = AgentStatus::Running;
             }
             OplogEntry::BeginAtomicRegion { .. } => {
@@ -394,7 +399,7 @@ fn calculate_latest_worker_status(
             }
         }
     }
-    (current_status, current_retry_count, current_retry_policy)
+    (current_status, current_retry_state, current_retry_policy)
 }
 
 fn calculate_deleted_regions(

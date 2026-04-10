@@ -40,6 +40,7 @@ pub struct SpawnedWorkerExecutor {
     out_level: Level,
     err_level: Level,
     registry_service: Arc<dyn RegistryService>,
+    environment_state_cache_capacity: Option<usize>,
     otlp: bool,
 }
 
@@ -56,6 +57,7 @@ impl SpawnedWorkerExecutor {
         out_level: Level,
         err_level: Level,
         registry_service: Arc<dyn RegistryService>,
+        environment_state_cache_capacity: Option<usize>,
         otlp: bool,
     ) -> Self {
         info!("Starting golem-worker-executor process");
@@ -76,6 +78,7 @@ impl SpawnedWorkerExecutor {
             out_level,
             err_level,
             &registry_service,
+            environment_state_cache_capacity,
             otlp,
         )
         .await;
@@ -94,6 +97,7 @@ impl SpawnedWorkerExecutor {
             out_level,
             err_level,
             registry_service,
+            environment_state_cache_capacity,
             otlp,
         }
     }
@@ -110,6 +114,7 @@ impl SpawnedWorkerExecutor {
         out_level: Level,
         err_level: Level,
         registry_service: &Arc<dyn RegistryService>,
+        environment_state_cache_capacity: Option<usize>,
         otlp: bool,
     ) -> (Child, ChildProcessLogger) {
         let mut child = Command::new(executable)
@@ -122,6 +127,7 @@ impl SpawnedWorkerExecutor {
                     worker_service,
                     rdb,
                     registry_service,
+                    environment_state_cache_capacity,
                     verbosity,
                     otlp,
                 )
@@ -188,6 +194,7 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             self.out_level,
             self.err_level,
             &self.registry_service,
+            self.environment_state_cache_capacity,
             self.otlp,
         )
         .await;

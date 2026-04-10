@@ -56,7 +56,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
-use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
+use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryContext};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::sync::Arc;
 use std::time::Duration;
@@ -413,33 +413,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn get_retry_policy(&mut self) -> anyhow::Result<golem_api_1_x::host::RetryPolicy> {
-        self.observe_function_call("golem::api", "get_retry_policy");
-        match &self.state.overridden_retry_policy {
-            Some(policy) => Ok(policy.into()),
-            None => Ok((&self.state.config.retry).into()),
-        }
-    }
-
-    async fn set_retry_policy(
-        &mut self,
-        new_retry_policy: golem_api_1_x::host::RetryPolicy,
-    ) -> anyhow::Result<()> {
-        self.observe_function_call("golem::api", "set_retry_policy");
-        let new_retry_policy: RetryConfig = new_retry_policy.into();
-        self.state.overridden_retry_policy = Some(new_retry_policy.clone());
-
-        if self.state.is_live() {
-            self.state
-                .oplog
-                .add(OplogEntry::change_retry_policy(new_retry_policy))
-                .await;
-        } else {
-            let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::ChangeRetryPolicy)?;
-        }
-        Ok(())
-    }
-
     async fn get_oplog_persistence_level(
         &mut self,
     ) -> anyhow::Result<golem_api_1_x::host::PersistenceLevel> {
@@ -570,6 +543,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             target_version.try_into().map_err(|e: String| anyhow!(e))?;
 
         let result = if durability.is_live() {
+            let retry_properties = RetryContext::golem_api("update-agent");
             let result = loop {
                 let result = self
                     .state
@@ -583,7 +557,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     )
                     .await;
                 match durability
-                    .try_trigger_retry_or_loop(self, &result, classify_worker_proxy_error)
+                    .try_trigger_retry_or_loop_with_properties(
+                        self,
+                        &result,
+                        classify_worker_proxy_error,
+                        retry_properties.clone(),
+                    )
                     .await?
                 {
                     InternalRetryResult::Persist => break result,
@@ -697,6 +676,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let oplog_index_cut_off: OplogIndex = OplogIndex::from_u64(oplog_idx_cut_off);
 
         let result = if durability.is_live() {
+            let retry_properties = RetryContext::golem_api("fork-agent");
             let result = loop {
                 let result = self
                     .state
@@ -709,7 +689,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     )
                     .await;
                 match durability
-                    .try_trigger_retry_or_loop(self, &result, classify_worker_proxy_error)
+                    .try_trigger_retry_or_loop_with_properties(
+                        self,
+                        &result,
+                        classify_worker_proxy_error,
+                        retry_properties.clone(),
+                    )
                     .await?
                 {
                     InternalRetryResult::Persist => break result,
@@ -747,13 +732,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let target: golem_common::model::worker::RevertWorkerTarget = revert_target.into();
 
         let result = if durability.is_live() {
+            let retry_properties = RetryContext::golem_api("revert-agent");
             let result = loop {
                 let result = self
                     .worker_proxy()
                     .revert(&agent_id, target.clone(), self.created_by())
                     .await;
                 match durability
-                    .try_trigger_retry_or_loop(self, &result, classify_worker_proxy_error)
+                    .try_trigger_retry_or_loop_with_properties(
+                        self,
+                        &result,
+                        classify_worker_proxy_error,
+                        retry_properties.clone(),
+                    )
                     .await?
                 {
                     InternalRetryResult::Persist => break result,
@@ -784,6 +775,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await?;
 
         let result = if durability.is_live() {
+            let retry_properties = RetryContext::golem_api("resolve-component-id");
             let result = loop {
                 let result = self
                     .state
@@ -796,7 +788,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     )
                     .await;
                 match durability
-                    .try_trigger_retry_or_loop(self, &result, classify_worker_executor_error)
+                    .try_trigger_retry_or_loop_with_properties(
+                        self,
+                        &result,
+                        classify_worker_executor_error,
+                        retry_properties.clone(),
+                    )
                     .await?
                 {
                     InternalRetryResult::Persist => break result,
@@ -845,13 +842,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await?;
 
         let result = if durability.is_live() {
+            let retry_properties = RetryContext::golem_api("resolve-agent-id-strict");
             let result = loop {
                 let result = self
                     .resolve_agent_id_strict_internal(component_slug.clone(), agent_name.clone())
                     .await;
 
                 match durability
-                    .try_trigger_retry_or_loop(self, &result, classify_worker_executor_error)
+                    .try_trigger_retry_or_loop_with_properties(
+                        self,
+                        &result,
+                        classify_worker_executor_error,
+                        retry_properties.clone(),
+                    )
                     .await?
                 {
                     InternalRetryResult::Persist => break result,
@@ -884,6 +887,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Durability::<GolemApiFork>::new(self, DurableFunctionType::WriteRemote).await?;
 
         let result = if durability.is_live() {
+            let retry_properties = RetryContext::golem_api("fork");
             let forked_phantom_id = Uuid::new_v4();
 
             let new_name = if let Some(agent_id) = self.parsed_agent_id() {
@@ -922,7 +926,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     )
                     .await;
                 match durability
-                    .try_trigger_retry_or_loop(self, &fork_result, classify_worker_executor_error)
+                    .try_trigger_retry_or_loop_with_properties(
+                        self,
+                        &fork_result,
+                        classify_worker_executor_error,
+                        retry_properties.clone(),
+                    )
                     .await?
                 {
                     InternalRetryResult::Persist => break fork_result,
@@ -1398,30 +1407,6 @@ impl From<golem_api_1_x::host::RevertAgentTarget>
                     },
                 )
             }
-        }
-    }
-}
-
-impl From<&RetryConfig> for golem_api_1_x::host::RetryPolicy {
-    fn from(value: &RetryConfig) -> Self {
-        Self {
-            max_attempts: value.max_attempts,
-            min_delay: value.min_delay.as_nanos() as u64,
-            max_delay: value.max_delay.as_nanos() as u64,
-            multiplier: value.multiplier,
-            max_jitter_factor: value.max_jitter_factor,
-        }
-    }
-}
-
-impl From<golem_api_1_x::host::RetryPolicy> for RetryConfig {
-    fn from(value: golem_api_1_x::host::RetryPolicy) -> Self {
-        Self {
-            max_attempts: value.max_attempts,
-            min_delay: Duration::from_nanos(value.min_delay),
-            max_delay: Duration::from_nanos(value.max_delay),
-            multiplier: value.multiplier,
-            max_jitter_factor: None,
         }
     }
 }

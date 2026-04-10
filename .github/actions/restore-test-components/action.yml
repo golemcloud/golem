@@ -8,7 +8,7 @@ runs:
   using: 'composite'
   steps:
     - name: Restore built test component WASMs
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         path: tmp/test-components-wasm
         key: golem-test-components-${{ inputs.run-id }}

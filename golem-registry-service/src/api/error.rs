@@ -30,6 +30,7 @@ use crate::services::plan::PlanError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use crate::services::reports::ReportsError;
 use crate::services::resource_definition::ResourceDefinitionError;
+use crate::services::retry_policy::RetryPolicyError;
 use crate::services::security_scheme::SecuritySchemeError;
 use crate::services::token::TokenError;
 use golem_common::base_model::api;
@@ -852,6 +853,35 @@ impl From<AgentSecretError> for ApiError {
             AgentSecretError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                cause: Some(value.into_anyhow()),
+            })),
+        }
+    }
+}
+
+impl From<RetryPolicyError> for ApiError {
+    fn from(value: RetryPolicyError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            RetryPolicyError::InvalidPredicateJson(_) | RetryPolicyError::InvalidPolicyJson(_) => {
+                Self::bad_request(api::error_code::VALIDATION_ERROR, error)
+            }
+            RetryPolicyError::ConcurrentModification => {
+                Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
+            }
+            RetryPolicyError::RetryPolicyForNameAlreadyExists { .. } => {
+                Self::conflict(api::error_code::RETRY_POLICY_ALREADY_EXISTS, error)
+            }
+            RetryPolicyError::RetryPolicyNotFound(_) => {
+                Self::not_found(api::error_code::RETRY_POLICY_NOT_FOUND, error)
+            }
+            RetryPolicyError::ParentEnvironmentNotFound(_) => {
+                Self::not_found(api::error_code::ENVIRONMENT_NOT_FOUND, error)
+            }
+            RetryPolicyError::Unauthorized(inner) => inner.into(),
+            RetryPolicyError::InternalError(_) => Self::InternalError(Json(ErrorBody {
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
+                error,
                 cause: Some(value.into_anyhow()),
             })),
         }

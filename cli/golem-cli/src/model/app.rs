@@ -31,7 +31,7 @@ use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
     AgentConfigEntry, ComponentFilePath, ComponentFilePermissions, ComponentName,
 };
-use golem_common::model::deployment::DeploymentAgentSecretDefault;
+use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::validate_lower_kebab_case_identifier;
@@ -338,6 +338,7 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
     agent_secrets_defaults:
         BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
+    retry_policy_defaults: BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
     bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
@@ -470,6 +471,19 @@ impl Application {
         {
             for agent_secret_default in environment_agent_secret_defaults {
                 result.push(agent_secret_default.value.clone())
+            }
+        }
+        result
+    }
+
+    pub fn deployment_retry_policy_defaults(
+        &self,
+        environment: &EnvironmentName,
+    ) -> Vec<DeploymentRetryPolicyDefault> {
+        let mut result = Vec::new();
+        if let Some(env_defaults) = self.retry_policy_defaults.get(environment) {
+            for default in env_defaults {
+                result.push(default.value.clone())
             }
         }
         result
@@ -1498,7 +1512,9 @@ mod app_builder {
     use golem_common::model::agent_secret::AgentSecretPath;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
-    use golem_common::model::deployment::DeploymentAgentSecretDefault;
+    use golem_common::model::deployment::{
+        DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault,
+    };
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::{
@@ -1621,6 +1637,9 @@ mod app_builder {
         agent_secret_defaults:
             BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
 
+        retry_policy_defaults:
+            BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
+
         all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
     }
@@ -1684,6 +1703,7 @@ mod app_builder {
                 http_api_deployments: builder.http_api_deployments,
                 mcp_deployments: builder.mcp_deployments,
                 agent_secrets_defaults: builder.agent_secret_defaults,
+                retry_policy_defaults: builder.retry_policy_defaults,
                 bridge_sdks: builder.bridge_sdks,
             })
         }
@@ -1880,6 +1900,26 @@ mod app_builder {
                                 WithSource::new(
                                     app.source.to_path_buf(),
                                     DeploymentAgentSecretDefault { path: AgentSecretPath(environment_agent_secret.path), secret_value: environment_agent_secret.value }
+                                )
+                            )
+                        }
+                    }
+
+                    for (environment, env_retry_policy_defaults) in app.application.retry_policy_defaults {
+                        let entry = self.retry_policy_defaults
+                            .entry(environment.clone())
+                            .or_default();
+
+                        for rpd in env_retry_policy_defaults {
+                            entry.push(
+                                WithSource::new(
+                                    app.source.to_path_buf(),
+                                    DeploymentRetryPolicyDefault {
+                                        name: rpd.name,
+                                        priority: rpd.priority,
+                                        predicate: rpd.predicate.into(),
+                                        policy: rpd.policy.into(),
+                                    }
                                 )
                             )
                         }

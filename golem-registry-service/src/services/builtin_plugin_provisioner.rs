@@ -318,6 +318,7 @@ async fn deploy_environment(
                 version: DeploymentVersion(Uuid::new_v4().to_string()),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
             },
             auth,
         )

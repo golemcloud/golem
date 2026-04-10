@@ -34,10 +34,18 @@ final case class GolemServer(process: ZProcess, examplesDir: File, tsPackagesPat
 
 object GolemServer {
 
-  private val golemPort        = 9881
-  private val startupTimeout   = 60.seconds
-  private val pollInterval     = 500.millis
-  private val deployTimeoutSec = 300L
+  private val golemPort             = 9881
+  private val startupTimeout        = 60.seconds
+  private val pollInterval          = 500.millis
+  private val deployTimeoutSec      = 300L
+  private val retryPolicyTimeoutSec = 30L
+
+  private val scalaCliRetryPolicies = Seq(
+    ("scala-integration-immediate", 200, "\"true\"", "\"immediate\""),
+    ("scala-integration-never", 100, "\"true\"", "\"never\"")
+  )
+
+  val scalaCliRetryPolicyNames: Seq[String] = scalaCliRetryPolicies.map(_._1)
 
   private val examplesDir: File = {
     val cwd        = Path.of(sys.props.getOrElse("user.dir", ".")).toAbsolutePath.normalize
@@ -164,23 +172,23 @@ object GolemServer {
         // Parse each secret block from the JSON array
         val secretBlocks = listResult.output.split("""\{""").tail.map("{" + _)
         ZIO.foreachDiscard(secretBlocks) { block =>
-         val idOpt   = idPattern.findFirstMatchIn(block).map(_.group(1))
-         val pathOpt = pathPattern.findFirstMatchIn(block).map(_.group(1))
+          val idOpt   = idPattern.findFirstMatchIn(block).map(_.group(1))
+          val pathOpt = pathPattern.findFirstMatchIn(block).map(_.group(1))
 
-         (idOpt, pathOpt) match {
-           case (Some(id), Some(pathStr)) =>
-             val normalizedPath = pathStr.replaceAll(""""|\s""", "").split(",").mkString(".")
-             secretValues.get(normalizedPath) match {
-               case Some(value) =>
-                 runGolemCmd(
-                   dir,
-                   30L,
-                   "agent-secret",
-                   "update-value",
-                   "--id",
-                   id,
-                   "--secret-value",
-                   value
+          (idOpt, pathOpt) match {
+            case (Some(id), Some(pathStr)) =>
+              val normalizedPath = pathStr.replaceAll(""""|\s""", "").split(",").mkString(".")
+              secretValues.get(normalizedPath) match {
+                case Some(value) =>
+                  runGolemCmd(
+                    dir,
+                    30L,
+                    "agent-secret",
+                    "update-value",
+                    "--id",
+                    id,
+                    "--secret-value",
+                    value
                   ).flatMap { result =>
                     if (result.exitCode == 0) ZIO.unit
                     else
@@ -198,6 +206,32 @@ object GolemServer {
       }
     }
   }
+
+  private def provisionRetryPolicies(dir: File): ZIO[Any, Throwable, Unit] =
+    ZIO.foreachDiscard(scalaCliRetryPolicies) { case (name, priority, predicateJson, policyJson) =>
+      runGolemCmd(
+        dir,
+        retryPolicyTimeoutSec,
+        "retry-policy",
+        "create",
+        "--name",
+        name,
+        "--priority",
+        priority.toString,
+        "--predicate-json",
+        predicateJson,
+        "--policy-json",
+        policyJson
+      ).flatMap { result =>
+        if (result.exitCode == 0) ZIO.unit
+        else
+          ZIO.fail(
+            new RuntimeException(
+              s"Failed to create retry policy '$name' (exit=${result.exitCode}):\n${result.output}"
+            )
+          )
+      }
+    }
 
   val layer: ZLayer[Any, Throwable, GolemServer] =
     ZLayer.scoped {
@@ -247,6 +281,7 @@ object GolemServer {
         _     <- waitUntilReady(process)
         server = GolemServer(process, examplesDir, tsPackagesPath)
         _     <- deploy(examplesDir)
+        _     <- provisionRetryPolicies(examplesDir)
         _     <- provisionSecrets(examplesDir)
       } yield server
     }
@@ -405,7 +440,9 @@ object GolemExamplesIntegrationSpec extends ZIOSpec[GolemServer] {
     Sample(
       "guards-block",
       "samples/guards/repl-guards-block.ts",
-      Contains("retry-ok", "level-ok", "idem-ok", "atomic-ok")
+      Contains(
+        (Seq("retry-visible-ok", "level-ok", "idem-ok", "atomic-ok") ++ GolemServer.scalaCliRetryPolicyNames)*
+      )
     ),
     Sample(
       "guards-resource",

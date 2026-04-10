@@ -56,6 +56,7 @@ async fn env_vars(
     worker_service: &Arc<dyn WorkerService>,
     rdb: &Arc<dyn Rdb>,
     registry_service: &Arc<dyn RegistryService>,
+    environment_state_cache_capacity: Option<usize>,
     verbosity: Level,
     otlp: bool,
 ) -> HashMap<String, String> {
@@ -94,7 +95,6 @@ async fn env_vars(
         .with_str("GOLEM__SHARD_MANAGER__RETRIES__MAX_DELAY", "2s")
         .with_str("GOLEM__SHARD_MANAGER__RETRIES__MULTIPLIER", "2")
         .with_str("GOLEM__LIMITS__FUEL_TO_BORROW", "100000")
-        .with_str("GOLEM__ENVIRONMENT_STATE_SERVICE__CACHE_CAPACITY", "0")
         .with_str(
             "GOLEM__AGENT_WEBHOOKS_SERVICE__USE_HTTPS_FOR_WEBHOOK_URL",
             "false",
@@ -103,6 +103,13 @@ async fn env_vars(
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with_optional_otlp("worker_executor", otlp)
         .build();
+
+    if let Some(environment_state_cache_capacity) = environment_state_cache_capacity {
+        env.insert(
+            "GOLEM__ENVIRONMENT_STATE_SERVICE__CACHE_CAPACITY".to_string(),
+            environment_state_cache_capacity.to_string(),
+        );
+    }
 
     let db_env = rdb.info().env("golem_worker_executor", false);
     let db_type = db_env

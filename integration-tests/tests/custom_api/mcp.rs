@@ -27,8 +27,6 @@ use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
-const MCP_PORT: u16 = 9007;
-
 static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 struct McpClient {
@@ -190,6 +188,7 @@ impl McpClient {
 
 pub struct McpTestContext {
     pub domain: Domain,
+    pub mcp_port: u16,
 }
 
 impl Debug for McpTestContext {
@@ -200,8 +199,12 @@ impl Debug for McpTestContext {
 
 impl McpTestContext {
     async fn connect_mcp_client(&self) -> anyhow::Result<McpClient> {
-        let url = format!("http://127.0.0.1:{}/mcp", MCP_PORT);
+        let url = format!("http://{}:{}/mcp", self.mcp_host(), self.mcp_port);
         McpClient::new(url, &self.domain.0).await
+    }
+
+    fn mcp_host(&self) -> &'static str {
+        "127.0.0.1"
     }
 }
 
@@ -265,7 +268,10 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> McpTestContext {
 
     user.deploy_environment(env.id).await.unwrap();
 
-    McpTestContext { domain }
+    McpTestContext {
+        domain,
+        mcp_port: deps.worker_service().mcp_port(),
+    }
 }
 
 #[test]

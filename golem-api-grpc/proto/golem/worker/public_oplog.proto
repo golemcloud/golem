@@ -11,6 +11,7 @@ import "golem/component/plugin.proto";
 import "golem/worker/agent_config.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
+import "golem/worker/retry_policy.proto";
 import "golem/worker/worker_id.proto";
 import "google/protobuf/timestamp.proto";
 import "wasm/rpc/value_and_type.proto";
@@ -27,7 +28,6 @@ message OplogEntry {
     JumpParameters Jump = 8;
     TimestampParameter Interrupted = 9;
     TimestampParameter Exited = 10;
-    ChangeRetryPolicyParameters ChangeRetryPolicy = 11;
     TimestampParameter BeginAtomicRegion = 12;
     EndAtomicRegionParameters EndAtomicRegion = 13;
     TimestampParameter BeginRemoteWrite = 14;
@@ -57,6 +57,8 @@ message OplogEntry {
     SnapshotDataParameters Snapshot = 39;
     OplogProcessorCheckpointParameters OplogProcessorCheckpoint = 40;
     FilesystemStorageUsageUpdateParameters FilesystemStorageUsageUpdate = 41;
+    SetRetryPolicyParameters SetRetryPolicy = 42;
+    RemoveRetryPolicyParameters RemoveRetryPolicy = 43;
   }
 }
 
@@ -185,10 +187,48 @@ message SnapshotData {
   }
 }
 
+message RetryPolicyState {
+  oneof state {
+    uint32 counter = 1;
+    golem.common.Empty terminal = 2;
+    RetryPolicyStateWrapper wrapper = 3;
+    RetryPolicyStateCountBox count_box = 4;
+    RetryPolicyStateTimeBox time_box = 5;
+    RetryPolicyStateAndThen and_then = 6;
+    RetryPolicyStatePair pair = 7;
+  }
+}
+
+message RetryPolicyStateWrapper {
+  RetryPolicyState inner = 1;
+}
+
+message RetryPolicyStateCountBox {
+  uint32 attempts = 1;
+  RetryPolicyState inner = 2;
+}
+
+message RetryPolicyStateTimeBox {
+  RetryPolicyState inner = 1;
+}
+
+message RetryPolicyStateAndThen {
+  RetryPolicyState left = 1;
+  RetryPolicyState right = 2;
+  bool on_right = 3;
+}
+
+message RetryPolicyStatePair {
+  RetryPolicyState first = 1;
+  RetryPolicyState second = 2;
+}
+
 message ErrorParameters {
   google.protobuf.Timestamp timestamp = 1;
   string error = 2;
   uint64 retry_from = 3;
+  bool inside_atomic_region = 4;
+  optional RetryPolicyState retry_policy_state = 5;
 }
 
 message JumpParameters {
@@ -197,17 +237,14 @@ message JumpParameters {
   uint64 end = 3;
 }
 
-message ChangeRetryPolicyParameters {
+message SetRetryPolicyParameters {
   google.protobuf.Timestamp timestamp = 1;
-  RetryPolicy retry_policy = 2;
+  golem.worker.retry.NamedRetryPolicy named_policy = 2;
 }
 
-message RetryPolicy {
-  uint32 max_attempts = 1;
-  uint64 min_delay = 2;
-  uint64 max_delay = 3;
-  double multiplier = 4;
-  optional double max_jitter_factor = 5;
+message RemoveRetryPolicyParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  string policy_name = 2;
 }
 
 message EndAtomicRegionParameters {

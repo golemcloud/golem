@@ -18,6 +18,7 @@ pub mod component;
 pub mod environment;
 pub mod plugin_registration;
 pub mod quota_lease;
+pub mod retry_policy;
 
 use derive_more::Display;
 use desert_rust::BinaryCodec;

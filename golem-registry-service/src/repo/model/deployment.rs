@@ -18,6 +18,7 @@ use super::agent_secrets::{
 };
 use super::audit::DeletableRevisionAuditFields;
 use super::resource_definition::{ResourceDefinitionCreationArgs, ResourceDefinitionRepoError};
+use super::retry_policy::{RetryPolicyCreationRecord, RetryPolicyRepoError};
 use crate::model::agent_secret::{DeploymentAgentSecretCreation, DeploymentAgentSecretUpdate};
 use crate::model::api_definition::{BoundCompiledRoute, UnboundCompiledRoute};
 use crate::repo::model::audit::RevisionAuditFields;
@@ -65,6 +66,8 @@ pub enum DeployRepoError {
     AgentSecretConflict { path: Vec<String> },
     #[error("Resource for name {name} already exists")]
     ResourceConflict { name: String },
+    #[error("Retry policy for name {name} already exists")]
+    RetryPolicyConflict { name: String },
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }
@@ -73,7 +76,8 @@ error_forwarding!(
     DeployRepoError,
     RepoError,
     AgentSecretRepoError,
-    ResourceDefinitionRepoError
+    ResourceDefinitionRepoError,
+    RetryPolicyRepoError
 );
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
@@ -457,6 +461,7 @@ pub struct DeploymentRevisionCreationRecord {
     pub updated_agent_secrets: Vec<AgentSecretRevisionRecord>,
 
     pub created_resource_definitions: Vec<ResourceDefinitionCreationArgs>,
+    pub created_retry_policies: Vec<RetryPolicyCreationRecord>,
 
     pub user_account_id: Uuid,
 }
@@ -476,6 +481,7 @@ impl DeploymentRevisionCreationRecord {
         created_agent_secrets: Vec<DeploymentAgentSecretCreation>,
         updated_agent_secrets: Vec<DeploymentAgentSecretUpdate>,
         created_resource_definitions: Vec<ResourceDefinitionCreation>,
+        created_retry_policies: Vec<RetryPolicyCreationRecord>,
         actor: AccountId,
     ) -> anyhow::Result<Self> {
         Ok(Self {
@@ -579,6 +585,7 @@ impl DeploymentRevisionCreationRecord {
                     )
                 })
                 .collect(),
+            created_retry_policies,
             user_account_id: actor.0,
         })
     }
