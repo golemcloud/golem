@@ -10,9 +10,7 @@ import * as log from "./log.js";
  * `sdks/rust/golem-rust` and `sdks/ts/packages` (the same markers used by golem-cli).
  * Returns the workspace root path if found, or undefined otherwise.
  */
-export async function detectGolemWorkspaceRoot(
-  startDir?: string,
-): Promise<string | undefined> {
+export async function detectGolemWorkspaceRoot(startDir?: string): Promise<string | undefined> {
   let dir = path.resolve(startDir ?? process.cwd());
   const { root } = path.parse(dir);
 
@@ -50,9 +48,7 @@ export async function findGolemAppDir(workspace: string): Promise<string> {
     // Not in root, search immediate subdirectories
   }
 
-  const entries = await fs
-    .readdir(workspace, { withFileTypes: true })
-    .catch(() => []);
+  const entries = await fs.readdir(workspace, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
     const candidate = path.join(workspace, entry.name);
@@ -93,10 +89,10 @@ export function resolveGolemTargetDir(golemPath: string): string {
 
   throw new Error(
     `No golem binary found in GOLEM_PATH (${golemPath}).\n` +
-    `Checked:\n` +
-    `  - ${path.join(releaseDir, "golem")}\n` +
-    `  - ${path.join(debugDir, "golem")}\n` +
-    `Build golem first with: cargo build -p golem`,
+      `Checked:\n` +
+      `  - ${path.join(releaseDir, "golem")}\n` +
+      `  - ${path.join(debugDir, "golem")}\n` +
+      `Build golem first with: cargo build -p golem`,
   );
 }
 
@@ -136,8 +132,8 @@ export class GolemServer {
     if (await this.isRunning(port)) {
       throw new Error(
         `A Golem server is already running on port ${port}.\n` +
-        `The skill test harness needs to manage its own server instance.\n` +
-        `Please stop the existing server and try again.`,
+          `The skill test harness needs to manage its own server instance.\n` +
+          `Please stop the existing server and try again.`,
       );
     }
 
@@ -146,14 +142,10 @@ export class GolemServer {
 
     await fs.mkdir(dataDir, { recursive: true });
 
-    this.serverProcess = spawn(
-      "golem",
-      ["server", "run", "--data-dir", dataDir, "--clean"],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: true,
-      },
-    );
+    this.serverProcess = spawn("golem", ["server", "run", "--data-dir", dataDir, "--clean"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+    });
 
     let stdoutBuf = "";
     let stderrBuf = "";

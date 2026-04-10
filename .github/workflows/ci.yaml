@@ -684,6 +684,10 @@ jobs:
           npm install
           npm run build
 
+      - name: Check Formatting
+        working-directory: golem-skills/tests/harness
+        run: npm run format:check
+
       - name: Run Unit Tests
         working-directory: golem-skills/tests/harness
         run: npm test

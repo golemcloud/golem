@@ -84,7 +84,11 @@ export class AmpAgentDriver extends BaseAgentDriver {
                 log.driver(prefix, line);
               }
             } else if (block.type === "tool_use") {
-              log.driverToolUse(prefix, block.name, block.input as Record<string, unknown> | undefined);
+              log.driverToolUse(
+                prefix,
+                block.name,
+                block.input as Record<string, unknown> | undefined,
+              );
             }
           }
         } else if (message.type === "result") {
@@ -95,8 +99,7 @@ export class AmpAgentDriver extends BaseAgentDriver {
             log.driverError(prefix, message.error || "", durationStr);
             return {
               success: false,
-              output:
-                message.error || outputParts.join("") || "Unknown Amp error",
+              output: message.error || outputParts.join("") || "Unknown Amp error",
               durationSeconds,
               exitCode: 1,
             };
@@ -116,8 +119,7 @@ export class AmpAgentDriver extends BaseAgentDriver {
       log.driverStreamEnd(prefix);
       return {
         success: false,
-        output:
-          outputParts.join("") || "Amp stream ended without a final result",
+        output: outputParts.join("") || "Amp stream ended without a final result",
         durationSeconds,
         exitCode: 1,
       };

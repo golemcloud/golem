@@ -1,13 +1,6 @@
 export interface FailureClassification {
   code: string;
-  category:
-    | "agent"
-    | "build"
-    | "deploy"
-    | "assertion"
-    | "network"
-    | "infra"
-    | "unknown";
+  category: "agent" | "build" | "deploy" | "assertion" | "network" | "infra" | "unknown";
   guidance: string;
 }
 
@@ -97,15 +90,13 @@ export function classifyFailure(errorString: string): FailureClassification {
     return {
       code: "AGENT_FAILED",
       category: "agent",
-      guidance:
-        "The agent returned an error. Check agent logs and ensure the prompt is clear.",
+      guidance: "The agent returned an error. Check agent logs and ensure the prompt is clear.",
     };
   }
 
   return {
     code: "UNKNOWN",
     category: "unknown",
-    guidance:
-      "An unclassified error occurred. Review the full error output for details.",
+    guidance: "An unclassified error occurred. Review the full error output for details.",
   };
 }

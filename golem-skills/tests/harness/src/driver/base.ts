@@ -43,11 +43,7 @@ export abstract class BaseAgentDriver implements AgentDriver {
     await fs.access(path.join(sourceDir, "SKILL.md"));
 
     for (const targetDir of this.skillDirs) {
-      const destDir = path.join(
-        this.workspace,
-        targetDir,
-        "golem-new-project",
-      );
+      const destDir = path.join(this.workspace, targetDir, "golem-new-project");
       await fs.mkdir(path.dirname(destDir), { recursive: true });
       await fs.cp(sourceDir, destDir, { recursive: true });
     }

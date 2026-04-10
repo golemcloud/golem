@@ -35,10 +35,7 @@ export interface AssertionResult {
   message: string;
 }
 
-export function evaluate(
-  context: AssertionContext,
-  expect: ExpectSpec,
-): AssertionResult[] {
+export function evaluate(context: AssertionContext, expect: ExpectSpec): AssertionResult[] {
   const results: AssertionResult[] = [];
 
   if (expect.exit_code !== undefined) {

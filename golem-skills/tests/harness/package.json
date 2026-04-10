@@ -6,10 +6,12 @@
   "main": "dist/src/run.js",
   "scripts": {
     "start": "tsx src/run.ts",
+    "build": "npm run lint && tsc",
     "test": "node --test dist/tests/*.test.js",
-    "build": "tsc",
-    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" --no-error-on-unmatched-pattern",
-    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\""
+    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "lint:fix": "eslint --fix \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\""
   },
   "dependencies": {
     "@sourcegraph/amp-sdk": "latest",
@@ -22,7 +24,9 @@
   "devDependencies": {
     "typescript": "^5.3.3",
     "@types/node": "^20.10.6",
-    "eslint": "^8.56.0",
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "typescript-eslint": "^8.0.0",
     "prettier": "^3.1.1"
   }
 }

@@ -107,7 +107,10 @@ describe("scenario logging", () => {
       log.scenarioFail("create-a-new-project");
     });
 
-    assert.equal(lines[0], `${prefix("scenario")}create-a-new-project ↷ skipped skip_if condition met`);
+    assert.equal(
+      lines[0],
+      `${prefix("scenario")}create-a-new-project ↷ skipped skip_if condition met`,
+    );
     assert.equal(lines[1], `${prefix("scenario")}create-a-new-project ✓ passed`);
     assert.equal(lines[2], `${prefix("scenario")}create-a-new-project ✗ failed`);
   });

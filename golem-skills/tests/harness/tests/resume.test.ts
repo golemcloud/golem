@@ -1,10 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import {
-  ScenarioExecutor,
-  type ScenarioSpec,
-  type StepSpec,
-} from "../src/executor.js";
+import { ScenarioExecutor, type ScenarioSpec, type StepSpec } from "../src/executor.js";
 
 function makePromptStep(id: string, prompt: string): StepSpec {
   return { tag: "prompt", id, prompt };
@@ -47,10 +43,7 @@ describe("Resume-from validation", () => {
   it("throws when resumeFromStepId does not exist", async () => {
     const spec: ScenarioSpec = {
       name: "test",
-      steps: [
-        makePromptStep("step-1", "hello"),
-        makePromptStep("step-2", "world"),
-      ],
+      steps: [makePromptStep("step-1", "hello"), makePromptStep("step-2", "world")],
     };
 
     const executor = new ScenarioExecutor(
@@ -74,10 +67,7 @@ describe("Resume-from validation", () => {
   it("accepts valid resumeFromStepId", async () => {
     const spec: ScenarioSpec = {
       name: "test",
-      steps: [
-        makePromptStep("step-1", "hello"),
-        makePromptStep("step-2", "world"),
-      ],
+      steps: [makePromptStep("step-1", "hello"), makePromptStep("step-2", "world")],
     };
 
     // This should not throw validation error (it will fail at verifyGolemConnectivity

@@ -24,12 +24,7 @@ import {
 import * as log from "./log.js";
 import { detectGolemWorkspaceRoot, resolveGolemTargetDir, GolemServer } from "./workspace.js";
 
-const SUPPORTED_AGENTS = [
-  "amp",
-  "claude-code",
-  "opencode",
-  "codex",
-] as const;
+const SUPPORTED_AGENTS = ["amp", "claude-code", "opencode", "codex"] as const;
 const SUPPORTED_LANGUAGES = ["ts", "rust", "scala"] as const;
 
 type SupportedAgent = (typeof SUPPORTED_AGENTS)[number];
@@ -58,11 +53,7 @@ function createDriver(agent: SupportedAgent): AgentDriver {
   }
 }
 
-
-async function mergeReports(
-  reportsDir: string,
-  outputDir: string,
-): Promise<void> {
+async function mergeReports(reportsDir: string, outputDir: string): Promise<void> {
   await fs.mkdir(outputDir, { recursive: true });
 
   const files: string[] = [];
@@ -192,7 +183,9 @@ async function main() {
   }
 
   if (!process.env.GOLEM_PATH) {
-    log.error("GOLEM_PATH is not set and could not be auto-detected.\nSet GOLEM_PATH to the root of your golem repository checkout, or run the harness from within the golem repo tree.");
+    log.error(
+      "GOLEM_PATH is not set and could not be auto-detected.\nSet GOLEM_PATH to the root of your golem repository checkout, or run the harness from within the golem repo tree.",
+    );
     process.exit(1);
   }
   const golemPath = process.env.GOLEM_PATH!;
@@ -232,9 +225,7 @@ Options:
   const agents: SupportedAgent[] =
     agentArg === "all" ? [...SUPPORTED_AGENTS] : [agentArg as SupportedAgent];
   const languages: SupportedLanguage[] =
-    languageArg === "all"
-      ? [...SUPPORTED_LANGUAGES]
-      : [languageArg as SupportedLanguage];
+    languageArg === "all" ? [...SUPPORTED_LANGUAGES] : [languageArg as SupportedLanguage];
 
   for (const a of agents) {
     if (!SUPPORTED_AGENTS.includes(a)) {
@@ -251,9 +242,7 @@ Options:
 
   const scenariosDir = path.resolve(process.cwd(), scenarios!);
   const resultsDir = path.resolve(process.cwd(), output!);
-  const globalTimeoutSeconds = timeout
-    ? Number.parseInt(timeout, 10)
-    : undefined;
+  const globalTimeoutSeconds = timeout ? Number.parseInt(timeout, 10) : undefined;
   if (resumeFrom && !scenarioFilter) {
     log.error("--resume-from requires --scenario to avoid aborting on unrelated scenarios");
     process.exit(1);
@@ -300,7 +289,12 @@ Options:
         const step = spec.steps[i];
         const label = step.id ?? `step-${i + 1}`;
         const rawPrompt = step.tag === "prompt" ? step.prompt : undefined;
-        const promptText = typeof rawPrompt === "string" ? rawPrompt : rawPrompt ? JSON.stringify(rawPrompt) : undefined;
+        const promptText =
+          typeof rawPrompt === "string"
+            ? rawPrompt
+            : rawPrompt
+              ? JSON.stringify(rawPrompt)
+              : undefined;
         let promptPreview: string;
         if (promptText) {
           promptPreview = promptText.length > 60 ? promptText.slice(0, 57) + "..." : promptText;
@@ -311,9 +305,13 @@ Options:
           promptPreview = "(no prompt)";
         }
         const rawSkills = step.expectedSkills;
-        const skills = (Array.isArray(rawSkills) ? rawSkills.join(", ") : rawSkills ? JSON.stringify(rawSkills) : "") || "(none)";
-        const timeoutVal =
-          step.timeout ?? spec.settings?.timeout_per_subprompt ?? "default";
+        const skills =
+          (Array.isArray(rawSkills)
+            ? rawSkills.join(", ")
+            : rawSkills
+              ? JSON.stringify(rawSkills)
+              : "") || "(none)";
+        const timeoutVal = step.timeout ?? spec.settings?.timeout_per_subprompt ?? "default";
         const conditions: string[] = [];
         if (step.only_if) {
           conditions.push(`only_if: ${JSON.stringify(step.only_if)}`);
@@ -322,7 +320,9 @@ Options:
           conditions.push(`skip_if: ${JSON.stringify(step.skip_if)}`);
         }
         log.dryRunStepLine(label, promptPreview);
-        log.dryRunStepDetail(`skills: ${skills} | timeout: ${typeof timeoutVal === "number" ? `${timeoutVal}s` : timeoutVal}`);
+        log.dryRunStepDetail(
+          `skills: ${skills} | timeout: ${typeof timeoutVal === "number" ? `${timeoutVal}s` : timeoutVal}`,
+        );
         if (conditions.length > 0) {
           log.dryRunStepDetail(`conditions: ${conditions.join(", ")}`);
         }
@@ -357,7 +357,9 @@ Options:
       return;
     }
     interrupted = true;
-    log.warn("\nInterrupted. Finishing current step and writing partial results... (press Ctrl+C again to force exit)");
+    log.warn(
+      "\nInterrupted. Finishing current step and writing partial results... (press Ctrl+C again to force exit)",
+    );
     abortController.abort();
   });
 
@@ -366,207 +368,207 @@ Options:
   let isFirstScenario = true;
 
   try {
-  for (const currentAgent of agents) {
-    for (const currentLanguage of languages) {
-      const driver = createDriver(currentAgent);
-      log.dim(`Config: agent=${currentAgent}, language=${currentLanguage}, scenarios=${scenariosDir}, output=${resultsDir}, timeout=${globalTimeoutSeconds ?? "default"}`);
-
-      for (const file of scenarioFiles) {
-        // Check if interrupted before starting next scenario
-        if (interrupted) {
-          log.warn("Skipping remaining scenarios due to interruption.");
-          break;
-        }
-
-        const spec = await ScenarioLoader.load(path.join(scenariosDir, file));
-
-        if (scenarioFilter && spec.name !== scenarioFilter) continue;
-
-        // Restart Golem server between scenarios to get a clean state
-        if (!isFirstScenario) {
-          log.dim("Restarting Golem server for clean state...");
-          await golemServer.restart();
-          log.success("Golem server restarted.");
-        }
-        isFirstScenario = false;
-
-        log.heading(`Running scenario: ${spec.name} [${currentAgent} x ${currentLanguage}]`);
-        const scenarioDir = spec.name.replace(/\s+/g, "-").toLowerCase();
-        const workspace = path.join(workspacesRoot, scenarioDir, currentLanguage);
-        const watcher = new SkillWatcher(workspace);
-        const executor = new ScenarioExecutor(
-          driver,
-          watcher,
-          workspace,
-          bootstrapSkillSourceDir,
-          {
-            globalTimeoutSeconds,
-            agent: currentAgent,
-            language: currentLanguage,
-            abortSignal: abortController.signal,
-            resumeFromStepId: resumeFrom,
-          },
+    for (const currentAgent of agents) {
+      for (const currentLanguage of languages) {
+        const driver = createDriver(currentAgent);
+        log.dim(
+          `Config: agent=${currentAgent}, language=${currentLanguage}, scenarios=${scenariosDir}, output=${resultsDir}, timeout=${globalTimeoutSeconds ?? "default"}`,
         );
 
-        const scenarioResult = await executor.execute(spec);
-        const results = scenarioResult.stepResults;
+        for (const file of scenarioFiles) {
+          // Check if interrupted before starting next scenario
+          if (interrupted) {
+            log.warn("Skipping remaining scenarios due to interruption.");
+            break;
+          }
 
-        const allPassed = scenarioResult.status === "pass";
-        if (allPassed) {
-          log.scenarioPass(spec.name);
-        } else {
-          hasFailures = true;
-          log.scenarioFail(spec.name);
-          for (const res of results) {
-            if (!res.success) {
-              const rawStepName = ("prompt" in res.step && res.step.prompt) || res.step.id || "unnamed";
-              const stepName = typeof rawStepName === "string" ? rawStepName : JSON.stringify(rawStepName);
-              log.scenarioFailedStep(stepName, res.error ?? "");
-              if (res.classification) {
-                log.scenarioFailureClassification(res.classification.category, res.classification.guidance);
+          const spec = await ScenarioLoader.load(path.join(scenariosDir, file));
+
+          if (scenarioFilter && spec.name !== scenarioFilter) continue;
+
+          // Restart Golem server between scenarios to get a clean state
+          if (!isFirstScenario) {
+            log.dim("Restarting Golem server for clean state...");
+            await golemServer.restart();
+            log.success("Golem server restarted.");
+          }
+          isFirstScenario = false;
+
+          log.heading(`Running scenario: ${spec.name} [${currentAgent} x ${currentLanguage}]`);
+          const scenarioDir = spec.name.replace(/\s+/g, "-").toLowerCase();
+          const workspace = path.join(workspacesRoot, scenarioDir, currentLanguage);
+          const watcher = new SkillWatcher(workspace);
+          const executor = new ScenarioExecutor(
+            driver,
+            watcher,
+            workspace,
+            bootstrapSkillSourceDir,
+            {
+              globalTimeoutSeconds,
+              agent: currentAgent,
+              language: currentLanguage,
+              abortSignal: abortController.signal,
+              resumeFromStepId: resumeFrom,
+            },
+          );
+
+          const scenarioResult = await executor.execute(spec);
+          const results = scenarioResult.stepResults;
+
+          const allPassed = scenarioResult.status === "pass";
+          if (allPassed) {
+            log.scenarioPass(spec.name);
+          } else {
+            hasFailures = true;
+            log.scenarioFail(spec.name);
+            for (const res of results) {
+              if (!res.success) {
+                const rawStepName =
+                  ("prompt" in res.step && res.step.prompt) || res.step.id || "unnamed";
+                const stepName =
+                  typeof rawStepName === "string" ? rawStepName : JSON.stringify(rawStepName);
+                log.scenarioFailedStep(stepName, res.error ?? "");
+                if (res.classification) {
+                  log.scenarioFailureClassification(
+                    res.classification.category,
+                    res.classification.guidance,
+                  );
+                }
               }
             }
           }
+
+          // Write individual report with agent-language prefix to avoid collisions
+          const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const report: ScenarioReport = {
+            scenario: spec.name,
+            matrix: { agent: currentAgent, language: currentLanguage },
+            run_id: runId,
+            status: scenarioResult.status,
+            durationSeconds: scenarioResult.durationSeconds,
+            results,
+            artifactPaths: scenarioResult.artifactPaths,
+          };
+
+          const reportPath = path.join(
+            resultsDir,
+            `${currentAgent}-${currentLanguage}-${spec.name}.json`,
+          );
+          await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
+          scenarioReports.push(report);
+
+          log.scenarioResultLine(allPassed, spec.name, results.length, spec.steps.length);
         }
-
-        // Write individual report with agent-language prefix to avoid collisions
-        const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const report: ScenarioReport = {
-          scenario: spec.name,
-          matrix: { agent: currentAgent, language: currentLanguage },
-          run_id: runId,
-          status: scenarioResult.status,
-          durationSeconds: scenarioResult.durationSeconds,
-          results,
-          artifactPaths: scenarioResult.artifactPaths,
-        };
-
-        const reportPath = path.join(
-          resultsDir,
-          `${currentAgent}-${currentLanguage}-${spec.name}.json`,
-        );
-        await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
-        scenarioReports.push(report);
-
-        log.scenarioResultLine(allPassed, spec.name, results.length, spec.steps.length);
       }
     }
-  }
 
-  // Aggregated summary report
-  if (scenarioReports.length > 0) {
-    const totalScenarios = scenarioReports.length;
-    const passed = scenarioReports.filter((r) => r.status === "pass").length;
-    const failed = scenarioReports.filter((r) => r.status === "fail").length;
-    const totalDuration = scenarioReports.reduce(
-      (sum, r) => sum + r.durationSeconds,
-      0,
-    );
+    // Aggregated summary report
+    if (scenarioReports.length > 0) {
+      const totalScenarios = scenarioReports.length;
+      const passed = scenarioReports.filter((r) => r.status === "pass").length;
+      const failed = scenarioReports.filter((r) => r.status === "fail").length;
+      const totalDuration = scenarioReports.reduce((sum, r) => sum + r.durationSeconds, 0);
 
-    const worstFailures = scenarioReports
-      .filter((r) => r.status === "fail")
-      .map((r) => {
-        const failedStep = r.results.find((s) => !s.success);
-        return {
-          scenario: r.scenario,
-          error: failedStep?.error ?? "unknown",
-          guidance: failedStep?.classification?.guidance,
-        };
-      });
+      const worstFailures = scenarioReports
+        .filter((r) => r.status === "fail")
+        .map((r) => {
+          const failedStep = r.results.find((s) => !s.success);
+          return {
+            scenario: r.scenario,
+            error: failedStep?.error ?? "unknown",
+            guidance: failedStep?.classification?.guidance,
+          };
+        });
 
-    const summary: Summary = {
-      agent: agents.join(","),
-      language: languages.join(","),
-      os: os.platform(),
-      timestamp: new Date().toISOString(),
-      total: totalScenarios,
-      passed,
-      failed,
-      skipped: 0,
-      durationSeconds: totalDuration,
-      worstFailures: worstFailures.map((f) => ({
-        scenario: f.scenario,
-        error: f.error,
-      })),
-      scenarios: scenarioReports.map((r) => ({
-        name: r.scenario,
-        status: r.status,
-        durationSeconds: r.durationSeconds,
-      })),
-    };
+      const summary: Summary = {
+        agent: agents.join(","),
+        language: languages.join(","),
+        os: os.platform(),
+        timestamp: new Date().toISOString(),
+        total: totalScenarios,
+        passed,
+        failed,
+        skipped: 0,
+        durationSeconds: totalDuration,
+        worstFailures: worstFailures.map((f) => ({
+          scenario: f.scenario,
+          error: f.error,
+        })),
+        scenarios: scenarioReports.map((r) => ({
+          name: r.scenario,
+          status: r.status,
+          durationSeconds: r.durationSeconds,
+        })),
+      };
 
-    const summaryPath = path.join(resultsDir, "summary.json");
-    await fs.writeFile(summaryPath, JSON.stringify(summary, null, 2));
+      const summaryPath = path.join(resultsDir, "summary.json");
+      await fs.writeFile(summaryPath, JSON.stringify(summary, null, 2));
 
-    // Generate HTML report
-    const htmlContent = generateHtmlReport(
-      summary,
-      scenarioReports as HtmlScenarioReport[],
-    );
-    const htmlPath = path.join(resultsDir, "report.html");
-    await fs.writeFile(htmlPath, htmlContent);
+      // Generate HTML report
+      const htmlContent = generateHtmlReport(summary, scenarioReports as HtmlScenarioReport[]);
+      const htmlPath = path.join(resultsDir, "report.html");
+      await fs.writeFile(htmlPath, htmlContent);
 
-    // GitHub Actions job summary
-    const ghSummaryPath = process.env["GITHUB_STEP_SUMMARY"];
-    if (ghSummaryPath) {
-      const lines: string[] = [];
-      lines.push("## Skill Test Results");
-      lines.push("");
-      lines.push("| Scenario | Agent | Language | Status | Duration |");
-      lines.push("|----------|-------|----------|--------|----------|");
-      for (const r of scenarioReports) {
-        const icon = r.status === "pass" ? "\u2705" : "\u274c";
+      // GitHub Actions job summary
+      const ghSummaryPath = process.env["GITHUB_STEP_SUMMARY"];
+      if (ghSummaryPath) {
+        const lines: string[] = [];
+        lines.push("## Skill Test Results");
+        lines.push("");
+        lines.push("| Scenario | Agent | Language | Status | Duration |");
+        lines.push("|----------|-------|----------|--------|----------|");
+        for (const r of scenarioReports) {
+          const icon = r.status === "pass" ? "\u2705" : "\u274c";
+          lines.push(
+            `| ${r.scenario} | ${r.matrix.agent} | ${r.matrix.language} | ${icon} ${r.status} | ${r.durationSeconds.toFixed(1)}s |`,
+          );
+        }
+        lines.push("");
         lines.push(
-          `| ${r.scenario} | ${r.matrix.agent} | ${r.matrix.language} | ${icon} ${r.status} | ${r.durationSeconds.toFixed(1)}s |`,
+          `**Total:** ${totalScenarios} | **Passed:** ${passed} | **Failed:** ${failed} | **Duration:** ${totalDuration.toFixed(1)}s`,
         );
+
+        if (worstFailures.length > 0) {
+          lines.push("");
+          lines.push("### Failures");
+          for (const f of worstFailures) {
+            const truncatedError = f.error.length > 200 ? f.error.slice(0, 197) + "..." : f.error;
+            lines.push(`- **${f.scenario}**: ${truncatedError}`);
+            if (f.guidance) {
+              lines.push(`  - _${f.guidance}_`);
+            }
+          }
+        }
+        lines.push("");
+
+        await fs.appendFile(ghSummaryPath, lines.join("\n"));
       }
-      lines.push("");
-      lines.push(
-        `**Total:** ${totalScenarios} | **Passed:** ${passed} | **Failed:** ${failed} | **Duration:** ${totalDuration.toFixed(1)}s`,
-      );
+
+      // Print summary
+      log.blank();
+      log.bold("=== Test Summary ===");
+      log.plain(`Total:    ${totalScenarios}`);
+      log.summaryLine("Passed:   ", passed, "green");
+      log.summaryLine("Failed:   ", failed, failed > 0 ? "red" : undefined);
+      log.plain(`Duration: ${totalDuration.toFixed(1)}s`);
 
       if (worstFailures.length > 0) {
-        lines.push("");
-        lines.push("### Failures");
+        log.blank();
+        log.error("Failures:");
         for (const f of worstFailures) {
-          const truncatedError =
-            f.error.length > 200 ? f.error.slice(0, 197) + "..." : f.error;
-          lines.push(`- **${f.scenario}**: ${truncatedError}`);
+          log.summaryFailure(f.scenario, f.error);
           if (f.guidance) {
-            lines.push(`  - _${f.guidance}_`);
+            log.summaryGuidance(f.guidance);
           }
         }
       }
-      lines.push("");
 
-      await fs.appendFile(ghSummaryPath, lines.join("\n"));
+      log.dim(`Reports: ${summaryPath}, ${path.join(resultsDir, "report.html")}`);
     }
 
-    // Print summary
-    log.blank();
-    log.bold("=== Test Summary ===");
-    log.plain(`Total:    ${totalScenarios}`);
-    log.summaryLine("Passed:   ", passed, "green");
-    log.summaryLine("Failed:   ", failed, failed > 0 ? "red" : undefined);
-    log.plain(`Duration: ${totalDuration.toFixed(1)}s`);
-
-    if (worstFailures.length > 0) {
-      log.blank();
-      log.error("Failures:");
-      for (const f of worstFailures) {
-        log.summaryFailure(f.scenario, f.error);
-        if (f.guidance) {
-          log.summaryGuidance(f.guidance);
-        }
-      }
+    if (hasFailures) {
+      process.exitCode = 1;
     }
-
-    log.dim(`Reports: ${summaryPath}, ${path.join(resultsDir, "report.html")}`);
-  }
-
-  if (hasFailures) {
-    process.exitCode = 1;
-  }
   } finally {
     await golemServer.stop();
   }

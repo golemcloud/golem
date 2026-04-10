@@ -11,10 +11,7 @@ type StepLike = {
   allowedExtraSkills?: string[];
 };
 type ExecutorWithPrivate = {
-  assertSkillActivation(
-    step: StepLike,
-    activated: string[],
-  ): string | undefined;
+  assertSkillActivation(step: StepLike, activated: string[]): string | undefined;
   workspace: string;
   findGolemProjectDir(): Promise<string>;
   runLocalCommand(
@@ -33,13 +30,8 @@ type ExecutorWithPrivate = {
   ): Promise<void>;
 };
 
-function assertSkillActivation(
-  step: StepLike,
-  activatedSkills: string[],
-): string | undefined {
-  const executor = Object.create(
-    ScenarioExecutor.prototype,
-  ) as unknown as ExecutorWithPrivate;
+function assertSkillActivation(step: StepLike, activatedSkills: string[]): string | undefined {
+  const executor = Object.create(ScenarioExecutor.prototype) as unknown as ExecutorWithPrivate;
   return executor.assertSkillActivation(step, activatedSkills);
 }
 
@@ -50,18 +42,15 @@ describe("assertSkillActivation", () => {
   });
 
   it("returns undefined when all expected skills are activated", () => {
-    const result = assertSkillActivation(
-      { expectedSkills: ["skill-a", "skill-b"] },
-      ["skill-a", "skill-b"],
-    );
+    const result = assertSkillActivation({ expectedSkills: ["skill-a", "skill-b"] }, [
+      "skill-a",
+      "skill-b",
+    ]);
     assert.equal(result, undefined);
   });
 
   it("returns error when expected skill is missing", () => {
-    const result = assertSkillActivation(
-      { expectedSkills: ["skill-a", "skill-b"] },
-      ["skill-a"],
-    );
+    const result = assertSkillActivation({ expectedSkills: ["skill-a", "skill-b"] }, ["skill-a"]);
     assert.ok(result);
     assert.ok(result.includes("SKILL_NOT_ACTIVATED"));
     assert.ok(result.includes("skill-b"));
@@ -85,20 +74,19 @@ describe("assertSkillActivation", () => {
   });
 
   it("returns error for strict match with extras", () => {
-    const result = assertSkillActivation(
-      { expectedSkills: ["skill-a"], strictSkillMatch: true },
-      ["skill-a", "skill-extra"],
-    );
+    const result = assertSkillActivation({ expectedSkills: ["skill-a"], strictSkillMatch: true }, [
+      "skill-a",
+      "skill-extra",
+    ]);
     assert.ok(result);
     assert.ok(result.includes("SKILL_MISMATCH"));
     assert.ok(result.includes("strict"));
   });
 
   it("passes strict match when exact", () => {
-    const result = assertSkillActivation(
-      { expectedSkills: ["skill-a"], strictSkillMatch: true },
-      ["skill-a"],
-    );
+    const result = assertSkillActivation({ expectedSkills: ["skill-a"], strictSkillMatch: true }, [
+      "skill-a",
+    ]);
     assert.equal(result, undefined);
   });
 });
@@ -107,9 +95,7 @@ describe("executeVerification", () => {
   it("does not attempt deploy when expected files are missing", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "verify-files-"));
     try {
-      const executor = Object.create(
-        ScenarioExecutor.prototype,
-      ) as unknown as ExecutorWithPrivate;
+      const executor = Object.create(ScenarioExecutor.prototype) as unknown as ExecutorWithPrivate;
       const calls: string[][] = [];
       const failures: string[] = [];
 
@@ -139,9 +125,7 @@ describe("executeVerification", () => {
   it("does not attempt deploy after a build failure", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "verify-build-"));
     try {
-      const executor = Object.create(
-        ScenarioExecutor.prototype,
-      ) as unknown as ExecutorWithPrivate;
+      const executor = Object.create(ScenarioExecutor.prototype) as unknown as ExecutorWithPrivate;
       const calls: string[][] = [];
       const failures: string[] = [];
 
@@ -152,12 +136,8 @@ describe("executeVerification", () => {
         return { success: false, output: "build failed" };
       };
 
-      await executor.executeVerification(
-        "verify",
-        { build: true, deploy: true },
-        {},
-        true,
-        (msg) => failures.push(msg),
+      await executor.executeVerification("verify", { build: true, deploy: true }, {}, true, (msg) =>
+        failures.push(msg),
       );
 
       assert.deepEqual(calls, [["build"]]);

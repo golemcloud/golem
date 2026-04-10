@@ -24,10 +24,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
     const parsed = this.tryParseJson(result.output);
     if (parsed && typeof parsed === "object" && "sessionId" in parsed) {
       const sessionId = parsed.sessionId;
-      this.sessionId =
-        typeof sessionId === "string" && sessionId.length > 0
-          ? sessionId
-          : null;
+      this.sessionId = typeof sessionId === "string" && sessionId.length > 0 ? sessionId : null;
     }
     if (!result.success && result.output.includes("command not found")) {
       result.output = `Claude CLI not installed. ${result.output}`;

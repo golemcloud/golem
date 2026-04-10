@@ -6,10 +6,7 @@ import { z } from "zod";
 import { AgentDriver } from "./driver/base.js";
 import { SkillWatcher } from "./watcher.js";
 import { evaluate, ExpectSchema, type AssertionContext } from "./assertions.js";
-import {
-  classifyFailure,
-  type FailureClassification,
-} from "./failure-classification.js";
+import { classifyFailure, type FailureClassification } from "./failure-classification.js";
 import { findGolemAppDir } from "./workspace.js";
 import * as log from "./log.js";
 
@@ -89,9 +86,7 @@ function extractInvokeJsonResult(output: string): unknown {
     return parsed;
   }
 
-  return "value" in resultJson
-    ? (resultJson as Record<string, unknown>).value
-    : undefined;
+  return "value" in resultJson ? (resultJson as Record<string, unknown>).value : undefined;
 }
 
 // --- Schemas ---
@@ -212,8 +207,7 @@ const StepSpecSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["expectedSkills"],
-        message:
-          "expectedSkills is required when allowedExtraSkills or strictSkillMatch is set",
+        message: "expectedSkills is required when allowedExtraSkills or strictSkillMatch is set",
       });
     }
   });
@@ -342,16 +336,26 @@ export function parseStep(raw: RawStepSpec): StepSpec {
   };
 
   switch (tag) {
-    case "prompt": return { ...common, tag, prompt: raw.prompt! };
-    case "invoke": return { ...common, tag, invoke: raw.invoke! };
-    case "invoke_json": return { ...common, tag, invoke_json: raw.invoke_json! };
-    case "shell": return { ...common, tag, shell: raw.shell! };
-    case "trigger": return { ...common, tag, trigger: raw.trigger! };
-    case "create_agent": return { ...common, tag, create_agent: raw.create_agent! };
-    case "delete_agent": return { ...common, tag, delete_agent: raw.delete_agent! };
-    case "create_project": return { ...common, tag, create_project: raw.create_project! };
-    case "sleep": return { ...common, tag, sleep: raw.sleep! };
-    case "http": return { ...common, tag, http: raw.http! };
+    case "prompt":
+      return { ...common, tag, prompt: raw.prompt! };
+    case "invoke":
+      return { ...common, tag, invoke: raw.invoke! };
+    case "invoke_json":
+      return { ...common, tag, invoke_json: raw.invoke_json! };
+    case "shell":
+      return { ...common, tag, shell: raw.shell! };
+    case "trigger":
+      return { ...common, tag, trigger: raw.trigger! };
+    case "create_agent":
+      return { ...common, tag, create_agent: raw.create_agent! };
+    case "delete_agent":
+      return { ...common, tag, delete_agent: raw.delete_agent! };
+    case "create_project":
+      return { ...common, tag, create_project: raw.create_project! };
+    case "sleep":
+      return { ...common, tag, sleep: raw.sleep! };
+    case "http":
+      return { ...common, tag, http: raw.http! };
   }
 }
 
@@ -417,10 +421,7 @@ export interface ScenarioExecutorOptions {
 
 // --- Template variable substitution ---
 
-export function substituteVariables(
-  text: string,
-  variables: Record<string, string>,
-): string {
+export function substituteVariables(text: string, variables: Record<string, string>): string {
   return text.replace(/\{\{(\w+)\}\}/g, (match, name: string) => {
     return variables[name] ?? match;
   });
@@ -495,70 +496,89 @@ export class ScenarioExecutor {
     return vars;
   }
 
-  private substituteStepVariables(
-    step: StepSpec,
-    variables: Record<string, string>,
-  ): StepSpec {
-    const sub = (s: string | undefined) =>
-      s ? substituteVariables(s, variables) : s;
+  private substituteStepVariables(step: StepSpec, variables: Record<string, string>): StepSpec {
+    const sub = (s: string | undefined) => (s ? substituteVariables(s, variables) : s);
     const subArr = (arr: string[] | undefined) =>
       arr?.map((s) => substituteVariables(s, variables));
     const subLangStr = (v: LangConditional<string>): LangConditional<string> =>
       typeof v === "string"
         ? substituteVariables(v, variables)
-        : Object.fromEntries(Object.entries(v).map(([k, s]) => [k, substituteVariables(s, variables)]));
+        : Object.fromEntries(
+            Object.entries(v).map(([k, s]) => [k, substituteVariables(s, variables)]),
+          );
 
     switch (step.tag) {
       case "prompt":
         return { ...step, prompt: subLangStr(step.prompt) };
       case "invoke":
-        return { ...step, invoke: {
-          agent: substituteVariables(step.invoke.agent, variables),
-          method: substituteVariables(step.invoke.method, variables),
-          args: sub(step.invoke.args),
-        }};
+        return {
+          ...step,
+          invoke: {
+            agent: substituteVariables(step.invoke.agent, variables),
+            method: substituteVariables(step.invoke.method, variables),
+            args: sub(step.invoke.args),
+          },
+        };
       case "invoke_json":
-        return { ...step, invoke_json: {
-          agent: substituteVariables(step.invoke_json.agent, variables),
-          method: substituteVariables(step.invoke_json.method, variables),
-          args: sub(step.invoke_json.args),
-        }};
+        return {
+          ...step,
+          invoke_json: {
+            agent: substituteVariables(step.invoke_json.agent, variables),
+            method: substituteVariables(step.invoke_json.method, variables),
+            args: sub(step.invoke_json.args),
+          },
+        };
       case "shell":
-        return { ...step, shell: {
-          command: substituteVariables(step.shell.command, variables),
-          args: subArr(step.shell.args),
-          cwd: sub(step.shell.cwd),
-        }};
+        return {
+          ...step,
+          shell: {
+            command: substituteVariables(step.shell.command, variables),
+            args: subArr(step.shell.args),
+            cwd: sub(step.shell.cwd),
+          },
+        };
       case "trigger":
-        return { ...step, trigger: {
-          agent: substituteVariables(step.trigger.agent, variables),
-          method: substituteVariables(step.trigger.method, variables),
-          args: sub(step.trigger.args),
-        }};
+        return {
+          ...step,
+          trigger: {
+            agent: substituteVariables(step.trigger.agent, variables),
+            method: substituteVariables(step.trigger.method, variables),
+            args: sub(step.trigger.args),
+          },
+        };
       case "create_agent":
-        return { ...step, create_agent: {
-          ...step.create_agent,
-          name: substituteVariables(step.create_agent.name, variables),
-        }};
+        return {
+          ...step,
+          create_agent: {
+            ...step.create_agent,
+            name: substituteVariables(step.create_agent.name, variables),
+          },
+        };
       case "delete_agent":
-        return { ...step, delete_agent: {
-          ...step.delete_agent,
-          name: substituteVariables(step.delete_agent.name, variables),
-        }};
+        return {
+          ...step,
+          delete_agent: {
+            ...step.delete_agent,
+            name: substituteVariables(step.delete_agent.name, variables),
+          },
+        };
       case "http":
-        return { ...step, http: {
-          ...step.http,
-          url: substituteVariables(step.http.url, variables),
-          body: sub(step.http.body),
-          headers: step.http.headers
-            ? Object.fromEntries(
-              Object.entries(step.http.headers).map(([k, v]) => [
-                k,
-                substituteVariables(v, variables),
-              ]),
-            )
-            : step.http.headers,
-        }};
+        return {
+          ...step,
+          http: {
+            ...step.http,
+            url: substituteVariables(step.http.url, variables),
+            body: sub(step.http.body),
+            headers: step.http.headers
+              ? Object.fromEntries(
+                  Object.entries(step.http.headers).map(([k, v]) => [
+                    k,
+                    substituteVariables(v, variables),
+                  ]),
+                )
+              : step.http.headers,
+          },
+        };
       case "create_project":
         return { ...step };
       case "sleep":
@@ -574,11 +594,18 @@ export class ScenarioExecutor {
       expectedSkills: resolveByLanguage(step.expectedSkills, lang),
       allowedExtraSkills: resolveByLanguage(step.allowedExtraSkills, lang),
       verify: resolvedVerify
-        ? { ...resolvedVerify, expectedFiles: resolveByLanguage(resolvedVerify.expectedFiles, lang) }
+        ? {
+            ...resolvedVerify,
+            expectedFiles: resolveByLanguage(resolvedVerify.expectedFiles, lang),
+          }
         : undefined,
     };
     if (step.tag === "prompt") {
-      return { ...resolved, tag: "prompt", prompt: resolveByLanguage(step.prompt, lang)! } as StepSpec;
+      return {
+        ...resolved,
+        tag: "prompt",
+        prompt: resolveByLanguage(step.prompt, lang)!,
+      } as StepSpec;
     }
     return resolved as StepSpec;
   }
@@ -608,9 +635,7 @@ export class ScenarioExecutor {
     const savedEnv: Record<string, string | undefined> = {};
     // Validate resumeFromStepId if set
     if (this.options.resumeFromStepId) {
-      const found = spec.steps.some(
-        (s) => s.id === this.options.resumeFromStepId,
-      );
+      const found = spec.steps.some((s) => s.id === this.options.resumeFromStepId);
       if (!found) {
         throw new Error(
           `Resume step "${this.options.resumeFromStepId}" not found in scenario "${spec.name}"`,
@@ -689,28 +714,21 @@ export class ScenarioExecutor {
         const attempts: StepAttemptResult[] = [];
         let finalResult:
           | {
-            success: boolean;
-            errors: string[];
-            activatedSkills: string[];
-            isFirstPrompt: boolean;
-          }
+              success: boolean;
+              errors: string[];
+              activatedSkills: string[];
+              isFirstPrompt: boolean;
+            }
           | undefined;
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
           if (attempt > 1) {
             log.stepRetry(step.id ?? "(unnamed)", attempt, maxAttempts, retryDelay);
-            await new Promise((resolve) =>
-              setTimeout(resolve, retryDelay * 1000),
-            );
+            await new Promise((resolve) => setTimeout(resolve, retryDelay * 1000));
           }
 
           const attemptStart = Date.now();
-          const bodyResult = await this.executeStepBody(
-            step,
-            spec,
-            commandEnv,
-            isFirstPrompt,
-          );
+          const bodyResult = await this.executeStepBody(step, spec, commandEnv, isFirstPrompt);
           const attemptDuration = (Date.now() - attemptStart) / 1000;
           isFirstPrompt = bodyResult.isFirstPrompt;
 
@@ -718,10 +736,7 @@ export class ScenarioExecutor {
             attemptNumber: attempt,
             success: bodyResult.success,
             durationSeconds: attemptDuration,
-            error:
-              bodyResult.errors.length > 0
-                ? bodyResult.errors.join("\n")
-                : undefined,
+            error: bodyResult.errors.length > 0 ? bodyResult.errors.join("\n") : undefined,
             activatedSkills: bodyResult.activatedSkills,
           });
 
@@ -729,18 +744,11 @@ export class ScenarioExecutor {
           if (bodyResult.success) break;
         }
 
-        const totalDuration = attempts.reduce(
-          (sum, a) => sum + a.durationSeconds,
-          0,
-        );
+        const totalDuration = attempts.reduce((sum, a) => sum + a.durationSeconds, 0);
         const errorStr =
-          finalResult!.errors.length > 0
-            ? finalResult!.errors.join("\n")
-            : undefined;
+          finalResult!.errors.length > 0 ? finalResult!.errors.join("\n") : undefined;
         const classification =
-          errorStr && !finalResult!.success
-            ? classifyFailure(errorStr)
-            : undefined;
+          errorStr && !finalResult!.success ? classifyFailure(errorStr) : undefined;
 
         results.push({
           step: originalStep,
@@ -805,9 +813,7 @@ export class ScenarioExecutor {
         this.watcherStarted = true;
       }
       await this.watcher.snapshotAtimes();
-      await new Promise((resolve) =>
-        setTimeout(resolve, WATCHER_SNAPSHOT_SETTLE_MS),
-      );
+      await new Promise((resolve) => setTimeout(resolve, WATCHER_SNAPSHOT_SETTLE_MS));
       stepBaseline = this.watcher.markBaseline();
     }
     const stepLabel = step.id ?? "(unnamed)";
@@ -824,28 +830,74 @@ export class ScenarioExecutor {
         await this.executeSleep(stepLabel, step.sleep);
         break;
       case "create_agent":
-        await this.executeCreateAgent(stepLabel, step.create_agent, stepTimeoutSeconds, commandEnv, fail);
+        await this.executeCreateAgent(
+          stepLabel,
+          step.create_agent,
+          stepTimeoutSeconds,
+          commandEnv,
+          fail,
+        );
         break;
       case "delete_agent":
-        await this.executeDeleteAgent(stepLabel, step.delete_agent, stepTimeoutSeconds, commandEnv, fail);
+        await this.executeDeleteAgent(
+          stepLabel,
+          step.delete_agent,
+          stepTimeoutSeconds,
+          commandEnv,
+          fail,
+        );
         break;
       case "create_project":
-        await this.executeCreateProject(stepLabel, step.create_project, stepTimeoutSeconds, commandEnv, fail);
+        await this.executeCreateProject(
+          stepLabel,
+          step.create_project,
+          stepTimeoutSeconds,
+          commandEnv,
+          fail,
+        );
         break;
       case "shell":
-        await this.executeShell(stepLabel, step.shell, step.expect, stepTimeoutSeconds, commandEnv, fail);
+        await this.executeShell(
+          stepLabel,
+          step.shell,
+          step.expect,
+          stepTimeoutSeconds,
+          commandEnv,
+          fail,
+        );
         break;
       case "trigger":
         await this.executeTrigger(stepLabel, step.trigger, stepTimeoutSeconds, commandEnv);
         break;
       case "prompt":
-        isFirstPrompt = await this.executePrompt(stepLabel, step.prompt as string, step.continue_session, isFirstPrompt, stepTimeoutSeconds, fail);
+        isFirstPrompt = await this.executePrompt(
+          stepLabel,
+          step.prompt as string,
+          step.continue_session,
+          isFirstPrompt,
+          stepTimeoutSeconds,
+          fail,
+        );
         break;
       case "invoke":
-        await this.executeInvoke(stepLabel, step.invoke, step.expect, stepTimeoutSeconds, commandEnv, fail);
+        await this.executeInvoke(
+          stepLabel,
+          step.invoke,
+          step.expect,
+          stepTimeoutSeconds,
+          commandEnv,
+          fail,
+        );
         break;
       case "invoke_json":
-        await this.executeInvokeJson(stepLabel, step.invoke_json, step.expect, stepTimeoutSeconds, commandEnv, fail);
+        await this.executeInvokeJson(
+          stepLabel,
+          step.invoke_json,
+          step.expect,
+          stepTimeoutSeconds,
+          commandEnv,
+          fail,
+        );
         break;
       case "http":
         await this.executeHttp(stepLabel, step.http, step.expect, stepTimeoutSeconds, fail);
@@ -859,7 +911,13 @@ export class ScenarioExecutor {
 
     // Build/deploy/expectedFiles verification
     if (step.verify?.build || step.verify?.deploy || step.verify?.expectedFiles) {
-      await this.executeVerification(stepLabel, step.verify as { build?: boolean; deploy?: boolean; expectedFiles?: string[] }, commandEnv, success, fail);
+      await this.executeVerification(
+        stepLabel,
+        step.verify as { build?: boolean; deploy?: boolean; expectedFiles?: string[] },
+        commandEnv,
+        success,
+        fail,
+      );
       success = errors.length === 0;
     }
 
@@ -901,9 +959,7 @@ export class ScenarioExecutor {
         args.push("-c", `${k}=${v}`);
       }
     }
-    const result = await this.runLocalCommand(
-      "golem", args, timeout, projectDir, commandEnv,
-    );
+    const result = await this.runLocalCommand("golem", args, timeout, projectDir, commandEnv);
     log.cliOutput(stepLabel, "golem agent new", result.output);
     if (!result.success) fail(`CREATE_AGENT_FAILED: ${result.output}`);
   }
@@ -918,7 +974,11 @@ export class ScenarioExecutor {
     log.stepAction(stepLabel, `deleting agent "${spec.name}"`);
     const projectDir = await this.findGolemProjectDir();
     const result = await this.runLocalCommand(
-      "golem", ["agent", "delete", spec.name], timeout, projectDir, commandEnv,
+      "golem",
+      ["agent", "delete", spec.name],
+      timeout,
+      projectDir,
+      commandEnv,
     );
     log.cliOutput(stepLabel, "golem agent delete", result.output);
     if (!result.success) fail(`DELETE_AGENT_FAILED: ${result.output}`);
@@ -944,9 +1004,7 @@ export class ScenarioExecutor {
         args.push("--preset", preset);
       }
     }
-    const result = await this.runLocalCommand(
-      "golem", args, timeout, this.workspace, commandEnv,
-    );
+    const result = await this.runLocalCommand("golem", args, timeout, this.workspace, commandEnv);
     log.cliOutput(stepLabel, "golem new", result.output);
     if (!result.success) fail(`CREATE_PROJECT_FAILED: ${result.output}`);
   }
@@ -960,15 +1018,21 @@ export class ScenarioExecutor {
     fail: (msg: string) => void,
   ): Promise<void> {
     log.stepAction(stepLabel, `running shell command "${shell.command}"`);
-    const shellCwd = shell.cwd
-      ? path.resolve(this.workspace, shell.cwd)
-      : this.workspace;
+    const shellCwd = shell.cwd ? path.resolve(this.workspace, shell.cwd) : this.workspace;
     const result = await this.runLocalCommand(
-      shell.command, shell.args ?? [], timeout, shellCwd, commandEnv,
+      shell.command,
+      shell.args ?? [],
+      timeout,
+      shellCwd,
+      commandEnv,
     );
 
     if (expect) {
-      this.evaluateAssertions({ stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }, expect, fail);
+      this.evaluateAssertions(
+        { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
+        expect,
+        fail,
+      );
     } else if (!result.success) {
       fail(`SHELL_FAILED: ${result.output}`);
     }
@@ -984,8 +1048,9 @@ export class ScenarioExecutor {
     const projectDir = await this.findGolemProjectDir();
     const args = ["agent", "invoke", trigger.agent, trigger.method, "--trigger"];
     if (trigger.args) args.push(trigger.args);
-    this.runLocalCommand("golem", args, timeout, projectDir, commandEnv)
-      .catch(() => { /* fire and forget */ });
+    this.runLocalCommand("golem", args, timeout, projectDir, commandEnv).catch(() => {
+      /* fire and forget */
+    });
   }
 
   private async executePrompt(
@@ -1021,18 +1086,21 @@ export class ScenarioExecutor {
     const projectDir = await this.findGolemProjectDir();
     const args = ["agent", "invoke", invoke.agent, invoke.method];
     if (invoke.args) args.push(invoke.args);
-    const result = await this.runLocalCommand(
-      "golem", args, timeout, projectDir, commandEnv,
-    );
+    const result = await this.runLocalCommand("golem", args, timeout, projectDir, commandEnv);
 
     log.invokeResult(stepLabel, `${invoke.agent}.${invoke.method}`, result.stdout);
 
     if (expect) {
       let resultJson: unknown;
-      try { resultJson = JSON.parse(result.stdout); } catch { /* not JSON */ }
+      try {
+        resultJson = JSON.parse(result.stdout);
+      } catch {
+        /* not JSON */
+      }
       this.evaluateAssertions(
         { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, resultJson },
-        expect, fail,
+        expect,
+        fail,
       );
     } else if (!result.success) {
       fail(`INVOKE_FAILED: ${result.output}`);
@@ -1051,9 +1119,7 @@ export class ScenarioExecutor {
     const projectDir = await this.findGolemProjectDir();
     const args = ["--format", "json", "agent", "invoke", invoke.agent, invoke.method];
     if (invoke.args) args.push(invoke.args);
-    const result = await this.runLocalCommand(
-      "golem", args, timeout, projectDir, commandEnv,
-    );
+    const result = await this.runLocalCommand("golem", args, timeout, projectDir, commandEnv);
 
     const resultJson = extractInvokeJsonResult(result.stdout);
 
@@ -1062,7 +1128,8 @@ export class ScenarioExecutor {
     if (expect) {
       this.evaluateAssertions(
         { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, resultJson },
-        expect, fail,
+        expect,
+        fail,
       );
     } else if (!result.success) {
       fail(`INVOKE_JSON_FAILED: ${result.output}`);
@@ -1092,8 +1159,15 @@ export class ScenarioExecutor {
 
       if (expect) {
         this.evaluateAssertions(
-          { stdout: body, stderr: "", exitCode: response.ok ? 0 : 1, body, status: response.status },
-          expect, fail,
+          {
+            stdout: body,
+            stderr: "",
+            exitCode: response.ok ? 0 : 1,
+            body,
+            status: response.status,
+          },
+          expect,
+          fail,
         );
       } else if (!response.ok) {
         fail(`HTTP_FAILED: ${response.status} ${body.slice(0, 500)}`);
@@ -1137,10 +1211,7 @@ export class ScenarioExecutor {
       log.stepSkillDetected(stepLabel, "atime", res.skillName, res.path);
     }
     const activatedSkills = Array.from(
-      new Set([
-        ...watcherEvents.map((e) => e.skillName),
-        ...atimeResults.map((r) => r.skillName),
-      ]),
+      new Set([...watcherEvents.map((e) => e.skillName), ...atimeResults.map((r) => r.skillName)]),
     );
     log.stepActivatedSkills(stepLabel, activatedSkills);
     const error = this.assertSkillActivation(stepLabel, step, activatedSkills);
@@ -1182,7 +1253,10 @@ export class ScenarioExecutor {
       if (missingCount === 0) {
         log.stepAction(stepLabel, `expected ${fileLabel} verified`);
       } else {
-        log.stepAction(stepLabel, `expected ${fileLabel} verification failed (${missingCount} missing)`);
+        log.stepAction(
+          stepLabel,
+          `expected ${fileLabel} verification failed (${missingCount} missing)`,
+        );
       }
     }
 
@@ -1203,7 +1277,13 @@ export class ScenarioExecutor {
         const golemTempDir = path.join(projectDir, "golem-temp");
         await fs.rm(golemTempDir, { recursive: true, force: true });
         log.stepAction(stepLabel, `running implicit golem build before deploy in ${projectDir}`);
-        const buildResult = await this.runLocalCommand("golem", ["build"], 600, projectDir, commandEnv);
+        const buildResult = await this.runLocalCommand(
+          "golem",
+          ["build"],
+          600,
+          projectDir,
+          commandEnv,
+        );
         log.cliOutput(stepLabel, "golem build", buildResult.output);
         if (!buildResult.success) {
           recordFailure(`BUILD_FAILED: ${buildResult.output}`);
@@ -1213,7 +1293,13 @@ export class ScenarioExecutor {
 
       if (!verificationFailed) {
         log.stepAction(stepLabel, `running golem deploy in ${projectDir}`);
-        const deployResult = await this.runLocalCommand("golem", ["deploy", "--yes"], 600, projectDir, commandEnv);
+        const deployResult = await this.runLocalCommand(
+          "golem",
+          ["deploy", "--yes"],
+          600,
+          projectDir,
+          commandEnv,
+        );
         log.cliOutput(stepLabel, "golem deploy", deployResult.output);
         if (!deployResult.success) recordFailure(`DEPLOY_FAILED: ${deployResult.output}`);
       }
@@ -1247,14 +1333,16 @@ export class ScenarioExecutor {
       return undefined;
     }
 
-    const allowedExtraSkills = (step.allowedExtraSkills as string[] | undefined);
+    const allowedExtraSkills = step.allowedExtraSkills as string[] | undefined;
     if (allowedExtraSkills) {
       const allowedExtras = new Set(allowedExtraSkills);
       const unexpectedExtras = activatedSkills.filter(
         (skill) => !expectedSet.has(skill) && !allowedExtras.has(skill),
       );
       if (unexpectedExtras.length > 0) {
-        log.warn(`extra skills activated beyond allowedExtraSkills: [${unexpectedExtras.join(", ")}]`);
+        log.warn(
+          `extra skills activated beyond allowedExtraSkills: [${unexpectedExtras.join(", ")}]`,
+        );
       }
     }
 
@@ -1267,9 +1355,7 @@ export class ScenarioExecutor {
       env["GOLEM_ROUTER_PORT"] = String(spec.settings.golem_server.router_port);
     }
     if (spec.settings?.golem_server?.custom_request_port) {
-      env["GOLEM_CUSTOM_REQUEST_PORT"] = String(
-        spec.settings.golem_server.custom_request_port,
-      );
+      env["GOLEM_CUSTOM_REQUEST_PORT"] = String(spec.settings.golem_server.custom_request_port);
     }
     if (spec.prerequisites?.env) {
       Object.assign(env, spec.prerequisites.env);
@@ -1287,9 +1373,7 @@ export class ScenarioExecutor {
       this.workspace,
     );
     if (!profileCheck.success) {
-      throw new Error(
-        `Failed to verify local Golem profile: ${profileCheck.output}`,
-      );
+      throw new Error(`Failed to verify local Golem profile: ${profileCheck.output}`);
     }
 
     const serverCheck = await this.runLocalCommand(

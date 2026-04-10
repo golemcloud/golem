@@ -10,9 +10,7 @@ describe("SkillWatcher", () => {
     it("extracts skill name from a valid SKILL.md path", () => {
       const watcher = new SkillWatcher("/tmp/skills");
       assert.equal(
-        watcher.pathToSkillName(
-          "/tmp/workspace/.agents/skills/adding-dependencies/SKILL.md",
-        ),
+        watcher.pathToSkillName("/tmp/workspace/.agents/skills/adding-dependencies/SKILL.md"),
         "adding-dependencies",
       );
     });
@@ -29,10 +27,7 @@ describe("SkillWatcher", () => {
 
     it("returns null for non-SKILL.md files", () => {
       const watcher = new SkillWatcher("/tmp/skills");
-      assert.equal(
-        watcher.pathToSkillName("/tmp/skills/adding-dependencies/README.md"),
-        null,
-      );
+      assert.equal(watcher.pathToSkillName("/tmp/skills/adding-dependencies/README.md"), null);
     });
 
     it("returns null for SKILL.md outside agent skill directories", () => {
@@ -106,9 +101,7 @@ describe("SkillWatcher", () => {
 
       const changed = await watcher.getSkillsWithChangedAtime();
 
-      assert.deepEqual(changed, [
-        { skillName: "golem-new-project", path: skillFile },
-      ]);
+      assert.deepEqual(changed, [{ skillName: "golem-new-project", path: skillFile }]);
     });
   });
 });

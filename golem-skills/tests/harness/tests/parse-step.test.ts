@@ -129,7 +129,8 @@ describe("parseStep", () => {
 
   it("requires expectedSkills when strictSkillMatch is set", async () => {
     await assert.rejects(
-      () => loadScenarioYaml(`
+      () =>
+        loadScenarioYaml(`
 name: "strict-skill-match"
 steps:
   - prompt: "do it"
@@ -144,7 +145,8 @@ steps:
 
   it("requires expectedSkills when allowedExtraSkills is set", async () => {
     await assert.rejects(
-      () => loadScenarioYaml(`
+      () =>
+        loadScenarioYaml(`
 name: "allowed-extra-skills"
 steps:
   - prompt: "do it"
@@ -442,7 +444,9 @@ steps:
     assert.deepEqual(tags, ["prompt", "http", "http", "http", "http", "shell"]);
 
     // Verify CRUD http methods
-    const httpSteps = spec.steps.filter((s): s is Extract<StepSpec, { tag: "http" }> => s.tag === "http");
+    const httpSteps = spec.steps.filter(
+      (s): s is Extract<StepSpec, { tag: "http" }> => s.tag === "http",
+    );
     const methods = httpSteps.map((s) => s.http.method);
     assert.deepEqual(methods, ["POST", "GET", "PUT", "DELETE"]);
 
@@ -502,15 +506,27 @@ steps:
 
     const tags = spec.steps.map((s) => s.tag);
     assert.deepEqual(tags, [
-      "prompt", "create_agent", "shell", "sleep",
-      "trigger", "invoke", "http", "delete_agent",
+      "prompt",
+      "create_agent",
+      "shell",
+      "sleep",
+      "trigger",
+      "invoke",
+      "http",
+      "delete_agent",
     ]);
 
     // Each step has the correct id
     const ids = spec.steps.map((s) => s.id);
     assert.deepEqual(ids, [
-      "init", "spawn-worker", "build", "warmup",
-      "kick-off", "call-worker", "check-api", "cleanup-worker",
+      "init",
+      "spawn-worker",
+      "build",
+      "warmup",
+      "kick-off",
+      "call-worker",
+      "check-api",
+      "cleanup-worker",
     ]);
   });
 
@@ -527,9 +543,23 @@ steps:
       url: "http://localhost"
 `);
     for (const step of spec.steps) {
-      const actionKeys = ["prompt", "invoke", "invoke_json", "shell", "trigger", "create_agent", "delete_agent", "sleep", "http"] as const;
+      const actionKeys = [
+        "prompt",
+        "invoke",
+        "invoke_json",
+        "shell",
+        "trigger",
+        "create_agent",
+        "delete_agent",
+        "sleep",
+        "http",
+      ] as const;
       const present = actionKeys.filter((k) => Object.prototype.hasOwnProperty.call(step, k));
-      assert.equal(present.length, 1, `Step "${step.id}" should have exactly one action field, got: ${present.join(", ")}`);
+      assert.equal(
+        present.length,
+        1,
+        `Step "${step.id}" should have exactly one action field, got: ${present.join(", ")}`,
+      );
       assert.equal(present[0], step.tag, `Step "${step.id}" action field should match tag`);
     }
   });

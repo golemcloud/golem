@@ -50,16 +50,10 @@ export class CodexAgentDriver extends BaseAgentDriver {
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const parsed = JSON.parse(lines[i]) as Record<string, unknown>;
-        if (
-          typeof parsed.session_id === "string" &&
-          parsed.session_id.length > 0
-        ) {
+        if (typeof parsed.session_id === "string" && parsed.session_id.length > 0) {
           return parsed.session_id;
         }
-        if (
-          typeof parsed.conversation_id === "string" &&
-          parsed.conversation_id.length > 0
-        ) {
+        if (typeof parsed.conversation_id === "string" && parsed.conversation_id.length > 0) {
           return parsed.conversation_id;
         }
       } catch {

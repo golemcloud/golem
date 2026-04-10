@@ -56,6 +56,26 @@ npm install
 npm run build
 ```
 
+The `build` script runs **ESLint** then **tsc**, so lint errors will fail the build.
+
+## Linting and Formatting
+
+The harness uses [ESLint 9](https://eslint.org/) with [`typescript-eslint`](https://typescript-eslint.io/) for linting and [Prettier](https://prettier.io/) for formatting. Configuration files:
+
+- `eslint.config.js` — ESLint flat config with `typescript-eslint` recommended rules
+- `.prettierrc` — Prettier config (2-space indent, double quotes, trailing commas, 100 char width)
+
+```shell
+cd golem-skills/tests/harness
+
+npm run lint            # Check for lint errors
+npm run lint:fix        # Auto-fix lint errors
+npm run format:check    # Check formatting without changing files
+npm run format          # Auto-format all source files
+```
+
+**Always run `npm run lint:fix` and `npm run format` before committing harness changes.** CI enforces both lint (via `npm run build`) and formatting (via `npm run format:check`).
+
 ## Running Unit Tests (harness self-tests)
 
 ```shell

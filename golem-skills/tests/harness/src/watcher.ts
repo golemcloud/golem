@@ -15,8 +15,7 @@ export class SkillWatcher {
   private activatedEvents: WatcherEvent[] = [];
   private rootDir: string;
   private extraDirs: string[] = [];
-  private atimeBaselines: Map<string, { skillName: string; atimeMs: number }> =
-    new Map();
+  private atimeBaselines: Map<string, { skillName: string; atimeMs: number }> = new Map();
   private warnedMissingTool = false;
   private suppressEvents = false;
 
@@ -65,7 +64,7 @@ export class SkillWatcher {
             const tool = platform === "darwin" ? "fswatch" : "inotifywait";
             log.warn(
               `SkillWatcher: "${tool}" not found; falling back to atime-based detection. ` +
-              `Install ${tool} for real-time skill activation tracking.`,
+                `Install ${tool} for real-time skill activation tracking.`,
             );
           }
         } else {
@@ -75,26 +74,13 @@ export class SkillWatcher {
     }
   }
 
-  private spawnWatcher(
-    platform: NodeJS.Platform,
-    dir: string,
-  ): ChildProcess | null {
+  private spawnWatcher(platform: NodeJS.Platform, dir: string): ChildProcess | null {
     if (platform === "linux") {
-      return spawn("inotifywait", [
-        "-m",
-        "-r",
-        "-e",
-        "access",
-        "--format",
-        "%w%f",
-        dir,
-      ]);
+      return spawn("inotifywait", ["-m", "-r", "-e", "access", "--format", "%w%f", dir]);
     } else if (platform === "darwin") {
       return null;
     }
-    log.warn(
-      `SkillWatcher: Unsupported platform ${platform}, activation tracking disabled.`,
-    );
+    log.warn(`SkillWatcher: Unsupported platform ${platform}, activation tracking disabled.`);
     return null;
   }
 
@@ -134,9 +120,7 @@ export class SkillWatcher {
    * Compare current atimes against the snapshot.
    * Returns skill names whose SKILL.md files had atime updated since the snapshot.
    */
-  async getSkillsWithChangedAtime(): Promise<
-    { skillName: string; path: string }[]
-  > {
+  async getSkillsWithChangedAtime(): Promise<{ skillName: string; path: string }[]> {
     const changed: { skillName: string; path: string }[] = [];
     for (const [filePath, baseline] of this.atimeBaselines) {
       try {

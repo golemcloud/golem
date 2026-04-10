@@ -15,15 +15,9 @@ type Colorizer = (text: string) => string;
 
 const DRIVER_TAGS = ["amp", "claude-code", "codex", "opencode"] as const;
 const TAG_WIDTH = Math.max(
-  ...[
-    "golem",
-    "scenario",
-    "step",
-    "run",
-    "dry-run",
-    "summary",
-    ...DRIVER_TAGS,
-  ].map((tag) => `[${tag}]`.length),
+  ...["golem", "scenario", "step", "run", "dry-run", "summary", ...DRIVER_TAGS].map(
+    (tag) => `[${tag}]`.length,
+  ),
 );
 
 function renderTag(tag: string, color: Colorizer): string {
@@ -213,11 +207,7 @@ export function driverTools(prefix: string, tools: string[]): void {
   );
 }
 
-export function driverMcp(
-  prefix: string,
-  name: string,
-  status: string,
-): void {
+export function driverMcp(prefix: string, name: string, status: string): void {
   const statusColor = status === "connected" ? chalk.green : chalk.yellow;
   driverLine(prefix, `${chalk.cyan("mcp")} ${chalk.white(name)} ${statusColor(status)}`);
 }
@@ -228,17 +218,11 @@ export function driverToolUse(
   input?: Record<string, unknown>,
 ): void {
   const inputStr =
-    input && Object.keys(input).length > 0
-      ? " " + chalk.gray(JSON.stringify(input))
-      : "";
+    input && Object.keys(input).length > 0 ? " " + chalk.gray(JSON.stringify(input)) : "";
   driverLine(prefix, `${chalk.yellow("▶")} ${chalk.yellow(toolName)}${inputStr}`);
 }
 
-export function driverSuccess(
-  prefix: string,
-  durationStr: string,
-  extra?: string,
-): void {
+export function driverSuccess(prefix: string, durationStr: string, extra?: string): void {
   const parts = [chalk.green("✓ done"), chalk.gray(durationStr)];
   if (extra) parts.push(chalk.gray(extra));
   driverLine(prefix, parts.join(" "));
@@ -374,10 +358,7 @@ export function scenarioFailedStep(stepName: string, error: string): void {
   scenarioDetail(`error: ${error}`, chalk.red);
 }
 
-export function scenarioFailureClassification(
-  category: string,
-  guidance: string,
-): void {
+export function scenarioFailureClassification(category: string, guidance: string): void {
   scenarioDetail(`[${category}] ${guidance}`, chalk.yellow);
 }
 
@@ -451,9 +432,12 @@ export function dryRunStepDetail(detail: string): void {
 // --- Test summary ----------------------------------------------------------
 
 export function summaryLine(label: string, value: string | number, color?: "green" | "red"): void {
-  const formatted = color === "green" ? chalk.green(`${label}${value}`)
-    : color === "red" ? chalk.red(`${label}${value}`)
-    : `${label}${value}`;
+  const formatted =
+    color === "green"
+      ? chalk.green(`${label}${value}`)
+      : color === "red"
+        ? chalk.red(`${label}${value}`)
+        : `${label}${value}`;
   summaryTagged(formatted);
 }
 
