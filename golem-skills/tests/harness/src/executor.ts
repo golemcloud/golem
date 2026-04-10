@@ -925,11 +925,11 @@ export class ScenarioExecutor {
   ): Promise<boolean> {
     const useContinueSession = continueSession !== false && !isFirstPrompt;
     if (useContinueSession) {
-      log.stepAction(stepLabel, "sending followup prompt");
+      log.stepPrompt(stepLabel, prompt, "followup");
       const result = await this.driver.sendFollowup(prompt, timeout);
       if (!result.success) fail(`Agent failed: ${result.output}`);
     } else {
-      log.stepAction(stepLabel, "sending prompt");
+      log.stepPrompt(stepLabel, prompt, "initial");
       const result = await this.driver.sendPrompt(prompt, timeout);
       if (!result.success) fail(`Agent failed: ${result.output}`);
     }

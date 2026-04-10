@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
-import chalk from "chalk";
 import * as log from "../log.js";
 
 export interface AgentResult {
@@ -23,15 +22,15 @@ export abstract class BaseAgentDriver implements AgentDriver {
   protected skillsDir: string = "";
   protected readonly skillLinkMode: "symlink" | "copy" = "symlink";
 
-  /** Short name used as a colored prefix in log output (e.g. "claude", "amp") */
+  /** Short tag used in log output (e.g. "claude-code", "amp") */
   protected abstract readonly driverName: string;
 
   /** Directories relative to workspace where skills should be symlinked (e.g. ['.claude/skills']) */
   protected abstract readonly skillDirs: string[];
 
-  /** Returns the colored log prefix for this driver, e.g. `[claude]` */
+  /** Returns the driver log tag, e.g. `claude-code` */
   protected get logPrefix(): string {
-    return chalk.magenta(`[${this.driverName}]`);
+    return this.driverName;
   }
 
   async setup(workspace: string, skillsDir: string): Promise<void> {
