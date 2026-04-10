@@ -225,7 +225,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let promise_completion_result = if is_local_worker {
                 self.public_state
                     .promise_service
-                    .complete(promise_id.clone(), data, self.created_by())
+                    .complete(promise_id.clone(), data)
                     .await?
             } else {
                 // talk to the executor that actually owns the promise

@@ -263,7 +263,6 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         let worker = self
             .worker_activator
             .get_or_create_running(
-                running_plugin.account_id,
                 &target_owned,
                 None,
                 None,

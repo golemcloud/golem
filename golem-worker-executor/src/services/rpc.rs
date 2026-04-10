@@ -766,7 +766,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
             let _worker = Worker::get_or_create_running(
                 self,
-                self_created_by,
                 owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),
@@ -827,7 +826,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             let principal = caller_agent_principal(self_agent_id);
             let worker = Worker::get_or_create_running(
                 self,
-                self_created_by,
                 owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),
@@ -904,7 +902,6 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             let principal = caller_agent_principal(self_agent_id);
             let worker = Worker::get_or_create_running(
                 self,
-                self_created_by,
                 owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),

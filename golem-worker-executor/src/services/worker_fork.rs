@@ -505,7 +505,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let source_worker_instance = Worker::get_or_create_suspended(
             self,
-            fork_account_id,
             &owned_source_agent_id,
             None,
             None,
@@ -519,6 +518,12 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let initial_source_worker_metadata = source_worker_instance.get_initial_worker_metadata();
 
+        // TODO: Should `created_by` use `component.account_id` (the component
+        // owner) instead of `fork_account_id` (the caller)?  The same issue
+        // fixed in `get_or_create_worker_metadata` for RPC-created workers
+        // (golemcloud/golem#3099) likely applies here — the forked worker's
+        // resource consumption would be attributed to the caller rather than
+        // the component owner?
         let target_worker_metadata = AgentMetadata {
             agent_id: target_agent_id.clone(),
             created_by: fork_account_id,

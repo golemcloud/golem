@@ -18,7 +18,6 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
 use tracing::warn;
 
@@ -32,7 +31,6 @@ pub trait CanStartWorker {
     fn maybe_invocation_context(&self) -> Option<InvocationContextStack> {
         None
     }
-    fn auth_ctx(&self) -> Result<AuthCtx, WorkerExecutorError>;
     fn principal(&self) -> Principal {
         Principal::anonymous()
     }
@@ -44,7 +42,6 @@ trait ProtobufInvocationDetails {
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext>;
-    fn proto_auth_ctx(&self) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx>;
     fn proto_principal(&self) -> &Option<golem_api_grpc::proto::golem::component::Principal> {
         &None
     }
@@ -93,14 +90,6 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
         })
     }
 
-    fn auth_ctx(&self) -> Result<AuthCtx, WorkerExecutorError> {
-        self.proto_auth_ctx()
-            .clone()
-            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
-            .try_into()
-            .map_err(WorkerExecutorError::invalid_request)
-    }
-
     fn principal(&self) -> Principal {
         self.proto_principal()
             .as_ref()
@@ -129,10 +118,6 @@ impl ProtobufInvocationDetails
         &None
     }
 
-    fn proto_auth_ctx(&self) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
-        &self.auth_ctx
-    }
-
     fn proto_principal(&self) -> &Option<golem_api_grpc::proto::golem::component::Principal> {
         &self.principal
     }
@@ -155,10 +140,6 @@ impl ProtobufInvocationDetails
         &None
     }
 
-    fn proto_auth_ctx(&self) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
-        &self.auth_ctx
-    }
-
     fn proto_principal(&self) -> &Option<golem_api_grpc::proto::golem::component::Principal> {
         &self.principal
     }
@@ -179,10 +160,6 @@ impl ProtobufInvocationDetails
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &self.context
-    }
-
-    fn proto_auth_ctx(&self) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
-        &self.auth_ctx
     }
 
     fn proto_principal(&self) -> &Option<golem_api_grpc::proto::golem::component::Principal> {

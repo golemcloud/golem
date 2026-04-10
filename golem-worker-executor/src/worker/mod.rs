@@ -51,7 +51,6 @@ use futures::channel::oneshot;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
-use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
@@ -151,7 +150,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker, but does not start it
     pub async fn get_or_create_suspended<T>(
         deps: &T,
-        account_id: AccountId,
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
@@ -168,7 +166,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .get_or_add(
                 deps,
                 owned_agent_id,
-                account_id,
                 worker_env,
                 worker_config_vars,
                 worker_agent_config,
@@ -183,7 +180,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker and makes sure it is running
     pub async fn get_or_create_running<T>(
         deps: &T,
-        account_id: AccountId,
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
@@ -198,7 +194,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     {
         let worker = Self::get_or_create_suspended(
             deps,
-            account_id,
             owned_agent_id,
             worker_env,
             worker_config_vars,
@@ -243,7 +238,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn new<T: HasAll<Ctx>>(
         deps: &T,
-        account_id: &AccountId,
         owned_agent_id: OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
@@ -262,7 +256,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             oplog,
         } = Self::get_or_create_worker_metadata(
             deps,
-            account_id,
             &owned_agent_id,
             component_revision,
             worker_env,
@@ -309,12 +302,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // is enforced from the very first agent startup for this account.
         // Registration is idempotent — subsequent calls for the same account
         // on the same executor are instant (OnceCell cache hit in ResourceLimitsGrpc).
+        let owner_account_id = initial_worker_metadata.created_by;
         let resource_entry = deps
             .resource_limits()
-            .initialize_account(*account_id)
+            .initialize_account(owner_account_id)
             .await?;
         deps.active_workers()
-            .register_account_concurrency(*account_id, resource_entry)
+            .register_account_concurrency(owner_account_id, resource_entry)
             .await;
 
         let worker = Worker {
@@ -1731,7 +1725,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             + Sync,
     >(
         this: &T,
-        account_id: &AccountId,
         owned_agent_id: &OwnedAgentId,
         component_revision: Option<ComponentRevision>,
         worker_env: Option<Vec<(String, String)>>,
@@ -1884,6 +1877,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ..Default::default()
                 };
 
+                // Use the component's authoritative account_id and environment_id
+                // rather than the caller-provided values. During cross-account or
+                // cross-environment RPC the caller may pass its own account/environment,
+                // but the worker must belong to the component's owning account and
+                // environment for correct metric attribution and quota enforcement.
                 let initial_worker_metadata = AgentMetadata {
                     agent_id: owned_agent_id.agent_id(),
                     // TODO: these environment variables already contain the component level values,
@@ -1892,8 +1890,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     env: worker_env,
                     config_vars: worker_config_vars.unwrap_or_default(),
                     agent_config: initial_agent_config,
-                    environment_id: owned_agent_id.environment_id(),
-                    created_by: *account_id,
+                    environment_id: component.environment_id,
+                    created_by: component.account_id,
                     created_at,
                     parent,
                     last_known_status: initial_status.clone(),
