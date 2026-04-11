@@ -167,62 +167,6 @@ async fn concurrent_agent_limit_not_reached_starts_immediately(
     Ok(())
 }
 
-/// When the concurrent agent limit is reached and the running agent becomes
-/// idle, starting a new agent automatically evicts the idle one to free a
-/// slot — no manual deletion required.
-#[test]
-#[tracing::instrument]
-#[timeout("2m")]
-async fn concurrent_agent_limit_idle_agent_is_evicted_to_make_room(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    // Limit of 1: only one agent may hold a permit at a time.
-    let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, agent_counters)
-        .store()
-        .await?;
-
-    // Start a1 — takes the only permit.
-    let a1 = agent_id!("Counter", "concurrent-evict-1");
-    let a1_id = executor.start_agent(&component.id, a1.clone()).await?;
-
-    // Invoke a1 so it runs and then returns to Idle.
-    executor
-        .invoke_and_await_agent(&component, &a1, "increment", data_value!())
-        .await?;
-
-    // Wait until a1 is Idle — it can now be evicted.
-    executor
-        .wait_for_status(&a1_id, AgentStatus::Idle, Duration::from_secs(10))
-        .await?;
-
-    // Spawn a2's start in the background. The permit acquisition will detect
-    // a1 is idle and evict it automatically, without any manual intervention.
-    let executor_clone = executor.clone();
-    let component_clone = component.clone();
-    let a2 = agent_id!("Counter", "concurrent-evict-2");
-    let a2_clone = a2.clone();
-    tokio::spawn(async move {
-        executor_clone
-            .start_agent(&component_clone.id, a2_clone)
-            .await
-    });
-
-    // a2's invocation will complete once the eviction unblocks it.
-    // No sleep, no manual delete — eviction is the feature under test.
-    executor
-        .invoke_and_await_agent(&component, &a2, "increment", data_value!())
-        .await?;
-
-    Ok(())
-}
-
 /// When the limit is reached with no idle agents, a new agent waits in
 /// WaitingForPermit until the running agent finishes and its permit is returned.
 ///
@@ -327,6 +271,135 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
     executor
         .invoke_and_await_agent(&counters_component, &a2, "increment", data_value!())
         .await?;
+
+    http_server.abort();
+    Ok(())
+}
+
+/// Idle agents must release their concurrent-agent permit so new agents can
+/// start without evicting the idle ones.
+///
+/// Setup: limit=1, keep a1 actively Running via an HTTP gate. While a1 is
+/// Running (not evictable) and holds the only permit, start a2 in the
+/// background — it blocks in WaitingForPermit. Release the gate so a1's
+/// invocation completes and a1 goes Idle.
+///
+/// With the bug (idle agents hold permits): a1 stays idle but still holds the
+/// permit. a2 remains blocked in WaitingForPermit because there is nothing to
+/// evict (the `try_free_up` callback found a1 was still Running at the time it
+/// was called, and now a1 is idle but the callback already returned false). a2
+/// never starts, and invoking it times out.
+///
+/// With the fix (idle agents release permits): a1 goes Idle and immediately
+/// drops its permit. a2's `acquire_owned().await` unblocks, a2 starts, and its
+/// invocation succeeds within the timeout.
+///
+/// Crucially, this test does NOT rely on eviction. The only way a2 can start
+/// is if a1's permit was returned to the pool by the idle transition, not by
+/// `stop_if_idle` eviction.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn concurrent_agent_idle_releases_permit(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // limit=1: exactly one concurrent-agent permit.
+    let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
+
+    // --- HTTP gate: keeps a1 provably Running until we release it. ---
+    let gate = std::sync::Arc::new(tokio::sync::Notify::new());
+    let gate_clone = gate.clone();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let http_server = tokio::spawn(async move {
+        let route = Router::new().route(
+            "/poll",
+            get(move || {
+                let gate = gate_clone.clone();
+                async move {
+                    gate.notified().await;
+                    "done".to_string()
+                }
+            }),
+        );
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    let http_component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+
+    // Start a1 using HttpClient2 (polls GET /poll until body equals "done").
+    let a1 = agent_id!("HttpClient2");
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let a1_id = executor
+        .start_agent_with(
+            &http_component.id,
+            a1.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    // Fire-and-forget: a1 starts polling the gated server.
+    executor
+        .invoke_agent(&http_component, &a1, "start_polling", data_value!("done"))
+        .await?;
+
+    // Confirm a1 is Running (holds the only permit, is NOT evictable).
+    executor
+        .wait_for_status(&a1_id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+
+    // Spawn a2 in background. It enters WaitingForPermit because a1 is Running.
+    // The try_free_up callback runs NOW and finds a1 Running (not idle) → returns
+    // false. a2 falls through to `acquire_owned().await` — blocking on the
+    // semaphore.
+    let counters_component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let executor_clone = executor.clone();
+    let counters_clone = counters_component.clone();
+    let a2 = agent_id!("Counter", "idle-permit-2");
+    let a2_clone = a2.clone();
+    tokio::spawn(async move {
+        executor_clone
+            .start_agent(&counters_clone.id, a2_clone)
+            .await
+    });
+
+    // Small delay to ensure a2's acquire + try_free_up has already executed and
+    // failed (a1 was Running). a2 is now blocked on acquire_owned().await.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // Release the gate. a1's poll returns "done", invocation completes, a1 goes Idle.
+    // With the fix: Idle transition drops the permit → semaphore notifies a2 → a2 starts.
+    // With the bug: a1 stays Idle but holds permit → a2 remains blocked forever.
+    gate.notify_waiters();
+
+    // a2 should now be unblocked (fix) or remain stuck (bug).
+    // Give it 15 seconds — well beyond what starting a counter agent takes.
+    let a2_result = tokio::time::timeout(
+        Duration::from_secs(15),
+        executor.invoke_and_await_agent(&counters_component, &a2, "increment", data_value!()),
+    )
+    .await;
+
+    assert!(
+        a2_result.is_ok(),
+        "a2 should have started after a1 went Idle and released its permit, \
+         but it timed out — idle agents are still holding permits"
+    );
+    a2_result.unwrap()?;
 
     http_server.abort();
     Ok(())

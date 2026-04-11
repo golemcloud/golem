@@ -2245,10 +2245,6 @@ struct RunningWorker {
     /// automatically when `RunningWorker` is dropped, returning storage
     /// permits to the pool.
     filesystem_storage_permit: Option<OwnedSemaphorePermit>,
-    /// Concurrent-agent semaphore permit for this account. Held for the
-    /// lifetime of the `RunningWorker` and returned automatically via `Drop`,
-    /// freeing a slot for the next waiting agent from the same account.
-    _concurrent_agent_permit: OwnedSemaphorePermit,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
 }
@@ -2306,6 +2302,7 @@ impl RunningWorker {
                     waiting_for_command_clone,
                     interrupt_signal_clone,
                     oom_retry_count,
+                    concurrent_agent_permit,
                 )
                 .instrument(span)
                 .await;
@@ -2319,7 +2316,6 @@ impl RunningWorker {
             queue,
             permit,
             filesystem_storage_permit: None,
-            _concurrent_agent_permit: concurrent_agent_permit,
             waiting_for_command,
             interrupt_signal,
         }
@@ -2566,6 +2562,7 @@ impl RunningWorker {
         waiting_for_command: Arc<AtomicBool>,
         interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
         oom_retry_count: u32,
+        concurrent_agent_permit: OwnedSemaphorePermit,
     ) {
         let mut invocation_loop = InvocationLoop {
             receiver,
@@ -2575,6 +2572,7 @@ impl RunningWorker {
             waiting_for_command,
             interrupt_signal,
             oom_retry_count,
+            concurrent_agent_permit: Some(concurrent_agent_permit),
         };
         invocation_loop.run().await;
     }
