@@ -720,8 +720,37 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [claude-code, opencode, codex]
+        agent: [claude-code, codex]
         language: [ts, rust, scala]
+        model: ['']
+        include:
+          - agent: opencode
+            language: ts
+            model: google/gemini-3-pro-preview
+          - agent: opencode
+            language: rust
+            model: google/gemini-3-pro-preview
+          - agent: opencode
+            language: scala
+            model: google/gemini-3-pro-preview
+          - agent: opencode
+            language: ts
+            model: openai/gpt-5.4
+          - agent: opencode
+            language: rust
+            model: openai/gpt-5.4
+          - agent: opencode
+            language: scala
+            model: openai/gpt-5.4
+          - agent: opencode
+            language: ts
+            model: anthropic/claude-opus-4-6
+          - agent: opencode
+            language: rust
+            model: anthropic/claude-opus-4-6
+          - agent: opencode
+            language: scala
+            model: anthropic/claude-opus-4-6
     steps:
       - uses: actions/checkout@v5
         with:
@@ -837,19 +866,34 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENCODE_MODEL: google/gemini-3-pro-preview
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/golem_test
           MYSQL_URL: mysql://root:golem@localhost:3306/golem_test
           GOLEM_PATH: ${{ github.workspace }}
         run: |
           cd /tmp/harness-run
-          tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} --scenarios scenarios
+          MODEL_ARG=""
+          if [ -n "${{ matrix.model }}" ]; then
+            MODEL_ARG="--model ${{ matrix.model }}"
+          fi
+          tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} $MODEL_ARG --scenarios scenarios
+
+      - name: Compute artifact suffix
+        if: always()
+        id: artifact-suffix
+        run: |
+          MODEL="${{ matrix.model }}"
+          if [ -n "$MODEL" ]; then
+            SAFE_MODEL=$(echo "$MODEL" | tr '/' '-')
+            echo "suffix=${{ matrix.agent }}-${SAFE_MODEL}-${{ matrix.language }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "suffix=${{ matrix.agent }}-${{ matrix.language }}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Upload Results
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: skill-results-${{ matrix.agent }}-${{ matrix.language }}
+          name: skill-results-${{ steps.artifact-suffix.outputs.suffix }}
           path: /tmp/harness-run/results/
 
       - name: Clean workspace build artifacts before upload
@@ -860,7 +904,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: skill-workspaces-${{ matrix.agent }}-${{ matrix.language }}
+          name: skill-workspaces-${{ steps.artifact-suffix.outputs.suffix }}
           path: /tmp/harness-run/workspaces/
           retention-days: 3
 

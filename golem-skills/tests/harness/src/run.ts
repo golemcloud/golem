@@ -147,6 +147,7 @@ async function main() {
       output: { type: "string", default: "./results" },
       scenario: { type: "string" },
       timeout: { type: "string" },
+      model: { type: "string" },
       help: { type: "boolean", short: "h", default: false },
       "dry-run": { type: "boolean", default: false },
       "resume-from": { type: "string" },
@@ -172,6 +173,12 @@ async function main() {
   const retriesArg = values.retries;
   const agentArg = values.agent ?? "all";
   const languageArg = values.language ?? "all";
+  const modelArg = values.model;
+
+  // If --model is provided, set OPENCODE_MODEL env var so the driver picks it up
+  if (modelArg) {
+    process.env.OPENCODE_MODEL = modelArg;
+  }
 
   // Merge-reports mode — standalone, doesn't require --agent/--language/--scenarios
   if (mergeReportsDir) {
@@ -215,6 +222,7 @@ Options:
   --agent <name>        Agent driver to use (${SUPPORTED_AGENTS.join(", ")}) (default: all)
   --language <lang>     Language for skill templates (${SUPPORTED_LANGUAGES.join(", ")}) (default: all)
   --scenario <name>     Run only the named scenario
+  --model <model>       Model identifier to pass to the agent driver (sets OPENCODE_MODEL)
   --scenarios <dir>     Path to scenario YAML files (default: ./scenarios)
   --output <dir>        Results output directory (default: ./results)
   --timeout <seconds>   Global timeout per scenario step in seconds (default: ${DEFAULT_STEP_TIMEOUT_SECONDS})
