@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
+import { ReportBuilder, TestBuilder, stringify } from "ctrf";
 import {
   ScenarioLoader,
   ScenarioExecutor,
@@ -155,6 +156,7 @@ async function main() {
       "merge-reports": { type: "string" },
       "idle-timeout": { type: "string" },
       retries: { type: "string" },
+      ctrf: { type: "string" },
     },
   });
 
@@ -171,6 +173,7 @@ async function main() {
   } = values;
   const idleTimeoutArg = values["idle-timeout"];
   const retriesArg = values.retries;
+  const ctrfOutputPath = values.ctrf;
   const agentArg = values.agent ?? "all";
   const languageArg = values.language ?? "all";
   const modelArg = values.model;
@@ -232,6 +235,7 @@ Options:
   --resume-from <id>    Resume execution from the given step ID
   --workspace <path>    Override workspace directory
   --merge-reports <dir> Merge summary.json files from <dir> into aggregated report
+  --ctrf <path>         Write a CTRF JSON report to the given file path
   -h, --help            Show this help message
 `.trim();
 
@@ -651,6 +655,35 @@ Options:
       }
 
       log.dim(`Reports: ${summaryPath}, ${path.join(resultsDir, "report.html")}`);
+
+      // Generate CTRF report if requested
+      if (ctrfOutputPath) {
+        const ctrfBuilder = new ReportBuilder({ autoGenerateId: true, autoTimestamp: true })
+          .tool({ name: "golem-skill-harness", version: "0.1.0" })
+          .environment({
+            buildName: `${agents.join(",")}/${languages.join(",")}`,
+            ...(process.env.GITHUB_SHA ? { testEnvironment: "ci" } : {}),
+          });
+
+        for (const r of scenarioReports) {
+          const failedStep = r.results.find((s) => !s.success);
+          ctrfBuilder.addTest(
+            new TestBuilder()
+              .name(r.scenario)
+              .status(r.status === "pass" ? "passed" : "failed")
+              .duration(Math.round(r.durationSeconds * 1000))
+              .suite([r.matrix.agent, r.matrix.language])
+              .message(failedStep?.error ?? "")
+              .build(),
+          );
+        }
+
+        const ctrfReport = ctrfBuilder.build();
+        const resolvedCtrfPath = path.resolve(process.cwd(), ctrfOutputPath);
+        await fs.mkdir(path.dirname(resolvedCtrfPath), { recursive: true });
+        await fs.writeFile(resolvedCtrfPath, stringify(ctrfReport));
+        log.dim(`CTRF report: ${resolvedCtrfPath}`);
+      }
     }
 
     if (hasFailures) {

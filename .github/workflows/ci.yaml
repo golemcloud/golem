@@ -669,7 +669,7 @@ jobs:
     name: Detect golem-skills changes
     runs-on: ubuntu-latest
     outputs:
-      skills_changed: ${{ github.event_name == 'push' || steps.filter.outputs.skills }}
+      skills_changed: ${{ github.event_name == 'push' && 'true' || steps.filter.outputs.skills }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
@@ -879,6 +879,15 @@ jobs:
           cp golem-skills/tests/harness/tsconfig.json /tmp/harness-run/
           cd /tmp/harness-run && git init -b main && git config user.email "ci@golem.cloud" && git config user.name "CI" && git add -A && git commit -m "init"
 
+      - name: Compute report suffix
+        id: report-suffix
+        run: |
+          suffix="${{ matrix.agent }}-${{ matrix.language }}"
+          if [ -n "${{ matrix.model }}" ]; then
+            suffix="${suffix}-$(printf '%s' '${{ matrix.model }}' | tr '/' '-')"
+          fi
+          echo "suffix=$suffix" >> "$GITHUB_OUTPUT"
+
       - name: Run Skill Tests
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -894,44 +903,13 @@ jobs:
           if [ -n "${{ matrix.model }}" ]; then
             MODEL_ARG="--model ${{ matrix.model }}"
           fi
-          tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} $MODEL_ARG --scenarios scenarios
+          tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} $MODEL_ARG --scenarios scenarios --ctrf "${{ github.workspace }}/target/ctrf-skills-${{ steps.report-suffix.outputs.suffix }}.json"
 
-      - name: Compute artifact suffix
+      - uses: ./.github/actions/publish-test-report
         if: always()
-        id: artifact-suffix
-        run: |
-          MODEL="${{ matrix.model }}"
-          if [ -n "$MODEL" ]; then
-            SAFE_MODEL=$(echo "$MODEL" | tr '/' '-')
-            echo "suffix=${{ matrix.agent }}-${SAFE_MODEL}-${{ matrix.language }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "suffix=${{ matrix.agent }}-${{ matrix.language }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Upload Results
-        if: always()
-        uses: actions/upload-artifact@v6
         with:
-          name: skill-results-${{ steps.artifact-suffix.outputs.suffix }}
-          path: /tmp/harness-run/results/
-
-      - name: Clean workspace build artifacts before upload
-        if: always()
-        run: |
-          if [ -d /tmp/harness-run/workspaces ]; then
-            find /tmp/harness-run/workspaces -name 'golem-temp' -type d -prune -exec rm -rf {} + 2>/dev/null || true
-            find /tmp/harness-run/workspaces -name 'target' -type d -prune -exec rm -rf {} + 2>/dev/null || true
-            find /tmp/harness-run/workspaces -name 'node_modules' -type d -prune -exec rm -rf {} + 2>/dev/null || true
-            rm -rf /tmp/harness-run/workspaces/golem-server-data 2>/dev/null || true
-          fi
-
-      - name: Upload Workspaces
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: skill-workspaces-${{ steps.artifact-suffix.outputs.suffix }}
-          path: /tmp/harness-run/workspaces/
-          retention-days: 3
+          artifact-name: skill-test-report-${{ steps.report-suffix.outputs.suffix }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
   docker-targets-build:
     env:
