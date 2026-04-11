@@ -15,8 +15,10 @@
 #![recursion_limit = "512"]
 
 use prometheus::Registry;
+use std::path::{Path, PathBuf};
 
 pub mod command_handler;
+pub mod compat;
 pub mod launch;
 mod router;
 
@@ -29,4 +31,10 @@ pub struct StartedComponents {
     pub worker_executor: golem_worker_executor::RunDetails,
     pub worker_service: golem_worker_service::TrafficReadyEndpoints,
     pub prometheus_registry: Registry,
+}
+
+pub const REGISTRY_DB_FILE_NAME: &str = "registry.db";
+
+pub fn registry_db_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(REGISTRY_DB_FILE_NAME)
 }
