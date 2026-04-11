@@ -3,17 +3,17 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { BaseAgentDriver, type AgentResult } from "../src/driver/base.js";
+import { BaseAgentDriver, type AgentResult, type DriverTimeoutOptions } from "../src/driver/base.js";
 
 class TestDriver extends BaseAgentDriver {
   protected readonly driverName = "test";
   protected readonly skillDirs = [".agents/skills"];
 
-  async sendPrompt(_prompt: string, _timeout: number): Promise<AgentResult> {
+  async sendPrompt(_prompt: string, _opts: DriverTimeoutOptions): Promise<AgentResult> {
     return { success: true, output: "", durationSeconds: 0, exitCode: 0 };
   }
 
-  async sendFollowup(_prompt: string, _timeout: number): Promise<AgentResult> {
+  async sendFollowup(_prompt: string, _opts: DriverTimeoutOptions): Promise<AgentResult> {
     return { success: true, output: "", durationSeconds: 0, exitCode: 0 };
   }
 

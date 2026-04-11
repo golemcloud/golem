@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { BaseAgentDriver, AgentResult, killProcessTree } from "./base.js";
+import { BaseAgentDriver, AgentResult, killProcessTree, ActivityMonitor, type DriverTimeoutOptions } from "./base.js";
 import * as log from "../log.js";
 
 export class OpenCodeAgentDriver extends BaseAgentDriver {
@@ -20,13 +20,13 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
     return args;
   }
 
-  async sendPrompt(prompt: string, timeout: number): Promise<AgentResult> {
+  async sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
     this.lastSessionId = null;
-    return this.executeOpencode(prompt, false, timeout);
+    return this.executeOpencode(prompt, false, opts);
   }
 
-  async sendFollowup(prompt: string, timeout: number): Promise<AgentResult> {
-    return this.executeOpencode(prompt, true, timeout);
+  async sendFollowup(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
+    return this.executeOpencode(prompt, true, opts);
   }
 
   async teardown(): Promise<void> {
@@ -36,7 +36,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
   private async executeOpencode(
     prompt: string,
     isFollowup: boolean,
-    timeout: number,
+    opts: DriverTimeoutOptions,
   ): Promise<AgentResult> {
     const prefix = this.logPrefix;
     const startTime = Date.now();
@@ -53,9 +53,13 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       let rawOutput = "";
       let stdoutBuf = "";
       let stderrBuf = "";
-      let timedOut = false;
+
+      const monitor = new ActivityMonitor(prefix, opts, (_kind) => {
+        killProcessTree(child);
+      });
 
       child.stdout?.on("data", (data) => {
+        monitor.noteActivity();
         const chunk = data.toString();
         rawOutput += chunk;
         stdoutBuf += chunk;
@@ -68,6 +72,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       });
 
       child.stderr?.on("data", (data) => {
+        monitor.noteActivity();
         const chunk = data.toString();
         rawOutput += chunk;
         stderrBuf += chunk;
@@ -79,26 +84,22 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         }
       });
 
-      const timeoutId = setTimeout(() => {
-        timedOut = true;
-        killProcessTree(child);
-      }, timeout * 1000);
-
       child.on("close", (exitCode) => {
-        clearTimeout(timeoutId);
+        monitor.finish();
         if (stdoutBuf) this.processJsonLine(prefix, stdoutBuf, textParts);
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
 
         const durationSeconds = (Date.now() - startTime) / 1000;
         const durationStr = `(${durationSeconds.toFixed(1)}s)`;
 
-        if (timedOut) {
-          log.driverTimeout(prefix, timeout);
+        if (monitor.isTimedOut) {
           resolve({
             success: false,
-            output: `Timed out after ${timeout}s. ${rawOutput}`,
+            output: `${monitor.formatTimeoutMessage("OpenCode")}. ${rawOutput}`,
             durationSeconds,
             exitCode: null,
+            timedOut: true,
+            timeoutKind: monitor.timeoutKind,
           });
           return;
         }
@@ -119,11 +120,11 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           log.driverSuccess(prefix, durationStr);
         }
 
-        resolve({ success, output, durationSeconds, exitCode: timedOut ? null : exitCode });
+        resolve({ success, output, durationSeconds, exitCode });
       });
 
       child.on("error", (err) => {
-        clearTimeout(timeoutId);
+        monitor.finish();
         const durationSeconds = (Date.now() - startTime) / 1000;
         log.driverFatal(prefix, err.message || "Unknown error");
         resolve({

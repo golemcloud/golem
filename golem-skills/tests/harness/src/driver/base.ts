@@ -42,15 +42,140 @@ export interface AgentResult {
   output: string;
   durationSeconds: number;
   exitCode: number | null;
+  timedOut?: boolean;
+  timeoutKind?: "step" | "idle";
+}
+
+export interface DriverTimeoutOptions {
+  stepTimeoutSeconds: number;
+  idleTimeoutSeconds?: number;       // default: 300 (5 min)
+  heartbeatIntervalSeconds?: number; // default: 30
 }
 
 export interface AgentDriver {
   setup(workspace: string, bootstrapSkillSourceDir: string): Promise<void>;
-  sendPrompt(prompt: string, timeout: number): Promise<AgentResult>;
-  sendFollowup(prompt: string, timeout: number): Promise<AgentResult>;
+  sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult>;
+  sendFollowup(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult>;
   teardown(): Promise<void>;
   /** Update the working directory used for subsequent agent invocations. */
   setWorkingDirectory(dir: string): void;
+}
+
+export const DEFAULT_IDLE_TIMEOUT_SECONDS = 300;
+export const DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30;
+
+export class ActivityMonitor {
+  private lastActivityTime: number;
+  private readonly startTime: number;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private stepTimer: ReturnType<typeof setTimeout> | null = null;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private settled = false;
+  private _timeoutKind: "step" | "idle" | undefined = undefined;
+  private readonly prefix: string;
+  private readonly idleTimeoutMs: number;
+  private readonly idleTimeoutSeconds: number;
+  private readonly onTimeout: (kind: "step" | "idle") => void;
+
+  constructor(
+    prefix: string,
+    opts: DriverTimeoutOptions,
+    onTimeout: (kind: "step" | "idle") => void,
+  ) {
+    this.prefix = prefix;
+    this.startTime = Date.now();
+    this.lastActivityTime = this.startTime;
+    this.onTimeout = onTimeout;
+
+    this.idleTimeoutSeconds = opts.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS;
+    const heartbeatSeconds = opts.heartbeatIntervalSeconds ?? DEFAULT_HEARTBEAT_INTERVAL_SECONDS;
+    this.idleTimeoutMs = this.idleTimeoutSeconds * 1000;
+
+    // Heartbeat timer — only logs when idle (no output since last heartbeat)
+    this.heartbeatTimer = setInterval(() => {
+      if (this.settled) return;
+      const idleMs = Date.now() - this.lastActivityTime;
+      if (idleMs >= heartbeatSeconds * 1000) {
+        const elapsed = Math.round((Date.now() - this.startTime) / 1000);
+        log.driverHeartbeat(this.prefix, elapsed);
+      }
+    }, heartbeatSeconds * 1000);
+
+    // Step timeout
+    this.stepTimer = setTimeout(() => {
+      this.triggerTimeout("step", opts.stepTimeoutSeconds);
+    }, opts.stepTimeoutSeconds * 1000);
+
+    // Idle timeout (resettable via noteActivity)
+    this.armIdleTimer();
+  }
+
+  private triggerTimeout(kind: "step" | "idle", displaySeconds?: number): void {
+    if (this.settled) return;
+    this._timeoutKind = kind;
+    this.settled = true;
+    if (kind === "step") {
+      log.driverTimeout(this.prefix, displaySeconds ?? 0);
+    } else {
+      log.driverIdleTimeout(this.prefix, displaySeconds ?? this.idleTimeoutSeconds);
+    }
+    this.clearTimers();
+    this.onTimeout(kind);
+  }
+
+  private armIdleTimer(): void {
+    if (this.idleTimeoutMs <= 0 || this.settled) return;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      this.triggerTimeout("idle");
+    }, this.idleTimeoutMs);
+  }
+
+  /** Call this whenever stdout/stderr data is received from the agent. */
+  noteActivity(): void {
+    if (this.settled) return;
+    this.lastActivityTime = Date.now();
+    this.armIdleTimer();
+  }
+
+  /** Call this when the process exits or the stream ends. Clears all timers. */
+  finish(): void {
+    if (this.settled) return;
+    this.settled = true;
+    this.clearTimers();
+  }
+
+  get isTimedOut(): boolean {
+    return this._timeoutKind !== undefined;
+  }
+
+  get timeoutKind(): "step" | "idle" | undefined {
+    return this._timeoutKind;
+  }
+
+  /** Build a human-readable timeout message matching the actual timeout kind. */
+  formatTimeoutMessage(fallbackPrefix: string): string {
+    if (this._timeoutKind === "idle") {
+      return `${fallbackPrefix} idle timeout — no output for ${this.idleTimeoutSeconds}s`;
+    }
+    const elapsed = Math.round((Date.now() - this.startTime) / 1000);
+    return `${fallbackPrefix} timed out after ${elapsed}s`;
+  }
+
+  private clearTimers(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    if (this.stepTimer) {
+      clearTimeout(this.stepTimer);
+      this.stepTimer = null;
+    }
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+  }
 }
 
 export abstract class BaseAgentDriver implements AgentDriver {
@@ -89,14 +214,14 @@ export abstract class BaseAgentDriver implements AgentDriver {
     }
   }
 
-  abstract sendPrompt(prompt: string, timeout: number): Promise<AgentResult>;
-  abstract sendFollowup(prompt: string, timeout: number): Promise<AgentResult>;
+  abstract sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult>;
+  abstract sendFollowup(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult>;
   abstract teardown(): Promise<void>;
 
   protected async runCommand(
     command: string,
     args: string[],
-    timeoutSeconds: number,
+    opts: DriverTimeoutOptions,
     cwd?: string,
   ): Promise<AgentResult> {
     const startTime = Date.now();
@@ -112,10 +237,14 @@ export abstract class BaseAgentDriver implements AgentDriver {
       let output = "";
       let stdoutBuf = "";
       let stderrBuf = "";
-      let timedOut = false;
       const prefix = this.logPrefix;
 
+      const monitor = new ActivityMonitor(prefix, opts, (_kind) => {
+        killProcessTree(child);
+      });
+
       child.stdout?.on("data", (data) => {
+        monitor.noteActivity();
         const chunk = data.toString();
         output += chunk;
         stdoutBuf += chunk;
@@ -126,6 +255,7 @@ export abstract class BaseAgentDriver implements AgentDriver {
         }
       });
       child.stderr?.on("data", (data) => {
+        monitor.noteActivity();
         const chunk = data.toString();
         output += chunk;
         stderrBuf += chunk;
@@ -136,26 +266,24 @@ export abstract class BaseAgentDriver implements AgentDriver {
         }
       });
 
-      const timeoutId = setTimeout(() => {
-        timedOut = true;
-        killProcessTree(child);
-      }, timeoutSeconds * 1000);
-
       child.on("close", (exitCode) => {
-        clearTimeout(timeoutId);
+        monitor.finish();
         if (stdoutBuf) log.driver(prefix, stdoutBuf);
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
         const durationSeconds = (Date.now() - startTime) / 1000;
+        const timedOut = monitor.isTimedOut;
         resolve({
           success: !timedOut && exitCode === 0,
-          output: timedOut ? `Timed out after ${timeoutSeconds}s. ${output}` : output,
+          output: timedOut ? `${monitor.formatTimeoutMessage("Agent")}. ${output}` : output,
           durationSeconds,
           exitCode: timedOut ? null : exitCode,
+          timedOut,
+          timeoutKind: monitor.timeoutKind,
         });
       });
 
       child.on("error", (err) => {
-        clearTimeout(timeoutId);
+        monitor.finish();
         const durationSeconds = (Date.now() - startTime) / 1000;
         resolve({
           success: false,

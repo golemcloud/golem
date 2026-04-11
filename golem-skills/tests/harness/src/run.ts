@@ -7,6 +7,7 @@ import {
   ScenarioLoader,
   ScenarioExecutor,
   DEFAULT_STEP_TIMEOUT_SECONDS,
+  DEFAULT_IDLE_TIMEOUT_SECONDS,
   type ScenarioRunResult,
 } from "./executor.js";
 import { AmpAgentDriver } from "./driver/amp.js";
@@ -23,6 +24,8 @@ import {
 } from "./html-report.js";
 import * as log from "./log.js";
 import { detectGolemWorkspaceRoot, resolveGolemTargetDir, GolemServer } from "./workspace.js";
+
+const DEFAULT_SCENARIO_RETRIES = 3;
 
 const SUPPORTED_AGENTS = ["amp", "claude-code", "opencode", "codex"] as const;
 const SUPPORTED_LANGUAGES = ["ts", "rust", "scala"] as const;
@@ -149,6 +152,8 @@ async function main() {
       "resume-from": { type: "string" },
       workspace: { type: "string" },
       "merge-reports": { type: "string" },
+      "idle-timeout": { type: "string" },
+      retries: { type: "string" },
     },
   });
 
@@ -163,6 +168,8 @@ async function main() {
     workspace: workspaceOverride,
     "merge-reports": mergeReportsDir,
   } = values;
+  const idleTimeoutArg = values["idle-timeout"];
+  const retriesArg = values.retries;
   const agentArg = values.agent ?? "all";
   const languageArg = values.language ?? "all";
 
@@ -211,6 +218,8 @@ Options:
   --scenarios <dir>     Path to scenario YAML files (default: ./scenarios)
   --output <dir>        Results output directory (default: ./results)
   --timeout <seconds>   Global timeout per scenario step in seconds (default: ${DEFAULT_STEP_TIMEOUT_SECONDS})
+  --idle-timeout <seconds>  Idle timeout — fail step if agent produces no output for this long (default: ${DEFAULT_IDLE_TIMEOUT_SECONDS})
+  --retries <n>             Max scenario retries on idle timeout (default: ${DEFAULT_SCENARIO_RETRIES})
   --dry-run             Validate scenarios and print step summaries without executing
   --resume-from <id>    Resume execution from the given step ID
   --workspace <path>    Override workspace directory
@@ -253,6 +262,21 @@ Options:
     (!Number.isFinite(globalTimeoutSeconds) || globalTimeoutSeconds <= 0)
   ) {
     log.error(`Invalid --timeout value: ${timeout}`);
+    process.exit(1);
+  }
+
+  const idleTimeoutSeconds = idleTimeoutArg ? Number.parseInt(idleTimeoutArg, 10) : undefined;
+  if (
+    idleTimeoutSeconds !== undefined &&
+    (!Number.isFinite(idleTimeoutSeconds) || idleTimeoutSeconds <= 0)
+  ) {
+    log.error(`Invalid --idle-timeout value: ${idleTimeoutArg}`);
+    process.exit(1);
+  }
+
+  const maxScenarioRetries = retriesArg ? Number.parseInt(retriesArg, 10) : DEFAULT_SCENARIO_RETRIES;
+  if (!Number.isFinite(maxScenarioRetries) || maxScenarioRetries < 0) {
+    log.error(`Invalid --retries value: ${retriesArg}`);
     process.exit(1);
   }
 
@@ -388,7 +412,7 @@ Options:
       for (const currentLanguage of languages) {
         const driver = createDriver(currentAgent);
         log.dim(
-          `Config: agent=${currentAgent}, language=${currentLanguage}, scenarios=${scenariosDir}, output=${resultsDir}, timeout=${globalTimeoutSeconds ?? "default"}`,
+          `Config: agent=${currentAgent}, language=${currentLanguage}, scenarios=${scenariosDir}, output=${resultsDir}, timeout=${globalTimeoutSeconds ?? "default"}, idle-timeout=${idleTimeoutSeconds ?? "default"}, retries=${maxScenarioRetries}`,
         );
 
         for (const file of scenarioFiles) {
@@ -412,26 +436,57 @@ Options:
 
           log.heading(`Running scenario: ${spec.name} [${currentAgent} x ${currentLanguage}]`);
           const scenarioDir = spec.name.replace(/\s+/g, "-").toLowerCase();
-          const workspace = path.join(workspacesRoot, scenarioDir, currentLanguage);
-          const watcher = new SkillWatcher(workspace);
-          const executor = new ScenarioExecutor(
-            driver,
-            watcher,
-            workspace,
-            bootstrapSkillSourceDir,
-            {
-              globalTimeoutSeconds,
-              agent: currentAgent,
-              language: currentLanguage,
-              abortSignal: abortController.signal,
-              resumeFromStepId: resumeFrom,
-            },
-          );
 
-          const scenarioResult = await executor.execute(spec);
-          const results = scenarioResult.stepResults;
+          let scenarioResult: ScenarioRunResult | undefined;
+          const totalAttempts = maxScenarioRetries + 1; // retries + initial attempt
+          const canRetry = maxScenarioRetries > 0 && !resumeFrom;
 
-          const allPassed = scenarioResult.status === "pass";
+          for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+            if (attempt > 1) {
+              log.scenarioRetry(spec.name, attempt - 1, maxScenarioRetries, "idle timeout");
+              // Restart Golem server for clean state
+              log.dim("Restarting Golem server for retry...");
+              await golemServer.restart();
+              log.success("Golem server restarted.");
+            }
+
+            const attemptSuffix = attempt > 1 ? `/attempt-${attempt}` : "";
+            const workspace = path.join(workspacesRoot, scenarioDir, currentLanguage + attemptSuffix);
+            const watcher = new SkillWatcher(workspace);
+            const executor = new ScenarioExecutor(
+              driver,
+              watcher,
+              workspace,
+              bootstrapSkillSourceDir,
+              {
+                globalTimeoutSeconds,
+                idleTimeoutSeconds,
+                agent: currentAgent,
+                language: currentLanguage,
+                abortSignal: abortController.signal,
+                resumeFromStepId: resumeFrom,
+              },
+            );
+
+            scenarioResult = await executor.execute(spec);
+
+            // Don't retry on success, abort, or non-idle-timeout failures
+            if (scenarioResult.status === "pass") break;
+            if (interrupted) break;
+
+            if (!canRetry || attempt >= totalAttempts) break;
+
+            const failedDueToIdleTimeout = scenarioResult.stepResults.some(
+              (r) => !r.success && r.timedOut && r.timeoutKind === "idle",
+            );
+            if (!failedDueToIdleTimeout) break;
+
+            log.warn(`Scenario "${spec.name}" failed due to idle timeout, will retry (retry ${attempt}/${maxScenarioRetries})`);
+          }
+
+          const results = scenarioResult!.stepResults;
+
+          const allPassed = scenarioResult!.status === "pass";
           if (allPassed) {
             log.scenarioPass(spec.name);
           } else {
@@ -460,10 +515,10 @@ Options:
             scenario: spec.name,
             matrix: { agent: currentAgent, language: currentLanguage },
             run_id: runId,
-            status: scenarioResult.status,
-            durationSeconds: scenarioResult.durationSeconds,
+            status: scenarioResult!.status,
+            durationSeconds: scenarioResult!.durationSeconds,
             results,
-            artifactPaths: scenarioResult.artifactPaths,
+            artifactPaths: scenarioResult!.artifactPaths,
           };
 
           const reportPath = path.join(

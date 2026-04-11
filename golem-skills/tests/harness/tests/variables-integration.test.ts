@@ -8,7 +8,7 @@ import {
   type ScenarioSpec,
   type ScenarioExecutorOptions,
 } from "../src/executor.js";
-import type { AgentDriver, AgentResult } from "../src/driver/base.js";
+import type { AgentDriver, AgentResult, DriverTimeoutOptions } from "../src/driver/base.js";
 import { SkillWatcher } from "../src/watcher.js";
 
 // Stub driver that records prompts sent to it
@@ -17,11 +17,11 @@ class StubDriver implements AgentDriver {
   async setup(_workspace: string, _bootstrapSkillSourceDir: string): Promise<void> {
     /* no-op */
   }
-  async sendPrompt(prompt: string, _timeout: number): Promise<AgentResult> {
+  async sendPrompt(prompt: string, _opts: DriverTimeoutOptions): Promise<AgentResult> {
     this.prompts.push(prompt);
     return { success: true, output: "", durationSeconds: 0, exitCode: 0 };
   }
-  async sendFollowup(prompt: string, _timeout: number): Promise<AgentResult> {
+  async sendFollowup(prompt: string, _opts: DriverTimeoutOptions): Promise<AgentResult> {
     this.prompts.push(prompt);
     return { success: true, output: "", durationSeconds: 0, exitCode: 0 };
   }
@@ -389,8 +389,8 @@ describe("Variable substitution integration", () => {
 
     // Abort after first prompt
     const origSend = driver.sendPrompt.bind(driver);
-    driver.sendPrompt = async (prompt: string, _timeout: number) => {
-      const res = await origSend(prompt, _timeout);
+    driver.sendPrompt = async (prompt: string, _opts: DriverTimeoutOptions) => {
+      const res = await origSend(prompt, _opts);
       controller.abort(); // abort after first step completes
       return res;
     };

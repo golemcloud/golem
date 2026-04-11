@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { BaseAgentDriver, AgentResult, killProcessTree } from "./base.js";
+import { BaseAgentDriver, AgentResult, killProcessTree, ActivityMonitor, type DriverTimeoutOptions } from "./base.js";
 import * as log from "../log.js";
 
 export class CodexAgentDriver extends BaseAgentDriver {
@@ -7,10 +7,10 @@ export class CodexAgentDriver extends BaseAgentDriver {
   protected readonly skillDirs = [".agents/skills"];
   private lastSessionId: string | null = null;
 
-  async sendPrompt(prompt: string, timeout: number): Promise<AgentResult> {
+  async sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
     const result = await this.executeCodex(
       ["exec", "--dangerously-bypass-approvals-and-sandbox", "--json", prompt],
-      timeout,
+      opts,
     );
     if (!result.success && result.output.includes("command not found")) {
       result.output = `Codex CLI not installed. ${result.output}`;
@@ -21,9 +21,9 @@ export class CodexAgentDriver extends BaseAgentDriver {
     return result;
   }
 
-  async sendFollowup(prompt: string, timeout: number): Promise<AgentResult> {
+  async sendFollowup(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
     if (!this.lastSessionId) {
-      return this.sendPrompt(prompt, timeout);
+      return this.sendPrompt(prompt, opts);
     }
     return this.executeCodex(
       [
@@ -34,7 +34,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
         "--json",
         prompt,
       ],
-      timeout,
+      opts,
     );
   }
 
@@ -42,7 +42,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
     this.lastSessionId = null;
   }
 
-  private executeCodex(args: string[], timeoutSeconds: number): Promise<AgentResult> {
+  private executeCodex(args: string[], opts: DriverTimeoutOptions): Promise<AgentResult> {
     const startTime = Date.now();
     const prefix = this.logPrefix;
 
@@ -54,12 +54,16 @@ export class CodexAgentDriver extends BaseAgentDriver {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
+      const monitor = new ActivityMonitor(prefix, opts, (_kind) => {
+        killProcessTree(child);
+      });
+
       const outputParts: string[] = [];
       let stdoutBuf = "";
       let stderrBuf = "";
-      let timedOut = false;
 
       child.stdout?.on("data", (data: Buffer) => {
+        monitor.noteActivity();
         stdoutBuf += data.toString();
         const lines = stdoutBuf.split("\n");
         stdoutBuf = lines.pop()!;
@@ -69,6 +73,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
       });
 
       child.stderr?.on("data", (data: Buffer) => {
+        monitor.noteActivity();
         stderrBuf += data.toString();
         const lines = stderrBuf.split("\n");
         stderrBuf = lines.pop()!;
@@ -77,29 +82,25 @@ export class CodexAgentDriver extends BaseAgentDriver {
         }
       });
 
-      const timeoutId = setTimeout(() => {
-        timedOut = true;
-        log.driverTimeout(prefix, timeoutSeconds);
-        killProcessTree(child);
-      }, timeoutSeconds * 1000);
-
       child.on("close", (exitCode) => {
-        clearTimeout(timeoutId);
+        monitor.finish();
         if (stdoutBuf) this.handleJsonLine(prefix, stdoutBuf, outputParts, startTime);
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
         const durationSeconds = (Date.now() - startTime) / 1000;
         resolve({
-          success: !timedOut && exitCode === 0,
-          output: timedOut
-            ? `Codex timed out after ${timeoutSeconds}s. ${outputParts.join("")}`
+          success: !monitor.isTimedOut && exitCode === 0,
+          output: monitor.isTimedOut
+            ? `${monitor.formatTimeoutMessage("Codex")}. ${outputParts.join("")}`
             : outputParts.join(""),
           durationSeconds,
-          exitCode: timedOut ? null : exitCode,
+          exitCode: monitor.isTimedOut ? null : exitCode,
+          timedOut: monitor.isTimedOut || undefined,
+          timeoutKind: monitor.timeoutKind,
         });
       });
 
       child.on("error", (err) => {
-        clearTimeout(timeoutId);
+        monitor.finish();
         const durationSeconds = (Date.now() - startTime) / 1000;
         resolve({
           success: false,

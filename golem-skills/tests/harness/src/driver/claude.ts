@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { BaseAgentDriver, AgentResult, killProcessTree } from "./base.js";
+import { BaseAgentDriver, AgentResult, killProcessTree, ActivityMonitor, type DriverTimeoutOptions } from "./base.js";
 import * as log from "../log.js";
 
 export class ClaudeAgentDriver extends BaseAgentDriver {
@@ -25,7 +25,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
     }
   }
 
-  async sendPrompt(prompt: string, timeout: number): Promise<AgentResult> {
+  async sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
     this.sessionId = null;
     return this.runClaudeStreamJson(
       [
@@ -37,13 +37,13 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
         "bypassPermissions",
         prompt,
       ],
-      timeout,
+      opts,
     );
   }
 
-  async sendFollowup(prompt: string, timeout: number): Promise<AgentResult> {
+  async sendFollowup(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
     if (!this.sessionId) {
-      return this.sendPrompt(prompt, timeout);
+      return this.sendPrompt(prompt, opts);
     }
     return this.runClaudeStreamJson(
       [
@@ -57,7 +57,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
         this.sessionId,
         prompt,
       ],
-      timeout,
+      opts,
     );
   }
 
@@ -65,7 +65,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
     this.sessionId = null;
   }
 
-  private async runClaudeStreamJson(args: string[], timeoutSeconds: number): Promise<AgentResult> {
+  private async runClaudeStreamJson(args: string[], opts: DriverTimeoutOptions): Promise<AgentResult> {
     const startTime = Date.now();
     const prefix = this.logPrefix;
     const outputParts: string[] = [];
@@ -78,9 +78,12 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
         stdio: ["ignore", "pipe", "pipe"],
       });
 
+      const monitor = new ActivityMonitor(prefix, opts, (_kind) => {
+        killProcessTree(child);
+      });
+
       let stdoutBuf = "";
       let stderrBuf = "";
-      let timedOut = false;
 
       const processLine = (line: string): void => {
         if (!line.trim()) return;
@@ -156,6 +159,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
       };
 
       child.stdout?.on("data", (data: Buffer) => {
+        monitor.noteActivity();
         stdoutBuf += data.toString();
         const lines = stdoutBuf.split("\n");
         stdoutBuf = lines.pop()!;
@@ -165,6 +169,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
       });
 
       child.stderr?.on("data", (data: Buffer) => {
+        monitor.noteActivity();
         stderrBuf += data.toString();
         const lines = stderrBuf.split("\n");
         stderrBuf = lines.pop()!;
@@ -173,29 +178,25 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
         }
       });
 
-      const timeoutId = setTimeout(() => {
-        timedOut = true;
-        log.driverTimeout(prefix, timeoutSeconds);
-        killProcessTree(child);
-      }, timeoutSeconds * 1000);
-
       child.on("close", (exitCode) => {
-        clearTimeout(timeoutId);
+        monitor.finish();
         if (stdoutBuf) processLine(stdoutBuf);
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
         const durationSeconds = (Date.now() - startTime) / 1000;
         resolve({
-          success: !timedOut && exitCode === 0,
-          output: timedOut
-            ? `Claude timed out after ${timeoutSeconds}s. ${outputParts.join("")}`
+          success: !monitor.isTimedOut && exitCode === 0,
+          output: monitor.isTimedOut
+            ? `${monitor.formatTimeoutMessage("Claude")}. ${outputParts.join("")}`
             : outputParts.join(""),
           durationSeconds,
-          exitCode: timedOut ? null : exitCode,
+          exitCode: monitor.isTimedOut ? null : exitCode,
+          timedOut: monitor.isTimedOut || undefined,
+          timeoutKind: monitor.timeoutKind,
         });
       });
 
       child.on("error", (err) => {
-        clearTimeout(timeoutId);
+        monitor.finish();
         const durationSeconds = (Date.now() - startTime) / 1000;
         const errMsg = err.message || "Unknown error";
         log.driverFatal(prefix, errMsg);

@@ -243,6 +243,10 @@ export function driverTimeout(prefix: string, seconds: number): void {
   driverLine(prefix, chalk.red(`✗ timed out after ${seconds}s`));
 }
 
+export function driverIdleTimeout(prefix: string, seconds: number): void {
+  driverLine(prefix, chalk.red(`✗ idle timeout — no output for ${seconds}s`));
+}
+
 export function driverNotInstalled(prefix: string): void {
   driverLine(prefix, chalk.red("✗ Amp CLI not installed"));
 }
@@ -253,6 +257,10 @@ export function driverAuthFailed(prefix: string): void {
 
 export function driverFatal(prefix: string, msg: string): void {
   driverLine(prefix, chalk.red(`✗ ${msg}`));
+}
+
+export function driverHeartbeat(prefix: string, elapsedSeconds: number): void {
+  driverLine(prefix, chalk.gray(`⏳ waiting for agent response… (${elapsedSeconds}s elapsed)`));
 }
 
 // --- Scenario / step lifecycle ---------------------------------------------
@@ -351,6 +359,10 @@ export function scenarioPass(name: string): void {
 
 export function scenarioFail(name: string): void {
   scenarioLine(name, chalk.red("✗ failed"));
+}
+
+export function scenarioRetry(name: string, attempt: number, maxAttempts: number, reason: string): void {
+  scenarioLine(name, `${chalk.yellow("↻ retry")} ${chalk.white(`${attempt}/${maxAttempts}`)} ${chalk.gray(reason)}`);
 }
 
 export function scenarioFailedStep(stepName: string, error: string): void {

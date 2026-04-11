@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import * as path from "node:path";
 import * as yaml from "yaml";
 import { z } from "zod";
-import { AgentDriver, killProcessTree } from "./driver/base.js";
+import { AgentDriver, killProcessTree, type DriverTimeoutOptions } from "./driver/base.js";
 import { SkillWatcher } from "./watcher.js";
 import { evaluate, ExpectSchema, type AssertionContext } from "./assertions.js";
 import { classifyFailure, type FailureClassification } from "./failure-classification.js";
@@ -11,6 +11,7 @@ import { findGolemAppDir } from "./workspace.js";
 import * as log from "./log.js";
 
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 1800;
+export const DEFAULT_IDLE_TIMEOUT_SECONDS = 300;
 const WATCHER_SNAPSHOT_SETTLE_MS = 25;
 
 // --- Language-conditional resolution ---
@@ -382,6 +383,8 @@ export interface StepAttemptResult {
   durationSeconds: number;
   error?: string;
   activatedSkills: string[];
+  timedOut?: boolean;
+  timeoutKind?: "step" | "idle";
 }
 
 export interface StepResult {
@@ -393,6 +396,8 @@ export interface StepResult {
   error?: string;
   attempts?: StepAttemptResult[];
   classification?: FailureClassification;
+  timedOut?: boolean;
+  timeoutKind?: "step" | "idle";
 }
 
 export interface ScenarioRunResult {
@@ -413,6 +418,7 @@ interface LocalCommandResult {
 
 export interface ScenarioExecutorOptions {
   globalTimeoutSeconds?: number;
+  idleTimeoutSeconds?: number;
   agent?: string;
   language?: string;
   abortSignal?: AbortSignal;
@@ -718,6 +724,8 @@ export class ScenarioExecutor {
               errors: string[];
               activatedSkills: string[];
               isFirstPrompt: boolean;
+              timedOut?: boolean;
+              timeoutKind?: "step" | "idle";
             }
           | undefined;
 
@@ -738,6 +746,8 @@ export class ScenarioExecutor {
             durationSeconds: attemptDuration,
             error: bodyResult.errors.length > 0 ? bodyResult.errors.join("\n") : undefined,
             activatedSkills: bodyResult.activatedSkills,
+            timedOut: bodyResult.timedOut,
+            timeoutKind: bodyResult.timeoutKind,
           });
 
           finalResult = bodyResult;
@@ -759,6 +769,8 @@ export class ScenarioExecutor {
           error: errorStr,
           attempts: maxAttempts > 1 ? attempts : undefined,
           classification,
+          timedOut: finalResult!.timedOut,
+          timeoutKind: finalResult!.timeoutKind,
         });
 
         if (!finalResult!.success) break; // Stop on failure
@@ -797,9 +809,13 @@ export class ScenarioExecutor {
     errors: string[];
     activatedSkills: string[];
     isFirstPrompt: boolean;
+    timedOut?: boolean;
+    timeoutKind?: "step" | "idle";
   }> {
     const errors: string[] = [];
     let success = true;
+    let stepTimedOut: boolean | undefined;
+    let stepTimeoutKind: "step" | "idle" | undefined;
     const stepTimeoutSeconds =
       step.timeout ??
       spec.settings?.timeout_per_subprompt ??
@@ -869,16 +885,22 @@ export class ScenarioExecutor {
       case "trigger":
         await this.executeTrigger(stepLabel, step.trigger, stepTimeoutSeconds, commandEnv);
         break;
-      case "prompt":
-        isFirstPrompt = await this.executePrompt(
+      case "prompt": {
+        const idleTimeout = this.options.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS;
+        const promptResult = await this.executePrompt(
           stepLabel,
           step.prompt as string,
           step.continue_session,
           isFirstPrompt,
           stepTimeoutSeconds,
+          idleTimeout,
           fail,
         );
+        isFirstPrompt = promptResult.isFirstPrompt;
+        stepTimedOut = promptResult.timedOut;
+        stepTimeoutKind = promptResult.timeoutKind;
         break;
+      }
       case "invoke":
         await this.executeInvoke(
           stepLabel,
@@ -935,7 +957,7 @@ export class ScenarioExecutor {
       // No golem app found yet — that's fine
     }
 
-    return { success, errors, activatedSkills, isFirstPrompt };
+    return { success, errors, activatedSkills, isFirstPrompt, timedOut: stepTimedOut, timeoutKind: stepTimeoutKind };
   }
 
   private needsSkillTracking(step: StepSpec): boolean {
@@ -1074,19 +1096,25 @@ export class ScenarioExecutor {
     continueSession: boolean | undefined,
     isFirstPrompt: boolean,
     timeout: number,
+    idleTimeout: number | undefined,
     fail: (msg: string) => void,
-  ): Promise<boolean> {
+  ): Promise<{ isFirstPrompt: boolean; timedOut?: boolean; timeoutKind?: "step" | "idle" }> {
+    const opts: DriverTimeoutOptions = {
+      stepTimeoutSeconds: timeout,
+      idleTimeoutSeconds: idleTimeout,
+    };
     const useContinueSession = continueSession !== false && !isFirstPrompt;
     if (useContinueSession) {
       log.stepPrompt(stepLabel, prompt, "followup");
-      const result = await this.driver.sendFollowup(prompt, timeout);
+      const result = await this.driver.sendFollowup(prompt, opts);
       if (!result.success) fail(`Agent failed: ${result.output}`);
+      return { isFirstPrompt: false, timedOut: result.timedOut, timeoutKind: result.timeoutKind };
     } else {
       log.stepPrompt(stepLabel, prompt, "initial");
-      const result = await this.driver.sendPrompt(prompt, timeout);
+      const result = await this.driver.sendPrompt(prompt, opts);
       if (!result.success) fail(`Agent failed: ${result.output}`);
+      return { isFirstPrompt: false, timedOut: result.timedOut, timeoutKind: result.timeoutKind };
     }
-    return false; // isFirstPrompt = false after any prompt
   }
 
   private async executeInvoke(

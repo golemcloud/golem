@@ -1,4 +1,4 @@
-import { BaseAgentDriver, AgentResult } from "./base.js";
+import { BaseAgentDriver, AgentResult, ActivityMonitor, type DriverTimeoutOptions } from "./base.js";
 import { execute, type AmpOptions } from "@sourcegraph/amp-sdk";
 import * as log from "../log.js";
 
@@ -10,16 +10,16 @@ export class AmpAgentDriver extends BaseAgentDriver {
   protected readonly skillDirs = [".agents/skills"];
   private sessionId: string | null = null;
 
-  async sendPrompt(prompt: string, timeout: number): Promise<AgentResult> {
+  async sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
     this.sessionId = null;
-    return this.executeAmp(prompt, timeout);
+    return this.executeAmp(prompt, opts);
   }
 
-  async sendFollowup(prompt: string, timeout: number): Promise<AgentResult> {
+  async sendFollowup(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
     if (!this.sessionId) {
-      return this.sendPrompt(prompt, timeout);
+      return this.sendPrompt(prompt, opts);
     }
-    return this.executeAmp(prompt, timeout, this.sessionId);
+    return this.executeAmp(prompt, opts, this.sessionId);
   }
 
   async teardown(): Promise<void> {
@@ -28,7 +28,7 @@ export class AmpAgentDriver extends BaseAgentDriver {
 
   private async executeAmp(
     prompt: string,
-    timeoutSeconds: number,
+    opts: DriverTimeoutOptions,
     continueSessionId?: string,
   ): Promise<AgentResult> {
     const startTime = Date.now();
@@ -61,10 +61,15 @@ export class AmpAgentDriver extends BaseAgentDriver {
 
     const prefix = this.logPrefix;
 
-    try {
-      const signal = AbortSignal.timeout(timeoutSeconds * 1000);
+    const controller = new AbortController();
+    const monitor = new ActivityMonitor(prefix, opts, (kind) => {
+      controller.abort(new Error(`${kind}-timeout`));
+    });
+    const signal = controller.signal;
 
+    try {
       for await (const message of execute({ prompt, options, signal })) {
+        monitor.noteActivity();
         this.sessionId ??= message.session_id;
 
         if (message.type === "system" && message.subtype === "init") {
@@ -128,12 +133,13 @@ export class AmpAgentDriver extends BaseAgentDriver {
       const errMsg = err instanceof Error ? err.message : String(err);
 
       if (/abort|timeout/i.test(errMsg)) {
-        log.driverTimeout(prefix, timeoutSeconds);
         return {
           success: false,
-          output: `Amp timed out after ${timeoutSeconds}s. ${outputParts.join("")}`,
+          output: `${monitor.formatTimeoutMessage("Amp")}. ${outputParts.join("")}`,
           durationSeconds,
           exitCode: null,
+          timedOut: true,
+          timeoutKind: monitor.timeoutKind ?? "step",
         };
       }
       if (/command not found|ENOENT/i.test(errMsg)) {
@@ -162,6 +168,8 @@ export class AmpAgentDriver extends BaseAgentDriver {
         durationSeconds,
         exitCode: null,
       };
+    } finally {
+      monitor.finish();
     }
   }
 }
