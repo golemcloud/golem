@@ -314,7 +314,7 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
     // Release the gate — a1's poll loop returns "done", its invocation
     // completes, and its permit is returned to the semaphore via Drop.
     // This unblocks a2 from WaitingForPermit.
-    gate.notify_waiters();
+    gate.notify_one();
 
     // Wait for a1 to become Idle (invocation done, permit released).
     executor
