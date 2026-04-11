@@ -213,19 +213,6 @@ impl From<WorkerServiceError> for ApiEndpointError {
     }
 }
 
-impl From<ComponentServiceError> for ApiEndpointError {
-    fn from(error: ComponentServiceError) -> Self {
-        match error {
-            ComponentServiceError::ComponentNotFound => {
-                Self::not_found(api::error_code::COMPONENT_NOT_FOUND, error)
-            }
-            ComponentServiceError::InternalError(_) => {
-                Self::internal(api::error_code::INTERNAL_UNKNOWN, error)
-            }
-        }
-    }
-}
-
 impl From<LimitServiceError> for ApiEndpointError {
     fn from(error: LimitServiceError) -> Self {
         match error {
@@ -233,6 +220,19 @@ impl From<LimitServiceError> for ApiEndpointError {
                 Self::limit_exceeded(api::error_code::LIMIT_EXCEEDED, error)
             }
             LimitServiceError::InternalError(_) => {
+                Self::internal(api::error_code::INTERNAL_UNKNOWN, error)
+            }
+        }
+    }
+}
+
+impl From<ComponentServiceError> for ApiEndpointError {
+    fn from(error: ComponentServiceError) -> Self {
+        match error {
+            ComponentServiceError::ComponentNotFound => {
+                Self::not_found(api::error_code::COMPONENT_NOT_FOUND, error)
+            }
+            ComponentServiceError::InternalError(_) => {
                 Self::internal(api::error_code::INTERNAL_UNKNOWN, error)
             }
         }

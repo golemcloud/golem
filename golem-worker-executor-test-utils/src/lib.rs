@@ -85,6 +85,9 @@ use golem_worker_executor::services::blob_store::{
     BlobStoreError, BlobStoreService, DefaultBlobStoreService,
 };
 use golem_worker_executor::services::component::ComponentService;
+use golem_worker_executor::services::direct_invocation_auth::{
+    DirectInvocationAuthService, NoOpDirectInvocationAuthService,
+};
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
@@ -485,6 +488,7 @@ type WrapKeyValueServiceFn =
 type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
+type CreateDirectInvocationAuthFn = dyn Fn() -> Arc<dyn DirectInvocationAuthService> + Send + Sync;
 
 #[derive(Clone, Default)]
 pub struct TestExecutorOverrides {
@@ -492,6 +496,7 @@ pub struct TestExecutorOverrides {
     pub wrap_key_value_service: Option<Arc<WrapKeyValueServiceFn>>,
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
+    pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
 }
 
 fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
@@ -1346,6 +1351,18 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         AdditionalTestDeps::new()
     }
 
+    fn create_direct_invocation_auth_service(
+        &self,
+        _registry_service: Arc<dyn RegistryService>,
+        _golem_config: &GolemConfig,
+    ) -> Arc<dyn DirectInvocationAuthService> {
+        if let Some(create) = &self.overrides.create_direct_invocation_auth {
+            create()
+        } else {
+            Arc::new(NoOpDirectInvocationAuthService)
+        }
+    }
+
     fn create_key_value_service(
         &self,
         key_value_storage: &Arc<dyn KeyValueStorage + Send + Sync>,
@@ -1460,6 +1477,14 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         _registry_service: Arc<dyn RegistryService>,
     ) -> NoAdditionalDeps {
         NoAdditionalDeps {}
+    }
+
+    fn create_direct_invocation_auth_service(
+        &self,
+        _registry_service: Arc<dyn RegistryService>,
+        _golem_config: &GolemConfig,
+    ) -> Arc<dyn DirectInvocationAuthService> {
+        Arc::new(NoOpDirectInvocationAuthService)
     }
 
     fn create_wasmtime_linker(
@@ -1605,11 +1630,22 @@ pub async fn start_with_fuel_tracking(
 ) -> anyhow::Result<TestWorkerExecutor> {
     // ResourceLimitsDisabled gives unlimited fuel budget so workers are never
     // suspended, allowing fuel consumption to be measured freely.
+    start_with_resource_limits(deps, context, Arc::new(ResourceLimitsDisabled)).await
+}
+
+/// Starts a worker executor that uses the production [`Context`] with a custom
+/// [`ResourceLimits`] implementation. Useful for tests that need to observe
+/// per-account resource initialization behaviour.
+pub async fn start_with_resource_limits(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    resource_limits: Arc<dyn ResourceLimits>,
+) -> anyhow::Result<TestWorkerExecutor> {
     run_production_context_bootstrap(
         deps,
         context,
-        Arc::new(ResourceLimitsDisabled),
-        "Timeout waiting for fuel-aware server to start",
+        resource_limits,
+        "Timeout waiting for custom-resource-limits server to start",
     )
     .await
 }

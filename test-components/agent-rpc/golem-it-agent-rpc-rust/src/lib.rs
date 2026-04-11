@@ -1,5 +1,4 @@
-use golem_rust::bindings::golem::agent::host::Datetime;
-use golem_rust::golem_agentic::golem::agent::host::WasmRpc;
+use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
 use golem_rust::{agent_definition, agent_implementation, PromiseId, Schema, Uuid};
 use golem_rust::agentic::Schema as SchemaOps;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -471,6 +470,49 @@ impl RpcBlockingCounter for RpcBlockingCounterImpl {
     }
 }
 
+// -- RPC auth parity test agent --
+
+/// Mirror of the WIT `rpc-error` variant with `Schema` so it can be returned
+/// from an agent method and pattern-matched in integration tests.
+#[derive(Debug, Clone, Schema)]
+pub enum RpcCallOutcome {
+    Ok,
+    Denied { details: String },
+    NotFound { details: String },
+    ProtocolError { details: String },
+    RemoteInternalError { details: String },
+}
+
+impl From<RpcError> for RpcCallOutcome {
+    fn from(e: RpcError) -> Self {
+        match e {
+            RpcError::Denied(details) => Self::Denied { details },
+            RpcError::NotFound(details) => Self::NotFound { details },
+            RpcError::ProtocolError(details) => Self::ProtocolError { details },
+            RpcError::RemoteInternalError(details) => Self::RemoteInternalError { details },
+            RpcError::RemoteAgentError(_) => Self::RemoteInternalError {
+                details: "remote agent error".to_string(),
+            },
+        }
+    }
+}
+
+/// Agent used to test RPC authorization parity (local vs remote path).
+/// All methods return `RpcCallOutcome` so integration tests can do typed assertions
+/// on the exact error variant rather than string matching.
+#[agent_definition]
+pub trait RpcAuthTester {
+    fn new(name: String) -> Self;
+
+    /// Attempt to call `inc_by(1)` on an `RpcCounter` agent with the given name.
+    /// Returns `RpcCallOutcome::Ok` on success or a typed denial/error on failure.
+    async fn try_call_counter(&self, counter_name: String) -> RpcCallOutcome;
+}
+
+struct RpcAuthTesterImpl {
+    _name: String,
+}
+
 // -- Cancel test agents --
 
 #[agent_definition]
@@ -486,6 +528,34 @@ pub trait CancelTester {
 
 struct CancelTesterImpl {
     _name: String,
+}
+
+#[agent_implementation]
+impl RpcAuthTester for RpcAuthTesterImpl {
+    fn new(name: String) -> Self {
+        Self { _name: name }
+    }
+
+    async fn try_call_counter(&self, counter_name: String) -> RpcCallOutcome {
+        use golem_rust::agentic::Schema;
+
+        // Build the constructor data value: RpcCounter::new(counter_name: String)
+        let constructor = Schema::to_data_value(counter_name)
+            .expect("Failed to encode constructor parameter");
+
+        // Connect to the RpcCounter agent in the same component.
+        // WasmRpc::new resolves the component_id from the registered agent type.
+        let rpc = WasmRpc::new("RpcCounter", &constructor, None, &[]);
+
+        // Invoke inc-by(1u64)
+        let arg = Schema::to_data_value(1u64)
+            .expect("Failed to encode method parameter");
+
+        match rpc.invoke_and_await("inc-by", &arg) {
+            Ok(_) => RpcCallOutcome::Ok,
+            Err(e) => RpcCallOutcome::from(e),
+        }
+    }
 }
 
 #[agent_implementation]

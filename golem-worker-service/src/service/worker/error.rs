@@ -157,11 +157,15 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
                 Self::InternalError(worker_execution_error.into())
             }
 
+            WorkerServiceError::AuthError(_) => Self::Unauthorized(ErrorBody {
+                error: error.to_safe_string(),
+                code: api::error_code::AUTH_UNAUTHORIZED.to_string(),
+            }),
+
             WorkerServiceError::Internal(_)
             | WorkerServiceError::RegistryServiceError(_)
             | WorkerServiceError::InternalCallError(_)
             | WorkerServiceError::LimitError(_)
-            | WorkerServiceError::AuthError(_)
             | WorkerServiceError::Component(ComponentServiceError::InternalError(_)) => {
                 Self::InternalError(WorkerExecutionError {
                     error: Some(GrpcError::Unknown(UnknownError {

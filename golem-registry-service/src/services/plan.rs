@@ -69,7 +69,6 @@ impl PlanService {
                         || existing_plan.env_limit != plan.env_limit
                         || existing_plan.component_limit != plan.component_limit
                         || existing_plan.storage_limit != plan.storage_limit
-                        || existing_plan.worker_limit != plan.worker_limit
                         || existing_plan.monthly_gas_limit != plan.monthly_gas_limit
                         || existing_plan.monthly_upload_limit != plan.app_limit
                         || existing_plan.max_memory_per_worker != plan.max_memory_per_worker
@@ -102,7 +101,6 @@ impl PlanService {
                         app_limit: plan.app_limit,
                         env_limit: plan.env_limit,
                         component_limit: plan.component_limit,
-                        worker_limit: plan.worker_limit,
                         worker_connection_limit: plan.worker_connection_limit,
                         storage_limit: plan.storage_limit,
                         monthly_gas_limit: plan.monthly_gas_limit,
@@ -155,7 +153,6 @@ impl PlanService {
             total_env_count: plan.env_limit.into(),
             total_component_count: plan.component_limit.into(),
             total_component_storage_bytes: plan.storage_limit.into(),
-            total_worker_count: plan.worker_limit.into(),
             total_worker_connection_count: plan.worker_connection_limit.into(),
             monthly_component_upload_limit_bytes: plan.monthly_upload_limit.into(),
             monthly_gas_limit: plan.monthly_gas_limit.into(),

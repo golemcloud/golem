@@ -27,7 +27,7 @@ use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
-use golem_common::model::account::AccountId;
+
 use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
@@ -104,7 +104,6 @@ pub trait PromiseService: Send + Sync {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
-        completed_by: AccountId,
     ) -> Result<bool, WorkerExecutorError>;
 
     // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
@@ -145,13 +144,9 @@ impl PromiseService for LazyPromiseService {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
-        completed_by: AccountId,
     ) -> Result<bool, WorkerExecutorError> {
         let lock = self.0.read().await;
-        lock.as_ref()
-            .unwrap()
-            .complete(promise_id, data, completed_by)
-            .await
+        lock.as_ref().unwrap().complete(promise_id, data).await
     }
 
     // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
@@ -216,7 +211,6 @@ pub trait PromiseWorkerAccess: Send + Sync {
     async fn activate_worker_if_needed(
         &self,
         promise_id: &PromiseId,
-        completed_by: AccountId,
     ) -> Result<(), WorkerExecutorError>;
 }
 
@@ -325,7 +319,6 @@ impl PromiseService for DefaultPromiseService {
         &self,
         promise_id: PromiseId,
         data: Vec<u8>,
-        completed_by: AccountId,
     ) -> Result<bool, WorkerExecutorError> {
         let key = get_promise_result_redis_key(&promise_id);
 
@@ -356,7 +349,7 @@ impl PromiseService for DefaultPromiseService {
         // We do this unconditionally here as the only reason complete will be called again during replay is if we managed to write
         // the result to redis, but failed before the worker could persist the result.
         self.worker_access
-            .activate_worker_if_needed(&promise_id, completed_by)
+            .activate_worker_if_needed(&promise_id)
             .await?;
 
         Ok(written)
@@ -422,7 +415,6 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
     async fn activate_worker_if_needed(
         &self,
         promise_id: &PromiseId,
-        completed_by: AccountId,
     ) -> Result<(), WorkerExecutorError> {
         let agent_id = promise_id.agent_id.clone();
 
@@ -474,7 +466,6 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
         if should_activate {
             self.worker_activator
                 .get_or_create_running(
-                    completed_by,
                     &owned_agent_id,
                     None,
                     None,
@@ -546,7 +537,6 @@ impl PromiseService for PromiseServiceMock {
         &self,
         promise_id: PromiseId,
         _data: Vec<u8>,
-        _completed_by: AccountId,
     ) -> Result<bool, WorkerExecutorError> {
         self.completed.lock().await.insert(promise_id);
         Ok(true)
