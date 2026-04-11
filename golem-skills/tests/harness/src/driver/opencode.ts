@@ -1,4 +1,5 @@
-import { BaseAgentDriver, AgentResult } from "./base.js";
+import { spawn } from "node:child_process";
+import { BaseAgentDriver, AgentResult, killProcessTree } from "./base.js";
 import * as log from "../log.js";
 
 export class OpenCodeAgentDriver extends BaseAgentDriver {
@@ -38,84 +39,193 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
     timeout: number,
   ): Promise<AgentResult> {
     const prefix = this.logPrefix;
-    const result = await this.runCommand("opencode", this.buildArgs(prompt, isFollowup), timeout);
-    const durationStr = `(${result.durationSeconds.toFixed(1)}s)`;
-
-    if (!result.success) {
-      const msg = result.output || "Unknown error";
-      if (/command not found|ENOENT/i.test(msg)) {
-        log.driverFatal(prefix, "opencode CLI not installed");
-      } else if (/\bauthentication\s+failed\b|invalid.*api.key|unauthorized/i.test(msg)) {
-        log.driverAuthFailed(prefix);
-      } else {
-        log.driverError(prefix, msg, durationStr);
-      }
-      return result;
-    }
-
-    // Parse JSON events from the output to extract session ID and text
-    const responseText = this.parseJsonEvents(result.output);
-    if (responseText !== null) {
-      log.driverSuccess(prefix, durationStr);
-      return { ...result, output: responseText };
-    }
-
-    // If no JSON events were found, return the raw output
-    log.driverSuccess(prefix, durationStr);
-    return result;
-  }
-
-  private parseJsonEvents(output: string): string | null {
-    const trimmed = output.trim();
-    if (!trimmed) return null;
-
+    const startTime = Date.now();
     const textParts: string[] = [];
-    let foundJson = false;
 
-    for (const line of trimmed.split("\n")) {
-      const l = line.trim();
-      if (!l) continue;
-      try {
-        const event = JSON.parse(l) as Record<string, unknown>;
-        foundJson = true;
+    return new Promise((resolve) => {
+      const child = spawn("opencode", this.buildArgs(prompt, isFollowup), {
+        cwd: this.workspace,
+        detached: true,
+        env: { ...process.env },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
 
-        // Extract session ID from session events
-        if (event.type === "session.created" || event.type === "session.resumed") {
-          const sessionId =
-            (event.session_id as string) ??
-            ((event.session as Record<string, unknown>)?.id as string);
-          if (sessionId) {
-            this.lastSessionId = sessionId;
-          }
+      let rawOutput = "";
+      let stdoutBuf = "";
+      let stderrBuf = "";
+      let timedOut = false;
+
+      child.stdout?.on("data", (data) => {
+        const chunk = data.toString();
+        rawOutput += chunk;
+        stdoutBuf += chunk;
+
+        const lines = stdoutBuf.split("\n");
+        stdoutBuf = lines.pop()!;
+        for (const line of lines) {
+          this.processJsonLine(prefix, line, textParts);
+        }
+      });
+
+      child.stderr?.on("data", (data) => {
+        const chunk = data.toString();
+        rawOutput += chunk;
+        stderrBuf += chunk;
+
+        const lines = stderrBuf.split("\n");
+        stderrBuf = lines.pop()!;
+        for (const line of lines) {
+          log.driverErr(prefix, line);
+        }
+      });
+
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        killProcessTree(child);
+      }, timeout * 1000);
+
+      child.on("close", (exitCode) => {
+        clearTimeout(timeoutId);
+        if (stdoutBuf) this.processJsonLine(prefix, stdoutBuf, textParts);
+        if (stderrBuf) log.driverErr(prefix, stderrBuf);
+
+        const durationSeconds = (Date.now() - startTime) / 1000;
+        const durationStr = `(${durationSeconds.toFixed(1)}s)`;
+
+        if (timedOut) {
+          log.driverTimeout(prefix, timeout);
+          resolve({
+            success: false,
+            output: `Timed out after ${timeout}s. ${rawOutput}`,
+            durationSeconds,
+            exitCode: null,
+          });
+          return;
         }
 
-        // Extract assistant text content
-        if (event.type === "message.created" || event.type === "message.updated") {
-          const message = event.message as Record<string, unknown> | undefined;
-          if (message?.role === "assistant") {
-            const content = message.content;
-            if (typeof content === "string") {
-              textParts.push(content);
-            } else if (Array.isArray(content)) {
-              for (const block of content as Record<string, unknown>[]) {
-                if (block.type === "text" && typeof block.text === "string") {
-                  textParts.push(block.text);
-                }
-              }
+        const success = exitCode === 0;
+        const output = textParts.join("\n") || rawOutput;
+
+        if (!success) {
+          const msg = rawOutput || "Unknown error";
+          if (/command not found|ENOENT/i.test(msg)) {
+            log.driverFatal(prefix, "opencode CLI not installed");
+          } else if (/\bauthentication\s+failed\b|invalid.*api.key|unauthorized/i.test(msg)) {
+            log.driverAuthFailed(prefix);
+          } else {
+            log.driverError(prefix, msg, durationStr);
+          }
+        } else {
+          log.driverSuccess(prefix, durationStr);
+        }
+
+        resolve({ success, output, durationSeconds, exitCode: timedOut ? null : exitCode });
+      });
+
+      child.on("error", (err) => {
+        clearTimeout(timeoutId);
+        const durationSeconds = (Date.now() - startTime) / 1000;
+        log.driverFatal(prefix, err.message || "Unknown error");
+        resolve({
+          success: false,
+          output: rawOutput + (err.message || "Unknown error"),
+          durationSeconds,
+          exitCode: null,
+        });
+      });
+    });
+  }
+
+  /**
+   * Parse a single JSONL line from opencode's `--format json` output and emit
+   * structured log output.
+   *
+   * Event types (per opencode docs):
+   *   step_start  — beginning of a processing step (contains sessionID)
+   *   tool_use    — tool invocation completed
+   *   text        — assistant text output
+   *   step_finish — end of step (contains token/cost stats)
+   *   error       — session error
+   */
+  private processJsonLine(prefix: string, line: string, textParts: string[]): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      // Not JSON — log as plain text
+      log.driver(prefix, trimmed);
+      return;
+    }
+
+    const sessionId = event.sessionID as string | undefined;
+    if (sessionId && !this.lastSessionId) {
+      this.lastSessionId = sessionId;
+      log.driverSession(prefix, sessionId);
+    }
+
+    const type = event.type as string | undefined;
+    const part = event.part as Record<string, unknown> | undefined;
+
+    switch (type) {
+      case "step_start": {
+        // Logged session above; nothing else needed
+        break;
+      }
+
+      case "tool_use": {
+        if (part) {
+          const toolName = (part.tool as string) || "unknown";
+          const state = part.state as Record<string, unknown> | undefined;
+          const input = state?.input as Record<string, unknown> | undefined;
+          log.driverToolUse(prefix, toolName, input);
+        }
+        break;
+      }
+
+      case "text": {
+        if (part) {
+          const text = part.text as string | undefined;
+          if (text) {
+            textParts.push(text);
+            for (const l of text.split("\n")) {
+              log.driver(prefix, l);
             }
           }
         }
+        break;
+      }
 
-        // Also check for the "response" field used by some opencode versions
-        if (typeof event.response === "string") {
-          textParts.push(event.response);
+      case "step_finish": {
+        if (part) {
+          const tokens = part.tokens as Record<string, unknown> | undefined;
+          const cost = part.cost as number | undefined;
+          if (tokens || cost !== undefined) {
+            const input = (tokens?.input as number) ?? 0;
+            const output = (tokens?.output as number) ?? 0;
+            const extra = `tokens=${input}+${output}` + (cost ? ` cost=$${cost.toFixed(4)}` : "");
+            log.driver(prefix, extra);
+          }
         }
-      } catch {
-        // Not JSON — raw output line, already logged by the base driver
+        break;
+      }
+
+      case "error": {
+        const error = event.error as Record<string, unknown> | undefined;
+        const errData = error?.data as Record<string, unknown> | undefined;
+        const errMsg =
+          (errData?.message as string) || (error?.name as string) || "unknown error";
+        log.driverError(prefix, errMsg);
+        break;
+      }
+
+      default: {
+        // Unknown event type — log raw for debugging
+        log.driver(prefix, trimmed);
+        break;
       }
     }
-
-    if (!foundJson) return null;
-    return textParts.join("\n") || "";
   }
 }
