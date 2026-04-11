@@ -152,10 +152,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         }
 
         if (monitor.isTimedOut) {
-          log.driver(
-            prefix,
-            `timeout exit: stdoutBytes=${stdoutBytes} stderrBytes=${stderrBytes}`,
-          );
+          log.driver(prefix, `timeout exit: stdoutBytes=${stdoutBytes} stderrBytes=${stderrBytes}`);
           resolve({
             success: false,
             output: `${monitor.formatTimeoutMessage("OpenCode")}. ${rawOutput}`,
