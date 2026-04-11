@@ -1,5 +1,11 @@
 import { spawn } from "node:child_process";
-import { BaseAgentDriver, AgentResult, killProcessTree, ActivityMonitor, type DriverTimeoutOptions } from "./base.js";
+import {
+  BaseAgentDriver,
+  AgentResult,
+  killProcessTree,
+  ActivityMonitor,
+  type DriverTimeoutOptions,
+} from "./base.js";
 import * as log from "../log.js";
 
 export class CodexAgentDriver extends BaseAgentDriver {

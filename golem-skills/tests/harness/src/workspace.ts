@@ -145,6 +145,7 @@ export class GolemServer {
     this.serverProcess = spawn("golem", ["server", "run", "--data-dir", dataDir, "--clean"], {
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
+      env: { ...process.env, RUST_BACKTRACE: "1" },
     });
 
     let stdoutBuf = "";

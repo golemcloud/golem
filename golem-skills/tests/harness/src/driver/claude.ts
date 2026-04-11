@@ -1,7 +1,13 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { BaseAgentDriver, AgentResult, killProcessTree, ActivityMonitor, type DriverTimeoutOptions } from "./base.js";
+import {
+  BaseAgentDriver,
+  AgentResult,
+  killProcessTree,
+  ActivityMonitor,
+  type DriverTimeoutOptions,
+} from "./base.js";
 import * as log from "../log.js";
 
 export class ClaudeAgentDriver extends BaseAgentDriver {
@@ -65,7 +71,10 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
     this.sessionId = null;
   }
 
-  private async runClaudeStreamJson(args: string[], opts: DriverTimeoutOptions): Promise<AgentResult> {
+  private async runClaudeStreamJson(
+    args: string[],
+    opts: DriverTimeoutOptions,
+  ): Promise<AgentResult> {
     const startTime = Date.now();
     const prefix = this.logPrefix;
     const outputParts: string[] = [];

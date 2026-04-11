@@ -25,7 +25,7 @@ import {
 import * as log from "./log.js";
 import { detectGolemWorkspaceRoot, resolveGolemTargetDir, GolemServer } from "./workspace.js";
 
-const DEFAULT_SCENARIO_RETRIES = 3;
+const DEFAULT_SCENARIO_RETRIES = 5;
 
 const SUPPORTED_AGENTS = ["amp", "claude-code", "opencode", "codex"] as const;
 const SUPPORTED_LANGUAGES = ["ts", "rust", "scala"] as const;
@@ -274,7 +274,9 @@ Options:
     process.exit(1);
   }
 
-  const maxScenarioRetries = retriesArg ? Number.parseInt(retriesArg, 10) : DEFAULT_SCENARIO_RETRIES;
+  const maxScenarioRetries = retriesArg
+    ? Number.parseInt(retriesArg, 10)
+    : DEFAULT_SCENARIO_RETRIES;
   if (!Number.isFinite(maxScenarioRetries) || maxScenarioRetries < 0) {
     log.error(`Invalid --retries value: ${retriesArg}`);
     process.exit(1);
@@ -451,7 +453,11 @@ Options:
             }
 
             const attemptSuffix = attempt > 1 ? `/attempt-${attempt}` : "";
-            const workspace = path.join(workspacesRoot, scenarioDir, currentLanguage + attemptSuffix);
+            const workspace = path.join(
+              workspacesRoot,
+              scenarioDir,
+              currentLanguage + attemptSuffix,
+            );
             const watcher = new SkillWatcher(workspace);
             const executor = new ScenarioExecutor(
               driver,
@@ -481,7 +487,9 @@ Options:
             );
             if (!failedDueToIdleTimeout) break;
 
-            log.warn(`Scenario "${spec.name}" failed due to idle timeout, will retry (retry ${attempt}/${maxScenarioRetries})`);
+            log.warn(
+              `Scenario "${spec.name}" failed due to idle timeout, will retry (retry ${attempt}/${maxScenarioRetries})`,
+            );
           }
 
           const results = scenarioResult!.stepResults;

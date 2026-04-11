@@ -361,8 +361,16 @@ export function scenarioFail(name: string): void {
   scenarioLine(name, chalk.red("✗ failed"));
 }
 
-export function scenarioRetry(name: string, attempt: number, maxAttempts: number, reason: string): void {
-  scenarioLine(name, `${chalk.yellow("↻ retry")} ${chalk.white(`${attempt}/${maxAttempts}`)} ${chalk.gray(reason)}`);
+export function scenarioRetry(
+  name: string,
+  attempt: number,
+  maxAttempts: number,
+  reason: string,
+): void {
+  scenarioLine(
+    name,
+    `${chalk.yellow("↻ retry")} ${chalk.white(`${attempt}/${maxAttempts}`)} ${chalk.gray(reason)}`,
+  );
 }
 
 export function scenarioFailedStep(stepName: string, error: string): void {

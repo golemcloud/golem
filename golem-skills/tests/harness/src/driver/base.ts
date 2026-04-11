@@ -48,7 +48,7 @@ export interface AgentResult {
 
 export interface DriverTimeoutOptions {
   stepTimeoutSeconds: number;
-  idleTimeoutSeconds?: number;       // default: 300 (5 min)
+  idleTimeoutSeconds?: number; // default: 300 (5 min)
   heartbeatIntervalSeconds?: number; // default: 30
 }
 

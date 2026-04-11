@@ -957,7 +957,14 @@ export class ScenarioExecutor {
       // No golem app found yet — that's fine
     }
 
-    return { success, errors, activatedSkills, isFirstPrompt, timedOut: stepTimedOut, timeoutKind: stepTimeoutKind };
+    return {
+      success,
+      errors,
+      activatedSkills,
+      isFirstPrompt,
+      timedOut: stepTimedOut,
+      timeoutKind: stepTimeoutKind,
+    };
   }
 
   private needsSkillTracking(step: StepSpec): boolean {

@@ -1,6 +1,14 @@
 import { spawn } from "node:child_process";
-import { BaseAgentDriver, AgentResult, killProcessTree, ActivityMonitor, type DriverTimeoutOptions } from "./base.js";
+import {
+  BaseAgentDriver,
+  AgentResult,
+  killProcessTree,
+  ActivityMonitor,
+  type DriverTimeoutOptions,
+} from "./base.js";
 import * as log from "../log.js";
+
+const STARTUP_STALL_TIMEOUT_SECONDS = 90;
 
 export class OpenCodeAgentDriver extends BaseAgentDriver {
   protected readonly driverName = "opencode";
@@ -43,7 +51,8 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
     const textParts: string[] = [];
 
     return new Promise((resolve) => {
-      const child = spawn("opencode", this.buildArgs(prompt, isFollowup), {
+      const args = this.buildArgs(prompt, isFollowup);
+      const child = spawn("opencode", args, {
         cwd: this.workspace,
         detached: true,
         env: { ...process.env },
@@ -53,16 +62,48 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       let rawOutput = "";
       let stdoutBuf = "";
       let stderrBuf = "";
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
+      let receivedFirstOutput = false;
+      let startupStalled = false;
+
+      const model = process.env.OPENCODE_MODEL;
+      log.driver(
+        prefix,
+        `spawn: cmd=opencode args=[${args.join(", ")}] cwd=${this.workspace} pid=${child.pid ?? "?"} ` +
+          `followup=${isFollowup} lastSession=${this.lastSessionId ?? "none"} ` +
+          `model=${model ?? "default"} ` +
+          `ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY ? "present" : "absent"} ` +
+          `OPENAI_API_KEY=${process.env.OPENAI_API_KEY ? "present" : "absent"} ` +
+          `OPENCODE_MODEL=${model ? "present" : "absent"}`,
+      );
 
       const monitor = new ActivityMonitor(prefix, opts, (_kind) => {
         killProcessTree(child);
       });
 
+      const startupTimer = setTimeout(() => {
+        if (!receivedFirstOutput) {
+          startupStalled = true;
+          log.driverFatal(
+            prefix,
+            `✗ agent startup stall — no output for ${STARTUP_STALL_TIMEOUT_SECONDS}s`,
+          );
+          killProcessTree(child);
+        }
+      }, STARTUP_STALL_TIMEOUT_SECONDS * 1000);
+
       child.stdout?.on("data", (data) => {
         monitor.noteActivity();
         const chunk = data.toString();
+        stdoutBytes += data.length;
         rawOutput += chunk;
         stdoutBuf += chunk;
+
+        if (!receivedFirstOutput) {
+          receivedFirstOutput = true;
+          clearTimeout(startupTimer);
+        }
 
         const lines = stdoutBuf.split("\n");
         stdoutBuf = lines.pop()!;
@@ -74,6 +115,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       child.stderr?.on("data", (data) => {
         monitor.noteActivity();
         const chunk = data.toString();
+        stderrBytes += data.length;
         rawOutput += chunk;
         stderrBuf += chunk;
 
@@ -85,6 +127,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       });
 
       child.on("close", (exitCode) => {
+        clearTimeout(startupTimer);
         monitor.finish();
         if (stdoutBuf) this.processJsonLine(prefix, stdoutBuf, textParts);
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
@@ -92,7 +135,27 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         const durationSeconds = (Date.now() - startTime) / 1000;
         const durationStr = `(${durationSeconds.toFixed(1)}s)`;
 
+        if (startupStalled) {
+          log.driver(
+            prefix,
+            `startup stall exit: stdoutBytes=${stdoutBytes} stderrBytes=${stderrBytes}`,
+          );
+          resolve({
+            success: false,
+            output: `OpenCode startup stall — no output for ${STARTUP_STALL_TIMEOUT_SECONDS}s. ${rawOutput}`,
+            durationSeconds,
+            exitCode: null,
+            timedOut: true,
+            timeoutKind: "idle",
+          });
+          return;
+        }
+
         if (monitor.isTimedOut) {
+          log.driver(
+            prefix,
+            `timeout exit: stdoutBytes=${stdoutBytes} stderrBytes=${stderrBytes}`,
+          );
           resolve({
             success: false,
             output: `${monitor.formatTimeoutMessage("OpenCode")}. ${rawOutput}`,
@@ -124,6 +187,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       });
 
       child.on("error", (err) => {
+        clearTimeout(startupTimer);
         monitor.finish();
         const durationSeconds = (Date.now() - startTime) / 1000;
         log.driverFatal(prefix, err.message || "Unknown error");
@@ -216,8 +280,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       case "error": {
         const error = event.error as Record<string, unknown> | undefined;
         const errData = error?.data as Record<string, unknown> | undefined;
-        const errMsg =
-          (errData?.message as string) || (error?.name as string) || "unknown error";
+        const errMsg = (errData?.message as string) || (error?.name as string) || "unknown error";
         log.driverError(prefix, errMsg);
         break;
       }
