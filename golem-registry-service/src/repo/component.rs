@@ -14,13 +14,13 @@
 
 use crate::repo::model::BindFields;
 use crate::repo::model::component::{
-    ComponentExtRevisionRecord, ComponentFileRecord, ComponentPluginInstallationRecord,
-    ComponentRepoError, ComponentRevisionIdentityRecord, ComponentRevisionRecord,
+    ComponentExtRevisionRecord, ComponentRepoError, ComponentRevisionIdentityRecord,
+    ComponentRevisionRecord,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt, TryStreamExt, stream};
+use futures::FutureExt;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
@@ -479,8 +479,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.agent_config,
+                           cr.size, cr.metadata,
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -491,7 +490,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         match revision {
-            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
+            Some(revision) => Ok(Some(revision)),
             None => Ok(None),
         }
     }
@@ -507,8 +506,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.agent_config,
+                           cr.size, cr.metadata,
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -520,7 +518,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         match revision {
-            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
+            Some(revision) => Ok(Some(revision)),
             None => Ok(None),
         }
     }
@@ -535,9 +533,8 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                         cr.component_id, cr.revision_id, cr.hash,
                         cr.created_at, cr.created_by, cr.deleted,
-                        cr.size, cr.metadata, cr.env,
-                        cr.config_vars, cr.agent_config,
-                        cr.object_store_key, cr.binary_hash
+                           cr.size, cr.metadata,
+                           cr.object_store_key, cr.binary_hash
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
                         ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
@@ -554,7 +551,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         match revision {
-            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
+            Some(revision) => Ok(Some(revision)),
             None => Ok(None),
         }
     }
@@ -570,8 +567,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.agent_config,
+                           cr.size, cr.metadata,
                            cr.object_store_key, cr.binary_hash
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
@@ -590,7 +586,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         match revision {
-            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
+            Some(revision) => Ok(Some(revision)),
             None => Ok(None),
         }
     }
@@ -617,8 +613,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                           c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.agent_config,
+                           cr.size, cr.metadata,
                            cr.object_store_key, cr.binary_hash
                     FROM distinct_revs dr
                     JOIN component_revisions cr
@@ -648,8 +643,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.agent_config,
+                           cr.size, cr.metadata,
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -662,7 +656,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         match revision {
-            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
+            Some(revision) => Ok(Some(revision)),
             None => Ok(None),
         }
     }
@@ -677,8 +671,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.agent_config,
+                           cr.size, cr.metadata,
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id AND c.current_revision_id = cr.revision_id
@@ -688,11 +681,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     .bind(environment_id),
             )
             .await?;
-
-        stream::iter(revisions)
-            .then(|revision| self.enrich_component(revision))
-            .try_collect()
-            .await
+        Ok(revisions)
     }
 
     async fn list_deployed(
@@ -705,9 +694,8 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.size, cr.metadata, cr.env,
-                           cr.original_config_vars, cr.config_vars, cr.agent_config,
-                           cr.binary_hash
+                           cr.size, cr.metadata,
+                           cr.object_store_key, cr.binary_hash
                     FROM current_deployments cd
                     JOIN current_deployment_revisions cdr
                         ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
@@ -723,11 +711,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     .bind(environment_id),
             )
             .await?;
-
-        stream::iter(revisions)
-            .then(|revision| self.enrich_component(revision))
-            .try_collect()
-            .await
+        Ok(revisions)
     }
 
     async fn list_by_deployment(
@@ -742,8 +726,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.agent_config,
+                           cr.size, cr.metadata,
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -757,11 +740,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                 .bind(deployment_revision_id),
             )
             .await?;
-
-        stream::iter(revisions)
-            .then(|revision| self.enrich_component(revision))
-            .try_collect()
-            .await
+        Ok(revisions)
     }
 
     async fn get_by_deployment_and_name(
@@ -776,8 +755,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
                     SELECT c.environment_id, c.name,
                            cr.component_id, cr.revision_id, cr.hash,
                            cr.created_at, cr.created_by, cr.deleted,
-                           cr.size, cr.metadata, cr.env,
-                           cr.config_vars, cr.agent_config,
+                           cr.size, cr.metadata,
                            cr.object_store_key, cr.binary_hash
                     FROM components c
                     JOIN component_revisions cr ON c.component_id = cr.component_id
@@ -791,7 +769,7 @@ impl ComponentRepo for DbComponentRepo<PostgresPool> {
             .await?;
 
         match revision {
-            Some(revision) => Ok(Some(self.enrich_component(revision).await?)),
+            Some(revision) => Ok(Some(revision)),
             None => Ok(None),
         }
     }
@@ -802,59 +780,10 @@ trait ComponentRepoInternal: ComponentRepo {
     type Db: Database;
     type Tx: LabelledPoolTransaction;
 
-    async fn get_component_plugins(
-        &self,
-        component_id: Uuid,
-        revision_id: i64,
-    ) -> RepoResult<Vec<ComponentPluginInstallationRecord>>;
-
-    async fn get_component_plugins_tx(
-        tx: &mut Self::Tx,
-        component_id: Uuid,
-        revision_id: i64,
-    ) -> RepoResult<Vec<ComponentPluginInstallationRecord>>;
-
-    async fn get_component_files(
-        &self,
-        component_id: Uuid,
-        revision_id: i64,
-    ) -> RepoResult<Vec<ComponentFileRecord>>;
-
-    // TODO: create a variant the accepts multiple component records, and which batches
-    //       queries (e.g. with "IN")
-    async fn enrich_component(
-        &self,
-        mut component: ComponentExtRevisionRecord,
-    ) -> RepoResult<ComponentExtRevisionRecord> {
-        component.revision.plugins = self
-            .get_component_plugins(
-                component.revision.component_id,
-                component.revision.revision_id,
-            )
-            .await?;
-        component.revision.files = self
-            .get_component_files(
-                component.revision.component_id,
-                component.revision.revision_id,
-            )
-            .await?;
-        Ok(component)
-    }
-
     async fn insert_revision(
         tx: &mut Self::Tx,
         revision: ComponentRevisionRecord,
     ) -> Result<ComponentRevisionRecord, ComponentRepoError>;
-
-    async fn insert_file(
-        tx: &mut Self::Tx,
-        file: ComponentFileRecord,
-    ) -> RepoResult<ComponentFileRecord>;
-
-    async fn insert_plugin(
-        tx: &mut Self::Tx,
-        plugin: ComponentPluginInstallationRecord,
-    ) -> RepoResult<()>;
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -863,194 +792,35 @@ impl ComponentRepoInternal for DbComponentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
-    async fn get_component_plugins(
-        &self,
-        component_id: Uuid,
-        revision_id: i64,
-    ) -> RepoResult<Vec<ComponentPluginInstallationRecord>> {
-        self.with_ro("get_component_plugins")
-            .fetch_all_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT
-                        cpi.component_id,
-                        cpi.revision_id,
-                        cpi.priority,
-                        cpi.environment_plugin_grant_id,
-                        cpi.parameters,
-                        p.plugin_id AS plugin_registration_id,
-                        p.name AS plugin_name,
-                        p.version AS plugin_version,
-                        p.component_id AS oplog_processor_component_id,
-                        p.component_revision_id AS oplog_processor_component_revision_id,
-                        cpi.created_at,
-                        cpi.created_by
-                    FROM component_plugin_installations cpi
-                    INNER JOIN environment_plugin_grants epg
-                        ON epg.environment_plugin_grant_id = cpi.environment_plugin_grant_id
-                    INNER JOIN plugins p
-                        ON p.plugin_id = epg.plugin_id
-                    WHERE cpi.component_id = $1 AND cpi.revision_id = $2
-                    ORDER BY priority
-                "#})
-                .bind(component_id)
-                .bind(revision_id),
-            )
-            .await
-    }
-
-    async fn get_component_plugins_tx(
-        tx: &mut Self::Tx,
-        component_id: Uuid,
-        revision_id: i64,
-    ) -> RepoResult<Vec<ComponentPluginInstallationRecord>> {
-        tx.fetch_all_as(
-            sqlx::query_as(indoc! { r#"
-                SELECT
-                       cpi.component_id,
-                       cpi.revision_id,
-                       cpi.priority,
-                       cpi.environment_plugin_grant_id,
-                       cpi.parameters,
-                       p.plugin_id AS plugin_registration_id,
-                       p.name AS plugin_name,
-                       p.version AS plugin_version,
-                       p.component_id AS oplog_processor_component_id,
-                       p.component_revision_id AS oplog_processor_component_revision_id,
-                       cpi.created_at,
-                       cpi.created_by
-                FROM component_plugin_installations cpi
-                INNER JOIN environment_plugin_grants epg
-                    ON epg.environment_plugin_grant_id = cpi.environment_plugin_grant_id
-                INNER JOIN plugins p
-                    ON p.plugin_id = epg.plugin_id
-                WHERE cpi.component_id = $1 AND cpi.revision_id = $2
-                ORDER BY priority
-            "#})
-            .bind(component_id)
-            .bind(revision_id),
-        )
-        .await
-    }
-
-    async fn get_component_files(
-        &self,
-        component_id: Uuid,
-        revision_id: i64,
-    ) -> RepoResult<Vec<ComponentFileRecord>> {
-        self.with_ro("get_component_files")
-            .fetch_all_as(
-                sqlx::query_as(indoc! { r#"
-                    SELECT component_id, revision_id, agent_type_name, file_path,
-                           created_at, created_by, file_content_hash, file_permissions, file_size
-                    FROM component_files
-                    WHERE component_id = $1 AND revision_id = $2
-                    ORDER BY agent_type_name, file_path
-                "#})
-                .bind(component_id)
-                .bind(revision_id),
-            )
-            .await
-    }
-
     async fn insert_revision(
         tx: &mut Self::Tx,
         revision: ComponentRevisionRecord,
     ) -> Result<ComponentRevisionRecord, ComponentRepoError> {
         let revision = revision.with_updated_hash();
-        let plugins = revision.plugins;
-        let files = revision.files;
 
-        let mut revision: ComponentRevisionRecord = {
-            tx.fetch_one_as(
-                sqlx::query_as(indoc! { r#"
-                    INSERT INTO component_revisions
-                    (component_id, revision_id, hash,
-                        created_at, created_by, deleted,
-                        size, metadata, env,
-                        config_vars, agent_config,
-                        object_store_key, binary_hash)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                    RETURNING component_id, revision_id, hash,
-                        created_at, created_by, deleted,
-                        size, metadata, env,
-                        config_vars, agent_config,
-                        object_store_key, binary_hash
-                "# })
-                .bind(revision.component_id)
-                .bind(revision.revision_id)
-                .bind(revision.hash)
-                .bind_deletable_revision_audit(revision.audit)
-                .bind(revision.size)
-                .bind(revision.metadata)
-                .bind(revision.env)
-                .bind(revision.config_vars)
-                .bind(revision.agent_config)
-                .bind(revision.object_store_key)
-                .bind(revision.binary_hash),
-            )
-            .await
-            .to_error_on_unique_violation(ComponentRepoError::ConcurrentModification)?
-        };
-
-        revision.files = {
-            let mut inserted_files = Vec::with_capacity(files.len());
-            for file in files {
-                inserted_files.push(Self::insert_file(tx, file).await?);
-            }
-            inserted_files.sort_by(|a, b| a.file_path.cmp(&b.file_path));
-            inserted_files
-        };
-
-        revision.plugins = {
-            for plugin in plugins {
-                Self::insert_plugin(tx, plugin).await?
-            }
-
-            Self::get_component_plugins_tx(tx, revision.component_id, revision.revision_id).await?
-        };
-
-        Ok(revision)
-    }
-
-    async fn insert_file(
-        tx: &mut Self::Tx,
-        file: ComponentFileRecord,
-    ) -> RepoResult<ComponentFileRecord> {
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
-                INSERT INTO component_files
-                (component_id, revision_id, agent_type_name, file_path, created_at, created_by, file_content_hash, file_permissions, file_size)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                RETURNING component_id, revision_id, agent_type_name, file_path, created_at, created_by, file_content_hash, file_permissions, file_size
-            "#})
-                .bind(file.component_id)
-                .bind(file.revision_id)
-                .bind(file.agent_type_name)
-                .bind(file.file_path)
-                .bind_revision_audit(file.audit)
-                .bind(file.file_content_hash)
-                .bind(file.file_permissions)
-                .bind(file.file_size)
-        ).await
-    }
-
-    async fn insert_plugin(
-        tx: &mut Self::Tx,
-        plugin: ComponentPluginInstallationRecord,
-    ) -> RepoResult<()> {
-        tx.fetch_one_as(
-            sqlx::query_as(indoc! { r#"
-                INSERT INTO component_plugin_installations
-                (component_id, revision_id, priority, created_at, created_by, environment_plugin_grant_id, parameters)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING component_id, revision_id, priority, created_at, created_by, environment_plugin_grant_id, parameters
-            "#})
-                .bind(plugin.component_id)
-                .bind(plugin.revision_id)
-                .bind(plugin.priority)
-                .bind_revision_audit(plugin.audit)
-                .bind(plugin.environment_plugin_grant_id)
-                .bind(plugin.parameters)
-        ).await
+                INSERT INTO component_revisions
+                (component_id, revision_id, hash,
+                    created_at, created_by, deleted,
+                    size, metadata,
+                    object_store_key, binary_hash)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                RETURNING component_id, revision_id, hash,
+                    created_at, created_by, deleted,
+                    size, metadata,
+                    object_store_key, binary_hash
+            "# })
+            .bind(revision.component_id)
+            .bind(revision.revision_id)
+            .bind(revision.hash)
+            .bind_deletable_revision_audit(revision.audit)
+            .bind(revision.size)
+            .bind(revision.metadata)
+            .bind(revision.object_store_key)
+            .bind(revision.binary_hash),
+        )
+        .await
+        .to_error_on_unique_violation(ComponentRepoError::ConcurrentModification)
     }
 }

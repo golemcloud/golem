@@ -260,7 +260,7 @@ impl From<ComponentError> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             ComponentError::ComponentProcessingError(_)
-            | ComponentError::InitialComponentFileNotFound { .. }
+            | ComponentError::AgentFileNotFoundInArchive { .. }
             | ComponentError::InvalidFilePath(_)
             | ComponentError::InvalidComponentName { .. }
             | ComponentError::InvalidOplogProcessorPlugin
@@ -289,7 +289,8 @@ impl From<ComponentError> for ApiError {
             | ComponentError::DeploymentRevisionNotFound(_)
             | ComponentError::ComponentNotFound(_)
             | ComponentError::ComponentByNameNotFound(_)
-            | ComponentError::AgentTypeForNameNotFound(_) => {
+            | ComponentError::AgentTypeForNameNotFound(_)
+            | ComponentError::UndeclaredAgentTypeInProvisionConfig(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 

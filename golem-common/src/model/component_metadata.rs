@@ -76,6 +76,29 @@ impl ComponentMetadata {
         }
     }
 
+    /// Returns a new `ComponentMetadata` with the provision configs replaced.
+    /// All other analysed fields (exports, memories, agent types, etc.) are preserved.
+    /// Use this when provision configs are updated independently of the WASM binary.
+    pub fn with_provision_configs(
+        &self,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+    ) -> Self {
+        let data = self.data.as_ref();
+        Self {
+            data: Arc::new(ComponentMetadataInnerData {
+                exports: data.exports.clone(),
+                producers: data.producers.clone(),
+                memories: data.memories.clone(),
+                binary_wit: data.binary_wit.clone(),
+                root_package_name: data.root_package_name.clone(),
+                root_package_version: data.root_package_version.clone(),
+                agent_types: data.agent_types.clone(),
+                agent_type_provision_configs,
+            }),
+            cache: Arc::default(),
+        }
+    }
+
     pub fn producers(&self) -> &[Producers] {
         &self.data.producers
     }
