@@ -243,17 +243,24 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
         .store()
         .await?;
 
-    // Spawn a2's start in the background. It will block in WaitingForPermit
-    // because a1 is Running (not evictable) and holds the only permit.
+    // Spawn a2's start in background while a1 still holds only permit.
+    // It must stay pending until gate opens; otherwise test is not exercising
+    // contested path.
     let executor_clone = executor.clone();
     let counters_clone = counters_component.clone();
     let a2 = agent_id!("Counter", "concurrent-wait-http-2");
     let a2_clone = a2.clone();
-    tokio::spawn(async move {
+    let a2_start = tokio::spawn(async move {
         executor_clone
             .start_agent(&counters_clone.id, a2_clone)
             .await
     });
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(
+        !a2_start.is_finished(),
+        "a2 start finished while a1 was still Running; test did not hit permit contention"
+    );
 
     // Release the gate — a1's poll loop returns "done", its invocation
     // completes, and its permit is returned to the semaphore via Drop.
@@ -270,6 +277,13 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
     // that the waiting-and-unblocking path works correctly.
     executor
         .invoke_and_await_agent(&counters_component, &a2, "increment", data_value!())
+        .await?;
+
+    let a2_id = tokio::time::timeout(Duration::from_secs(10), a2_start)
+        .await
+        .expect("a2 start should unblock after a1 releases permit")??;
+    executor
+        .wait_for_status(&a2_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
 
     http_server.abort();
@@ -359,10 +373,9 @@ async fn concurrent_agent_idle_releases_permit(
         .wait_for_status(&a1_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
-    // Spawn a2 in background. It enters WaitingForPermit because a1 is Running.
-    // The try_free_up callback runs NOW and finds a1 Running (not idle) → returns
-    // false. a2 falls through to `acquire_owned().await` — blocking on the
-    // semaphore.
+    // Spawn a2 in background while a1 still holds only permit. Assert start is
+    // still pending before gate opens. That proves later success comes from
+    // permit release on idle transition, not lucky late scheduling.
     let counters_component = executor
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
@@ -371,15 +384,17 @@ async fn concurrent_agent_idle_releases_permit(
     let counters_clone = counters_component.clone();
     let a2 = agent_id!("Counter", "idle-permit-2");
     let a2_clone = a2.clone();
-    tokio::spawn(async move {
+    let a2_start = tokio::spawn(async move {
         executor_clone
             .start_agent(&counters_clone.id, a2_clone)
             .await
     });
 
-    // Small delay to ensure a2's acquire + try_free_up has already executed and
-    // failed (a1 was Running). a2 is now blocked on acquire_owned().await.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(
+        !a2_start.is_finished(),
+        "a2 start finished while a1 was still Running; test did not hit idle-release path"
+    );
 
     // Release the gate. a1's poll returns "done", invocation completes, a1 goes Idle.
     // With the fix: Idle transition drops the permit → semaphore notifies a2 → a2 starts.
@@ -400,6 +415,13 @@ async fn concurrent_agent_idle_releases_permit(
          but it timed out — idle agents are still holding permits"
     );
     a2_result.unwrap()?;
+
+    let a2_id = tokio::time::timeout(Duration::from_secs(10), a2_start)
+        .await
+        .expect("a2 start should unblock after a1 goes idle and releases permit")??;
+    executor
+        .wait_for_status(&a2_id, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
 
     http_server.abort();
     Ok(())
