@@ -7,12 +7,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
   private lastSessionId: string | null = null;
 
   private buildArgs(prompt: string, isFollowup: boolean): string[] {
-    const args = [
-      "run",
-      "--format",
-      "json",
-      "--dangerously-skip-permissions",
-    ];
+    const args = ["run", "--format", "json", "--dangerously-skip-permissions"];
     const model = process.env.OPENCODE_MODEL;
     if (model) {
       args.push("-m", model);
@@ -43,11 +38,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
     timeout: number,
   ): Promise<AgentResult> {
     const prefix = this.logPrefix;
-    const result = await this.runCommand(
-      "opencode",
-      this.buildArgs(prompt, isFollowup),
-      timeout,
-    );
+    const result = await this.runCommand("opencode", this.buildArgs(prompt, isFollowup), timeout);
     const durationStr = `(${result.durationSeconds.toFixed(1)}s)`;
 
     if (!result.success) {

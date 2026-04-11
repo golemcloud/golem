@@ -404,7 +404,7 @@ jobs:
         run: cargo build -p golem-client
 
   build-golem-scala:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
@@ -667,7 +667,7 @@ jobs:
 
   skill-harness-unit-tests:
     name: Skill Harness Unit Tests
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     steps:
       - uses: actions/checkout@v5
 
