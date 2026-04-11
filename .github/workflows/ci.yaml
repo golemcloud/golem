@@ -665,9 +665,26 @@ jobs:
           path: tmp/test-components-wasm
           key: golem-test-components-${{ github.run_id }}
 
+  detect-skill-changes:
+    name: Detect golem-skills changes
+    runs-on: ubuntu-latest
+    outputs:
+      skills_changed: ${{ github.event_name == 'push' || steps.filter.outputs.skills }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            skills:
+              - 'golem-skills/**'
+
   skill-harness-unit-tests:
     name: Skill Harness Unit Tests
     runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs: detect-skill-changes
+    if: needs.detect-skill-changes.outputs.skills_changed == 'true'
     steps:
       - uses: actions/checkout@v5
 
@@ -693,12 +710,14 @@ jobs:
         run: npm test
 
   skill-harness-integration-test:
-    name: skill-harness ${{ matrix.agent }} x ${{ matrix.language }}
+    name: skills ${{ matrix.agent }}/${{ matrix.language }}${{ matrix.model && format(' [{0}]', matrix.model) || '' }}
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs:
+      - detect-skill-changes
       - build-and-store
       - build-golem-ts
       - build-golem-scala
+    if: needs.detect-skill-changes.outputs.skills_changed == 'true'
     services:
       postgres:
         image: postgres:16
@@ -898,7 +917,13 @@ jobs:
 
       - name: Clean workspace build artifacts before upload
         if: always()
-        run: find /tmp/harness-run/workspaces -name 'golem-temp' -type d -exec rm -rf {} + 2>/dev/null; find /tmp/harness-run/workspaces -name 'target' -type d -exec rm -rf {} + 2>/dev/null; find /tmp/harness-run/workspaces -name 'node_modules' -type d -exec rm -rf {} + 2>/dev/null; rm -rf /tmp/harness-run/workspaces/golem-server-data 2>/dev/null; true
+        run: |
+          if [ -d /tmp/harness-run/workspaces ]; then
+            find /tmp/harness-run/workspaces -name 'golem-temp' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+            find /tmp/harness-run/workspaces -name 'target' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+            find /tmp/harness-run/workspaces -name 'node_modules' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+            rm -rf /tmp/harness-run/workspaces/golem-server-data 2>/dev/null || true
+          fi
 
       - name: Upload Workspaces
         if: always()
