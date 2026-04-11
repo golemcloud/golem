@@ -52,8 +52,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     ResolveAgentTypeByNamesResponse, ResolveAgentTypeByNamesSuccessResponse,
     ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
     SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
-    UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
-    authenticate_token_response, batch_update_resource_usage_response, download_component_response,
+    UpdateWorkerConnectionLimitResponse, authenticate_token_response,
+    batch_update_resource_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
@@ -61,7 +61,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_deployed_component_metadata_response, get_resource_definition_by_id_response,
     get_resource_definition_by_name_response, get_resource_limits_response, registry_service_error,
     resolve_agent_type_by_names_response, resolve_component_response,
-    update_worker_connection_limit_response, update_worker_limit_response,
+    update_worker_connection_limit_response,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
@@ -182,26 +182,6 @@ impl RegistryServiceGrpcApi {
         Ok(GetResourceLimitsSuccessResponse {
             limits: Some(limits.into()),
         })
-    }
-
-    async fn update_worker_limit_internal(
-        &self,
-        request: UpdateWorkerLimitRequest,
-    ) -> Result<EmptySuccessResponse, GrpcApiError> {
-        let account_id: AccountId = request
-            .account_id
-            .ok_or("missing account_id field")?
-            .try_into()?;
-        if request.added {
-            self.account_usage_service
-                .add_worker(account_id, &AuthCtx::System)
-                .await?;
-        } else {
-            self.account_usage_service
-                .remove_worker(account_id, &AuthCtx::System)
-                .await?;
-        }
-        Ok(EmptySuccessResponse {})
     }
 
     async fn update_worker_connection_limit_internal(
@@ -632,31 +612,6 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(GetResourceLimitsResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn update_worker_limit(
-        &self,
-        request: Request<UpdateWorkerLimitRequest>,
-    ) -> Result<Response<UpdateWorkerLimitResponse>, tonic::Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "update_worker_limit",
-            account_id = AccountId::render_proto(request.account_id)
-        );
-
-        let response = match self
-            .update_worker_limit_internal(request)
-            .instrument(record.span.clone())
-            .await
-            .apply(|r| record.result(r))
-        {
-            Ok(result) => update_worker_limit_response::Result::Success(result),
-            Err(error) => update_worker_limit_response::Result::Error(error.into()),
-        };
-
-        Ok(Response::new(UpdateWorkerLimitResponse {
             result: Some(response),
         }))
     }

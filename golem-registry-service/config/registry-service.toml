@@ -102,7 +102,6 @@ plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
 plan_name = "default"
 storage_limit = 500000000
 worker_connection_limit = 100
-worker_limit = 10000
 
 [login]
 type = "OAuth2"

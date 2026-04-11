@@ -115,11 +115,14 @@ pub struct PerExecutorOplogProcessorPlugin<Ctx: WorkerCtx> {
     worker_proxy: Arc<dyn WorkerProxy>,
 }
 
+// TODO: Once cross-environment RPC is enabled via host.wit, the cache key should
+// use the component's canonical environment_id rather than the caller-provided one.
+// Currently all plugin workers live in the same environment as their callers so
+// the inconsistency is harmless — a cache miss just triggers a component lookup.
 type WorkerKey = (EnvironmentId, PluginRegistrationId);
 
 #[derive(Debug, Clone)]
 struct RunningPlugin {
-    pub account_id: AccountId,
     pub owned_agent_id: OwnedAgentId,
     pub configuration: BTreeMap<String, String>,
     pub component_revision: ComponentRevision,
@@ -164,16 +167,16 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                             ))?;
 
                         let agent_id = self.generate_agent_id_for(plugin_component_id).await?;
+                        // Resolve the component's authoritative environment_id.
                         let plugin_component = self
                             .component_service
                             .get_metadata(plugin_component_id, Some(plugin_component_revision))
                             .await?;
                         let owned_agent_id = OwnedAgentId {
-                            environment_id,
+                            environment_id: plugin_component.environment_id,
                             agent_id: agent_id.clone(),
                         };
                         let running_plugin = RunningPlugin {
-                            account_id: plugin_component.account_id,
                             owned_agent_id: owned_agent_id.clone(),
                             configuration: plugin.parameters.clone(),
                             component_revision: plugin_component_revision,
@@ -264,7 +267,6 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         let worker = self
             .worker_activator
             .get_or_create_running(
-                running_plugin.account_id,
                 &target_owned,
                 None,
                 None,

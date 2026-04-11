@@ -30,6 +30,9 @@ test_r::enable!();
 
 use self::durable_host::{DurableWorkerCtx, DurableWorkerCtxView};
 use self::services::agent_webhooks::AgentWebhooksService;
+use self::services::direct_invocation_auth::{
+    DefaultDirectInvocationAuthService, DirectInvocationAuthService,
+};
 use self::services::environment_state::EnvironmentStateService;
 use self::services::golem_config::EnvironmentStateServiceConfig;
 use self::services::promise::LazyPromiseService;
@@ -235,6 +238,17 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
     fn create_additional_deps(&self, registry_service: Arc<dyn RegistryService>) -> Ctx::ExtraDeps;
 
+    fn create_direct_invocation_auth_service(
+        &self,
+        registry_service: Arc<dyn RegistryService>,
+        golem_config: &GolemConfig,
+    ) -> Arc<dyn DirectInvocationAuthService> {
+        Arc::new(DefaultDirectInvocationAuthService::new(
+            registry_service,
+            &golem_config.direct_invocation_auth_cache,
+        ))
+    }
+
     fn create_rdbms_service(
         &self,
         golem_config: &GolemConfig,
@@ -252,6 +266,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
     async fn create_services(
         &self,
+        direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
         active_workers: Arc<ActiveWorkers<Ctx>>,
         engine: Arc<Engine>,
         linker: Arc<Linker<Ctx>>,
@@ -329,6 +344,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 worker_proxy.clone(),
                 shard_service.clone(),
             )),
+            direct_invocation_auth_service,
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
@@ -838,12 +854,16 @@ pub async fn create_worker_executor_impl<
 
     let additional_deps = bootstrap.create_additional_deps(registry_service.clone());
 
+    let direct_invocation_auth_service =
+        bootstrap.create_direct_invocation_auth_service(registry_service.clone(), &golem_config);
+
     let rdbms_service = bootstrap.create_rdbms_service(&golem_config, &additional_deps);
 
     let leak_sentinel = Arc::new(());
 
     let all = bootstrap
         .create_services(
+            direct_invocation_auth_service,
             active_workers,
             engine,
             linker,

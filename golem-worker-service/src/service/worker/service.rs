@@ -149,14 +149,6 @@ impl WorkerService {
             )
             .await?;
 
-        self.limit_service
-            .update_worker_limit(
-                environment_auth_details.account_id_owning_environment,
-                agent_id,
-                true,
-            )
-            .await?;
-
         Ok(component.revision)
     }
 
@@ -211,8 +203,7 @@ impl WorkerService {
             .get_latest_by_id(agent_id.component_id)
             .await?;
 
-        let environment_auth_details = self
-            .auth_service
+        self.auth_service
             .authorize_environment_actions(
                 component.environment_id,
                 EnvironmentAction::DeleteWorker,
@@ -222,14 +213,6 @@ impl WorkerService {
 
         self.worker_client
             .delete(agent_id, component.environment_id, auth_ctx)
-            .await?;
-
-        self.limit_service
-            .update_worker_limit(
-                environment_auth_details.account_id_owning_environment,
-                agent_id,
-                false,
-            )
             .await?;
 
         Ok(())

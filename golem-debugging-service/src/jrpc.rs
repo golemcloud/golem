@@ -278,7 +278,6 @@ impl JrpcSession {
                         .debug_service
                         .playback(
                             &owned_agent_id,
-                            active_session_data.account_id,
                             params.target_index,
                             params.overrides,
                             params.ensure_invocation_boundary.unwrap_or(true),
@@ -302,7 +301,6 @@ impl JrpcSession {
                         .debug_service
                         .rewind(
                             &owned_agent_id,
-                            active_session_data.account_id,
                             params.target_index,
                             params.ensure_invocation_boundary.unwrap_or(true),
                         )

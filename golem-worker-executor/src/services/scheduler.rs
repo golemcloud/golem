@@ -27,7 +27,6 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
-use golem_common::model::account::AccountId;
 use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction};
@@ -51,17 +50,15 @@ pub trait SchedulerService: Send + Sync {
 /// for `SchedulerServiceDefault`, making it easier to test (by being independent of `WorkerCtx`).
 #[async_trait]
 pub trait SchedulerWorkerAccess {
-    async fn activate_worker(&self, created_by: AccountId, owned_agent_id: &OwnedAgentId);
+    async fn activate_worker(&self, owned_agent_id: &OwnedAgentId);
     async fn open_oplog(
         &self,
-        created_by: AccountId,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError>;
 
     // enqueue an invocation to the worker
     async fn enqueue_invocation(
         &self,
-        created_by: AccountId,
         owned_agent_id: &OwnedAgentId,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError>;
@@ -69,20 +66,16 @@ pub trait SchedulerWorkerAccess {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
-    async fn activate_worker(&self, created_by: AccountId, owned_agent_id: &OwnedAgentId) {
-        self.deref()
-            .activate_worker(created_by, owned_agent_id)
-            .await;
+    async fn activate_worker(&self, owned_agent_id: &OwnedAgentId) {
+        self.deref().activate_worker(owned_agent_id).await;
     }
 
     async fn open_oplog(
         &self,
-        created_by: AccountId,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         let worker = self
             .get_or_create_suspended(
-                created_by,
                 owned_agent_id,
                 None,
                 None,
@@ -98,13 +91,11 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
 
     async fn enqueue_invocation(
         &self,
-        created_by: AccountId,
         owned_agent_id: &OwnedAgentId,
         invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         let worker = self
             .get_or_create_suspended(
-                created_by,
                 owned_agent_id,
                 None,
                 None,
@@ -246,7 +237,7 @@ impl SchedulerServiceDefault {
         for (key, action) in matching {
             match action.clone() {
                 ScheduledAction::CompletePromise {
-                    account_id,
+                    account_id: _,
                     promise_id,
                     environment_id,
                 } => {
@@ -254,7 +245,7 @@ impl SchedulerServiceDefault {
 
                     let result = self
                         .promise_service
-                        .complete(promise_id.clone(), vec![], account_id)
+                        .complete(promise_id.clone(), vec![])
                         .await;
 
                     // TODO: We probably need more error handling here as not completing a promise that is expected to complete can lead to deadlocks.
@@ -270,7 +261,7 @@ impl SchedulerServiceDefault {
                                 );
 
                                 self.worker_access
-                                    .activate_worker(account_id, &owned_agent_id)
+                                    .activate_worker(&owned_agent_id)
                                     .instrument(span)
                                     .await;
                             }
@@ -297,11 +288,7 @@ impl SchedulerServiceDefault {
                             self.oplog_service.get_last_index(&owned_agent_id).await;
                         if current_last_index == last_oplog_index {
                             // Need to create the `Worker` instance to avoid race conditions
-                            match self
-                                .worker_access
-                                .open_oplog(account_id, &owned_agent_id)
-                                .await
-                            {
+                            match self.worker_access.open_oplog(&owned_agent_id).await {
                                 Ok(oplog) => {
                                     let start = Instant::now();
                                     if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
@@ -342,7 +329,7 @@ impl SchedulerServiceDefault {
                     }
                 }
                 ScheduledAction::Invoke {
-                    account_id,
+                    account_id: _,
                     owned_agent_id,
                     invocation,
                 } => {
@@ -350,7 +337,7 @@ impl SchedulerServiceDefault {
                     // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
                     let result = self
                         .worker_access
-                        .enqueue_invocation(account_id, &owned_agent_id, *invocation)
+                        .enqueue_invocation(&owned_agent_id, *invocation)
                         .await;
 
                     if let Err(e) = result {
@@ -361,12 +348,10 @@ impl SchedulerServiceDefault {
                     };
                 }
                 ScheduledAction::Resume {
-                    agent_created_by,
+                    agent_created_by: _,
                     owned_agent_id,
                 } => {
-                    self.worker_access
-                        .activate_worker(agent_created_by, &owned_agent_id)
-                        .await;
+                    self.worker_access.activate_worker(&owned_agent_id).await;
                 }
             }
 
@@ -487,17 +472,15 @@ mod tests {
 
     #[async_trait]
     impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
-        async fn activate_worker(&self, _created_by: AccountId, _owned_agent_id: &OwnedAgentId) {}
+        async fn activate_worker(&self, _owned_agent_id: &OwnedAgentId) {}
         async fn open_oplog(
             &self,
-            _created_by: AccountId,
             _owned_agent_id: &OwnedAgentId,
         ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
             unimplemented!()
         }
         async fn enqueue_invocation(
             &self,
-            _created_by: AccountId,
             _owned_agent_id: &OwnedAgentId,
             _invocation: AgentInvocation,
         ) -> Result<(), WorkerExecutorError> {
