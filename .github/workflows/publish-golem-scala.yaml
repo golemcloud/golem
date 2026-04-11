@@ -37,4 +37,5 @@ jobs:
           PGP_SECRET: ${{ secrets.PGP_SECRET }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+          CI_RELEASE: "+modelJVM/publishSigned; +modelJS/publishSigned; +codegen/publishSigned; +macros/publishSigned; +core/publishSigned; ++2.12.21; sbtPlugin/publishSigned"
           CI_SONATYPE_RELEASE: sonaRelease
