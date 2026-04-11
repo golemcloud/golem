@@ -16,8 +16,9 @@ val Scala212    = "2.12.21"
 // Global settings
 // ---------------------------------------------------------------------------
 
-ThisBuild / organization := "cloud.golem"
-ThisBuild / scalaVersion := Scala3Golem
+ThisBuild / organization     := "cloud.golem"
+ThisBuild / scalaVersion     := Scala3Golem
+ThisBuild / dynverTagPrefix  := "golem-scala-v"
 ThisBuild / licenses     := List("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0"))
 ThisBuild / homepage     := Some(url("https://github.com/golemcloud/golem"))
 ThisBuild / scmInfo := Some(
