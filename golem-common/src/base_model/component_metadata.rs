@@ -14,7 +14,8 @@
 
 use crate::base_model::agent::AgentType;
 use crate::base_model::base64::Base64;
-use crate::base_model::component::{AgentConfigEntry, InitialAgentFile, InstalledPlugin};
+use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
+use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
 use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize, Serializer};
@@ -117,8 +118,6 @@ impl PartialEq for ComponentMetadata {
     }
 }
 
-impl Eq for ComponentMetadata {}
-
 impl Serialize for ComponentMetadata {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -142,7 +141,7 @@ impl<'de> Deserialize<'de> for ComponentMetadata {
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -175,7 +174,7 @@ pub struct ComponentMetadataInnerData {
 
 /// Per-agent-type provisioning configuration stored alongside AgentType declarations
 /// in ComponentMetadata. Holds runtime setup data separate from agent type declarations.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -183,6 +182,7 @@ pub struct ComponentMetadataInnerData {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[allow(clippy::derive_partial_eq_without_eq)]
 pub struct AgentTypeProvisionConfig {
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
@@ -192,7 +192,7 @@ pub struct AgentTypeProvisionConfig {
     pub wasi_config: BTreeMap<String, String>,
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
-    pub config: Vec<AgentConfigEntry>,
+    pub config: Vec<TypedAgentConfigEntry>,
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub plugins: Vec<InstalledPlugin>,

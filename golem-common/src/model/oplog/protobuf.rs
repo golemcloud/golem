@@ -44,7 +44,7 @@ use crate::model::oplog::public_oplog_entry::{
     StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::regions::OplogRegion;
-use crate::model::worker::ParsedWorkerAgentConfigEntry;
+use crate::model::worker::TypedAgentConfigEntry;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
     AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan, invocation_span,
@@ -268,7 +268,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 local_agent_config: create
                     .agent_config
                     .into_iter()
-                    .map(ParsedWorkerAgentConfigEntry::try_from)
+                    .map(TypedAgentConfigEntry::try_from)
                     .collect::<Result<Vec<_>, _>>()?,
                 environment_id: create
                     .environment_id

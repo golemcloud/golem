@@ -59,7 +59,7 @@ message AgentType {
 message AgentTypeProvisionConfig {
   map<string, string> env = 1;
   map<string, string> wasi_config = 2;
-  repeated golem.worker.AgentConfigEntry config_values = 3;
+  repeated golem.worker.TypedAgentConfigEntry config_values = 3;
   repeated golem.component.PluginInstallation plugins = 4;
   repeated golem.component.InitialAgentFile files = 5;
 }

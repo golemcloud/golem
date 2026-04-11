@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::json::NormalizedJsonValue;
 use crate::model::diff;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use uuid::Uuid;
 
 pub use crate::base_model::component::*;
@@ -20,57 +22,61 @@ pub use crate::base_model::path::{AgentFilePath, ArchiveFilePath, CanonicalFileP
 
 impl ComponentDto {
     pub fn to_diffable(&self) -> diff::Component {
-        let agent_type_provision_configs = self
-            .metadata
-            .agent_type_provision_configs()
-            .iter()
-            .map(|(name, config)| {
-                let state = diff::AgentTypeProvisionConfig {
-                    env: config.env.clone(),
-                    wasi_config: config.wasi_config.clone(),
-                    config: config
-                        .config
-                        .iter()
-                        .map(|e| {
-                            // Join path segments with '.' to form the map key.
-                            // Values are already normalized via NormalizedJsonValue.
-                            (e.path.join("."), e.value.clone())
-                        })
-                        .collect(),
-                    files_by_path: config
-                        .files
-                        .iter()
-                        .map(|file| {
-                            (
-                                file.path.to_abs_string(),
-                                diff::AgentFile {
-                                    hash: file.content_hash.0,
-                                    permissions: file.permissions,
-                                }
-                                .into(),
-                            )
-                        })
-                        .collect(),
-                    plugins_by_grant_id: config
-                        .plugins
-                        .iter()
-                        .map(|plugin| {
-                            (
-                                plugin.environment_plugin_grant_id.0,
-                                diff::PluginInstallation {
-                                    priority: plugin.priority.0,
-                                    name: plugin.plugin_name.clone(),
-                                    version: plugin.plugin_version.clone(),
-                                    grant_id: plugin.environment_plugin_grant_id.0,
-                                    parameters: plugin.parameters.clone(),
-                                },
-                            )
-                        })
-                        .collect(),
-                };
-                (name.0.clone(), state.into())
-            })
-            .collect();
+        let agent_type_provision_configs =
+            self.metadata
+                .agent_type_provision_configs()
+                .iter()
+                .map(|(name, config)| {
+                    let state =
+                        diff::AgentTypeProvisionConfig {
+                            env: config.env.clone(),
+                            wasi_config: config.wasi_config.clone(),
+                            config: config
+                                .config
+                                .iter()
+                                .map(|e| {
+                                    (
+                                        e.path.join("."),
+                                        NormalizedJsonValue::new(e.value.to_json_value().expect(
+                                            "TypedAgentConfigEntry value must be valid JSON",
+                                        )),
+                                    )
+                                })
+                                .collect(),
+                            files_by_path: config
+                                .files
+                                .iter()
+                                .map(|file| {
+                                    (
+                                        file.path.to_abs_string(),
+                                        diff::AgentFile {
+                                            hash: file.content_hash.0,
+                                            permissions: file.permissions,
+                                        }
+                                        .into(),
+                                    )
+                                })
+                                .collect(),
+                            plugins_by_grant_id: config
+                                .plugins
+                                .iter()
+                                .map(|plugin| {
+                                    (
+                                        plugin.environment_plugin_grant_id.0,
+                                        diff::PluginInstallation {
+                                            priority: plugin.priority.0,
+                                            name: plugin.plugin_name.clone(),
+                                            version: plugin.plugin_version.clone(),
+                                            grant_id: plugin.environment_plugin_grant_id.0,
+                                            parameters: plugin.parameters.clone(),
+                                        },
+                                    )
+                                })
+                                .collect(),
+                        };
+                    (name.0.clone(), state.into())
+                })
+                .collect();
 
         diff::Component {
             wasm_hash: self.wasm_hash,

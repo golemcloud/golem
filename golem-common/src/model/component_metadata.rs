@@ -1006,21 +1006,13 @@ mod protobuf {
         fn try_from(
             proto: golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig,
         ) -> Result<Self, Self::Error> {
-            use crate::base_model::component::{
-                AgentConfigEntry, InitialAgentFile, InstalledPlugin,
-            };
+            use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
+            use crate::base_model::worker::TypedAgentConfigEntry;
 
             let config = proto
                 .config_values
                 .into_iter()
-                .map(|e| -> Result<AgentConfigEntry, String> {
-                    let value: serde_json::Value = serde_json::from_str(&e.value)
-                        .map_err(|err| format!("Invalid JSON in config value: {err}"))?;
-                    Ok(AgentConfigEntry {
-                        path: e.path,
-                        value: value.into(),
-                    })
-                })
+                .map(TypedAgentConfigEntry::try_from)
                 .collect::<Result<Vec<_>, _>>()?;
 
             let plugins = proto
@@ -1057,10 +1049,7 @@ mod protobuf {
                 config_values: config
                     .config
                     .into_iter()
-                    .map(|e| golem_api_grpc::proto::golem::worker::AgentConfigEntry {
-                        path: e.path,
-                        value: e.value.to_string(),
-                    })
+                    .map(golem_api_grpc::proto::golem::worker::TypedAgentConfigEntry::from)
                     .collect(),
                 plugins: config
                     .plugins

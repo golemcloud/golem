@@ -16,6 +16,7 @@ use crate::base_model::account::AccountId;
 use crate::base_model::component::{AgentFilePermissions, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use crate::base_model::json::NormalizedJsonValue;
 use crate::base_model::oplog::AgentResourceId;
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp};
@@ -67,21 +68,21 @@ declare_unions! {
     wit(name = "raw-local-agent-config-entry", owner = "golem:api@1.5.0/oplog")
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct UntypedWorkerAgentConfigEntry {
+pub struct UntypedAgentConfigEntry {
     pub path: Vec<String>,
     pub value: golem_wasm::Value,
 }
 
 declare_structs! {
-    pub struct WorkerAgentConfigEntry {
+    pub struct AgentConfigEntryDto {
         pub path: Vec<String>,
-        pub value: serde_json::Value
+        pub value: NormalizedJsonValue
     }
 
     #[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", wit(name = "local-agent-config-entry", owner = "golem:api@1.5.0/oplog"))]
     #[cfg_attr(feature = "full", desert(evolution()))]
-    pub struct ParsedWorkerAgentConfigEntry {
+    pub struct TypedAgentConfigEntry {
         pub path: Vec<String>,
         pub value: golem_wasm::ValueAndType
     }
@@ -92,7 +93,7 @@ declare_structs! {
         #[cfg_attr(feature = "full", oai(default))]
         pub config_vars: BTreeMap<String, String>,
         #[cfg_attr(feature = "full", oai(default))]
-        pub agent_config: Vec<WorkerAgentConfigEntry>
+        pub agent_config: Vec<AgentConfigEntryDto>
     }
 
     pub struct PendingUpdate {
@@ -122,7 +123,7 @@ declare_structs! {
         pub created_by: AccountId,
         pub env: HashMap<String, String>,
         pub config_vars: BTreeMap<String, String>,
-        pub agent_config: Vec<ParsedWorkerAgentConfigEntry>,
+        pub agent_config: Vec<TypedAgentConfigEntry>,
         pub status: AgentStatus,
         pub component_revision: ComponentRevision,
         pub retry_count: u32,
@@ -172,8 +173,8 @@ declare_enums! {
     }
 }
 
-impl From<ParsedWorkerAgentConfigEntry> for UntypedWorkerAgentConfigEntry {
-    fn from(value: ParsedWorkerAgentConfigEntry) -> Self {
+impl From<TypedAgentConfigEntry> for UntypedAgentConfigEntry {
+    fn from(value: TypedAgentConfigEntry) -> Self {
         Self {
             path: value.path,
             value: value.value.value,
@@ -181,14 +182,15 @@ impl From<ParsedWorkerAgentConfigEntry> for UntypedWorkerAgentConfigEntry {
     }
 }
 
-impl From<ParsedWorkerAgentConfigEntry> for WorkerAgentConfigEntry {
-    fn from(value: ParsedWorkerAgentConfigEntry) -> Self {
+impl From<TypedAgentConfigEntry> for AgentConfigEntryDto {
+    fn from(value: TypedAgentConfigEntry) -> Self {
         Self {
             path: value.path,
             value: value
                 .value
                 .to_json_value()
-                .expect("ValueAndType in ParsedWorkerAgentConfigEntry  must be valid JSON"),
+                .expect("ValueAndType in TypedAgentConfigEntry must be valid JSON")
+                .into(),
         }
     }
 }
