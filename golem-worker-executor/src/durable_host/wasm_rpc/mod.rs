@@ -1166,7 +1166,11 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
         .invocation_context
         .clone_as_inherited_stack(span.span_id());
 
-    let remote_agent_id = OwnedAgentId::new(ctx.owned_agent_id.environment_id, &remote_agent_id);
+    let target_component = ctx
+        .component_service()
+        .get_metadata(remote_agent_id.component_id, None)
+        .await?;
+    let remote_agent_id = OwnedAgentId::new(target_component.environment_id, &remote_agent_id);
     let demand = ctx
         .rpc()
         .create_demand(

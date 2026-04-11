@@ -36,6 +36,11 @@ max_metadata_capacity = 16384
 max_resolved_component_capacity = 1024
 time_to_idle = "12h"
 
+[direct_invocation_auth_cache]
+cache_capacity = 1024
+cache_eviction_interval = "1m"
+cache_ttl = "5m"
+
 [engine]
 enable_fs_cache = false
 
@@ -337,6 +342,11 @@ without_time = false
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
 # 
+# [direct_invocation_auth_cache]
+# cache_capacity = 1024
+# cache_eviction_interval = "1m"
+# cache_ttl = "5m"
+# 
 # [engine]
 # enable_fs_cache = false
 # 
@@ -621,6 +631,11 @@ without_time = false
 # max_metadata_capacity = 16384
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
+# 
+# [direct_invocation_auth_cache]
+# cache_capacity = 1024
+# cache_eviction_interval = "1m"
+# cache_ttl = "5m"
 # 
 # [engine]
 # enable_fs_cache = false

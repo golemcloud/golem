@@ -80,7 +80,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         &self,
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        account_id: AccountId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
         worker_agent_config: Vec<WorkerAgentConfigEntry>,
@@ -103,7 +102,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                     Ok(Arc::new(
                         Worker::new(
                             &deps,
-                            &account_id,
                             owned_agent_id,
                             worker_env,
                             worker_config_vars,

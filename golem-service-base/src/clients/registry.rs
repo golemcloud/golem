@@ -30,15 +30,15 @@ use golem_api_grpc::proto::golem::registry::v1::{
     GetCurrentEnvironmentStateRequest, GetDeployedComponentMetadataRequest,
     GetResourceDefinitionByIdRequest, GetResourceDefinitionByNameRequest, GetResourceLimitsRequest,
     ResolveAgentTypeByNamesRequest, ResolveComponentRequest, UpdateWorkerConnectionLimitRequest,
-    UpdateWorkerLimitRequest, authenticate_token_response, batch_update_resource_usage_response,
-    download_component_response, get_active_mcp_for_domain_response,
-    get_active_routes_for_domain_response, get_agent_type_response, get_all_agent_types_response,
+    authenticate_token_response, batch_update_resource_usage_response, download_component_response,
+    get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
+    get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
     get_component_metadata_response, get_current_environment_state_response,
     get_deployed_component_metadata_response, get_resource_definition_by_id_response,
     get_resource_definition_by_name_response, get_resource_limits_response,
     resolve_agent_type_by_names_response, resolve_component_response,
-    update_worker_connection_limit_response, update_worker_limit_response,
+    update_worker_connection_limit_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
@@ -99,13 +99,6 @@ pub trait RegistryService: Send + Sync {
         &self,
         account_id: AccountId,
     ) -> Result<ResourceLimits, RegistryServiceError>;
-
-    async fn update_worker_limit(
-        &self,
-        account_id: AccountId,
-        agent_id: &AgentId,
-        added: bool,
-    ) -> Result<(), RegistryServiceError>;
 
     async fn update_worker_connection_limit(
         &self,
@@ -526,33 +519,6 @@ impl RegistryService for GrpcRegistryService {
                 Ok(payload.limits.ok_or("missing limits field")?.into())
             }
             Some(get_resource_limits_response::Result::Error(error)) => Err(error.into()),
-        }
-    }
-
-    async fn update_worker_limit(
-        &self,
-        account_id: AccountId,
-        agent_id: &AgentId,
-        added: bool,
-    ) -> Result<(), RegistryServiceError> {
-        let response = self
-            .client
-            .call("update_worker_limit", move |client| {
-                let request = UpdateWorkerLimitRequest {
-                    account_id: Some(account_id.into()),
-                    agent_id: Some(agent_id.clone().into()),
-                    added,
-                };
-
-                Box::pin(client.update_worker_limit(request))
-            })
-            .await?
-            .into_inner();
-
-        match response.result {
-            None => Err(RegistryServiceError::empty_response()),
-            Some(update_worker_limit_response::Result::Success(_)) => Ok(()),
-            Some(update_worker_limit_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

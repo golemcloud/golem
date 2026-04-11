@@ -40,13 +40,6 @@ error_forwarding!(LimitServiceError, RegistryServiceError);
 
 #[async_trait]
 pub trait LimitService: Send + Sync {
-    async fn update_worker_limit(
-        &self,
-        account_id: AccountId,
-        agent_id: &AgentId,
-        added: bool,
-    ) -> Result<(), LimitServiceError>;
-
     async fn update_worker_connection_limit(
         &self,
         account_id: AccountId,
@@ -67,22 +60,6 @@ impl RemoteLimitService {
 
 #[async_trait]
 impl LimitService for RemoteLimitService {
-    async fn update_worker_limit(
-        &self,
-        account_id: AccountId,
-        agent_id: &AgentId,
-        added: bool,
-    ) -> Result<(), LimitServiceError> {
-        self.client
-            .update_worker_limit(account_id, agent_id, added)
-            .await
-            .map_err(|e| match e {
-                RegistryServiceError::LimitExceeded(msg) => LimitServiceError::LimitExceeded(msg),
-                other => other.into(),
-            })?;
-        Ok(())
-    }
-
     async fn update_worker_connection_limit(
         &self,
         account_id: AccountId,

@@ -16,6 +16,7 @@ use crate::Tracing;
 use anyhow::anyhow;
 use axum::Router;
 use axum::routing::get;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     ComponentModelElementValue, DataValue, ElementValue, ElementValues,
 };
@@ -3553,6 +3554,331 @@ async fn invoking_worker_while_its_getting_deleted_works(
     if let Err(e) = invocation_result {
         info!("Invocation failed during deletion as expected: {e}");
     }
+
+    Ok(())
+}
+
+/// Same environment, different account: when account A lazily creates a worker
+/// for a component owned by account B (e.g. via cross-account RPC), the newly
+/// created worker's `created_by` must be account B (the component owner), not
+/// account A (the caller).
+///
+/// This simulates the `create_worker` gRPC path where `auth_ctx` carries the
+/// caller's account (A) but the component is owned by a different account (B).
+/// The `get_or_create_worker_metadata` code must use the component's
+/// `account_id` for `created_by`, not the caller-provided account.
+#[test]
+#[tracing::instrument]
+async fn worker_created_by_reflects_component_owner_not_caller(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateWorkerRequest, create_worker_response,
+    };
+    use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    // Store the component in the default environment.
+    // The component is owned by context.account_id (= account B, the owner).
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let component_owner_account_id = component.account_id;
+
+    // This is account A — the caller who is lazily creating a worker for
+    // account B's component. It must differ from the component owner.
+    let caller_account_id = AccountId::new();
+    assert_ne!(caller_account_id, component_owner_account_id);
+
+    // Build an auth_ctx that carries the caller's account (A), simulating
+    // what happens during cross-account RPC.
+    let caller_auth_ctx: golem_api_grpc::proto::golem::auth::AuthCtx = AuthCtx::User(UserAuthCtx {
+        account_id: caller_account_id,
+        account_plan_id: context.account_plan_id,
+        account_roles: context.account_roles.clone(),
+    })
+    .into();
+
+    let agent_id = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Clock", "cross-account-attribution-test").to_string(),
+    };
+
+    let response = executor
+        .client
+        .clone()
+        .create_worker(CreateWorkerRequest {
+            agent_id: Some(agent_id.clone().into()),
+            component_owner_account_id: Some(component_owner_account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            env: Default::default(),
+            config_vars: Default::default(),
+            agent_config: Vec::new(),
+            ignore_already_existing: false,
+            auth_ctx: Some(caller_auth_ctx),
+            principal: None,
+            invocation_context: None,
+        })
+        .await?
+        .into_inner();
+
+    match response.result {
+        Some(create_worker_response::Result::Success(_)) => {}
+        Some(create_worker_response::Result::Failure(error)) => {
+            return Err(anyhow!("create_worker failed: {error:?}"));
+        }
+        None => return Err(anyhow!("No response from create_worker")),
+    }
+
+    // Retrieve the worker metadata and verify created_by is the component
+    // owner (account B), not the caller (account A).
+    let metadata = executor.get_worker_metadata(&agent_id).await?;
+
+    drop(executor);
+
+    assert_eq!(
+        metadata.created_by, component_owner_account_id,
+        "Worker created_by should be the component owner's account (B), not the caller's (A)"
+    );
+
+    Ok(())
+}
+
+/// Different environment, different account: when a caller in environment A
+/// creates a worker for a component owned by account B in environment B,
+/// the worker must be stored in environment B's namespace and be retrievable
+/// using the component's environment_id. Both `created_by` and `environment_id`
+/// in the worker metadata must reflect the component owner, not the caller.
+#[test]
+#[tracing::instrument]
+async fn worker_environment_reflects_component_not_caller(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateWorkerRequest, create_worker_response,
+    };
+    use golem_common::model::environment::EnvironmentId;
+    use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    // Store the component in the default environment (= environment B).
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let component_owner_account_id = component.account_id;
+    let component_environment_id = component.environment_id;
+
+    // These are the caller's values (environment A, account A).
+    let caller_account_id = AccountId::new();
+    let caller_environment_id = EnvironmentId::new();
+    assert_ne!(caller_account_id, component_owner_account_id);
+    assert_ne!(caller_environment_id, component_environment_id);
+
+    let caller_auth_ctx: golem_api_grpc::proto::golem::auth::AuthCtx = AuthCtx::User(UserAuthCtx {
+        account_id: caller_account_id,
+        account_plan_id: context.account_plan_id,
+        account_roles: context.account_roles.clone(),
+    })
+    .into();
+
+    let agent_id = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Clock", "cross-env-attribution-test").to_string(),
+    };
+
+    // Create the worker with the CALLER's environment_id and account.
+    // This simulates what construct_wasm_rpc_resource does: it builds an
+    // OwnedAgentId using the caller's environment_id rather than the target
+    // component's.
+    let response = executor
+        .client
+        .clone()
+        .create_worker(CreateWorkerRequest {
+            agent_id: Some(agent_id.clone().into()),
+            component_owner_account_id: Some(caller_account_id.into()),
+            environment_id: Some(caller_environment_id.into()),
+            env: Default::default(),
+            config_vars: Default::default(),
+            agent_config: Vec::new(),
+            ignore_already_existing: false,
+            auth_ctx: Some(caller_auth_ctx),
+            principal: None,
+            invocation_context: None,
+        })
+        .await?
+        .into_inner();
+
+    match response.result {
+        Some(create_worker_response::Result::Success(_)) => {}
+        Some(create_worker_response::Result::Failure(error)) => {
+            return Err(anyhow!("create_worker failed: {error:?}"));
+        }
+        None => return Err(anyhow!("No response from create_worker")),
+    }
+
+    // The worker must be findable using the component's environment_id, not
+    // the caller's. get_worker_metadata looks up using the component's
+    // environment, so if the worker was stored under the wrong namespace this
+    // call will fail with "Worker not found".
+    let metadata = executor.get_worker_metadata(&agent_id).await?;
+
+    drop(executor);
+
+    assert_eq!(
+        metadata.environment_id, component_environment_id,
+        "Worker environment_id should be the component's environment (B), not the caller's (A)"
+    );
+    assert_eq!(
+        metadata.created_by, component_owner_account_id,
+        "Worker created_by should be the component owner's account (B), not the caller's (A)"
+    );
+
+    Ok(())
+}
+
+/// When a worker is created with a caller account that differs from the
+/// component owner, the resource limits (fuel, storage quotas) must be
+/// initialized for the **component owner's** account, not the caller's.
+/// Otherwise, all resource consumption is attributed to the wrong account.
+#[test]
+#[tracing::instrument]
+#[timeout("30s")]
+async fn resource_limits_initialized_for_component_owner_not_caller(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use async_trait::async_trait;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateWorkerRequest, create_worker_response,
+    };
+    use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
+    use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
+    use golem_worker_executor_test_utils::start_with_resource_limits;
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+
+    /// Records every `account_id` passed to `initialize_account`, while
+    /// returning unlimited resources so the worker can run normally.
+    struct RecordingResourceLimits {
+        initialized_accounts: Mutex<Vec<AccountId>>,
+    }
+
+    impl RecordingResourceLimits {
+        fn new() -> Self {
+            Self {
+                initialized_accounts: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn initialized_accounts(&self) -> Vec<AccountId> {
+            self.initialized_accounts.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl ResourceLimits for RecordingResourceLimits {
+        async fn initialize_account(
+            &self,
+            account_id: AccountId,
+        ) -> Result<
+            Arc<AtomicResourceEntry>,
+            golem_service_base::error::worker_executor::WorkerExecutorError,
+        > {
+            self.initialized_accounts.lock().unwrap().push(account_id);
+            Ok(Arc::new(AtomicResourceEntry::new(
+                u64::MAX,
+                usize::MAX,
+                usize::MAX,
+                u64::MAX,
+                u64::MAX,
+            )))
+        }
+    }
+
+    let context = TestContext::new(last_unique_id);
+    let recording = Arc::new(RecordingResourceLimits::new());
+    let executor = start_with_resource_limits(deps, &context, recording.clone()).await?;
+
+    // Store the component — it is owned by context.account_id (= account B).
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let component_owner_account_id = component.account_id;
+
+    // This is account A — the "caller" who creates the worker on behalf of
+    // account B's component.
+    let caller_account_id = AccountId::new();
+    assert_ne!(caller_account_id, component_owner_account_id);
+
+    let caller_auth_ctx: golem_api_grpc::proto::golem::auth::AuthCtx = AuthCtx::User(UserAuthCtx {
+        account_id: caller_account_id,
+        account_plan_id: context.account_plan_id,
+        account_roles: context.account_roles.clone(),
+    })
+    .into();
+
+    let agent_id = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Clock", "resource-limits-attribution-test").to_string(),
+    };
+
+    // Create the worker with the CALLER's auth_ctx (account A).
+    let response = executor
+        .client
+        .clone()
+        .create_worker(CreateWorkerRequest {
+            agent_id: Some(agent_id.clone().into()),
+            component_owner_account_id: Some(component_owner_account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            env: Default::default(),
+            config_vars: Default::default(),
+            agent_config: Vec::new(),
+            ignore_already_existing: false,
+            auth_ctx: Some(caller_auth_ctx),
+            principal: None,
+            invocation_context: None,
+        })
+        .await?
+        .into_inner();
+
+    match response.result {
+        Some(create_worker_response::Result::Success(_)) => {}
+        Some(create_worker_response::Result::Failure(error)) => {
+            return Err(anyhow!("create_worker failed: {error:?}"));
+        }
+        None => return Err(anyhow!("No response from create_worker")),
+    }
+
+    // The resource limits service must have been initialized for the
+    // component owner (account B), not the caller (account A).
+    let initialized: HashSet<AccountId> = recording.initialized_accounts().into_iter().collect();
+
+    drop(executor);
+
+    assert_eq!(
+        initialized,
+        HashSet::from([component_owner_account_id]),
+        "Resource limits must be initialized only for the component owner (B), \
+         not the caller (A = {caller_account_id})"
+    );
 
     Ok(())
 }

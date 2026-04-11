@@ -992,7 +992,6 @@ pub async fn test_account_usage(deps: &Deps) {
             UsageType::TotalAppCount => 3,
             UsageType::TotalEnvCount => 10,
             UsageType::TotalComponentCount => 15,
-            UsageType::TotalWorkerCount => 20,
             UsageType::TotalWorkerConnectionCount => 25,
             UsageType::TotalComponentStorageBytes => 1000,
             UsageType::MonthlyGasLimit => 2000,
