@@ -115,8 +115,10 @@ impl ConcurrentAgentsSemaphore {
     ///
     /// First calls `try_free_up` to attempt eviction of an idle agent from the
     /// same account. If that succeeds a permit becomes available immediately.
-    /// If nothing can be evicted, waits efficiently via `semaphore.acquire_owned()`
-    /// until a running agent stops and returns its permit.
+    /// If nothing can be evicted, waits on the semaphore with periodic retries
+    /// of `try_free_up`. This handles the case where a running agent transitions
+    /// to idle while a waiter is blocked — the `RunningWorker` (and its permit)
+    /// stays alive until evicted, so we must periodically retry eviction.
     ///
     /// If the account's plan limit changed since last time, the semaphore pool
     /// is resized before attempting the acquire (grown on upgrade, shrunk on
@@ -130,7 +132,7 @@ impl ConcurrentAgentsSemaphore {
         try_free_up: F,
     ) -> OwnedSemaphorePermit
     where
-        F: FnOnce() -> Fut,
+        F: Fn() -> Fut,
         Fut: std::future::Future<Output = bool>,
     {
         let semaphore = match self
@@ -149,9 +151,6 @@ impl ConcurrentAgentsSemaphore {
             }
         };
 
-        // Sync the semaphore pool size with the current plan limit (up or down).
-        self.sync_semaphore_limit(&account_id, &semaphore).await;
-
         // Unlimited accounts bypass the semaphore entirely.
         if self.is_unlimited(&account_id).await {
             return semaphore
@@ -160,47 +159,51 @@ impl ConcurrentAgentsSemaphore {
                 .expect("acquiring 0 permits must always succeed");
         }
 
-        // First, try to acquire immediately (optimistic path — capacity may already be free).
-        // Then attempt a single eviction if needed, and retry once.
-        // If still no capacity, wait efficiently on the semaphore.
-        match semaphore.clone().try_acquire_owned() {
-            Ok(permit) => {
-                debug!(
-                    "ConcurrentAgentsSemaphore: acquired permit for {account_id} immediately, available: {}",
-                    semaphore.available_permits()
-                );
-                permit
-            }
-            Err(TryAcquireError::Closed) => {
-                panic!("concurrent agents semaphore for {account_id} has been closed")
-            }
-            Err(TryAcquireError::NoPermits) => {
-                debug!(
-                    "ConcurrentAgentsSemaphore: no permits for {account_id}, trying to free one up"
-                );
-                if try_free_up().await {
-                    // An idle agent was evicted; its Drop returns the permit to
-                    // the pool. Attempt a non-blocking acquire — it should now
-                    // succeed, but fall through to acquire_owned if not.
-                    debug!("ConcurrentAgentsSemaphore: freed a slot for {account_id}, retrying");
-                    if let Ok(permit) = semaphore.clone().try_acquire_owned() {
-                        return permit;
-                    }
+        // Polling loop: try to acquire a permit, attempting eviction of idle
+        // agents when none are available. This matches the pattern used by the
+        // memory and filesystem-storage semaphores.
+        //
+        // We do NOT use `semaphore.acquire_owned().await` because:
+        // 1. Idle workers keep their RunningWorker (and permit) alive until
+        //    explicitly evicted — permits are only returned on eviction/stop.
+        // 2. Plan limit changes (sync_semaphore_limit) must be applied on each
+        //    iteration so upgrades/downgrades take effect for waiting starters.
+        loop {
+            self.sync_semaphore_limit(&account_id, &semaphore).await;
+
+            match semaphore.clone().try_acquire_owned() {
+                Ok(permit) => {
+                    debug!(
+                        "ConcurrentAgentsSemaphore: acquired permit for {account_id}, available: {}",
+                        semaphore.available_permits()
+                    );
+                    return permit;
                 }
-                // Nothing to evict (or eviction raced with another waiter) —
-                // wait efficiently until a running agent stops and returns its permit.
-                debug!("ConcurrentAgentsSemaphore: nothing to free for {account_id}, waiting");
-                let permit = semaphore
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .expect("concurrent agents semaphore for {account_id} must not be closed");
-                // Re-sync after waking in case the plan changed while waiting.
-                self.sync_semaphore_limit(&account_id, &semaphore).await;
-                permit
+                Err(TryAcquireError::Closed) => {
+                    panic!("concurrent agents semaphore for {account_id} has been closed")
+                }
+                Err(TryAcquireError::NoPermits) => {
+                    debug!(
+                        "ConcurrentAgentsSemaphore: no permits for {account_id}, trying to free one up"
+                    );
+                    if try_free_up().await {
+                        debug!(
+                            "ConcurrentAgentsSemaphore: freed a slot for {account_id}, retrying"
+                        );
+                        continue;
+                    }
+                    debug!(
+                        "ConcurrentAgentsSemaphore: nothing to free for {account_id}, retrying after {:?}",
+                        Self::EVICTION_RETRY_INTERVAL
+                    );
+                    tokio::time::sleep(Self::EVICTION_RETRY_INTERVAL).await;
+                }
             }
         }
     }
+
+    /// How often to retry eviction while waiting for a concurrent-agent permit.
+    const EVICTION_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
     /// Returns `true` if the account's current limit is at or above the unlimited sentinel.
     async fn is_unlimited(&self, account_id: &AccountId) -> bool {

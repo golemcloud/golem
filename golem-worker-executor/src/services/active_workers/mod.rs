@@ -318,8 +318,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     pub async fn acquire_concurrent_agent(&self, account_id: AccountId) -> OwnedSemaphorePermit {
         let workers = self.workers.clone();
         self.concurrent_agents
-            .acquire(account_id, move || async move {
-                Self::try_free_up_concurrent_agent_slot(&workers, account_id).await
+            .acquire(account_id, || {
+                let workers = workers.clone();
+                async move { Self::try_free_up_concurrent_agent_slot(&workers, account_id).await }
             })
             .await
     }
