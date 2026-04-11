@@ -215,9 +215,10 @@ lazy val sbtPlugin = project
   .enablePlugins(SbtPlugin)
   .dependsOn(codegen)
   .settings(
-    name           := "golem-scala-sbt",
-    scalaVersion   := Scala212,
-    sbtVersion     := "1.12.0",
+    name               := "golem-scala-sbt",
+    scalaVersion       := Scala212,
+    crossScalaVersions := Seq(Scala212),
+    sbtVersion         := "1.12.0",
     addSbtPlugin("org.scala-js" % "sbt-scalajs" % "1.20.2"),
     libraryDependencies += "org.scalameta" %% "scalafmt-dynamic" % scalafmtDynamicVersion
   )
