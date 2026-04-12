@@ -1039,7 +1039,7 @@ pub mod worker {
     use golem_client::model::ScanCursor;
     use golem_common::model::IdempotencyKey;
     use golem_common::model::component::{ComponentName, ComponentRevision};
-    use golem_common::model::worker::WorkerAgentConfigEntry as AgentConfigEntry;
+    use golem_common::model::worker::AgentConfigEntryDto as AgentConfigEntryDto;
     use uuid::Uuid;
 
     #[derive(Debug, Subcommand)]
@@ -1057,7 +1057,7 @@ pub mod worker {
             /// (agents.*.config) is used. If neither value nor default is provided and the config is non-optional, creation
             /// of the agent will fail.
             #[arg(short, long, value_parser = parse_agent_config, verbatim_doc_comment)]
-            config: Vec<AgentConfigEntry>,
+            config: Vec<AgentConfigEntryDto>,
             /// wasi:config entries visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "VAR=VAL")]
             wasi_config: Vec<(String, String)>,

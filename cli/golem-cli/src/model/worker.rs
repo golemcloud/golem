@@ -24,7 +24,7 @@ use colored::control::SHOULD_COLORIZE;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::worker::{UpdateRecord, WorkerAgentConfigEntry as AgentConfigEntry};
+use golem_common::model::worker::{UpdateRecord, AgentConfigEntryDto as AgentConfigEntryDto};
 use golem_common::model::{AgentId, AgentResourceDescription, AgentStatus, Timestamp};
 use serde_derive::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -151,7 +151,7 @@ pub struct AgentMetadata {
     pub created_by: AccountId,
     pub env: HashMap<String, String>,
     pub wasi_config: BTreeMap<String, String>,
-    pub config: Vec<AgentConfigEntry>,
+    pub config: Vec<AgentConfigEntryDto>,
     pub status: AgentStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u32,

@@ -30,7 +30,7 @@ use crate::model::{GuestLanguage, app_raw};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
-use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentName};
+use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
 use golem_common::model::deployment::DeploymentAgentSecretDefault;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
@@ -1876,12 +1876,12 @@ impl ComponentProperties {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ComponentFilePathWithPermissions {
-    pub path: ComponentFilePath,
-    pub permissions: ComponentFilePermissions,
+pub struct CanonicalFilePathWithPermissions {
+    pub path: CanonicalFilePath,
+    pub permissions: AgentFilePermissions,
 }
 
-impl ComponentFilePathWithPermissions {
+impl CanonicalFilePathWithPermissions {
     pub fn extend_path(&mut self, path: &str) -> Result<(), String> {
         self.path.extend(path)
     }
@@ -1891,7 +1891,7 @@ impl ComponentFilePathWithPermissions {
 #[serde(rename_all = "camelCase")]
 pub struct InitialComponentFile {
     pub source: InitialComponentFileSource,
-    pub target: ComponentFilePathWithPermissions,
+    pub target: CanonicalFilePathWithPermissions,
 }
 
 impl InitialComponentFile {
@@ -1910,11 +1910,11 @@ impl InitialComponentFile {
 
         Some(InitialComponentFile {
             source,
-            target: ComponentFilePathWithPermissions {
+            target: CanonicalFilePathWithPermissions {
                 path: file.target_path,
                 permissions: file
                     .permissions
-                    .unwrap_or(ComponentFilePermissions::ReadOnly),
+                    .unwrap_or(AgentFilePermissions::ReadOnly),
             },
         })
     }

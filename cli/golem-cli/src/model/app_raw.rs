@@ -20,7 +20,7 @@ use crate::model::format::Format;
 use crate::{APP_MANIFEST_JSON_SCHEMA, fs};
 use anyhow::{Context, anyhow};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
+use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
@@ -463,8 +463,8 @@ impl DeploymentOptions {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InitialComponentFile {
     pub source_path: String,
-    pub target_path: ComponentFilePath,
-    pub permissions: Option<ComponentFilePermissions>,
+    pub target_path: CanonicalFilePath,
+    pub permissions: Option<AgentFilePermissions>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -774,7 +774,7 @@ impl TypeScriptBridgeGenerator {
         writer: &mut TsFunctionWriter<'_>,
         local_configs: &[&AgentConfigDeclaration],
     ) {
-        writer.write_line("const agentConfig: base.WorkerAgentConfigEntry[] = [];");
+        writer.write_line("const agentConfig: base.AgentConfigEntryDto[] = [];");
         for config in local_configs {
             let param_name = format!(
                 "config{}",

@@ -14,12 +14,12 @@
 
 use crate::client::check_http_response_success;
 use crate::log::{LogColorize, LogIndent, log_action};
-use crate::model::app::{ComponentFilePathWithPermissions, InitialComponentFile};
+use crate::model::app::{CanonicalFilePathWithPermissions, InitialComponentFile};
 use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
-use golem_common::model::component::{ComponentFileOptions, ComponentFilePath};
+use golem_common::model::component::{AgentFileOptions, ArchiveFilePath};
 use itertools::Itertools;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -32,19 +32,19 @@ use url::Url;
 #[derive(Debug, Clone)]
 struct LoadedFile {
     content: Vec<u8>,
-    target: ComponentFilePathWithPermissions,
+    target: CanonicalFilePathWithPermissions,
 }
 
 #[derive(Debug, Clone)]
 pub struct HashedFile {
     pub hash: blake3::Hash,
-    pub target: ComponentFilePathWithPermissions,
+    pub target: CanonicalFilePathWithPermissions,
 }
 
 #[derive(Debug)]
 pub struct ComponentFilesArchive {
     pub archive_path: PathBuf,
-    pub file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
+    pub file_options: BTreeMap<golem_common::model::component::ArchiveFilePath, AgentFileOptions>,
     _temp_dir: TempDir, // archive_path is only valid as long as this is alive
 }
 
@@ -91,7 +91,7 @@ impl IfsFileManager {
             .with_context(|| "Error creating zip file for IFS archive")?;
         let mut zip_writer = ZipFileWriter::with_tokio(zip_file);
 
-        let mut file_options = BTreeMap::<ComponentFilePath, ComponentFileOptions>::new();
+        let mut file_options = BTreeMap::<ArchiveFilePath, AgentFileOptions>::new();
 
         for component_file in component_files {
             for LoadedFile { content, target } in self
@@ -119,8 +119,9 @@ impl IfsFileManager {
                     })?;
 
                 file_options.insert(
-                    target.path,
-                    ComponentFileOptions {
+                    ArchiveFilePath(target.path.clone()),
+                    AgentFileOptions {
+                        target_path: golem_common::model::component::AgentFilePath(target.path.clone()),
                         permissions: target.permissions,
                     },
                 );
@@ -208,7 +209,7 @@ impl IfsFileManager {
         let source_path = PathBuf::from(component_file.source.as_url().path());
 
         let mut results: Vec<R> = vec![];
-        let mut queue: VecDeque<(PathBuf, ComponentFilePathWithPermissions)> =
+        let mut queue: VecDeque<(PathBuf, CanonicalFilePathWithPermissions)> =
             vec![(source_path, component_file.target.clone())].into();
 
         while let Some((path, target)) = queue.pop_front() {
@@ -259,13 +260,13 @@ trait FileProcessor<R> {
     async fn process_local_file(
         &self,
         path: &Path,
-        target: &ComponentFilePathWithPermissions,
+        target: &CanonicalFilePathWithPermissions,
     ) -> anyhow::Result<R>;
 
     async fn process_remote_file(
         &self,
         url: &Url,
-        target: &ComponentFilePathWithPermissions,
+        target: &CanonicalFilePathWithPermissions,
     ) -> anyhow::Result<R>;
 }
 
@@ -278,7 +279,7 @@ impl FileProcessor<LoadedFile> for FileLoader {
     async fn process_local_file(
         &self,
         path: &Path,
-        target: &ComponentFilePathWithPermissions,
+        target: &CanonicalFilePathWithPermissions,
     ) -> anyhow::Result<LoadedFile> {
         log_action(
             "Loading",
@@ -301,7 +302,7 @@ impl FileProcessor<LoadedFile> for FileLoader {
     async fn process_remote_file(
         &self,
         url: &Url,
-        target: &ComponentFilePathWithPermissions,
+        target: &CanonicalFilePathWithPermissions,
     ) -> anyhow::Result<LoadedFile> {
         log_action(
             "Downloading",
@@ -338,7 +339,7 @@ impl FileProcessor<HashedFile> for FileHasher {
     async fn process_local_file(
         &self,
         path: &Path,
-        target: &ComponentFilePathWithPermissions,
+        target: &CanonicalFilePathWithPermissions,
     ) -> anyhow::Result<HashedFile> {
         log_action(
             "Calculating hash",
@@ -365,7 +366,7 @@ impl FileProcessor<HashedFile> for FileHasher {
     async fn process_remote_file(
         &self,
         url: &Url,
-        target: &ComponentFilePathWithPermissions,
+        target: &CanonicalFilePathWithPermissions,
     ) -> anyhow::Result<HashedFile> {
         log_action(
             "Calculating hash",

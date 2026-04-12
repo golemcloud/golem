@@ -17,7 +17,7 @@ use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use golem_client::model::ScanCursor;
 use golem_common::model::agent_secret::AgentSecretPath;
-use golem_common::model::worker::WorkerAgentConfigEntry as AgentConfigEntry;
+use golem_common::model::worker::AgentConfigEntryDto as AgentConfigEntryDto;
 
 pub fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
     let pos = key_and_val.find('=').ok_or_else(|| {
@@ -32,14 +32,14 @@ pub fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
     ))
 }
 
-pub fn parse_agent_config(s: &str) -> anyhow::Result<AgentConfigEntry> {
+pub fn parse_agent_config(s: &str) -> anyhow::Result<AgentConfigEntryDto> {
     let (path, value) = split_agent_config_path_and_value(s)?;
 
     let path = parse_agent_config_path(path)?;
 
     let value: serde_json::Value = serde_json::from_str(value)?;
 
-    Ok(AgentConfigEntry { path, value })
+    Ok(AgentConfigEntryDto { path, value: value.into() })
 }
 
 pub fn parse_agent_secret_path(input: &str) -> anyhow::Result<AgentSecretPath> {
@@ -147,11 +147,11 @@ pub fn parse_instant(
 #[cfg(test)]
 mod parse_agent_config_tests {
     use super::{parse_agent_config, parse_agent_config_path};
-    use golem_common::model::worker::WorkerAgentConfigEntry as AgentConfigEntry;
+    use golem_common::model::worker::AgentConfigEntryDto as AgentConfigEntryDto;
     use serde_json::json;
     use test_r::test;
 
-    fn parse(input: &str) -> AgentConfigEntry {
+    fn parse(input: &str) -> AgentConfigEntryDto {
         parse_agent_config(input).unwrap()
     }
 

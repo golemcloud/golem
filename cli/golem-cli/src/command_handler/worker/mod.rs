@@ -67,7 +67,7 @@ use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{
     RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
-    WorkerAgentConfigEntry as AgentConfigEntry,
+    AgentConfigEntryDto as AgentConfigEntryDto,
 };
 use golem_common::model::{IdempotencyKey, OplogIndex};
 
@@ -238,7 +238,7 @@ impl WorkerCommandHandler {
         agent_name: AgentIdArgs,
         env: Vec<(String, String)>,
         wasi_config: Vec<(String, String)>,
-        config: Vec<AgentConfigEntry>,
+        config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
@@ -1266,7 +1266,7 @@ impl WorkerCommandHandler {
         agent_name: String,
         env: HashMap<String, String>,
         wasi_config: BTreeMap<String, String>,
-        config: Vec<AgentConfigEntry>,
+        config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 

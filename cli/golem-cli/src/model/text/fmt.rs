@@ -22,7 +22,7 @@ use cli_table::{Row, Title, WithTitle};
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::model::AgentStatus;
-use golem_common::model::component::{InitialComponentFile, InstalledPlugin};
+use golem_common::model::component::{InitialAgentFile, InstalledPlugin};
 use itertools::Itertools;
 use regex::Regex;
 use serde::Serialize;
@@ -309,7 +309,7 @@ pub fn format_exports(exports: &[String]) -> String {
     exports.iter().map(|e| format_export(e.as_str())).join("\n")
 }
 
-pub fn format_files(files: &[InitialComponentFile]) -> String {
+pub fn format_files(files: &[InitialAgentFile]) -> String {
     files
         .iter()
         .map(|file| {
