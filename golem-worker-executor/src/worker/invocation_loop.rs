@@ -71,6 +71,9 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     /// Only actively running agents hold a permit. Dropped automatically when
     /// the task is aborted (e.g. `RunningWorker::stop()`).
     pub concurrent_agent_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    /// `ResumeReplay` is not represented in the internal queue, so we track it
+    /// explicitly to avoid evicting a worker that is blocked waking up for it.
+    pub resume_replay_pending: Arc<AtomicBool>,
 }
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
@@ -112,6 +115,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     invocations_since_snapshot: 0,
                     idle_snapshot_task: None,
                     concurrent_agent_permit: &mut self.concurrent_agent_permit,
+                    resume_replay_pending: self.resume_replay_pending.clone(),
                 };
 
                 final_decision = inner_loop.run().await;
@@ -294,6 +298,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     /// `InvocationLoop`. Set to `None` when entering idle (releasing the
     /// permit back to the semaphore pool) and re-acquired on wake.
     concurrent_agent_permit: &'a mut Option<tokio::sync::OwnedSemaphorePermit>,
+    resume_replay_pending: Arc<AtomicBool>,
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
@@ -358,7 +363,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         }
                     }
                 }
-                WorkerCommand::ResumeReplay => self.resume_replay().await,
+                WorkerCommand::ResumeReplay => {
+                    self.resume_replay_pending.store(false, Ordering::Release);
+                    self.resume_replay().await
+                }
             };
             match outcome {
                 CommandOutcome::BreakOuterLoop => {

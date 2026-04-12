@@ -440,7 +440,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut instance_guard = self.lock_non_stopping_worker().await;
         let stop_result = match &*instance_guard {
             WorkerInstance::Running(running) => {
-                if is_running_agent_idle(running).await {
+                if self.is_running_worker_idle(running).await {
                     let stop_result = self
                         .stop_internal_locked(
                             &mut instance_guard,
@@ -576,6 +576,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn resume_replay(&self) -> Result<(), WorkerExecutorError> {
         match &*self.lock_non_stopping_worker().await {
             WorkerInstance::Running(running) => {
+                running.resume_replay_pending.store(true, Ordering::Release);
                 running
                     .sender
                     .send(WorkerCommand::ResumeReplay)
@@ -788,20 +789,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Returns true if the worker is running, but it is not performing any invocations at the moment
-    /// (ExecutionStatus::Suspended) and has no pending invocation in its invocation queue.
+    /// (ExecutionStatus::Suspended) and has no pending work that should keep the
+    /// loaded worker resident while memory and filesystem pressure is low.
     ///
     /// These workers can be stopped to free up available worker memory.
     pub async fn is_currently_idle_but_running(&self) -> bool {
         match &*self.instance.lock().await {
-            WorkerInstance::Running(running) => {
-                let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
-                let has_invocations = !self.pending_invocations().await.is_empty();
-                debug!(
-                    "Worker {} is running, waiting_for_command: {waiting_for_command} has_invocations: {has_invocations}",
-                    self.owned_agent_id
-                );
-                waiting_for_command && !has_invocations
-            }
+            WorkerInstance::Running(running) => self.is_running_worker_idle(running).await,
             WorkerInstance::WaitingForPermit(_) => {
                 debug!(
                     "Worker {} is waiting for permit, cannot be used to free up memory",
@@ -833,6 +827,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 false
             }
         }
+    }
+
+    async fn is_running_worker_idle(&self, running: &RunningWorker) -> bool {
+        let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
+        let has_pending_invocations = !self.pending_invocations().await.is_empty();
+        let has_queued_internal_work = !running.queue.read().await.is_empty();
+        let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
+        let has_interrupt = running.interrupt_signal.lock().await.is_some();
+
+        debug!(
+            "Worker {} idle check: waiting_for_command={waiting_for_command} has_pending_invocations={has_pending_invocations} has_queued_internal_work={has_queued_internal_work} has_resume_replay={has_resume_replay} has_interrupt={has_interrupt}",
+            self.owned_agent_id
+        );
+
+        waiting_for_command
+            && !has_pending_invocations
+            && !has_queued_internal_work
+            && !has_resume_replay
+            && !has_interrupt
     }
 
     /// Gets the timestamp of the last time the execution status changed
@@ -2151,12 +2164,15 @@ impl WaitingWorker {
 
         let handle = tokio::task::spawn(
             async move {
-                let permit = parent.active_workers().acquire(memory_requirement).await;
                 let account_id = parent.initial_worker_metadata.created_by;
                 let concurrent_agent_permit = parent
                     .active_workers()
                     .acquire_concurrent_agent(account_id)
                     .await;
+                // Do not reserve executor memory while waiting for a per-account
+                // concurrency slot. Otherwise one account could fill the memory
+                // pool with workers that are not allowed to run yet.
+                let permit = parent.active_workers().acquire(memory_requirement).await;
                 // Pre-acquire storage permits for this restart.
                 //
                 // We need to acquire `filesystem_storage_requirement + desired_extra` total:
@@ -2247,6 +2263,9 @@ struct RunningWorker {
     filesystem_storage_permit: Option<OwnedSemaphorePermit>,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
+    /// `ResumeReplay` is signalled directly through the command channel rather
+    /// than the internal queue, so eviction must treat it as pending work.
+    resume_replay_pending: Arc<AtomicBool>,
 }
 
 impl Drop for RunningWorker {
@@ -2280,6 +2299,8 @@ impl RunningWorker {
         let waiting_for_command_clone = waiting_for_command.clone();
         let interrupt_signal = Arc::new(async_lock::Mutex::new(None));
         let interrupt_signal_clone = interrupt_signal.clone();
+        let resume_replay_pending = Arc::new(AtomicBool::new(false));
+        let resume_replay_pending_clone = resume_replay_pending.clone();
 
         let span = span!(
             parent: None,
@@ -2303,6 +2324,7 @@ impl RunningWorker {
                     interrupt_signal_clone,
                     oom_retry_count,
                     concurrent_agent_permit,
+                    resume_replay_pending_clone,
                 )
                 .instrument(span)
                 .await;
@@ -2318,6 +2340,7 @@ impl RunningWorker {
             filesystem_storage_permit: None,
             waiting_for_command,
             interrupt_signal,
+            resume_replay_pending,
         }
     }
 
@@ -2563,6 +2586,7 @@ impl RunningWorker {
         interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
         oom_retry_count: u32,
         concurrent_agent_permit: OwnedSemaphorePermit,
+        resume_replay_pending: Arc<AtomicBool>,
     ) {
         let mut invocation_loop = InvocationLoop {
             receiver,
@@ -2573,6 +2597,7 @@ impl RunningWorker {
             interrupt_signal,
             oom_retry_count,
             concurrent_agent_permit: Some(concurrent_agent_permit),
+            resume_replay_pending,
         };
         invocation_loop.run().await;
     }
@@ -2920,10 +2945,6 @@ fn is_snapshot_capable_oplog_processor(
 enum WorkerCommand {
     Unblock,
     ResumeReplay,
-}
-
-async fn is_running_agent_idle(running: &RunningWorker) -> bool {
-    running.waiting_for_command.load(Ordering::Acquire) && running.queue.read().await.is_empty()
 }
 
 #[derive(Debug)]
