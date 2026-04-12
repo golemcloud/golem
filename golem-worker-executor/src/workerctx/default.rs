@@ -51,10 +51,11 @@ use crate::workerctx::{
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
+use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
-use golem_common::model::component::{ComponentFilePath, ComponentRevision};
+use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -477,14 +478,14 @@ impl UpdateManagement for Context {
 impl FileSystemReading for Context {
     async fn get_file_system_node(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.get_file_system_node(path).await
     }
 
     async fn read_file(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
         self.durable_ctx.read_file(path).await
     }
@@ -852,6 +853,10 @@ impl WorkerCtx for Context {
 
     fn component_metadata(&self) -> &Component {
         self.durable_ctx.component_metadata()
+    }
+
+    fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig> {
+        self.durable_ctx.agent_type_provision_config()
     }
 
     fn is_exit(error: &Error) -> Option<i32> {

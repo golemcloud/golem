@@ -252,9 +252,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let initial_plugins = metadata
-                    .installed_plugins
-                    .into_iter()
+                let initial_plugins = agent_type_name
+                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                    .unwrap_or_default()
+                    .iter()
+                    .cloned()
                     .filter(|p| initial_active_plugins.contains(&p.environment_plugin_grant_id))
                     .map(make_plugin_installation_description)
                     .collect();
@@ -511,9 +513,11 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let new_plugins = metadata
-                    .installed_plugins
-                    .into_iter()
+                let new_plugins = agent_type_name
+                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                    .unwrap_or_default()
+                    .iter()
+                    .cloned()
                     .filter(|p| new_active_plugins.contains(&p.environment_plugin_grant_id))
                     .map(make_plugin_installation_description)
                     .collect();
@@ -592,10 +596,14 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let plugin_installation = metadata
-                    .installed_plugins
-                    .into_iter()
-                    .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
+                let plugin_installation = agent_type_name
+                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                    .and_then(|plugins| {
+                        plugins
+                            .iter()
+                            .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
+                    })
+                    .cloned()
                     .ok_or("plugin not found in metadata".to_string())?;
 
                 let desc = make_plugin_installation_description(plugin_installation);
@@ -616,10 +624,14 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let plugin_installation = metadata
-                    .installed_plugins
-                    .into_iter()
-                    .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
+                let plugin_installation = agent_type_name
+                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                    .and_then(|plugins| {
+                        plugins
+                            .iter()
+                            .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
+                    })
+                    .cloned()
                     .ok_or("plugin not found in metadata".to_string())?;
 
                 let desc = make_plugin_installation_description(plugin_installation);
@@ -769,10 +781,14 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let plugin_installation = metadata
-                    .installed_plugins
-                    .into_iter()
-                    .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
+                let plugin_installation = agent_type_name
+                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                    .and_then(|plugins| {
+                        plugins
+                            .iter()
+                            .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
+                    })
+                    .cloned()
                     .ok_or("plugin not found in metadata".to_string())?;
 
                 let desc = make_plugin_installation_description(plugin_installation);

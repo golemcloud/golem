@@ -42,7 +42,7 @@ use golem_common::model::agent::{
 };
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
-use golem_common::model::worker::WorkerAgentConfigEntry;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
 };
@@ -64,7 +64,7 @@ pub trait Rpc: Send + Sync {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, RpcError>;
 
     async fn invoke_and_await(
@@ -265,7 +265,7 @@ impl Rpc for RemoteInvocationRpc {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         debug!("Ensuring remote target worker exists");
 
@@ -740,7 +740,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         if self
             .shard_service()

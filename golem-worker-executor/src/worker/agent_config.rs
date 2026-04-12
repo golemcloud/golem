@@ -1,6 +1,6 @@
 // Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.1 (the "License");
+// Licensed under the Golem Source Available License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::{AgentConfigSource, AgentType, AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentConfigSource, AgentType, ParsedAgentId};
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
-use golem_common::model::worker::{ParsedWorkerAgentConfigEntry, WorkerAgentConfigEntry};
+use golem_common::model::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::agent_secret::AgentSecret;
-use golem_service_base::model::component::{AgentConfigEntry, Component};
+use golem_service_base::model::component::Component;
 use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
@@ -78,10 +78,10 @@ pub fn ensure_required_agent_secrets_are_configured(
 }
 
 pub fn parse_worker_creation_agent_config(
-    worker_agent_config: Vec<WorkerAgentConfigEntry>,
+    worker_agent_config: Vec<AgentConfigEntryDto>,
     agent_id: Option<&ParsedAgentId>,
     component: &Component,
-) -> Result<Vec<ParsedWorkerAgentConfigEntry>, WorkerExecutorError> {
+) -> Result<Vec<TypedAgentConfigEntry>, WorkerExecutorError> {
     let Some(agent_id) = agent_id else {
         return Ok(Vec::new());
     };
@@ -106,7 +106,7 @@ pub fn parse_worker_creation_agent_config(
             })?;
 
         let parsed_value =
-            ValueAndType::parse_with_type(&entry.value, &config_declaration.value_type).map_err(
+            ValueAndType::parse_with_type(&entry.value.0, &config_declaration.value_type).map_err(
                 |err| {
                     WorkerExecutorError::invalid_request(format!(
                         "config value for path {} does not match expected schema: [{}]",
@@ -116,7 +116,7 @@ pub fn parse_worker_creation_agent_config(
                 },
             )?;
 
-        initial_agent_config.push(ParsedWorkerAgentConfigEntry {
+        initial_agent_config.push(TypedAgentConfigEntry {
             path: entry.path,
             value: parsed_value,
         });
@@ -124,13 +124,15 @@ pub fn parse_worker_creation_agent_config(
 
     {
         // The actual loading of the local agent config happens in the DurableWorkerCtx, but
-        // we also compute it here during creation to allow failing a creation request before any metdata has
-        // been written / oplog has been created.
-        let agent_config = effective_agent_config(
-            initial_agent_config.clone(),
-            component.agent_config.clone(),
-            &agent_type.type_name,
-        );
+        // we also compute it here during creation to allow failing a creation request before any
+        // metadata has been written / oplog has been created.
+        let component_config = component
+            .metadata
+            .agent_type_config(&agent_id.agent_type)
+            .clone()
+            .unwrap_or_default();
+
+        let agent_config = effective_agent_config(initial_agent_config.clone(), component_config);
 
         validate_agent_config(&agent_config, &agent_type)?;
     }
@@ -138,22 +140,20 @@ pub fn parse_worker_creation_agent_config(
     Ok(initial_agent_config)
 }
 
+/// Merges the component-level typed config (stored in `AgentTypeProvisionConfig`) with
+/// the worker-creation config entries, with worker entries taking precedence.
+/// Returns a map from config path to `ValueAndType`.
 pub fn effective_agent_config(
-    worker_agent_config: Vec<ParsedWorkerAgentConfigEntry>,
-    component_agent_config: Vec<AgentConfigEntry>,
-    agent_type: &AgentTypeName,
-) -> HashMap<Vec<String>, golem_wasm::ValueAndType> {
+    agent_config: Vec<TypedAgentConfigEntry>,
+    default_agent_config: Vec<TypedAgentConfigEntry>,
+) -> HashMap<Vec<String>, ValueAndType> {
     let mut result = HashMap::new();
 
-    let applicable_component_agent_config = component_agent_config
-        .into_iter()
-        .filter(|lac| lac.agent == *agent_type);
-
-    for entry in applicable_component_agent_config {
+    for entry in default_agent_config {
         result.insert(entry.path, entry.value);
     }
 
-    for entry in worker_agent_config {
+    for entry in agent_config {
         result.insert(entry.path, entry.value);
     }
 
@@ -161,7 +161,7 @@ pub fn effective_agent_config(
 }
 
 pub fn validate_agent_config(
-    agent_config: &HashMap<Vec<String>, golem_wasm::ValueAndType>,
+    agent_config: &HashMap<Vec<String>, ValueAndType>,
     agent_type: &AgentType,
 ) -> Result<(), WorkerExecutorError> {
     for entry in &agent_type.config {

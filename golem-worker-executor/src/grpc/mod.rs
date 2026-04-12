@@ -52,12 +52,12 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal, UntypedDataValue};
-use golem_common::model::component::{ComponentFilePath, ComponentId, PluginPriority};
+use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
-use golem_common::model::worker::WorkerAgentConfigEntry;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
@@ -247,7 +247,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_config = request
             .agent_config
             .into_iter()
-            .map(WorkerAgentConfigEntry::try_from)
+            .map(AgentConfigEntryDto::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|err| {
                 WorkerExecutorError::invalid_request(format!(
@@ -1382,7 +1382,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: GetFileSystemNodeRequest,
     ) -> Result<GetFileSystemNodeResponse, WorkerExecutorError> {
-        let path = ComponentFilePath::from_abs_str(&request.path)
+        let path = CanonicalFilePath::from_abs_str(&request.path)
             .map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid path: {e}")))?;
 
         let worker = self.get_or_create(&request).await?;
@@ -1424,7 +1424,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: GetFileContentsRequest,
     ) -> Result<<Self as WorkerExecutor>::GetFileContentsStream, WorkerExecutorError> {
-        let path = ComponentFilePath::from_abs_str(&request.file_path)
+        let path = CanonicalFilePath::from_abs_str(&request.file_path)
             .map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid path: {e}")))?;
 
         let worker = self.get_or_create(&request).await?;
@@ -1530,10 +1530,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     )
                     .await?;
 
-                let installation = component_metadata
-                    .installed_plugins
-                    .iter()
-                    .find(|installation| installation.priority == plugin_priority);
+                let agent_type =
+                    ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+
+                let installation = agent_type
+                    .as_ref()
+                    .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
+                    .find(|p| p.priority == plugin_priority);
 
                 match installation {
                     Some(installation) => {
@@ -1608,10 +1611,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .await?;
 
-        let installation = component_metadata
-            .installed_plugins
-            .iter()
-            .find(|installation| installation.priority == plugin_priority);
+        let agent_type =
+            ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
+        let installation = agent_type
+            .as_ref()
+            .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
+            .find(|p| p.priority == plugin_priority)
+            .cloned();
 
         match installation {
             Some(installation) => {

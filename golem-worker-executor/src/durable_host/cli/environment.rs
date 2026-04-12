@@ -15,7 +15,7 @@
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::model::AgentConfig;
 use crate::services::HasWorker;
-use crate::worker::merge_worker_env_with_component_env;
+use crate::worker::merge_agent_env_with_default_env;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::AgentId;
 use wasmtime_wasi::cli::WasiCliView as _;
@@ -23,10 +23,14 @@ use wasmtime_wasi::p2::bindings::cli::environment::Host;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
-        let component_env = self.state.component_metadata.env.clone();
+        let default_agent_env = self
+            .agent_type_provision_configs()
+            .map(|c| c.env.clone())
+            .unwrap_or_default();
 
         let worker_metadata = self.public_state.worker().get_initial_worker_metadata();
-        let mut env = merge_worker_env_with_component_env(Some(worker_metadata.env), component_env);
+        let mut env =
+            merge_agent_env_with_default_env(Some(worker_metadata.env), default_agent_env);
 
         let current_agent_name = if let Some(agent_id) = self.parsed_agent_id() {
             let updated_agent_id = agent_id.with_phantom_id(self.state.current_phantom_id);

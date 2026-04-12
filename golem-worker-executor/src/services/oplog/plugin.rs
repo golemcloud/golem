@@ -29,7 +29,7 @@ use async_lock::Mutex;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::Principal;
+use golem_common::model::agent::{ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -983,11 +983,17 @@ impl ForwardingOplogState {
             _ => return,
         };
 
-        let plugin = match component_metadata
-            .installed_plugins
-            .iter()
-            .find(|p| p.environment_plugin_grant_id == grant_id)
-        {
+        let agent_type =
+            ParsedAgentId::parse_agent_type_name(&self.initial_worker_metadata.agent_id.agent_id)
+                .ok();
+        let plugin = match agent_type
+            .as_ref()
+            .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
+            .and_then(|plugins| {
+                plugins
+                    .iter()
+                    .find(|p| p.environment_plugin_grant_id == grant_id)
+            }) {
             Some(p) => p.clone(),
             None => return,
         };
@@ -1351,11 +1357,18 @@ impl ForwardingOplogState {
                 }
             }
 
-            let plugin = match component_metadata
-                .installed_plugins
-                .iter()
-                .find(|p| p.environment_plugin_grant_id == grant_id)
-            {
+            let agent_type = ParsedAgentId::parse_agent_type_name(
+                &self.initial_worker_metadata.agent_id.agent_id,
+            )
+            .ok();
+            let plugin = match agent_type
+                .as_ref()
+                .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
+                .and_then(|plugins| {
+                    plugins
+                        .iter()
+                        .find(|p| p.environment_plugin_grant_id == grant_id)
+                }) {
                 Some(p) => p.clone(),
                 None => continue,
             };

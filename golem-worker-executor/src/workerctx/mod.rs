@@ -43,7 +43,7 @@ use async_trait::async_trait;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
-use golem_common::model::component::{ComponentFilePath, ComponentRevision};
+use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -63,6 +63,7 @@ use wasmtime::component::Instance;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
+use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -179,6 +180,8 @@ pub trait WorkerCtx:
     fn created_by(&self) -> AccountId;
 
     fn component_metadata(&self) -> &Component;
+
+    fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig>;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to
@@ -413,11 +416,11 @@ pub trait PublicWorkerIo {
 pub trait FileSystemReading {
     async fn get_file_system_node(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError>;
     async fn read_file(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError>;
 }
 

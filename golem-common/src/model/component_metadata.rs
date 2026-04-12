@@ -12,10 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use super::parsed_function_name::{
+    ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
+};
 use crate::SafeDisplay;
+use crate::base_model::component::InitialAgentFile;
 use crate::base_model::component_metadata::AgentTypeProvisionConfig;
+pub use crate::base_model::component_metadata::*;
+use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::base64::Base64;
+use crate::model::component::InstalledPlugin;
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
 use golem_wasm::analysis::{
@@ -27,11 +34,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
 use wasmtime::component::__internal::wasmtime_environ::wasmparser;
-
-pub use super::parsed_function_name::{
-    ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
-};
-pub use crate::base_model::component_metadata::*;
 
 /// Describes an exported function that can be invoked on a worker
 #[derive(Debug, Clone)]
@@ -134,6 +136,34 @@ impl ComponentMetadata {
         name: &AgentTypeName,
     ) -> Option<&AgentTypeProvisionConfig> {
         self.data.agent_type_provision_configs.get(name)
+    }
+
+    pub fn agent_type_env(&self, name: &AgentTypeName) -> Option<&BTreeMap<String, String>> {
+        self.agent_type_provision_config(name)
+            .map(|config| &config.env)
+    }
+
+    pub fn agent_type_config(&self, name: &AgentTypeName) -> Option<&[TypedAgentConfigEntry]> {
+        self.agent_type_provision_config(name)
+            .map(|config| config.config.as_slice())
+    }
+
+    pub fn agent_type_wasi_config(
+        &self,
+        name: &AgentTypeName,
+    ) -> Option<&BTreeMap<String, String>> {
+        self.agent_type_provision_config(name)
+            .map(|config| &config.wasi_config)
+    }
+
+    pub fn agent_type_files(&self, name: &AgentTypeName) -> Option<&[InitialAgentFile]> {
+        self.agent_type_provision_config(name)
+            .map(|config| config.files.as_slice())
+    }
+
+    pub fn agent_type_plugins(&self, name: &AgentTypeName) -> Option<&[InstalledPlugin]> {
+        self.agent_type_provision_config(name)
+            .map(|config| config.plugins.as_slice())
     }
 
     pub fn is_agent(&self) -> bool {

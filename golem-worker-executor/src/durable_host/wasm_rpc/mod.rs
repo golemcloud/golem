@@ -61,7 +61,7 @@ use tracing::{Instrument, error};
 use wasmtime::component::Resource;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
-use golem_common::model::worker::WorkerAgentConfigEntry;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 
@@ -125,9 +125,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     .to_json_value()
                     .map_err(|err| anyhow::anyhow!("Failed serializing agent config: {err}"))?;
 
-                Ok::<_, anyhow::Error>(WorkerAgentConfigEntry {
+                Ok::<_, anyhow::Error>(AgentConfigEntryDto {
                     path: c.path,
-                    value: encoded,
+                    value: encoded.into(),
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -1193,7 +1193,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     remote_agent_id: AgentId,
     env: &[(String, String)],
     config: std::collections::BTreeMap<String, String>,
-    agent_config: Vec<WorkerAgentConfigEntry>,
+    agent_config: Vec<AgentConfigEntryDto>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let span = create_rpc_connection_span(ctx, &remote_agent_id).await?;
 
