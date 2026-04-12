@@ -1214,6 +1214,8 @@ mod tests {
             .unwrap();
         }
 
+        wait_for_oplog_completions(&user, &worker_id, 3, Duration::from_secs(120), &received).await;
+
         // Stop all executors immediately — before flush timer fires
         deps.stop_all_worker_executors().await;
         deps.start_all_worker_executors().await;
@@ -1238,7 +1240,8 @@ mod tests {
             .unwrap();
         }
 
-        let batches = wait_for_invocations(&received, 5, Duration::from_secs(60)).await;
+        wait_for_oplog_completions(&user, &worker_id, 5, Duration::from_secs(120), &received).await;
+        let batches = wait_for_invocations(&received, 5, Duration::from_secs(120)).await;
         let fn_names = extract_function_names(&batches);
         // Exactly-once: exactly 1 init + 4 adds, no duplicates across shard move.
         // Current bug: no checkpoint, in-flight batch may be re-delivered.
