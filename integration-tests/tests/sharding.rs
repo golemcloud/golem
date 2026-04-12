@@ -977,7 +977,7 @@ mod tests {
         let component = user
             .component(&env.id, "it_agent_counters_release")
             .name("it:agent-counters")
-            .with_parametrized_plugin(&grant.id, 0, params)
+            .with_parametrized_plugin("Repository", &grant.id, 0, params)
             .store()
             .await
             .unwrap();
@@ -1099,7 +1099,7 @@ mod tests {
         let component = user
             .component(&env.id, "it_agent_counters_release")
             .name("it:agent-counters")
-            .with_parametrized_plugin(&grant.id, 0, params)
+            .with_parametrized_plugin("Repository", &grant.id, 0, params)
             .store()
             .await
             .unwrap();
@@ -1217,7 +1217,7 @@ mod tests {
         let component = user
             .component(&env.id, "it_agent_counters_release")
             .name("it:agent-counters")
-            .with_parametrized_plugin(&grant.id, 0, params)
+            .with_parametrized_plugin("Repository", &grant.id, 0, params)
             .store()
             .await
             .unwrap();
@@ -1337,7 +1337,7 @@ mod tests {
         let component = user
             .component(&env.id, "it_agent_counters_release")
             .name("it:agent-counters")
-            .with_parametrized_plugin(&grant.id, 0, params)
+            .with_parametrized_plugin("Repository", &grant.id, 0, params)
             .store()
             .await
             .unwrap();

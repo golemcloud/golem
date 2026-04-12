@@ -93,7 +93,7 @@ async fn otlp_basic_trace_export(
     let _component = user
         .component(&env.id, "golem_it_agent_invocation_context_release")
         .name("golem-it:agent-invocation-context")
-        .with_parametrized_plugin(&otlp_grant_id, 0, plugin_params)
+        .with_parametrized_plugin("InvocationContextAgent", &otlp_grant_id, 0, plugin_params)
         .store()
         .await?;
 
@@ -196,7 +196,7 @@ async fn otlp_all_signals_export(
     let _component = user
         .component(&env.id, "golem_it_agent_invocation_context_release")
         .name("golem-it:agent-invocation-context")
-        .with_parametrized_plugin(&otlp_grant_id, 0, plugin_params)
+        .with_parametrized_plugin("InvocationContextAgent", &otlp_grant_id, 0, plugin_params)
         .store()
         .await?;
 

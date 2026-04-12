@@ -17,9 +17,9 @@ use crate::Tracing;
 use anyhow::anyhow;
 use assert2::let_assert;
 use golem_client::api::WorkerError;
-use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::AgentConfigEntry;
-use golem_common::model::worker::WorkerAgentConfigEntry;
+use golem_common::model::component::AgentTypeProvisionConfigUpdate;
+use golem_common::model::worker::AgentConfigEntryDto;
+use std::collections::BTreeMap;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -57,34 +57,29 @@ async fn agent_with_only_component_agent_config(
     let component = user
         .component(&env.id, ctx.test_component_file())
         .name(ctx.test_component_name())
-        .with_agent_config(vec![
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
+        .with_agent_config("LocalConfigAgent", vec![
+            AgentConfigEntryDto {
                 path: vec!["foo".to_string()],
-                value: json!(1),
+                value: json!(1).into(),
             },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
+            AgentConfigEntryDto {
                 path: vec!["bar".to_string()],
-                value: json!("bar"),
+                value: json!("bar").into(),
             },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
+            AgentConfigEntryDto {
                 path: vec!["nested".to_string(), "a".to_string()],
-                value: json!(true),
+                value: json!(true).into(),
             },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
+            AgentConfigEntryDto {
                 path: vec!["nested".to_string(), "b".to_string()],
-                value: json!([1, 2]),
+                value: json!([1, 2]).into(),
             },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
+            AgentConfigEntryDto {
                 path: vec![
                     ctx.case_config_path_segment("aliased-nested"),
                     "c".to_string(),
                 ],
-                value: json!(3),
+                value: json!(3).into(),
             },
         ])
         .store()
@@ -149,28 +144,28 @@ async fn agent_with_only_worker_agent_config(
         HashMap::new(),
         HashMap::new(),
         vec![
-            WorkerAgentConfigEntry {
+            AgentConfigEntryDto {
                 path: vec!["foo".to_string()],
-                value: json!(1),
+                value: json!(1).into(),
             },
-            WorkerAgentConfigEntry {
+            AgentConfigEntryDto {
                 path: vec!["bar".to_string()],
-                value: json!("bar"),
+                value: json!("bar").into(),
             },
-            WorkerAgentConfigEntry {
+            AgentConfigEntryDto {
                 path: vec!["nested".to_string(), "a".to_string()],
-                value: json!(true),
+                value: json!(true).into(),
             },
-            WorkerAgentConfigEntry {
+            AgentConfigEntryDto {
                 path: vec!["nested".to_string(), "b".to_string()],
-                value: json!([1, 2]),
+                value: json!([1, 2]).into(),
             },
-            WorkerAgentConfigEntry {
+            AgentConfigEntryDto {
                 path: vec![
                     ctx.case_config_path_segment("aliased-nested"),
                     "c".to_string(),
                 ],
-                value: json!(3),
+                value: json!(3).into(),
             },
         ],
     )
@@ -222,16 +217,14 @@ async fn agent_with_mixed_agent_config(
     let component = user
         .component(&env.id, ctx.test_component_file())
         .name(ctx.test_component_name())
-        .with_agent_config(vec![
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
+        .with_agent_config("LocalConfigAgent", vec![
+            AgentConfigEntryDto {
                 path: vec!["foo".to_string()],
-                value: json!(1),
+                value: json!(1).into(),
             },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
+            AgentConfigEntryDto {
                 path: vec!["bar".to_string()],
-                value: json!("bar"),
+                value: json!("bar").into(),
             },
         ])
         .store()
@@ -244,24 +237,24 @@ async fn agent_with_mixed_agent_config(
         HashMap::new(),
         HashMap::new(),
         vec![
-            WorkerAgentConfigEntry {
+            AgentConfigEntryDto {
                 path: vec!["foo".to_string()],
-                value: json!(2),
+                value: json!(2).into(),
             },
-            WorkerAgentConfigEntry {
+            AgentConfigEntryDto {
                 path: vec!["nested".to_string(), "a".to_string()],
-                value: json!(true),
+                value: json!(true).into(),
             },
-            WorkerAgentConfigEntry {
+            AgentConfigEntryDto {
                 path: vec!["nested".to_string(), "b".to_string()],
-                value: json!([1, 2]),
+                value: json!([1, 2]).into(),
             },
-            WorkerAgentConfigEntry {
+            AgentConfigEntryDto {
                 path: vec![
                     ctx.case_config_path_segment("aliased-nested"),
                     "c".to_string(),
                 ],
-                value: json!(3),
+                value: json!(3).into(),
             },
         ],
     )
@@ -313,16 +306,14 @@ async fn agent_with_mixed_agent_config_update(
     let component = user
         .component(&env.id, ctx.test_component_file())
         .name(ctx.test_component_name())
-        .with_agent_config(vec![
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
+        .with_agent_config("LocalConfigAgent", vec![
+            AgentConfigEntryDto {
                 path: vec!["foo".to_string()],
-                value: json!(1),
+                value: json!(1).into(),
             },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
+            AgentConfigEntryDto {
                 path: vec!["bar".to_string()],
-                value: json!("bar"),
+                value: json!("bar").into(),
             },
         ])
         .store()
@@ -337,24 +328,24 @@ async fn agent_with_mixed_agent_config_update(
             HashMap::new(),
             HashMap::new(),
             vec![
-                WorkerAgentConfigEntry {
+                AgentConfigEntryDto {
                     path: vec!["foo".to_string()],
-                    value: json!(2),
+                    value: json!(2).into(),
                 },
-                WorkerAgentConfigEntry {
+                AgentConfigEntryDto {
                     path: vec!["nested".to_string(), "a".to_string()],
-                    value: json!(true),
+                    value: json!(true).into(),
                 },
-                WorkerAgentConfigEntry {
+                AgentConfigEntryDto {
                     path: vec!["nested".to_string(), "b".to_string()],
-                    value: json!([1, 2]),
+                    value: json!([1, 2]).into(),
                 },
-                WorkerAgentConfigEntry {
+                AgentConfigEntryDto {
                     path: vec![
                         ctx.case_config_path_segment("aliased-nested"),
                         "c".to_string(),
                     ],
-                    value: json!(3),
+                    value: json!(3).into(),
                 },
             ],
         )
@@ -365,22 +356,22 @@ async fn agent_with_mixed_agent_config_update(
             &component.id,
             component.revision,
             None,
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-            Some(vec![
-                AgentConfigEntry {
-                    agent: AgentTypeName("LocalConfigAgent".to_string()),
-                    path: vec!["foo".to_string()],
-                    value: json!(3),
+            Some(BTreeMap::from([(
+                golem_common::model::agent::AgentTypeName("LocalConfigAgent".to_string()),
+                AgentTypeProvisionConfigUpdate {
+                    config: Some(vec![
+                        AgentConfigEntryDto {
+                            path: vec!["foo".to_string()],
+                            value: json!(3).into(),
+                        },
+                        AgentConfigEntryDto {
+                            path: vec!["bar".to_string()],
+                            value: json!("baz").into(),
+                        },
+                    ]),
+                    ..Default::default()
                 },
-                AgentConfigEntry {
-                    agent: AgentTypeName("LocalConfigAgent".to_string()),
-                    path: vec!["bar".to_string()],
-                    value: json!("baz"),
-                },
-            ]),
+            )])),
             Vec::new(),
         )
         .await?;
@@ -446,24 +437,24 @@ async fn missing_agent_config_key(
             HashMap::new(),
             HashMap::new(),
             vec![
-                WorkerAgentConfigEntry {
+                AgentConfigEntryDto {
                     path: vec!["bar".to_string()],
-                    value: json!("bar"),
+                    value: json!("bar").into(),
                 },
-                WorkerAgentConfigEntry {
+                AgentConfigEntryDto {
                     path: vec!["nested".to_string(), "a".to_string()],
-                    value: json!(true),
+                    value: json!(true).into(),
                 },
-                WorkerAgentConfigEntry {
+                AgentConfigEntryDto {
                     path: vec!["nested".to_string(), "b".to_string()],
-                    value: json!([1, 2]),
+                    value: json!([1, 2]).into(),
                 },
-                WorkerAgentConfigEntry {
+                AgentConfigEntryDto {
                     path: vec![
                         ctx.case_config_path_segment("aliased-nested"),
                         "c".to_string(),
                     ],
-                    value: json!(3),
+                    value: json!(3).into(),
                 },
             ],
         )
@@ -503,28 +494,28 @@ async fn mistyped_agent_config_key(
             HashMap::new(),
             HashMap::new(),
             vec![
-                WorkerAgentConfigEntry {
+                AgentConfigEntryDto {
                     path: vec!["foo".to_string()],
-                    value: json!("foo"),
+                    value: json!("foo").into(),
                 },
-                WorkerAgentConfigEntry {
+                AgentConfigEntryDto {
                     path: vec!["bar".to_string()],
-                    value: json!("bar"),
+                    value: json!("bar").into(),
                 },
-                WorkerAgentConfigEntry {
+                AgentConfigEntryDto {
                     path: vec!["nested".to_string(), "a".to_string()],
-                    value: json!(true),
+                    value: json!(true).into(),
                 },
-                WorkerAgentConfigEntry {
+                AgentConfigEntryDto {
                     path: vec!["nested".to_string(), "b".to_string()],
-                    value: json!([1, 2]),
+                    value: json!([1, 2]).into(),
                 },
-                WorkerAgentConfigEntry {
+                AgentConfigEntryDto {
                     path: vec![
                         ctx.case_config_path_segment("aliased-nested"),
                         "c".to_string(),
                     ],
-                    value: json!(3),
+                    value: json!(3).into(),
                 },
             ],
         )
@@ -562,21 +553,21 @@ async fn optional_agent_config_does_not_need_to_be_provided(
         HashMap::new(),
         HashMap::new(),
         vec![
-            WorkerAgentConfigEntry {
+            AgentConfigEntryDto {
                 path: vec!["foo".to_string()],
-                value: json!(1),
+                value: json!(1).into(),
             },
-            WorkerAgentConfigEntry {
+            AgentConfigEntryDto {
                 path: vec!["bar".to_string()],
-                value: json!("bar"),
+                value: json!("bar").into(),
             },
-            WorkerAgentConfigEntry {
+            AgentConfigEntryDto {
                 path: vec!["nested".to_string(), "a".to_string()],
-                value: json!(true),
+                value: json!(true).into(),
             },
-            WorkerAgentConfigEntry {
+            AgentConfigEntryDto {
                 path: vec!["nested".to_string(), "b".to_string()],
-                value: json!([1, 2]),
+                value: json!([1, 2]).into(),
             },
         ],
     )

@@ -23,10 +23,10 @@ use futures_concurrency::future::Join;
 use golem_api_grpc::proto::golem::worker::{LogEvent, log_event};
 use golem_client::api::RegistryServiceClient;
 use golem_common::model::account::{AccountRevision, AccountSetPlan};
-use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentId};
+use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::worker::{FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind};
+use golem_common::model::worker::{AgentFileSystemNode, AgentFileSystemNodeKind};
 use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
     StringFilterComparator,
@@ -1053,16 +1053,16 @@ async fn worker_use_initial_files(
         .component(&env.id, "it_initial_file_system_release")
         .name("golem-it:initial-file-system")
         .unique()
-        .with_files(&[
+        .with_files("FileReadWrite", &[
             IFSEntry {
                 source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadOnly,
+                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
             },
             IFSEntry {
                 source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadWrite,
+                target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadWrite,
             },
         ])
         .store()
@@ -1119,21 +1119,21 @@ async fn worker_list_files(
         .component(&env.id, "it_initial_file_system_release")
         .name("golem-it:initial-file-system")
         .unique()
-        .with_files(&[
+        .with_files("FileReadWrite", &[
             IFSEntry {
                 source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadOnly,
+                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
             },
             IFSEntry {
                 source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadWrite,
+                target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadWrite,
             },
             IFSEntry {
                 source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: ComponentFilePath::from_abs_str("/baz.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadWrite,
+                target_path: CanonicalFilePath::from_abs_str("/baz.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadWrite,
             },
         ])
         .store()
@@ -1146,7 +1146,7 @@ async fn worker_list_files(
 
     let mut result = result
         .into_iter()
-        .map(|e| FlatComponentFileSystemNode {
+        .map(|e| AgentFileSystemNode {
             last_modified: 0,
             ..e
         })
@@ -1157,25 +1157,25 @@ async fn worker_list_files(
     assert_eq!(
         result,
         vec![
-            FlatComponentFileSystemNode {
+            AgentFileSystemNode {
                 name: "bar".to_string(),
                 last_modified: 0,
-                kind: FlatComponentFileSystemNodeKind::Directory,
+                kind: AgentFileSystemNodeKind::Directory,
                 permissions: None,
                 size: None
             },
-            FlatComponentFileSystemNode {
+            AgentFileSystemNode {
                 name: "baz.txt".to_string(),
                 last_modified: 0,
-                kind: FlatComponentFileSystemNodeKind::File,
-                permissions: Some(ComponentFilePermissions::ReadWrite),
+                kind: AgentFileSystemNodeKind::File,
+                permissions: Some(AgentFilePermissions::ReadWrite),
                 size: Some(4),
             },
-            FlatComponentFileSystemNode {
+            AgentFileSystemNode {
                 name: "foo.txt".to_string(),
                 last_modified: 0,
-                kind: FlatComponentFileSystemNodeKind::File,
-                permissions: Some(ComponentFilePermissions::ReadOnly),
+                kind: AgentFileSystemNodeKind::File,
+                permissions: Some(AgentFilePermissions::ReadOnly),
                 size: Some(4)
             },
         ]
@@ -1185,7 +1185,7 @@ async fn worker_list_files(
 
     let mut result = result
         .into_iter()
-        .map(|e| FlatComponentFileSystemNode {
+        .map(|e| AgentFileSystemNode {
             last_modified: 0,
             ..e
         })
@@ -1195,11 +1195,11 @@ async fn worker_list_files(
 
     assert_eq!(
         result,
-        vec![FlatComponentFileSystemNode {
+        vec![AgentFileSystemNode {
             name: "baz.txt".to_string(),
             last_modified: 0,
-            kind: FlatComponentFileSystemNodeKind::File,
-            permissions: Some(ComponentFilePermissions::ReadWrite),
+            kind: AgentFileSystemNodeKind::File,
+            permissions: Some(AgentFilePermissions::ReadWrite),
             size: Some(4),
         },]
     );
@@ -1208,7 +1208,7 @@ async fn worker_list_files(
 
     let mut result = result
         .into_iter()
-        .map(|e| FlatComponentFileSystemNode {
+        .map(|e| AgentFileSystemNode {
             last_modified: 0,
             ..e
         })
@@ -1218,11 +1218,11 @@ async fn worker_list_files(
 
     assert_eq!(
         result,
-        vec![FlatComponentFileSystemNode {
+        vec![AgentFileSystemNode {
             name: "baz.txt".to_string(),
             last_modified: 0,
-            kind: FlatComponentFileSystemNodeKind::File,
-            permissions: Some(ComponentFilePermissions::ReadWrite),
+            kind: AgentFileSystemNodeKind::File,
+            permissions: Some(AgentFilePermissions::ReadWrite),
             size: Some(4),
         },]
     );
@@ -1246,16 +1246,16 @@ async fn worker_read_files(
         .component(&env.id, "it_initial_file_system_release")
         .name("golem-it:initial-file-system")
         .unique()
-        .with_files(&[
+        .with_files("FileReadWrite", &[
             IFSEntry {
                 source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadOnly,
+                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
             },
             IFSEntry {
                 source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadWrite,
+                target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadWrite,
             },
         ])
         .store()
@@ -1306,16 +1306,16 @@ async fn worker_initial_files_after_automatic_worker_update(
     let component = user
         .component(&env.id, "it_initial_file_system_release")
         .name("golem-it:initial-file-system")
-        .with_files(&[
+        .with_files("FileReadWrite", &[
             IFSEntry {
                 source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadOnly,
+                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
             },
             IFSEntry {
                 source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadWrite,
+                target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadWrite,
             },
         ])
         .store()
@@ -1334,22 +1334,23 @@ async fn worker_initial_files_after_automatic_worker_update(
     let updated_component = user
         .update_component_with_files(
             &component.id,
+            "FileReadWrite",
             "it_initial_file_system_release",
             vec![
                 IFSEntry {
                     source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                    target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-                    permissions: ComponentFilePermissions::ReadOnly,
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
                 },
                 IFSEntry {
                     source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                    target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                    permissions: ComponentFilePermissions::ReadWrite,
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
                 },
                 IFSEntry {
                     source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                    target_path: ComponentFilePath::from_abs_str("/baz.txt").unwrap(),
-                    permissions: ComponentFilePermissions::ReadWrite,
+                    target_path: CanonicalFilePath::from_abs_str("/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
                 },
             ],
         )

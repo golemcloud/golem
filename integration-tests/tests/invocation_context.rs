@@ -80,7 +80,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
 
     user.component(&env.id, "golem_it_agent_invocation_context_release")
         .name("golem-it:agent-invocation-context")
-        .with_env(vec![("PORT".to_string(), host_http_port.to_string())])
+        .with_env("InvocationContextAgent", vec![("PORT".to_string(), host_http_port.to_string())])
         .store()
         .await?;
 
