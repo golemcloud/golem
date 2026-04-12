@@ -263,25 +263,27 @@ pub fn add_openapi_spec_routes(
     current_route_id: &mut i32,
     compiled_routes: &mut Vec<UnboundCompiledRoute>,
 ) {
-    let route_id = *current_route_id;
-    *current_route_id = current_route_id.checked_add(1).unwrap();
+    for openapi_path in ["openapi.json", "openapi.yaml"] {
+        let route_id = *current_route_id;
+        *current_route_id = current_route_id.checked_add(1).unwrap();
 
-    compiled_routes.push(UnboundCompiledRoute {
-        route_id,
-        domain: domain.clone(),
-        method: HttpMethod::Get(Empty {}),
-        // Note: This is currently a fixed path,
-        // but it can be part of the http api deployment configuration
-        path: vec![PathSegment::Literal {
-            value: "openapi.json".to_string(),
-        }],
-        body: RequestBodySchema::Unused,
-        behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {}),
-        security: UnboundRouteSecurity::None,
-        cors: CorsOptions {
-            allowed_patterns: Vec::new(),
-        },
-    });
+        compiled_routes.push(UnboundCompiledRoute {
+            route_id,
+            domain: domain.clone(),
+            method: HttpMethod::Get(Empty {}),
+            // Note: This is currently a fixed path,
+            // but it can be part of the http api deployment configuration
+            path: vec![PathSegment::Literal {
+                value: openapi_path.to_string(),
+            }],
+            body: RequestBodySchema::Unused,
+            behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {}),
+            security: UnboundRouteSecurity::None,
+            cors: CorsOptions {
+                allowed_patterns: Vec::new(),
+            },
+        });
+    }
 }
 
 pub fn build_agent_http_api_deployment_details(
