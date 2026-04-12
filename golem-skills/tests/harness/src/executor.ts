@@ -106,7 +106,7 @@ const HttpSchema = z.object({
 
 const InvokeSchema = z.object({
   agent: z.string(),
-  method: z.string(),
+  method: langConditional(z.string()),
   args: z.string().optional(),
 });
 
@@ -118,7 +118,7 @@ const ShellSchema = z.object({
 
 const TriggerSchema = z.object({
   agent: z.string(),
-  method: z.string(),
+  method: langConditional(z.string()),
   args: z.string().optional(),
 });
 
@@ -259,9 +259,11 @@ interface StepCommon {
   retry?: { attempts: number; delay: number };
 }
 
-type InvokeSpec = { agent: string; method: string; args?: string };
+type InvokeSpec = { agent: string; method: LangConditional<string>; args?: string };
 type ShellSpec = { command: string; args?: string[]; cwd?: string };
-type TriggerSpec = { agent: string; method: string; args?: string };
+type TriggerSpec = { agent: string; method: LangConditional<string>; args?: string };
+type ResolvedInvokeSpec = { agent: string; method: string; args?: string };
+type ResolvedTriggerSpec = { agent: string; method: string; args?: string };
 type CreateAgentSpec = {
   name: string;
   env?: Record<string, string>;
@@ -521,7 +523,7 @@ export class ScenarioExecutor {
           ...step,
           invoke: {
             agent: substituteVariables(step.invoke.agent, variables),
-            method: substituteVariables(step.invoke.method, variables),
+            method: subLangStr(step.invoke.method),
             args: sub(step.invoke.args),
           },
         };
@@ -530,7 +532,7 @@ export class ScenarioExecutor {
           ...step,
           invoke_json: {
             agent: substituteVariables(step.invoke_json.agent, variables),
-            method: substituteVariables(step.invoke_json.method, variables),
+            method: subLangStr(step.invoke_json.method),
             args: sub(step.invoke_json.args),
           },
         };
@@ -548,7 +550,7 @@ export class ScenarioExecutor {
           ...step,
           trigger: {
             agent: substituteVariables(step.trigger.agent, variables),
-            method: substituteVariables(step.trigger.method, variables),
+            method: subLangStr(step.trigger.method),
             args: sub(step.trigger.args),
           },
         };
@@ -613,7 +615,59 @@ export class ScenarioExecutor {
         prompt: resolveByLanguage(step.prompt, lang)!,
       } as StepSpec;
     }
+    if (step.tag === "invoke") {
+      return {
+        ...resolved,
+        tag: "invoke",
+        invoke: {
+          ...step.invoke,
+          method: resolveByLanguage(step.invoke.method, lang)!,
+        },
+      } as StepSpec;
+    }
+    if (step.tag === "invoke_json") {
+      return {
+        ...resolved,
+        tag: "invoke_json",
+        invoke_json: {
+          ...step.invoke_json,
+          method: resolveByLanguage(step.invoke_json.method, lang)!,
+        },
+      } as StepSpec;
+    }
+    if (step.tag === "trigger") {
+      return {
+        ...resolved,
+        tag: "trigger",
+        trigger: {
+          ...step.trigger,
+          method: resolveByLanguage(step.trigger.method, lang)!,
+        },
+      } as StepSpec;
+    }
     return resolved as StepSpec;
+  }
+
+  private ensureResolvedInvokeSpec(invoke: InvokeSpec): ResolvedInvokeSpec {
+    if (typeof invoke.method !== "string") {
+      throw new Error("Invoke method must resolve to a string for the current language");
+    }
+
+    return {
+      ...invoke,
+      method: invoke.method,
+    };
+  }
+
+  private ensureResolvedTriggerSpec(trigger: TriggerSpec): ResolvedTriggerSpec {
+    if (typeof trigger.method !== "string") {
+      throw new Error("Trigger method must resolve to a string for the current language");
+    }
+
+    return {
+      ...trigger,
+      method: trigger.method,
+    };
   }
 
   async execute(spec: ScenarioSpec): Promise<ScenarioRunResult> {
@@ -883,7 +937,12 @@ export class ScenarioExecutor {
         );
         break;
       case "trigger":
-        await this.executeTrigger(stepLabel, step.trigger, stepTimeoutSeconds, commandEnv);
+        await this.executeTrigger(
+          stepLabel,
+          this.ensureResolvedTriggerSpec(step.trigger),
+          stepTimeoutSeconds,
+          commandEnv,
+        );
         break;
       case "prompt": {
         const idleTimeout = this.options.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS;
@@ -904,7 +963,7 @@ export class ScenarioExecutor {
       case "invoke":
         await this.executeInvoke(
           stepLabel,
-          step.invoke,
+          this.ensureResolvedInvokeSpec(step.invoke),
           step.expect,
           stepTimeoutSeconds,
           commandEnv,
@@ -914,7 +973,7 @@ export class ScenarioExecutor {
       case "invoke_json":
         await this.executeInvokeJson(
           stepLabel,
-          step.invoke_json,
+          this.ensureResolvedInvokeSpec(step.invoke_json),
           step.expect,
           stepTimeoutSeconds,
           commandEnv,
@@ -1084,7 +1143,7 @@ export class ScenarioExecutor {
 
   private async executeTrigger(
     stepLabel: string,
-    trigger: TriggerSpec,
+    trigger: ResolvedTriggerSpec,
     timeout: number,
     commandEnv: Record<string, string>,
   ): Promise<void> {
@@ -1126,7 +1185,7 @@ export class ScenarioExecutor {
 
   private async executeInvoke(
     stepLabel: string,
-    invoke: InvokeSpec,
+    invoke: ResolvedInvokeSpec,
     expect: StepCommon["expect"],
     timeout: number,
     commandEnv: Record<string, string>,
@@ -1160,7 +1219,7 @@ export class ScenarioExecutor {
 
   private async executeInvokeJson(
     stepLabel: string,
-    invoke: InvokeSpec,
+    invoke: ResolvedInvokeSpec,
     expect: StepCommon["expect"],
     timeout: number,
     commandEnv: Record<string, string>,

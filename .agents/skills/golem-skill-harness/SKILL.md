@@ -310,27 +310,71 @@ With language-conditional presets:
 - id: "call-function"
   invoke:
     agent: 'CounterAgent("my-counter")'
-    function: 'app:component/agent.{increment}'
+    method: "increment"
     args: '"hello"'                # Optional function arguments
   expect:
     stdout_contains: "1"
 ```
 
+Use the real method name as it appears in source code, not a kebab-cased external name. For
+cross-language scenarios, `method` can be language-conditional:
+
+```yaml
+- id: "call-function"
+  invoke:
+    agent: 'ItemRepositoryAgent("catalog")'
+    method:
+      rust: "create_item"
+      ts: "createItem"
+      scala: "createItem"
+    args: '{id: "item-1", name: "Hammer"}'
+```
+
+Prompts can still describe public API behavior in kebab-case if that is clearer for the coding
+agent, but invocation steps should use the source-language method names that the generated code
+actually exposes.
+
 #### `invoke_json` — Invoke with `--json` output
 
-Same as `invoke` but passes `--json` flag to `golem agent invoke`. Supports `result_json` assertions with JSONPath.
+Same as `invoke` but requests JSON-formatted CLI output. Supports `result_json` assertions with
+JSONPath.
+
+`result_json` assertions are evaluated against the unwrapped invocation result value, not the full
+CLI envelope. That means:
+- if the method returns a record/object/case class, use paths like `$.id`
+- if the method returns a scalar, assert against `$`
+- if the method returns a list, assert against `$` or list element paths like `$[0].id`
 
 ```yaml
 - id: "call-json"
   invoke_json:
     agent: 'MyAgent("test")'
-    function: 'app:component/agent.{get-data}'
+    method: "getData"
   expect:
     result_json:
       - path: "$.name"
         equals: "test"
       - path: "$.items[0]"
         contains: "expected"
+```
+
+Cross-language example:
+
+```yaml
+- id: "create-item"
+  invoke_json:
+    agent: 'ItemRepositoryAgent("catalog")'
+    method:
+      rust: "create_item"
+      ts: "createItem"
+      scala: "createItem"
+    args: '{id: "item-1", name: "Hammer"}'
+  expect:
+    result_json:
+      - path: "$.id"
+        equals: "item-1"
+      - path: "$.name"
+        equals: "Hammer"
 ```
 
 #### `create_agent` — Create a Golem agent
@@ -359,8 +403,11 @@ Same as `invoke` but passes `--json` flag to `golem agent invoke`. Supports `res
 - id: "trigger-bg"
   trigger:
     agent: 'MyAgent("test")'
-    function: 'app:component/agent.{background-task}'
+    method: "backgroundTask"
 ```
+
+Like `invoke` and `invoke_json`, `trigger.method` can be language-conditional when Rust,
+TypeScript, and Scala use different method casing.
 
 #### `sleep` — Wait for a duration
 
@@ -391,7 +438,8 @@ Available assertion fields:
 
 ### Language-Conditional Fields
 
-`prompt`, `expectedSkills`, `allowedExtraSkills`, `verify`, and `create_project` can be language-conditional:
+`prompt`, `expectedSkills`, `allowedExtraSkills`, `verify`, `create_project`, `invoke.method`,
+`invoke_json.method`, and `trigger.method` can be language-conditional:
 
 ```yaml
 - id: "create-project"
@@ -402,6 +450,29 @@ Available assertion fields:
     ts: ["golem-new-project", "golem-db-app-ts"]
     rust: ["golem-new-project", "golem-db-app-rust"]
 ```
+
+Another common pattern is language-specific invocation naming:
+
+```yaml
+- id: "list-items"
+  invoke_json:
+    agent: 'ItemRepositoryAgent("catalog")'
+    method:
+      rust: "list_items"
+      ts: "listItems"
+      scala: "listItems"
+```
+
+## Scenario Authoring Tips
+
+- Prefer `create_project` for setup when the scenario is not specifically testing project
+  creation. This keeps skill activation expectations focused on the behavior under test.
+- Prefer `invoke_json` over `invoke` for behavioral verification. It is more stable for
+  assertions, especially for records, lists, and other structured return values.
+- Use language-conditional `method` fields whenever Rust, TypeScript, and Scala differ in method
+  casing or naming style.
+- When writing prompts for new agents, it is fine to describe the intended public behavior in
+  kebab-case, but the verification steps should invoke the real method names used in code.
 
 ### Template Variables
 

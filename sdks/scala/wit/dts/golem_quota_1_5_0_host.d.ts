@@ -4,48 +4,55 @@
  * reserve / commit actual usage.
  */
 declare module 'golem:quota/host@1.5.0' {
-  /**
-   * Error returned when a reservation cannot be satisfied because the
-   * resource's enforcement policy is `reject`.
-   */
-  export type FailedReservation = {
-    /** Estimated wait in nanoseconds until capacity is available (rate-limited resources only). */
-    estimatedWaitNanos?: bigint;
-  };
-
-  /**
-   * A short-lived capability representing a pending or committed resource consumption.
-   * Dropping without committing is equivalent to committing zero usage.
-   */
   export class Reservation {
     /**
-     * Commit actual usage.
-     * used < reserved → unused returned to pool.
-     * used > reserved → excess deducted as debt.
+     * Commit actual usage, consuming the reservation.
+     * If `used` < reserved  — unused capacity is returned to the pool.
+     * If `used` > reserved  — the excess is deducted from the token's
+     *                          remaining allocation as "debt".
      */
-    commit(used: bigint): void;
+    static commit(this_: Reservation, used: bigint): void;
   }
-
-  /**
-   * An unforgeable capability granting the right to consume a named resource.
-   * Dropping the token releases the underlying lease back to the executor pool.
-   */
   export class QuotaToken {
+    /**
+     * Request a quota capability for the given resource.
+     * - `resource-name` : the resource name (as declared in the manifest).
+     * - `expected-use`  : expected units per reservation; used to derive
+     *                      credit rate and max-credit for fair scheduling.
+     */
     constructor(resourceName: string, expectedUse: bigint);
     /**
-     * Reserve `amount` units. Blocks until capacity is available or enforcement fires.
-     * @throws FailedReservation when the enforcement policy is `reject`.
+     * Reserve `amount` units from the local allocation.
+     * Blocks internally until capacity is available or the resource's
+     * enforcement action fires.  Returns a `reservation` handle that
+     * must be committed (or dropped) to release unused capacity.
+     * @throws FailedReservation
      */
     reserve(amount: bigint): Reservation;
     /**
-     * Split off a child token with `childExpectedUse` units.
-     * Traps if childExpectedUse exceeds the parent's current expectedUse.
+     * Split off a child token with `child-expected-use` units from this token.
+     * The parent's `expected-use` is reduced by `child-expected-use`.
+     * Credits are divided proportionally between parent and child.
+     * Traps if `child-expected-use` exceeds the parent's current `expected-use`.
      */
     split(childExpectedUse: bigint): QuotaToken;
     /**
-     * Merge `other` into this token. `other` is consumed.
+     * Merge `other` back into this token.
+     * The two tokens must refer to the same resource (same resource-name
+     * and environment).  `other` is consumed.
      * Traps if the tokens refer to different resources.
      */
     merge(other: QuotaToken): void;
   }
+  /**
+   * Error returned when a reservation cannot be satisfied because the
+   * resource's enforcement policy is `reject`.
+   * The inner value is an optional estimate in nanoseconds of how long
+   * the caller would need to wait for capacity (only available for
+   * rate-limited resources).
+   */
+  export type FailedReservation = {
+    estimatedWaitNanos?: bigint;
+  };
+  export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }
