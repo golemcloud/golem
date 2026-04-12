@@ -48,6 +48,7 @@ impl InvokeResultView {
         let result_format = match &source_language {
             SourceLanguage::Rust => "Rust syntax",
             SourceLanguage::TypeScript => "TypeScript syntax",
+            SourceLanguage::Scala => "Scala syntax",
             SourceLanguage::Other(_) => "WAVE",
         }
         .to_string();

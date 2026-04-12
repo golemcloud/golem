@@ -71,6 +71,18 @@ fn round_trip_ts(value: Value, typ: AnalysedType) {
     );
 }
 
+fn round_trip_scala(value: Value, typ: AnalysedType) {
+    let data_value = cm_value(value.clone(), typ.clone());
+    let schema = cm_schema(typ.clone());
+    let rendered = render_data_value(&data_value, &SourceLanguage::Scala);
+    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala)
+        .unwrap_or_else(|e| panic!("parse failed for rendered='{rendered}': {e}"));
+    assert_eq!(
+        data_value, parsed,
+        "round-trip failed for rendered='{rendered}'"
+    );
+}
+
 // Primitive round-trips
 
 #[test]
@@ -876,10 +888,587 @@ fn multi_param_rust_syntax() {
                         name: None,
                         owner: None,
                         inner: Box::new(AnalysedType::Str(TypeStr)),
-                    }),
-                ),
-            }),
-        ],
+                        }),
+                        ),
+                        }),
+                        ],
+                        });
+                        assert_eq!(parsed, expected);
+                        }
+
+                        // Scala primitive round-trips
+
+                        #[test]
+                        fn scala_round_trip_bool() {
+                        round_trip_scala(Value::Bool(true), AnalysedType::Bool(TypeBool));
+                        round_trip_scala(Value::Bool(false), AnalysedType::Bool(TypeBool));
+                        }
+
+                        #[test]
+                        fn scala_round_trip_integers() {
+                        round_trip_scala(Value::U32(42), AnalysedType::U32(TypeU32));
+                        round_trip_scala(Value::S32(-7), AnalysedType::S32(TypeS32));
+                        round_trip_scala(Value::S32(0), AnalysedType::S32(TypeS32));
+                        }
+
+                        #[test]
+                        fn scala_round_trip_string() {
+                        round_trip_scala(
+                        Value::String("hello world".into()),
+                        AnalysedType::Str(TypeStr),
+                        );
+                        round_trip_scala(
+                        Value::String("line\nnewline".into()),
+                        AnalysedType::Str(TypeStr),
+                        );
+                        round_trip_scala(
+                        Value::String("has \"quotes\"".into()),
+                        AnalysedType::Str(TypeStr),
+                        );
+                        }
+
+                        #[test]
+                        fn scala_round_trip_char() {
+                        round_trip_scala(Value::Char('a'), AnalysedType::Chr(TypeChr));
+                        round_trip_scala(Value::Char('\n'), AnalysedType::Chr(TypeChr));
+                        }
+
+                        #[test]
+                        fn scala_round_trip_float() {
+                        round_trip_scala(Value::F64(2.71), AnalysedType::F64(TypeF64));
+                        round_trip_scala(Value::F64(f64::INFINITY), AnalysedType::F64(TypeF64));
+                        round_trip_scala(Value::F64(f64::NEG_INFINITY), AnalysedType::F64(TypeF64));
+                        // NaN needs special handling — can't use equality
+                        let data = cm_value(Value::F64(f64::NAN), AnalysedType::F64(TypeF64));
+                        let schema = cm_schema(AnalysedType::F64(TypeF64));
+                        let rendered = render_data_value(&data, &SourceLanguage::Scala);
+                        let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala).unwrap();
+                        match &parsed {
+                        DataValue::Tuple(elems) => match &elems.elements[0] {
+                        ElementValue::ComponentModel(cm) => match &cm.value.value {
+                        Value::F64(v) => assert!(v.is_nan(), "expected NaN"),
+                        _ => panic!("expected F64"),
+                        },
+                        _ => panic!("expected CM"),
+                        },
+                        _ => panic!("expected Tuple"),
+                        }
+                        }
+
+                        // Scala composite round-trips
+
+                        #[test]
+                        fn scala_round_trip_record() {
+                        let typ = AnalysedType::Record(TypeRecord {
+                        name: Some("my-record".to_string()),
+                        owner: None,
+                        fields: vec![
+                        NameTypePair {
+                        name: "field-one".to_string(),
+                        typ: AnalysedType::U32(TypeU32),
+                        },
+                        NameTypePair {
+                        name: "field-two".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                        },
+                        ],
+                        });
+                        let val = Value::Record(vec![Value::U32(42), Value::String("hi".into())]);
+                        round_trip_scala(val, typ);
+                        }
+
+                        #[test]
+                        fn scala_round_trip_variant() {
+                        let typ = AnalysedType::Variant(TypeVariant {
+                        name: Some("my-variant".to_string()),
+                        owner: None,
+                        cases: vec![
+                        NameOptionTypePair {
+                        name: "case-a".to_string(),
+                        typ: Some(AnalysedType::U32(TypeU32)),
+                        },
+                        NameOptionTypePair {
+                        name: "case-b".to_string(),
+                        typ: None,
+                        },
+                        ],
+                        });
+                        // With payload
+                        round_trip_scala(
+                        Value::Variant {
+                        case_idx: 0,
+                        case_value: Some(Box::new(Value::U32(99))),
+                        },
+                        typ.clone(),
+                        );
+                        // Without payload
+                        round_trip_scala(
+                        Value::Variant {
+                        case_idx: 1,
+                        case_value: None,
+                        },
+                        typ,
+                        );
+                        }
+
+                        #[test]
+                        fn scala_round_trip_enum() {
+                        let typ = AnalysedType::Enum(TypeEnum {
+                        name: Some("my-enum".to_string()),
+                        owner: None,
+                        cases: vec!["case-a".to_string(), "case-b".to_string()],
+                        });
+                        round_trip_scala(Value::Enum(1), typ);
+                        }
+
+                        #[test]
+                        fn scala_round_trip_option() {
+                        let typ = AnalysedType::Option(TypeOption {
+                        name: None,
+                        owner: None,
+                        inner: Box::new(AnalysedType::U32(TypeU32)),
+                        });
+                        round_trip_scala(Value::Option(Some(Box::new(Value::U32(42)))), typ.clone());
+                        round_trip_scala(Value::Option(None), typ);
+                        }
+
+                        #[test]
+                        fn scala_round_trip_result() {
+                        let typ = AnalysedType::Result(TypeResult {
+                        name: None,
+                        owner: None,
+                        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
+                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
+                        });
+                        round_trip_scala(
+                        Value::Result(Ok(Some(Box::new(Value::U32(42))))),
+                        typ.clone(),
+                        );
+                        round_trip_scala(
+                        Value::Result(Err(Some(Box::new(Value::String("fail".into()))))),
+                        typ,
+                        );
+                        }
+
+                        #[test]
+                        fn scala_round_trip_list() {
+                        let typ = AnalysedType::List(TypeList {
+                        name: None,
+                        owner: None,
+                        inner: Box::new(AnalysedType::U32(TypeU32)),
+                        });
+                        round_trip_scala(
+                        Value::List(vec![Value::U32(1), Value::U32(2), Value::U32(3)]),
+                        typ,
+                        );
+                        }
+
+                        #[test]
+                        fn scala_round_trip_tuple() {
+                        let typ = AnalysedType::Tuple(TypeTuple {
+                        name: None,
+                        owner: None,
+                        items: vec![AnalysedType::U32(TypeU32), AnalysedType::Str(TypeStr)],
+                        });
+                        round_trip_scala(
+                        Value::Tuple(vec![Value::U32(42), Value::String("hi".into())]),
+                        typ,
+                        );
+                        }
+
+                        #[test]
+                        fn scala_round_trip_flags() {
+                        let typ = AnalysedType::Flags(TypeFlags {
+                        name: Some("my-flags".to_string()),
+                        owner: None,
+                        names: vec!["flag-one".to_string(), "flag-two".to_string()],
+                        });
+                        round_trip_scala(Value::Flags(vec![true, false]), typ);
+                        }
+
+                        #[test]
+                        fn scala_round_trip_tuple1() {
+                        let typ = AnalysedType::Tuple(TypeTuple {
+                        name: None,
+                        owner: None,
+                        items: vec![AnalysedType::U32(TypeU32)],
+                        });
+                        round_trip_scala(Value::Tuple(vec![Value::U32(5)]), typ);
+                        }
+
+                        // Scala-specific parsing tests
+
+                        #[test]
+                        fn scala_option_none_parsed() {
+                        let typ = AnalysedType::Option(TypeOption {
+                        name: None,
+                        owner: None,
+                        inner: Box::new(AnalysedType::U32(TypeU32)),
+                        });
+                        let schema = cm_schema(typ.clone());
+                        let parsed = parse_agent_id_params("None", &schema, &SourceLanguage::Scala).unwrap();
+                        let expected = cm_value(Value::Option(None), typ);
+                        assert_eq!(parsed, expected);
+                        }
+
+                        #[test]
+                        fn scala_result_ok_parsed() {
+                        let typ = AnalysedType::Result(TypeResult {
+                        name: None,
+                        owner: None,
+                        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
+                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
+                        });
+                        let schema = cm_schema(typ.clone());
+                        let parsed = parse_agent_id_params("Ok(42)", &schema, &SourceLanguage::Scala).unwrap();
+                        let expected = cm_value(Value::Result(Ok(Some(Box::new(Value::U32(42))))), typ);
+                        assert_eq!(parsed, expected);
+                        }
+
+                        #[test]
+                        fn scala_result_err_parsed() {
+                        let typ = AnalysedType::Result(TypeResult {
+                        name: None,
+                        owner: None,
+                        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
+                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
+                        });
+                        let schema = cm_schema(typ.clone());
+                        let parsed =
+                        parse_agent_id_params(r#"Err("fail")"#, &schema, &SourceLanguage::Scala).unwrap();
+                        let expected = cm_value(
+                        Value::Result(Err(Some(Box::new(Value::String("fail".into()))))),
+                        typ,
+                        );
+                        assert_eq!(parsed, expected);
+                        }
+
+                        #[test]
+                        fn scala_result_qualified_ok() {
+                        let typ = AnalysedType::Result(TypeResult {
+                        name: None,
+                        owner: None,
+                        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
+                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
+                        });
+                        let schema = cm_schema(typ.clone());
+                        let parsed =
+                        parse_agent_id_params("WitResult.Ok(42)", &schema, &SourceLanguage::Scala).unwrap();
+                        let expected = cm_value(Value::Result(Ok(Some(Box::new(Value::U32(42))))), typ);
+                        assert_eq!(parsed, expected);
+                        }
+
+                        #[test]
+                        fn scala_variant_dot_syntax() {
+                        let typ = AnalysedType::Variant(TypeVariant {
+                        name: None,
+                        owner: None,
+                        cases: vec![
+                        NameOptionTypePair {
+                        name: "MyCase".to_string(),
+                        typ: Some(AnalysedType::U32(TypeU32)),
+                        },
+                        NameOptionTypePair {
+                        name: "OtherCase".to_string(),
+                        typ: None,
+                        },
+                        ],
+                        });
+                        let schema = cm_schema(typ.clone());
+                        let parsed = parse_agent_id_params("MyCase(5)", &schema, &SourceLanguage::Scala).unwrap();
+                        let expected = cm_value(
+                        Value::Variant {
+                        case_idx: 0,
+                        case_value: Some(Box::new(Value::U32(5))),
+                        },
+                        typ,
+                        );
+                        assert_eq!(parsed, expected);
+                        }
+
+                        #[test]
+                        fn scala_enum_dot_syntax() {
+                        let typ = AnalysedType::Enum(TypeEnum {
+                        name: Some("my-enum".to_string()),
+                        owner: None,
+                        cases: vec!["case-a".to_string(), "case-b".to_string()],
+                        });
+                        let schema = cm_schema(typ.clone());
+                        let parsed =
+                        parse_agent_id_params("MyEnum.CaseA", &schema, &SourceLanguage::Scala).unwrap();
+                        let expected = cm_value(Value::Enum(0), typ);
+                        assert_eq!(parsed, expected);
+                        }
+
+                        #[test]
+                        fn scala_list_syntax() {
+                        let typ = AnalysedType::List(TypeList {
+                        name: None,
+                        owner: None,
+                        inner: Box::new(AnalysedType::U32(TypeU32)),
+                        });
+                        let schema = cm_schema(typ.clone());
+                        let parsed =
+                        parse_agent_id_params("List(1, 2, 3)", &schema, &SourceLanguage::Scala).unwrap();
+                        let expected = cm_value(
+                        Value::List(vec![Value::U32(1), Value::U32(2), Value::U32(3)]),
+                        typ,
+                        );
+                        assert_eq!(parsed, expected);
+                        }
+
+                        #[test]
+                        fn scala_record_named_args() {
+                        let typ = AnalysedType::Record(TypeRecord {
+                        name: Some("my-record".to_string()),
+                        owner: None,
+                        fields: vec![
+                        NameTypePair {
+                        name: "field-one".to_string(),
+                        typ: AnalysedType::U32(TypeU32),
+                        },
+                        NameTypePair {
+                        name: "field-two".to_string(),
+                        typ: AnalysedType::Str(TypeStr),
+                        },
+                        ],
+                        });
+                        let schema = cm_schema(typ.clone());
+                        let parsed = parse_agent_id_params(
+                        r#"MyRecord(fieldOne = 1, fieldTwo = "hi")"#,
+                        &schema,
+                        &SourceLanguage::Scala,
+                        )
+                        .unwrap();
+                        let expected = cm_value(
+                        Value::Record(vec![Value::U32(1), Value::String("hi".into())]),
+                        typ,
+                        );
+                        assert_eq!(parsed, expected);
+                        }
+
+                        #[test]
+                        fn scala_language_specific_parsed_first() {
+                        let typ = AnalysedType::Option(TypeOption {
+                        name: None,
+                        owner: None,
+                        inner: Box::new(AnalysedType::U32(TypeU32)),
+                        });
+                        let schema = cm_schema(typ.clone());
+                        let parsed = parse_agent_id_params("Some(42)", &schema, &SourceLanguage::Scala).unwrap();
+                        let expected = cm_value(Value::Option(Some(Box::new(Value::U32(42)))), typ);
+                        assert_eq!(parsed, expected);
+                        }
+
+                        // Scala fallback & error tests
+
+                        #[test]
+                        fn canonical_fallback_for_scala_language() {
+                        let typ = AnalysedType::Option(TypeOption {
+                        name: None,
+                        owner: None,
+                        inner: Box::new(AnalysedType::U32(TypeU32)),
+                        });
+                        let schema = cm_schema(typ.clone());
+                        let parsed = parse_agent_id_params("s(42)", &schema, &SourceLanguage::Scala).unwrap();
+                        let expected = cm_value(Value::Option(Some(Box::new(Value::U32(42)))), typ);
+                        assert_eq!(parsed, expected);
+                        }
+
+                        #[test]
+                        fn combined_error_on_both_failures_scala() {
+                        let schema = cm_schema(AnalysedType::U32(TypeU32));
+                        let result =
+                        parse_agent_id_params("not_a_number_at_all!!!", &schema, &SourceLanguage::Scala);
+                        let err = result.unwrap_err();
+                        assert!(
+                        err.message.contains("Scala parser"),
+                        "error should mention Scala parser: {}",
+                        err.message
+                        );
+                        assert!(
+                        err.message.contains("Structural parser"),
+                        "error should mention Structural parser: {}",
+                        err.message
+                        );
+                        }
+
+                        // Scala multi-param test
+
+                        #[test]
+                        fn multi_param_scala_syntax() {
+                        let schema = DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![
+                        NamedElementSchema {
+                        name: "p1".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: AnalysedType::U32(TypeU32),
+                        }),
+                        },
+                        NamedElementSchema {
+                        name: "p2".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: AnalysedType::Option(TypeOption {
+                        name: None,
+                        owner: None,
+                        inner: Box::new(AnalysedType::Str(TypeStr)),
+                        }),
+                        }),
+                        },
+                        ],
+                        });
+                        let parsed =
+                        parse_agent_id_params(r#"42, Some("hello")"#, &schema, &SourceLanguage::Scala).unwrap();
+                        let expected = DataValue::Tuple(ElementValues {
+                        elements: vec![
+                        ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: ValueAndType::new(Value::U32(42), AnalysedType::U32(TypeU32)),
+                        }),
+                        ElementValue::ComponentModel(ComponentModelElementValue {
+                        value: ValueAndType::new(
+                        Value::Option(Some(Box::new(Value::String("hello".into())))),
+                        AnalysedType::Option(TypeOption {
+                        name: None,
+                        owner: None,
+                        inner: Box::new(AnalysedType::Str(TypeStr)),
+                        }),
+                        ),
+                        }),
+                        ],
+                        });
+                        assert_eq!(parsed, expected);
+                        }
+
+// Flags edge cases
+
+#[test]
+fn scala_round_trip_flags_all_false() {
+    let typ = AnalysedType::Flags(TypeFlags {
+        name: Some("my-flags".to_string()),
+        owner: None,
+        names: vec!["flag-one".to_string(), "flag-two".to_string()],
     });
-    assert_eq!(parsed, expected);
+    round_trip_scala(Value::Flags(vec![false, false]), typ);
+}
+
+#[test]
+fn scala_round_trip_flags_false_first() {
+    let typ = AnalysedType::Flags(TypeFlags {
+        name: Some("my-flags".to_string()),
+        owner: None,
+        names: vec!["flag-one".to_string(), "flag-two".to_string()],
+    });
+    round_trip_scala(Value::Flags(vec![false, true]), typ);
+}
+
+// Unstructured text/binary round-trips
+
+#[test]
+fn scala_round_trip_unstructured_text_url() {
+    use golem_common::model::agent::{
+        TextDescriptor, TextReference, UnstructuredTextElementValue, Url,
+    };
+    let schema = DataSchema::Tuple(NamedElementSchemas {
+        elements: vec![NamedElementSchema {
+            name: "text".to_string(),
+            schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+        }],
+    });
+    let data_value = DataValue::Tuple(ElementValues {
+        elements: vec![ElementValue::UnstructuredText(
+            UnstructuredTextElementValue {
+                value: TextReference::Url(Url {
+                    value: "https://example.com".into(),
+                }),
+                descriptor: TextDescriptor { restrictions: None },
+            },
+        )],
+    });
+    let rendered = render_data_value(&data_value, &SourceLanguage::Scala);
+    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala).unwrap();
+    assert_eq!(data_value, parsed);
+}
+
+#[test]
+fn scala_round_trip_unstructured_text_inline() {
+    use golem_common::model::agent::{
+        TextDescriptor, TextReference, TextSource, TextType, UnstructuredTextElementValue,
+    };
+    let schema = DataSchema::Tuple(NamedElementSchemas {
+        elements: vec![NamedElementSchema {
+            name: "text".to_string(),
+            schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+        }],
+    });
+    let data_value = DataValue::Tuple(ElementValues {
+        elements: vec![ElementValue::UnstructuredText(
+            UnstructuredTextElementValue {
+                value: TextReference::Inline(TextSource {
+                    data: "hello".into(),
+                    text_type: Some(TextType {
+                        language_code: "en".into(),
+                    }),
+                }),
+                descriptor: TextDescriptor { restrictions: None },
+            },
+        )],
+    });
+    let rendered = render_data_value(&data_value, &SourceLanguage::Scala);
+    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala).unwrap();
+    assert_eq!(data_value, parsed);
+}
+
+#[test]
+fn scala_round_trip_unstructured_text_inline_no_lang() {
+    use golem_common::model::agent::{
+        TextDescriptor, TextReference, TextSource, UnstructuredTextElementValue,
+    };
+    let schema = DataSchema::Tuple(NamedElementSchemas {
+        elements: vec![NamedElementSchema {
+            name: "text".to_string(),
+            schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions: None }),
+        }],
+    });
+    let data_value = DataValue::Tuple(ElementValues {
+        elements: vec![ElementValue::UnstructuredText(
+            UnstructuredTextElementValue {
+                value: TextReference::Inline(TextSource {
+                    data: "world".into(),
+                    text_type: None,
+                }),
+                descriptor: TextDescriptor { restrictions: None },
+            },
+        )],
+    });
+    let rendered = render_data_value(&data_value, &SourceLanguage::Scala);
+    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala).unwrap();
+    assert_eq!(data_value, parsed);
+}
+
+// Scala property-based round-trips
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 200, .. ProptestConfig::default()
+    })]
+
+    #[test]
+    fn proptest_scala_leaf_roundtrip((typ, val) in leaf_type_and_value()) {
+        let data = cm_data_for(val, typ.clone());
+        let schema = cm_schema_for(typ);
+        let rendered = render_data_value(&data, &SourceLanguage::Scala);
+        let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala)
+            .unwrap_or_else(|e| panic!("Scala parse failed for '{rendered}': {e}"));
+        prop_assert_eq!(data, parsed);
+    }
+
+    #[test]
+    fn proptest_scala_complex_roundtrip((typ, val) in arb_type_and_value()) {
+        let data = cm_data_for(val, typ.clone());
+        let schema = cm_schema_for(typ);
+        let rendered = render_data_value(&data, &SourceLanguage::Scala);
+        let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala)
+            .unwrap_or_else(|e| panic!("Scala parse failed for '{rendered}': {e}"));
+        prop_assert_eq!(data, parsed);
+    }
 }

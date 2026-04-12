@@ -233,7 +233,7 @@ fn render_agent_constructor_with_lang(
 fn render_param_name(name: &str, lang: &SourceLanguage) -> String {
     match lang {
         SourceLanguage::Rust => name.to_snake_case(),
-        SourceLanguage::TypeScript | SourceLanguage::Other(_) => name.to_lower_camel_case(),
+        SourceLanguage::TypeScript | SourceLanguage::Scala | SourceLanguage::Other(_) => name.to_lower_camel_case(),
     }
 }
 
