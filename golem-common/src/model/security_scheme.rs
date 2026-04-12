@@ -93,13 +93,13 @@ mod tests {
     #[test]
     fn provider_serialize_known() {
         let json = serde_json::to_value(Provider::Google(Empty {})).unwrap();
-        assert_eq!(json["type"], "google");
+        assert_eq!(json["type"], "Google");
         let json = serde_json::to_value(Provider::Facebook(Empty {})).unwrap();
-        assert_eq!(json["type"], "facebook");
+        assert_eq!(json["type"], "Facebook");
         let json = serde_json::to_value(Provider::Microsoft(Empty {})).unwrap();
-        assert_eq!(json["type"], "microsoft");
+        assert_eq!(json["type"], "Microsoft");
         let json = serde_json::to_value(Provider::Gitlab(Empty {})).unwrap();
-        assert_eq!(json["type"], "gitlab");
+        assert_eq!(json["type"], "Gitlab");
     }
 
     #[test]
@@ -109,7 +109,7 @@ mod tests {
             issuer_url: "https://keycloak.example.com/realms/myrealm".to_string(),
         });
         let json = serde_json::to_value(&provider).unwrap();
-        assert_eq!(json["type"], "custom");
+        assert_eq!(json["type"], "Custom");
         assert_eq!(json["name"], "my-keycloak");
         assert_eq!(
             json["issuerUrl"],
@@ -119,22 +119,22 @@ mod tests {
 
     #[test]
     fn provider_deserialize_known() {
-        let json = r#"{"type": "google"}"#;
+        let json = r#"{"type": "Google"}"#;
         assert_eq!(
             serde_json::from_str::<Provider>(json).unwrap(),
             Provider::Google(Empty {})
         );
-        let json = r#"{"type": "facebook"}"#;
+        let json = r#"{"type": "Facebook"}"#;
         assert_eq!(
             serde_json::from_str::<Provider>(json).unwrap(),
             Provider::Facebook(Empty {})
         );
-        let json = r#"{"type": "microsoft"}"#;
+        let json = r#"{"type": "Microsoft"}"#;
         assert_eq!(
             serde_json::from_str::<Provider>(json).unwrap(),
             Provider::Microsoft(Empty {})
         );
-        let json = r#"{"type": "gitlab"}"#;
+        let json = r#"{"type": "Gitlab"}"#;
         assert_eq!(
             serde_json::from_str::<Provider>(json).unwrap(),
             Provider::Gitlab(Empty {})
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn provider_deserialize_custom() {
-        let json = r#"{"type": "custom", "name": "my-keycloak", "issuerUrl": "https://keycloak.example.com/realms/myrealm"}"#;
+        let json = r#"{"type": "Custom", "name": "my-keycloak", "issuerUrl": "https://keycloak.example.com/realms/myrealm"}"#;
         let provider = serde_json::from_str::<Provider>(json).unwrap();
         assert_eq!(
             provider,
@@ -156,13 +156,13 @@ mod tests {
 
     #[test]
     fn provider_deserialize_custom_missing_name() {
-        let json = r#"{"type": "custom", "issuerUrl": "https://example.com"}"#;
+        let json = r#"{"type": "Custom", "issuerUrl": "https://example.com"}"#;
         assert!(serde_json::from_str::<Provider>(json).is_err());
     }
 
     #[test]
     fn provider_deserialize_custom_missing_issuer_url() {
-        let json = r#"{"type": "custom", "name": "foo"}"#;
+        let json = r#"{"type": "Custom", "name": "foo"}"#;
         assert!(serde_json::from_str::<Provider>(json).is_err());
     }
 
@@ -268,6 +268,35 @@ mod tests {
             .kind(),
             ProviderKind::Custom
         );
+    }
+
+    #[test]
+    fn provider_serialization_poem_serde_equivalence_known() {
+        use poem_openapi::types::ToJSON;
+
+        for provider in [
+            Provider::Google(Empty {}),
+            Provider::Facebook(Empty {}),
+            Provider::Microsoft(Empty {}),
+            Provider::Gitlab(Empty {}),
+        ] {
+            let serialized = provider.to_json_string();
+            let deserialized: Provider = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(provider, deserialized);
+        }
+    }
+
+    #[test]
+    fn provider_serialization_poem_serde_equivalence_custom() {
+        use poem_openapi::types::ToJSON;
+
+        let provider = Provider::Custom(CustomProvider {
+            name: "my-keycloak".to_string(),
+            issuer_url: "https://keycloak.example.com/realms/myrealm".to_string(),
+        });
+        let serialized = provider.to_json_string();
+        let deserialized: Provider = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(provider, deserialized);
     }
 
     #[test]
