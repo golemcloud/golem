@@ -21,7 +21,7 @@ use crate::service::worker::{WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::component::{ComponentFilePath, ComponentId, PluginPriority};
+use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
@@ -1136,8 +1136,8 @@ impl WorkerApi {
     }
 }
 
-fn make_component_file_path(name: String) -> Result<ComponentFilePath> {
-    ComponentFilePath::from_rel_str(&name).map_err(|error| {
+fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
+    CanonicalFilePath::from_rel_str(&name).map_err(|error| {
         ApiEndpointError::BadRequest(Json(ErrorsBody {
             errors: vec![format!("Invalid file name: {error}")],
             cause: None,

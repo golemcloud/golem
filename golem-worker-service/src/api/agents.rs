@@ -6,7 +6,7 @@ use golem_common::model::agent::{AgentTypeName, UntypedJsonDataValue};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::worker::WorkerAgentConfigEntry;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -148,7 +148,7 @@ pub struct CreateAgentRequest {
     pub phantom_id: Option<Uuid>,
     #[oai(default)]
     #[serde(default)]
-    pub agent_config: Vec<WorkerAgentConfigEntry>,
+    pub agent_config: Vec<AgentConfigEntryDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]

@@ -33,13 +33,13 @@ use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::component::{
-    ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
+    CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::WorkerAgentConfigEntry;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
@@ -64,7 +64,7 @@ pub trait WorkerClient: Send + Sync {
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
@@ -164,7 +164,7 @@ pub trait WorkerClient: Send + Sync {
     async fn get_file_system_node(
         &self,
         agent_id: &AgentId,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
@@ -173,7 +173,7 @@ pub trait WorkerClient: Send + Sync {
     async fn get_file_contents(
         &self,
         agent_id: &AgentId,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
@@ -404,7 +404,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
@@ -427,7 +427,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         agent_config: agent_config
                             .clone()
                             .into_iter()
-                            .map(golem_api_grpc::proto::golem::worker::AgentConfigEntry::from)
+                            .map(golem_api_grpc::proto::golem::worker::AgentConfigEntryDto::from)
                             .collect(),
                         component_owner_account_id: Some(account_id_clone.into()),
                         environment_id: Some(environment_id.into()),
@@ -914,7 +914,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn get_file_system_node(
         &self,
         agent_id: &AgentId,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
@@ -977,7 +977,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn get_file_contents(
         &self,
         agent_id: &AgentId,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,

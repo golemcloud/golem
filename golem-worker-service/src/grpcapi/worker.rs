@@ -30,7 +30,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::WorkerAgentConfigEntry;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::proto_agent_id_string;
@@ -298,7 +298,7 @@ impl WorkerGrpcApi {
         let agent_config = request
             .agent_config
             .into_iter()
-            .map(WorkerAgentConfigEntry::try_from)
+            .map(AgentConfigEntryDto::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| bad_request_error(format!("failed converting agent_config: {e}")))?;
 

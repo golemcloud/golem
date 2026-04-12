@@ -19,7 +19,7 @@ use crate::service::worker::CallWorkerExecutorError;
 use golem_common::SafeDisplay;
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::{ComponentFilePath, ComponentId};
+use golem_common::model::component::{CanonicalFilePath, ComponentId};
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
@@ -46,9 +46,9 @@ pub enum WorkerServiceError {
     #[error("Internal error: {0}")]
     Internal(String),
     #[error("File not found: {0}")]
-    FileNotFound(ComponentFilePath),
+    FileNotFound(CanonicalFilePath),
     #[error("Bad file type: {0}")]
-    BadFileType(ComponentFilePath),
+    BadFileType(CanonicalFilePath),
     #[error(transparent)]
     RegistryServiceError(#[from] RegistryServiceError),
 }

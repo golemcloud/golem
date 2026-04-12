@@ -30,14 +30,14 @@ use golem_common::model::agent::{
     DataValue, GolemUserPrincipal, ParsedAgentId, Principal, UntypedDataValue,
 };
 use golem_common::model::component::{
-    ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
+    CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::WorkerAgentConfigEntry;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
@@ -77,7 +77,7 @@ impl WorkerService {
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
@@ -109,7 +109,7 @@ impl WorkerService {
         component: Component,
         environment_variables: HashMap<String, String>,
         config_vars: BTreeMap<String, String>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
@@ -486,7 +486,7 @@ impl WorkerService {
     pub async fn get_file_system_node(
         &self,
         agent_id: &AgentId,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
         let component = self
@@ -520,7 +520,7 @@ impl WorkerService {
     pub async fn get_file_contents(
         &self,
         agent_id: &AgentId,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
         let component = self
