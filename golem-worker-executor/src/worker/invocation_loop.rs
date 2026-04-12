@@ -507,8 +507,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         // agents get a chance to run. The worker will self-wake
                         // and re-acquire its permit through the FIFO queue if
                         // more durable work remains.
-                        let status =
-                            self.parent.get_non_detached_last_known_status().await;
+                        let status = self.parent.get_non_detached_last_known_status().await;
                         if !status.pending_invocations.is_empty() {
                             // More durable work remains — self-wake so we return
                             // to the outer loop, release the permit (entering

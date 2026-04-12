@@ -470,9 +470,7 @@ async fn eviction_prefers_idle_workers_over_warm_runnable(
 
     // Worker A: invoke and let it complete → LoadedIdle
     let agent_a = agent_id!("LargeInitialMemoryAgent", "eviction-idle-a");
-    let worker_a = executor
-        .start_agent(&component.id, agent_a.clone())
-        .await?;
+    let worker_a = executor.start_agent(&component.id, agent_a.clone()).await?;
     let result_a = executor
         .invoke_and_await_agent(&component, &agent_a, "run", data_value!())
         .await?;
@@ -488,9 +486,7 @@ async fn eviction_prefers_idle_workers_over_warm_runnable(
     // Worker B: invoke and let it complete, then fire-and-forget another invoke
     // → WarmRunnable (has durable pending invocation)
     let agent_b = agent_id!("LargeInitialMemoryAgent", "eviction-warm-b");
-    let worker_b = executor
-        .start_agent(&component.id, agent_b.clone())
-        .await?;
+    let worker_b = executor.start_agent(&component.id, agent_b.clone()).await?;
     let result_b = executor
         .invoke_and_await_agent(&component, &agent_b, "run", data_value!())
         .await?;
@@ -516,9 +512,7 @@ async fn eviction_prefers_idle_workers_over_warm_runnable(
     // memory pool is too small for all three. Under the new eviction policy,
     // Worker A (LoadedIdle) should be evicted before Worker B (WarmRunnable).
     let agent_c = agent_id!("LargeInitialMemoryAgent", "eviction-new-c");
-    let _worker_c = executor
-        .start_agent(&component.id, agent_c.clone())
-        .await?;
+    let _worker_c = executor.start_agent(&component.id, agent_c.clone()).await?;
     let result_c = executor
         .invoke_and_await_agent(&component, &agent_c, "run", data_value!())
         .await?;

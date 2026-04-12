@@ -14,9 +14,9 @@
 
 use super::concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
 use crate::services::resource_limits::AtomicResourceEntry;
-use golem_common::model::account::AccountId;
 use golem_common::model::AgentId;
-use std::collections::{HashSet, VecDeque};
+use golem_common::model::account::AccountId;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::OwnedSemaphorePermit;
 use tracing::debug;
@@ -27,8 +27,7 @@ use tracing::debug;
 /// 1. Workers within an account are scheduled in FIFO order.
 /// 2. A worker that finishes and re-requests a slot goes to the back of the
 ///    queue.
-/// 3. De-duplication prevents the same agent from being queued twice.
-/// 4. Dropping the [`ConcurrentAgentPermit`] notifies the scheduler to wake the
+/// 3. Dropping the [`ConcurrentAgentPermit`] notifies the scheduler to wake the
 ///    next queued agent — fully synchronously, no spawned tasks.
 pub struct ConcurrentAgentsScheduler {
     permits: Arc<ConcurrentAgentsSemaphore>,
@@ -45,7 +44,6 @@ struct AccountScheduler {
 struct AccountSchedulerState {
     running_count: usize,
     ready_queue: VecDeque<QueuedAgent>,
-    ready_set: HashSet<AgentId>,
 }
 
 struct QueuedAgent {
@@ -132,7 +130,6 @@ impl ConcurrentAgentsScheduler {
                     state: std::sync::Mutex::new(AccountSchedulerState {
                         running_count: 0,
                         ready_queue: VecDeque::new(),
-                        ready_set: HashSet::new(),
                     }),
                 })
             });
@@ -145,8 +142,8 @@ impl ConcurrentAgentsScheduler {
     /// entirely and acquires directly from the underlying semaphore.
     ///
     /// Otherwise:
-    /// - If `running_count < limit` and no older waiters exist, acquires
-    ///   directly (fast path).
+    /// - If `running_count < limit`, no older waiters exist, and a raw
+    ///   semaphore permit is available, acquires directly (fast path).
     /// - Otherwise, enqueues the agent and awaits a permit from the scheduler.
     pub async fn acquire(
         self: &Arc<Self>,
@@ -158,10 +155,26 @@ impl ConcurrentAgentsScheduler {
 
         // Unlimited accounts bypass the queue entirely.
         if is_unlimited(limit) {
-            let raw = self
-                .permits
-                .acquire(account_id, || async { false })
-                .await;
+            let raw = self.permits.acquire(account_id, || async { false }).await;
+            return ConcurrentAgentPermit {
+                raw: Some(raw),
+                account: None,
+                account_id,
+            };
+        }
+
+        // Sync the underlying semaphore pool size with the current plan limit
+        // so that plan upgrades/downgrades take effect immediately. This must
+        // happen before the fast-path check to ensure the raw semaphore has the
+        // correct number of permits.
+        self.permits
+            .sync_semaphore_limit(&account_id, &account.raw_semaphore)
+            .await;
+
+        // Re-read the limit after sync (may have changed).
+        let limit = account.resource_entry.max_concurrent_agents_per_executor();
+        if is_unlimited(limit) {
+            let raw = self.permits.acquire(account_id, || async { false }).await;
             return ConcurrentAgentPermit {
                 raw: Some(raw),
                 account: None,
@@ -170,23 +183,45 @@ impl ConcurrentAgentsScheduler {
         }
 
         enum AcquireDecision {
-            FastPath,
+            FastPath(OwnedSemaphorePermit),
             Queued(tokio::sync::oneshot::Receiver<OwnedSemaphorePermit>),
         }
 
         let decision = {
             let mut state = account.state.lock().unwrap();
 
-            // Fast path: capacity available and no older waiters.
+            // Read the limit inside the lock to avoid TOCTOU races with
+            // concurrent plan changes.
+            let limit = account.resource_entry.max_concurrent_agents_per_executor();
+
+            // After a plan upgrade, newly added semaphore permits may allow
+            // queued agents to proceed. Drain what we can before deciding
+            // about the current agent.
+            drain_ready_queue(&mut state, &account.raw_semaphore, limit, &account_id);
+
+            // Fast path: capacity available, no older waiters, and the raw
+            // semaphore actually has a permit. We try-acquire the semaphore
+            // synchronously here so that `running_count` is only incremented
+            // when we have a real permit — avoiding drift between the two.
             if state.running_count < limit as usize && state.ready_queue.is_empty() {
-                state.running_count += 1;
-                AcquireDecision::FastPath
+                match account.raw_semaphore.clone().try_acquire_owned() {
+                    Ok(raw) => {
+                        state.running_count += 1;
+                        AcquireDecision::FastPath(raw)
+                    }
+                    Err(_) => {
+                        // Semaphore disagrees (e.g. plan downgrade trimmed
+                        // permits). Fall through to the slow path.
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        state.ready_queue.push_back(QueuedAgent {
+                            agent_id: agent_id.clone(),
+                            waker: tx,
+                        });
+                        AcquireDecision::Queued(rx)
+                    }
+                }
             } else {
                 // Slow path: enqueue and wait.
-                if !state.ready_set.contains(&agent_id) {
-                    state.ready_set.insert(agent_id.clone());
-                }
-
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 state.ready_queue.push_back(QueuedAgent {
                     agent_id: agent_id.clone(),
@@ -199,21 +234,16 @@ impl ConcurrentAgentsScheduler {
         };
 
         match decision {
-            AcquireDecision::FastPath => {
-                let raw = self
-                    .permits
-                    .acquire(account_id, || async { false })
-                    .await;
-
+            AcquireDecision::FastPath(raw) => {
                 debug!(
                     "ConcurrentAgentsScheduler: fast-path permit for {agent_id} in account {account_id}"
                 );
 
-                return ConcurrentAgentPermit {
+                ConcurrentAgentPermit {
                     raw: Some(raw),
                     account: Some(account),
                     account_id,
-                };
+                }
             }
             AcquireDecision::Queued(rx) => {
                 debug!(
@@ -235,11 +265,7 @@ impl ConcurrentAgentsScheduler {
 
     async fn get_or_create_account(&self, account_id: &AccountId) -> Arc<AccountScheduler> {
         // Fast path: account already registered.
-        if let Some(account) = self
-            .accounts
-            .read_async(account_id, |_, v| v.clone())
-            .await
-        {
+        if let Some(account) = self.accounts.read_async(account_id, |_, v| v.clone()).await {
             return account;
         }
 
@@ -264,7 +290,6 @@ impl ConcurrentAgentsScheduler {
                     state: std::sync::Mutex::new(AccountSchedulerState {
                         running_count: 0,
                         ready_queue: VecDeque::new(),
-                        ready_set: HashSet::new(),
                     }),
                 })
             })
@@ -306,12 +331,25 @@ fn try_grant_next_sync(account: &AccountScheduler, account_id: &AccountId) {
     let mut state = account.state.lock().unwrap();
     state.running_count = state.running_count.saturating_sub(1);
 
+    drain_ready_queue(&mut state, &account.raw_semaphore, limit, account_id);
+}
+
+/// Try to grant permits to queued agents from the front of the ready queue.
+///
+/// Called both from `try_grant_next_sync` (Drop path) and from `acquire`
+/// (after a plan-upgrade sync adds new permits). Fully synchronous — only
+/// uses `try_acquire_owned` which does not block.
+fn drain_ready_queue(
+    state: &mut AccountSchedulerState,
+    raw_semaphore: &Arc<tokio::sync::Semaphore>,
+    limit: u64,
+    account_id: &AccountId,
+) {
     while !state.ready_queue.is_empty() && state.running_count < limit as usize {
         let queued = state.ready_queue.pop_front().unwrap();
-        state.ready_set.remove(&queued.agent_id);
 
         // tokio::sync::Semaphore::try_acquire_owned is synchronous.
-        match account.raw_semaphore.clone().try_acquire_owned() {
+        match raw_semaphore.clone().try_acquire_owned() {
             Ok(raw) => {
                 state.running_count += 1;
                 if queued.waker.send(raw).is_err() {
@@ -332,7 +370,6 @@ fn try_grant_next_sync(account: &AccountScheduler, account_id: &AccountId) {
             }
             Err(_) => {
                 // Semaphore exhausted — re-enqueue at front and stop.
-                state.ready_set.insert(queued.agent_id.clone());
                 state.ready_queue.push_front(queued);
                 break;
             }

@@ -235,7 +235,11 @@ impl ConcurrentAgentsSemaphore {
     ///
     /// If the limit is at or above the unlimited sentinel the semaphore is not
     /// touched.
-    async fn sync_semaphore_limit(&self, account_id: &AccountId, semaphore: &Arc<Semaphore>) {
+    pub(crate) async fn sync_semaphore_limit(
+        &self,
+        account_id: &AccountId,
+        semaphore: &Arc<Semaphore>,
+    ) {
         // Step 1: atomically compute and record any pool growth required for the
         // current plan. This avoids races where multiple concurrent acquires can
         // observe the same old limit and all call add_permits(delta).
@@ -337,17 +341,6 @@ impl ConcurrentAgentsSemaphore {
     pub(crate) async fn raw_semaphore(&self, account_id: &AccountId) -> Option<Arc<Semaphore>> {
         self.accounts
             .read_async(account_id, |_, e| e.semaphore.clone())
-            .await
-    }
-
-    /// Returns the current per-executor concurrent agent limit for an account,
-    /// as read from the account's [`AtomicResourceEntry`].
-    #[cfg(test)]
-    pub(crate) async fn current_limit(&self, account_id: &AccountId) -> Option<u64> {
-        self.accounts
-            .read_async(account_id, |_, e| {
-                e.resource_entry.max_concurrent_agents_per_executor()
-            })
             .await
     }
 

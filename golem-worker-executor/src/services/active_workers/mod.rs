@@ -245,11 +245,9 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             }
 
             // Sort each bucket by timestamp — newest first so we pop oldest
-            idle_candidates
-                .sort_by_key(|(_, _, _, ts)| ts.to_millis());
+            idle_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
             idle_candidates.reverse();
-            warm_candidates
-                .sort_by_key(|(_, _, _, ts)| ts.to_millis());
+            warm_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
             warm_candidates.reverse();
 
             let mut freed = 0u64;
@@ -353,9 +351,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         account_id: AccountId,
         agent_id: AgentId,
     ) -> ConcurrentAgentPermit {
-        self.concurrent_agents
-            .acquire(account_id, agent_id)
-            .await
+        self.concurrent_agents.acquire(account_id, agent_id).await
     }
 
     async fn try_free_up_filesystem_storage(
