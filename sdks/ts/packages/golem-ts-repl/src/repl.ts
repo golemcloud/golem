@@ -29,10 +29,7 @@ import { AsyncCompleter } from 'readline';
 import { PassThrough } from 'node:stream';
 import { ts } from 'ts-morph';
 import { flushStdIO, setOutput, writeln } from './process';
-import {
-  initTestSyncEventsFromEnv,
-  writeTestSyncEvent,
-} from './test-sync-events';
+import { initTestSyncEventsFromEnv, writeTestSyncEvent } from './test-sync-events';
 import { formatAsTable, formatEvalError, logSnippetInfo } from './format';
 import type * as base from '@golemcloud/golem-ts-bridge';
 import type {
@@ -205,10 +202,7 @@ export class Repl {
     const languageService = this.getLanguageService();
     const cli = this.cli;
     const customCompleter: AsyncCompleter = function (line, callback) {
-      const callbackWithSync = (
-        err?: Error | null,
-        result?: [string[], string],
-      ): void => {
+      const callbackWithSync = (err?: Error | null, result?: [string[], string]): void => {
         writeTestSyncEvent('completion_done');
         callback(err, result);
       };
