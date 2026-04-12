@@ -70,7 +70,7 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     /// (set to `None`) when the agent goes idle, re-acquired when it wakes up.
     /// Only actively running agents hold a permit. Dropped automatically when
     /// the task is aborted (e.g. `RunningWorker::stop()`).
-    pub concurrent_agent_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    pub concurrent_agent_permit: Option<crate::services::active_workers::ConcurrentAgentPermit>,
     /// `ResumeReplay` is not represented in the internal queue, so we track it
     /// explicitly to avoid evicting a worker that is blocked waking up for it.
     pub resume_replay_pending: Arc<AtomicBool>,
@@ -297,7 +297,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     /// Mutable reference to the concurrent-agent permit held by the outer
     /// `InvocationLoop`. Set to `None` when entering idle (releasing the
     /// permit back to the semaphore pool) and re-acquired on wake.
-    concurrent_agent_permit: &'a mut Option<tokio::sync::OwnedSemaphorePermit>,
+    concurrent_agent_permit: &'a mut Option<crate::services::active_workers::ConcurrentAgentPermit>,
     resume_replay_pending: Arc<AtomicBool>,
 }
 
@@ -401,16 +401,19 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
     }
 
-    /// Re-acquire the concurrent-agent permit from the semaphore.
+    /// Re-acquire the concurrent-agent permit from the scheduler.
     /// Called when the agent wakes from idle to process a command.
+    /// The scheduler ensures FIFO ordering within the account so that a worker
+    /// that just finished goes to the back of the queue.
     async fn acquire_concurrent_agent_permit(&mut self) {
         if self.concurrent_agent_permit.is_none() {
             let account_id = self.parent.get_initial_worker_metadata().created_by;
+            let agent_id = self.owned_agent_id.agent_id();
             debug!("Re-acquiring concurrent-agent permit (waking from idle)");
             let permit = self
                 .parent
                 .active_workers()
-                .acquire_concurrent_agent(account_id)
+                .acquire_concurrent_agent(account_id, agent_id)
                 .await;
             *self.concurrent_agent_permit = Some(permit);
         }
@@ -498,6 +501,19 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     CommandOutcome::Continue => {
                         if self.on_external_invocation_completed().await {
                             break CommandOutcome::Continue;
+                        }
+                        // Fairness: after completing one external durable
+                        // invocation, yield to the scheduler so other same-account
+                        // agents get a chance to run. The worker will self-wake
+                        // and re-acquire its permit through the FIFO queue if
+                        // more durable work remains.
+                        let status =
+                            self.parent.get_non_detached_last_known_status().await;
+                        if !status.pending_invocations.is_empty() {
+                            // More durable work remains — self-wake so we return
+                            // to the outer loop, release the permit (entering
+                            // idle), and re-enter through the scheduler queue.
+                            break CommandOutcome::WaitForWakeup;
                         }
                         continue;
                     }

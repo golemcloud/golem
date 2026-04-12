@@ -332,9 +332,27 @@ impl ConcurrentAgentsSemaphore {
             .await
     }
 
+    /// Returns the inner tokio semaphore Arc for an account.
+    /// Used by the scheduler to perform synchronous try-acquire in Drop paths.
+    pub(crate) async fn raw_semaphore(&self, account_id: &AccountId) -> Option<Arc<Semaphore>> {
+        self.accounts
+            .read_async(account_id, |_, e| e.semaphore.clone())
+            .await
+    }
+
+    /// Returns the current per-executor concurrent agent limit for an account,
+    /// as read from the account's [`AtomicResourceEntry`].
+    #[cfg(test)]
+    pub(crate) async fn current_limit(&self, account_id: &AccountId) -> Option<u64> {
+        self.accounts
+            .read_async(account_id, |_, e| {
+                e.resource_entry.max_concurrent_agents_per_executor()
+            })
+            .await
+    }
+
     /// Non-blocking single attempt: returns `Some(permit)` if one is available
     /// right now, `None` otherwise. Does not call `try_free_up` or wait.
-    /// Intended for tests that need to assert exhaustion without blocking.
     #[cfg(test)]
     pub(crate) async fn try_acquire_now(
         &self,

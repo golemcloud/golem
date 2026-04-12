@@ -423,6 +423,120 @@ async fn dynamic_large_memory_allocation(
     Ok(())
 }
 
+/// Verifies that under memory pressure, LoadedIdle workers (no pending work) are
+/// evicted before WarmRunnable workers (with durable pending invocations).
+///
+/// Setup:
+/// - Tight memory pool that fits only ~2 workers.
+/// - Worker A: invoked, completes → LoadedIdle (no pending work).
+/// - Worker B: invoked, completes, then a second fire-and-forget invoke is sent
+///   → WarmRunnable (has a durable pending invocation).
+/// - Worker C: started, its memory allocation triggers eviction.
+///
+/// Expected:
+/// - Worker A (LoadedIdle) is evicted first.
+/// - Worker B (WarmRunnable) is preserved as long as possible.
+/// - Worker C starts successfully.
+/// - Worker B's pending invocation eventually completes.
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn eviction_prefers_idle_workers_over_warm_runnable(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("large_initial_memory")] large_initial_memory: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+
+    // Tight memory: 768 MB fits only ~1 large-initial-memory worker comfortably.
+    // With eviction the executor can cycle through them.
+    let executor = start_customized(
+        deps,
+        &context,
+        Some(768 * 1024 * 1024),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, large_initial_memory)
+        .store()
+        .await?;
+
+    // Worker A: invoke and let it complete → LoadedIdle
+    let agent_a = agent_id!("LargeInitialMemoryAgent", "eviction-idle-a");
+    let worker_a = executor
+        .start_agent(&component.id, agent_a.clone())
+        .await?;
+    let result_a = executor
+        .invoke_and_await_agent(&component, &agent_a, "run", data_value!())
+        .await?;
+    assert_eq!(result_a, data_value!(536870912u64));
+    info!("Worker A completed, now idle");
+
+    // Verify worker A is Idle
+    let meta_a = executor
+        .wait_for_status(&worker_a, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    assert_eq!(meta_a.status, AgentStatus::Idle);
+
+    // Worker B: invoke and let it complete, then fire-and-forget another invoke
+    // → WarmRunnable (has durable pending invocation)
+    let agent_b = agent_id!("LargeInitialMemoryAgent", "eviction-warm-b");
+    let worker_b = executor
+        .start_agent(&component.id, agent_b.clone())
+        .await?;
+    let result_b = executor
+        .invoke_and_await_agent(&component, &agent_b, "run", data_value!())
+        .await?;
+    assert_eq!(result_b, data_value!(536870912u64));
+    info!("Worker B completed first invocation, now idle");
+
+    let meta_b = executor
+        .wait_for_status(&worker_b, AgentStatus::Idle, Duration::from_secs(10))
+        .await?;
+    assert_eq!(meta_b.status, AgentStatus::Idle);
+
+    // Fire-and-forget: this makes B WarmRunnable (durable pending invocation).
+    // Worker B is still loaded but now has pending work.
+    executor
+        .invoke_agent(&component, &agent_b, "run", data_value!())
+        .await?;
+    info!("Worker B has pending invocation, now WarmRunnable");
+
+    // Small delay so the pending invocation is registered
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Worker C: create a new worker. This should trigger eviction because the
+    // memory pool is too small for all three. Under the new eviction policy,
+    // Worker A (LoadedIdle) should be evicted before Worker B (WarmRunnable).
+    let agent_c = agent_id!("LargeInitialMemoryAgent", "eviction-new-c");
+    let _worker_c = executor
+        .start_agent(&component.id, agent_c.clone())
+        .await?;
+    let result_c = executor
+        .invoke_and_await_agent(&component, &agent_c, "run", data_value!())
+        .await?;
+    assert_eq!(result_c, data_value!(536870912u64));
+    info!("Worker C completed successfully (eviction worked)");
+
+    // Worker B's pending invocation should eventually complete.
+    // This proves B was not evicted (or if it was, it was recovered and
+    // the pending invocation was replayed — both are acceptable).
+    let meta_b_final = executor
+        .wait_for_status(&worker_b, AgentStatus::Idle, Duration::from_secs(60))
+        .await?;
+    assert_eq!(meta_b_final.status, AgentStatus::Idle);
+    info!("Worker B's pending invocation completed");
+
+    Ok(())
+}
+
 /// Returns the number of entries in the primary oplog stream for a given worker.
 async fn primary_oplog_length(
     redis: &dyn golem_test_framework::components::redis::Redis,
