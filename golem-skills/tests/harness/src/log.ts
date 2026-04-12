@@ -293,6 +293,13 @@ export function stepAction(label: string, description: string): void {
   stepLine(label, formatStepAction(description));
 }
 
+export function stepOutput(label: string, stream: "stdout" | "stderr", text: string): void {
+  const prefix = stream === "stderr" ? chalk.red("err│") : chalk.gray("out│");
+  for (const line of text.split(/\r?\n/)) {
+    stepLine(label, `${prefix} ${line}`);
+  }
+}
+
 export function stepPrompt(
   label: string,
   prompt: string,

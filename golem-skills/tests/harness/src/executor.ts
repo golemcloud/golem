@@ -259,9 +259,17 @@ interface StepCommon {
   retry?: { attempts: number; delay: number };
 }
 
-type InvokeSpec = { agent: string; method: LangConditional<string>; args?: LangConditional<string> };
+type InvokeSpec = {
+  agent: string;
+  method: LangConditional<string>;
+  args?: LangConditional<string>;
+};
 type ShellSpec = { command: string; args?: string[]; cwd?: string };
-type TriggerSpec = { agent: string; method: LangConditional<string>; args?: LangConditional<string> };
+type TriggerSpec = {
+  agent: string;
+  method: LangConditional<string>;
+  args?: LangConditional<string>;
+};
 type ResolvedInvokeSpec = { agent: string; method: string; args?: string };
 type ResolvedTriggerSpec = { agent: string; method: string; args?: string };
 type CreateAgentSpec = {
@@ -514,8 +522,9 @@ export class ScenarioExecutor {
         : Object.fromEntries(
             Object.entries(v).map(([k, s]) => [k, substituteVariables(s, variables)]),
           );
-    const subLangStrOpt = (v: LangConditional<string> | undefined): LangConditional<string> | undefined =>
-      v === undefined ? undefined : subLangStr(v);
+    const subLangStrOpt = (
+      v: LangConditional<string> | undefined,
+    ): LangConditional<string> | undefined => (v === undefined ? undefined : subLangStr(v));
 
     switch (step.tag) {
       case "prompt":
@@ -1132,7 +1141,8 @@ export class ScenarioExecutor {
     commandEnv: Record<string, string>,
     fail: (msg: string) => void,
   ): Promise<void> {
-    log.stepAction(stepLabel, `running shell command "${shell.command}"`);
+    const fullCommand = [shell.command, ...(shell.args ?? [])].join(" ");
+    log.stepAction(stepLabel, `running shell command: ${fullCommand}`);
     const shellCwd = shell.cwd ? path.resolve(this.workspace, shell.cwd) : this.workspace;
     const result = await this.runLocalCommand(
       shell.command,
@@ -1140,7 +1150,10 @@ export class ScenarioExecutor {
       timeout,
       shellCwd,
       commandEnv,
+      (stream, data) => log.stepOutput(stepLabel, stream, data),
     );
+
+    log.stepAction(stepLabel, `exit code: ${result.exitCode}`);
 
     if (expect) {
       this.evaluateAssertions(
@@ -1530,6 +1543,7 @@ export class ScenarioExecutor {
     timeoutSeconds: number,
     cwd: string,
     extraEnv?: Record<string, string>,
+    onOutput?: (stream: "stdout" | "stderr", data: string) => void,
   ): Promise<LocalCommandResult> {
     return new Promise((resolve) => {
       const child = spawn(command, args, {
@@ -1542,8 +1556,16 @@ export class ScenarioExecutor {
       let stdout = "";
       let stderr = "";
       let timedOut = false;
-      child.stdout?.on("data", (data) => (stdout += data.toString()));
-      child.stderr?.on("data", (data) => (stderr += data.toString()));
+      child.stdout?.on("data", (chunk) => {
+        const text = chunk.toString();
+        stdout += text;
+        onOutput?.("stdout", text);
+      });
+      child.stderr?.on("data", (chunk) => {
+        const text = chunk.toString();
+        stderr += text;
+        onOutput?.("stderr", text);
+      });
 
       const timeoutId = setTimeout(() => {
         timedOut = true;
