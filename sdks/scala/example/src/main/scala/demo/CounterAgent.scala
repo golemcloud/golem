@@ -5,7 +5,7 @@ import golem.BaseAgent
 
 import scala.concurrent.Future
 
-@agentDefinition()
+@agentDefinition(mount = "/counters/{value}")
 trait CounterAgent extends BaseAgent {
 
   class Id(val value: String)
@@ -34,4 +34,3 @@ final case class Example1Impl(name: String, count: Int) extends Example1 {
     }
   }
 }
-
