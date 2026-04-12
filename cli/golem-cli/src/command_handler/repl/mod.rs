@@ -285,6 +285,15 @@ impl ReplHandler {
             }
         }
 
+        if let Ok(test_sync_events_file) = std::env::var("GOLEM_TS_REPL_TEST_SYNC_EVENTS_FILE")
+            && !test_sync_events_file.trim().is_empty()
+        {
+            env_vars.insert(
+                "GOLEM_TS_REPL_TEST_SYNC_EVENTS_FILE".to_string(),
+                test_sync_events_file,
+            );
+        }
+
         Ok(env_vars)
     }
 }
