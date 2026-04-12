@@ -1,11 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { generateHtmlReport, escapeHtml } from "../src/html-report.js";
-import type {
-  Summary,
-  MergedSummary,
-  HtmlScenarioReport,
-} from "../src/html-report.js";
+import type { Summary, MergedSummary, HtmlScenarioReport } from "../src/html-report.js";
 import type { StepSpec } from "../src/executor.js";
 
 function makePromptStep(id: string, prompt: string): StepSpec {

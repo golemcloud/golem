@@ -49,9 +49,7 @@ export function escapeHtml(str: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function isMergedSummary(
-  summary: Summary | MergedSummary,
-): summary is MergedSummary {
+function isMergedSummary(summary: Summary | MergedSummary): summary is MergedSummary {
   return "heatMap" in summary;
 }
 
@@ -124,13 +122,16 @@ function generateScenarioDetails(reports: ScenarioReport[]): string {
 
       const steps = report.results
         .map((r, i) => {
-          const stepName = escapeHtml(
-            r.step.id ?? (r.step.tag === "prompt" ? r.step.prompt as string : undefined) ?? `step-${i + 1}`,
-          );
+          const rawPrompt = r.step.tag === "prompt" ? r.step.prompt : undefined;
+          const promptStr =
+            rawPrompt == null
+              ? undefined
+              : typeof rawPrompt === "string"
+                ? rawPrompt
+                : JSON.stringify(rawPrompt);
+          const stepName = escapeHtml(r.step.id ?? promptStr ?? `step-${i + 1}`);
           const sClass = r.success ? "pass" : "fail";
-          const errorBlock = r.error
-            ? `<pre class="error">${escapeHtml(r.error)}</pre>`
-            : "";
+          const errorBlock = r.error ? `<pre class="error">${escapeHtml(r.error)}</pre>` : "";
           const classificationBlock = r.classification
             ? `<div class="classification"><span class="badge ${r.classification.category}">${escapeHtml(r.classification.category)}</span> ${escapeHtml(r.classification.guidance)}</div>`
             : "";
@@ -178,9 +179,7 @@ function generateFailureSummary(reports: ScenarioReport[]): string {
       const failedStep = r.results.find((s) => !s.success);
       const error = failedStep?.error ?? "unknown";
       const guidance = failedStep?.classification?.guidance;
-      const guidanceBlock = guidance
-        ? `<br/><em>${escapeHtml(guidance)}</em>`
-        : "";
+      const guidanceBlock = guidance ? `<br/><em>${escapeHtml(guidance)}</em>` : "";
       return `<li><strong>${escapeHtml(r.scenario)}</strong>: ${escapeHtml(error)}${guidanceBlock}</li>`;
     })
     .join("\n");
@@ -243,9 +242,7 @@ export function generateHtmlReport(
   scenarioReports: ScenarioReport[],
 ): string {
   const title = isMergedSummary(summary) ? "Merged Test Report" : "Test Report";
-  const matrixSection = isMergedSummary(summary)
-    ? generateMatrixTable(summary)
-    : "";
+  const matrixSection = isMergedSummary(summary) ? generateMatrixTable(summary) : "";
 
   return `<!DOCTYPE html>
 <html lang="en">

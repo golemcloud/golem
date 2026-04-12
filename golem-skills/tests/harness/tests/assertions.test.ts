@@ -1,14 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import {
-  evaluate,
-  type AssertionContext,
-  type ExpectSpec,
-} from "../src/assertions.js";
+import { evaluate, type AssertionContext, type ExpectSpec } from "../src/assertions.js";
 
-function makeContext(
-  overrides: Partial<AssertionContext> = {},
-): AssertionContext {
+function makeContext(overrides: Partial<AssertionContext> = {}): AssertionContext {
   return {
     stdout: "",
     stderr: "",
@@ -131,10 +125,9 @@ describe("Assertion Engine", () => {
 
   describe("result_json", () => {
     it("passes when json path equals expected value", () => {
-      const results = evaluate(
-        makeContext({ resultJson: { name: "test", version: 1 } }),
-        { result_json: [{ path: "$.name", equals: "test" }] },
-      );
+      const results = evaluate(makeContext({ resultJson: { name: "test", version: 1 } }), {
+        result_json: [{ path: "$.name", equals: "test" }],
+      });
       assert.equal(results[0].passed, true);
     });
 
@@ -146,18 +139,16 @@ describe("Assertion Engine", () => {
     });
 
     it("passes when json path value contains string", () => {
-      const results = evaluate(
-        makeContext({ resultJson: { message: "hello world" } }),
-        { result_json: [{ path: "$.message", contains: "world" }] },
-      );
+      const results = evaluate(makeContext({ resultJson: { message: "hello world" } }), {
+        result_json: [{ path: "$.message", contains: "world" }],
+      });
       assert.equal(results[0].passed, true);
     });
 
     it("fails when json path value does not contain string", () => {
-      const results = evaluate(
-        makeContext({ resultJson: { message: "hello" } }),
-        { result_json: [{ path: "$.message", contains: "world" }] },
-      );
+      const results = evaluate(makeContext({ resultJson: { message: "hello" } }), {
+        result_json: [{ path: "$.message", contains: "world" }],
+      });
       assert.equal(results[0].passed, false);
     });
 
@@ -166,6 +157,14 @@ describe("Assertion Engine", () => {
         result_json: [{ path: "$.missing", equals: "test" }],
       });
       assert.equal(results[0].passed, false);
+    });
+
+    it("handles missing parsed json gracefully", () => {
+      const results = evaluate(makeContext({ resultJson: undefined }), {
+        result_json: [{ path: "$", equals: 1 }],
+      });
+      assert.equal(results[0].passed, false);
+      assert.ok(results[0].message.includes("expected 1"));
     });
   });
 
@@ -176,19 +175,16 @@ describe("Assertion Engine", () => {
         stdout_contains: "success",
         stdout_not_contains: "error",
       };
-      const results = evaluate(
-        makeContext({ exitCode: 0, stdout: "operation success" }),
-        expect,
-      );
+      const results = evaluate(makeContext({ exitCode: 0, stdout: "operation success" }), expect);
       assert.equal(results.length, 3);
       assert.ok(results.every((r) => r.passed));
     });
 
     it("reports mixed pass/fail", () => {
-      const results = evaluate(
-        makeContext({ exitCode: 1, stdout: "success" }),
-        { exit_code: 0, stdout_contains: "success" },
-      );
+      const results = evaluate(makeContext({ exitCode: 1, stdout: "success" }), {
+        exit_code: 0,
+        stdout_contains: "success",
+      });
       assert.equal(results.length, 2);
       assert.equal(results[0].passed, false); // exit_code
       assert.equal(results[1].passed, true); // stdout_contains

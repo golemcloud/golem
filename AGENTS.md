@@ -73,6 +73,7 @@ Load these skills for guided workflows on complex tasks:
 | `golem-scala-base-image` | WIT folder structure and regenerating `agent_guest.wasm` for the Scala SDK |
 | `golem-scala-code-generation` | Writing Scala code generators for the Scala SDK |
 | `investigating-executor-performance` | Investigating worker-executor performance with OTLP tracing and Jaeger |
+| `golem-skill-harness` | Developing, testing, and running Golem skill tests with the skill test harness |
 | `pre-pr-checklist` | Final checks before submitting a pull request |
 
 ## Before Submitting a PR

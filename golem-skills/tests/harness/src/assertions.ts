@@ -35,10 +35,7 @@ export interface AssertionResult {
   message: string;
 }
 
-export function evaluate(
-  context: AssertionContext,
-  expect: ExpectSpec,
-): AssertionResult[] {
+export function evaluate(context: AssertionContext, expect: ExpectSpec): AssertionResult[] {
   const results: AssertionResult[] = [];
 
   if (expect.exit_code !== undefined) {
@@ -124,10 +121,15 @@ export function evaluate(
 
   if (expect.result_json && expect.result_json.length > 0) {
     for (const jsonAssert of expect.result_json) {
-      const pathResults = JSONPath({
+      const rawPathResults = JSONPath({
         path: jsonAssert.path,
         json: context.resultJson as object,
       });
+      const pathResults = Array.isArray(rawPathResults)
+        ? rawPathResults
+        : rawPathResults === undefined
+          ? []
+          : [rawPathResults];
 
       if (jsonAssert.equals !== undefined) {
         const passed =

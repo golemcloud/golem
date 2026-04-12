@@ -16,7 +16,7 @@ use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, OplogOps};
-use crate::services::{HasEvents, HasOplog, HasWorker};
+use crate::services::{HasActiveWorkers, HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
@@ -66,6 +66,14 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub waiting_for_command: Arc<AtomicBool>,
     pub interrupt_signal: Arc<Mutex<Option<InterruptKind>>>,
     pub oom_retry_count: u32,
+    /// Concurrent-agent permit owned by this invocation loop task. Released
+    /// (set to `None`) when the agent goes idle, re-acquired when it wakes up.
+    /// Only actively running agents hold a permit. Dropped automatically when
+    /// the task is aborted (e.g. `RunningWorker::stop()`).
+    pub concurrent_agent_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    /// `ResumeReplay` is not represented in the internal queue, so we track it
+    /// explicitly to avoid evicting a worker that is blocked waking up for it.
+    pub resume_replay_pending: Arc<AtomicBool>,
 }
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
@@ -106,6 +114,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     store: &store,
                     invocations_since_snapshot: 0,
                     idle_snapshot_task: None,
+                    concurrent_agent_permit: &mut self.concurrent_agent_permit,
+                    resume_replay_pending: self.resume_replay_pending.clone(),
                 };
 
                 final_decision = inner_loop.run().await;
@@ -284,6 +294,11 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     store: &'a Mutex<Store<Ctx>>,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
+    /// Mutable reference to the concurrent-agent permit held by the outer
+    /// `InvocationLoop`. Set to `None` when entering idle (releasing the
+    /// permit back to the semaphore pool) and re-acquired on wake.
+    concurrent_agent_permit: &'a mut Option<tokio::sync::OwnedSemaphorePermit>,
+    resume_replay_pending: Arc<AtomicBool>,
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
@@ -306,9 +321,14 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
         let mut final_decision = None;
 
-        // Exits when RunningWorker is dropped
+        // Entering idle: release the concurrent-agent permit so other agents
+        // from the same account can start without evicting this one.
         self.waiting_for_command.store(true, Ordering::Release);
+        self.release_concurrent_agent_permit();
         while let Some(cmd) = self.next_wakeup().await {
+            // Waking from idle: re-acquire the concurrent-agent permit before
+            // processing any commands.
+            self.acquire_concurrent_agent_permit().await;
             self.waiting_for_command.store(false, Ordering::Release);
             let outcome = match cmd {
                 WorkerCommand::Unblock => {
@@ -343,7 +363,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         }
                     }
                 }
-                WorkerCommand::ResumeReplay => self.resume_replay().await,
+                WorkerCommand::ResumeReplay => {
+                    self.resume_replay_pending.store(false, Ordering::Release);
+                    self.resume_replay().await
+                }
             };
             match outcome {
                 CommandOutcome::BreakOuterLoop => {
@@ -357,7 +380,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 CommandOutcome::Continue | CommandOutcome::WaitForWakeup => {}
             }
 
+            // Returning to idle: release the concurrent-agent permit.
             self.waiting_for_command.store(true, Ordering::Release);
+            self.release_concurrent_agent_permit();
         }
         self.abort_idle_snapshot_task();
         self.waiting_for_command.store(false, Ordering::Release);
@@ -365,6 +390,30 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         debug!(final_decision = ?final_decision, "Invocation queue loop finished");
 
         final_decision
+    }
+
+    /// Release the concurrent-agent permit back to the semaphore pool.
+    /// Called when the agent enters idle state. No-op if already released.
+    fn release_concurrent_agent_permit(&mut self) {
+        if let Some(permit) = self.concurrent_agent_permit.take() {
+            debug!("Releasing concurrent-agent permit (entering idle)");
+            drop(permit);
+        }
+    }
+
+    /// Re-acquire the concurrent-agent permit from the semaphore.
+    /// Called when the agent wakes from idle to process a command.
+    async fn acquire_concurrent_agent_permit(&mut self) {
+        if self.concurrent_agent_permit.is_none() {
+            let account_id = self.parent.get_initial_worker_metadata().created_by;
+            debug!("Re-acquiring concurrent-agent permit (waking from idle)");
+            let permit = self
+                .parent
+                .active_workers()
+                .acquire_concurrent_agent(account_id)
+                .await;
+            *self.concurrent_agent_permit = Some(permit);
+        }
     }
 
     async fn next_wakeup(&mut self) -> Option<WorkerCommand> {

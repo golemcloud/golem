@@ -286,17 +286,20 @@ fn dep_base_version(spec: &str) -> String {
 #[cfg(test)]
 mod test {
     use super::{PackageJsonSection, typescript_sdk_requirements};
+    use crate::app::template::TEMPLATES_DIR;
     use crate::sdk_overrides::sdk_overrides;
     use pretty_assertions::assert_eq;
     use std::collections::BTreeSet;
-    use std::path::PathBuf;
     use test_r::test;
 
     #[test]
     fn ts_template_and_check_requirements_match() {
-        let template_path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates/ts/common/package.json");
-        let template_source = std::fs::read_to_string(&template_path).unwrap();
+        let template_source = TEMPLATES_DIR
+            .get_file("ts/common/package.json")
+            .unwrap()
+            .contents_utf8()
+            .unwrap()
+            .to_string();
         let template_json: serde_json::Value = serde_json::from_str(&template_source).unwrap();
 
         let template_deps = template_json["dependencies"]

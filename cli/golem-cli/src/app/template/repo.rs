@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::LazyLock;
 
-pub static TEMPLATES_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/templates");
+pub static TEMPLATES_DIR: Dir<'static> = include_dir!("$OUT_DIR/templates");
 
 pub type GroupedAppTemplates = BTreeMap<GuestLanguage, AppTemplatesForLanguage>;
 
@@ -282,5 +282,46 @@ impl AppTemplateRepo {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppTemplateRepo;
+    use crate::model::GuestLanguage;
+    use std::fs as stdfs;
+    use std::path::{Path, PathBuf};
+    use test_r::test;
+
+    fn canonical_skill_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../golem-skills/skills/common/golem-new-project/SKILL.md")
+    }
+
+    #[test]
+    fn embedded_common_bootstrap_skill_matches_canonical_source() {
+        let repo = AppTemplateRepo::get(false).unwrap();
+        let canonical = stdfs::read_to_string(canonical_skill_path()).unwrap();
+
+        let relative_path = Path::new(".agents/skills/golem-new-project/SKILL.md");
+
+        for language in [
+            GuestLanguage::TypeScript,
+            GuestLanguage::Rust,
+            GuestLanguage::Scala,
+        ] {
+            let embedded = repo
+                .common_template_file_contents(language, relative_path)
+                .unwrap()
+                .unwrap();
+
+            assert_eq!(
+                embedded,
+                canonical,
+                "{} common template skill drifted for {}",
+                language.name(),
+                relative_path.display(),
+            );
+        }
     }
 }
