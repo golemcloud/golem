@@ -127,9 +127,7 @@ async fn start_callback_server() -> (String, Arc<Mutex<Vec<BatchCallback>>>, Joi
     // Keep the listener address family aligned with the callback URL. Using
     // `localhost` against an IPv4-only listener flakes in CI when the client
     // resolves it to IPv6.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
 
     let http_server = tokio::spawn(async move {
@@ -168,9 +166,7 @@ async fn start_callback_server_gated() -> (
     let enabled = Arc::new(AtomicBool::new(false));
     let enabled_clone = enabled.clone();
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
 
     let http_server = tokio::spawn(async move {

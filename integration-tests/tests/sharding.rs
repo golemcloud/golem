@@ -921,9 +921,7 @@ mod tests {
         // Keep the listener address family aligned with the callback URL. Using
         // `localhost` against an IPv4-only listener flakes in CI when the client
         // resolves it to IPv6.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
         let handle = tokio::spawn(async move {
