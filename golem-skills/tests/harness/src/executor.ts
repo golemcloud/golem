@@ -1224,6 +1224,9 @@ export class ScenarioExecutor {
     const result = await this.runLocalCommand("golem", args, timeout, projectDir, commandEnv);
 
     log.invokeResult(stepLabel, `${invoke.agent}.${invoke.method}`, result.stdout);
+    if (result.stderr.trim()) {
+      log.stepLine(stepLabel, `stderr: ${result.stderr.trim()}`);
+    }
 
     if (expect) {
       let resultJson: unknown;
@@ -1260,6 +1263,10 @@ export class ScenarioExecutor {
     const resultJson = extractInvokeJsonResult(result.stdout);
 
     log.invokeResult(stepLabel, `${invoke.agent}.${invoke.method}`, result.stdout);
+    if (result.stderr.trim()) {
+      log.stepLine(stepLabel, `stderr: ${result.stderr.trim()}`);
+    }
+    log.stepLine(stepLabel, `extracted resultJson: ${JSON.stringify(resultJson)}`);
 
     if (expect) {
       this.evaluateAssertions(

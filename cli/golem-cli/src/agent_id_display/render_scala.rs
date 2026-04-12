@@ -386,7 +386,10 @@ fn render_type_variant_scala(tv: &TypeVariant, prefer_name: bool) -> String {
     for case in &tv.cases {
         let case_name = case.name.to_upper_camel_case();
         if let Some(t) = &case.typ {
-            parts.push(format!("{case_name}({})", render_type_scala(t, prefer_name)));
+            parts.push(format!(
+                "{case_name}({})",
+                render_type_scala(t, prefer_name)
+            ));
         } else {
             parts.push(case_name);
         }

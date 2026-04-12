@@ -4,6 +4,7 @@ import { z } from "zod";
 const ResultJsonAssertionSchema = z.object({
   path: z.string(),
   equals: z.unknown().optional(),
+  equals_unordered: z.unknown().optional(),
   contains: z.string().optional(),
 });
 
@@ -125,10 +126,15 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
         path: jsonAssert.path,
         json: context.resultJson as object,
       });
+      // JSONPath returns undefined for falsy root values (false, 0, null, "").
+      // When querying "$" and the result is undefined, fall back to wrapping the
+      // root value itself so that scalar assertions work for all values.
       const pathResults = Array.isArray(rawPathResults)
         ? rawPathResults
         : rawPathResults === undefined
-          ? []
+          ? jsonAssert.path === "$" && context.resultJson !== undefined
+            ? [context.resultJson]
+            : []
           : [rawPathResults];
 
       if (jsonAssert.equals !== undefined) {
@@ -141,6 +147,25 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
           message: passed
             ? `${jsonAssert.path} equals ${JSON.stringify(jsonAssert.equals)}`
             : `${jsonAssert.path} expected ${JSON.stringify(jsonAssert.equals)}, got ${JSON.stringify(pathResults[0])}`,
+        });
+      }
+
+      if (jsonAssert.equals_unordered !== undefined) {
+        const actual = pathResults.length > 0 ? pathResults[0] : undefined;
+        const expected = jsonAssert.equals_unordered;
+        const passed =
+          Array.isArray(actual) &&
+          Array.isArray(expected) &&
+          actual.length === expected.length &&
+          expected.every((exp: unknown) =>
+            actual.some((act: unknown) => JSON.stringify(act) === JSON.stringify(exp)),
+          );
+        results.push({
+          assertion: `result_json[${jsonAssert.path}].equals_unordered`,
+          passed,
+          message: passed
+            ? `${jsonAssert.path} equals (unordered) ${JSON.stringify(expected)}`
+            : `${jsonAssert.path} expected (unordered) ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
         });
       }
 

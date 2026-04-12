@@ -49,7 +49,10 @@ impl Default for SourceLanguage {
 impl SourceLanguage {
     /// Returns true if this is a known language with specialized rendering/parsing support.
     pub fn is_known(&self) -> bool {
-        matches!(self, SourceLanguage::Rust | SourceLanguage::TypeScript | SourceLanguage::Scala)
+        matches!(
+            self,
+            SourceLanguage::Rust | SourceLanguage::TypeScript | SourceLanguage::Scala
+        )
     }
 }
 

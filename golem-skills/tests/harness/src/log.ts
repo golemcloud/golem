@@ -50,7 +50,7 @@ function scenarioDetail(line: string, lineColor?: Colorizer): void {
   emit("scenario", chalk.blue, line, lineColor);
 }
 
-function stepLine(label: string, line: string): void {
+export function stepLine(label: string, line: string): void {
   emit("step", chalk.cyan, `${chalk.bold(label)} ${line}`);
 }
 

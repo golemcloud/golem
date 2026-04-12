@@ -51,16 +51,15 @@ impl Dialect for ScalaDialect {
         typ: &AnalysedType,
     ) -> Result<ValueAndType, ParseError> {
         // For arity == 1: accept both Tuple1(a) and (a)
-        if tt.items.len() == 1 {
-            if let Token::Ident(id) = lexer.peek()? {
-                if id == "Tuple1" {
-                    lexer.next_token()?;
-                    lexer.expect(&Token::LParen)?;
-                    let v = parse_cm_value::<Self>(lexer, &tt.items[0])?.value;
-                    lexer.expect(&Token::RParen)?;
-                    return Ok(ValueAndType::new(Value::Tuple(vec![v]), typ.clone()));
-                }
-            }
+        if tt.items.len() == 1
+            && let Token::Ident(id) = lexer.peek()?
+            && id == "Tuple1"
+        {
+            lexer.next_token()?;
+            lexer.expect(&Token::LParen)?;
+            let v = parse_cm_value::<Self>(lexer, &tt.items[0])?.value;
+            lexer.expect(&Token::RParen)?;
+            return Ok(ValueAndType::new(Value::Tuple(vec![v]), typ.clone()));
         }
         // For arity > 1 or fallback for arity == 1: (a, b, ...)
         lexer.expect(&Token::LParen)?;
@@ -83,10 +82,10 @@ impl Dialect for ScalaDialect {
         if let Some(name) = &tr.name {
             // Named record: optionally accept TypeName prefix, then (...)
             let camel = name.to_upper_camel_case();
-            if let Token::Ident(id) = lexer.peek()? {
-                if *id == camel {
-                    lexer.next_token()?;
-                }
+            if let Token::Ident(id) = lexer.peek()?
+                && *id == camel
+            {
+                lexer.next_token()?;
             }
             lexer.expect(&Token::LParen)?;
             let values = parse_record_fields(lexer, tr, &Token::RParen)?;
@@ -109,11 +108,11 @@ impl Dialect for ScalaDialect {
         // Optionally accept TypeName.CaseA or just CaseA
         if let Some(name) = &tv.name {
             let camel = name.to_upper_camel_case();
-            if let Token::Ident(id) = lexer.peek()? {
-                if *id == camel {
-                    lexer.next_token()?;
-                    lexer.expect(&Token::Dot)?;
-                }
+            if let Token::Ident(id) = lexer.peek()?
+                && *id == camel
+            {
+                lexer.next_token()?;
+                lexer.expect(&Token::Dot)?;
             }
         }
         let (case_name, cp, _) = lexer.expect_ident()?;
@@ -148,11 +147,11 @@ impl Dialect for ScalaDialect {
         // MyEnum.CaseA or just CaseA
         if let Some(name) = &te.name {
             let camel = name.to_upper_camel_case();
-            if let Token::Ident(id) = lexer.peek()? {
-                if *id == camel {
-                    lexer.next_token()?;
-                    lexer.expect(&Token::Dot)?;
-                }
+            if let Token::Ident(id) = lexer.peek()?
+                && *id == camel
+            {
+                lexer.next_token()?;
+                lexer.expect(&Token::Dot)?;
             }
         }
         let (case_name, cp, _) = lexer.expect_ident()?;
@@ -240,10 +239,10 @@ impl Dialect for ScalaDialect {
         let (open, close) = if let Some(name) = &tf.name {
             // Named: optionally TypeName prefix, then (...)
             let camel = name.to_upper_camel_case();
-            if let Token::Ident(id) = lexer.peek()? {
-                if *id == camel {
-                    lexer.next_token()?;
-                }
+            if let Token::Ident(id) = lexer.peek()?
+                && *id == camel
+            {
+                lexer.next_token()?;
             }
             lexer.expect(&Token::LParen)?;
             (Token::LParen, Token::RParen)
@@ -293,23 +292,23 @@ impl Dialect for ScalaDialect {
         typ: &AnalysedType,
     ) -> Result<ValueAndType, ParseError> {
         // Accept List(1, 2, 3) or [1, 2, 3]
-        if let Token::Ident(id) = lexer.peek()? {
-            if id == "List" {
-                lexer.next_token()?;
-                lexer.expect(&Token::LParen)?;
-                let mut items = Vec::new();
-                while *lexer.peek()? != Token::RParen {
-                    if !items.is_empty() {
-                        lexer.expect(&Token::Comma)?;
-                        if *lexer.peek()? == Token::RParen {
-                            break;
-                        }
+        if let Token::Ident(id) = lexer.peek()?
+            && id == "List"
+        {
+            lexer.next_token()?;
+            lexer.expect(&Token::LParen)?;
+            let mut items = Vec::new();
+            while *lexer.peek()? != Token::RParen {
+                if !items.is_empty() {
+                    lexer.expect(&Token::Comma)?;
+                    if *lexer.peek()? == Token::RParen {
+                        break;
                     }
-                    items.push(parse_cm_value::<Self>(lexer, &tl.inner)?.value);
                 }
-                lexer.expect(&Token::RParen)?;
-                return Ok(ValueAndType::new(Value::List(items), typ.clone()));
+                items.push(parse_cm_value::<Self>(lexer, &tl.inner)?.value);
             }
+            lexer.expect(&Token::RParen)?;
+            return Ok(ValueAndType::new(Value::List(items), typ.clone()));
         }
         // Fall back to default bracket syntax [1, 2, 3]
         lexer.expect(&Token::LBrack)?;
@@ -496,8 +495,6 @@ fn parse_record_fields(
     values
         .into_iter()
         .enumerate()
-        .map(|(i, v)| {
-            v.ok_or_else(|| perr(pos, &format!("missing field '{}'", tr.fields[i].name)))
-        })
+        .map(|(i, v)| v.ok_or_else(|| perr(pos, &format!("missing field '{}'", tr.fields[i].name))))
         .collect()
 }
