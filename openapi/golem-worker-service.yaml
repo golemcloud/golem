@@ -1740,6 +1740,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentFilter'
+    AgentConfigEntryDto:
+      type: object
+      title: AgentConfigEntryDto
+      required:
+      - path
+      - value
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/NormalizedJsonValue'
     AgentConfigVarsFilter:
       type: object
       title: AgentConfigVarsFilter
@@ -1788,7 +1801,7 @@ components:
           type: array
           default: []
           items:
-            $ref: '#/components/schemas/WorkerAgentConfigEntry'
+            $ref: '#/components/schemas/AgentConfigEntryDto'
     AgentEnvFilter:
       type: object
       title: AgentEnvFilter
@@ -1803,6 +1816,36 @@ components:
           $ref: '#/components/schemas/StringFilterComparator'
         value:
           type: string
+    AgentFilePermissions:
+      type: string
+      enum:
+      - read-only
+      - read-write
+    AgentFileSystemNode:
+      type: object
+      title: AgentFileSystemNode
+      required:
+      - name
+      - lastModified
+      - kind
+      properties:
+        name:
+          type: string
+        lastModified:
+          type: integer
+          format: uint64
+        kind:
+          $ref: '#/components/schemas/AgentFileSystemNodeKind'
+        permissions:
+          $ref: '#/components/schemas/AgentFilePermissions'
+        size:
+          type: integer
+          format: uint64
+    AgentFileSystemNodeKind:
+      type: string
+      enum:
+      - directory
+      - file
     AgentFilter:
       type: object
       oneOf:
@@ -2076,7 +2119,7 @@ components:
         agentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/ParsedWorkerAgentConfigEntry'
+            $ref: '#/components/schemas/TypedAgentConfigEntry'
         status:
           $ref: '#/components/schemas/AgentStatus'
         componentRevision:
@@ -2655,11 +2698,6 @@ components:
           items:
             type: integer
             format: uint8
-    ComponentFilePermissions:
-      type: string
-      enum:
-      - read-only
-      - read-write
     ComponentModelElementValue:
       type: object
       title: ComponentModelElementValue
@@ -2692,7 +2730,7 @@ components:
           type: array
           default: []
           items:
-            $ref: '#/components/schemas/WorkerAgentConfigEntry'
+            $ref: '#/components/schemas/AgentConfigEntryDto'
     CreateAgentResponse:
       type: object
       title: CreateAgentResponse
@@ -2876,31 +2914,6 @@ components:
       - Greater
       - LessEqual
       - Less
-    FlatComponentFileSystemNode:
-      type: object
-      title: FlatComponentFileSystemNode
-      required:
-      - name
-      - lastModified
-      - kind
-      properties:
-        name:
-          type: string
-        lastModified:
-          type: integer
-          format: uint64
-        kind:
-          $ref: '#/components/schemas/FlatComponentFileSystemNodeKind'
-        permissions:
-          $ref: '#/components/schemas/ComponentFilePermissions'
-        size:
-          type: integer
-          format: uint64
-    FlatComponentFileSystemNodeKind:
-      type: string
-      enum:
-      - directory
-      - file
     ForkWorkerRequest:
       type: object
       title: ForkWorkerRequest
@@ -2925,7 +2938,7 @@ components:
         nodes:
           type: array
           items:
-            $ref: '#/components/schemas/FlatComponentFileSystemNode'
+            $ref: '#/components/schemas/AgentFileSystemNode'
     GetOplogResponse:
       type: object
       title: GetOplogResponse
@@ -3099,6 +3112,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/NamedElementValue'
+    NormalizedJsonValue:
+      type: object
     OplogCursor:
       type: object
       title: OplogCursor
@@ -3125,19 +3140,6 @@ components:
         end:
           type: integer
           format: uint64
-    ParsedWorkerAgentConfigEntry:
-      type: object
-      title: ParsedWorkerAgentConfigEntry
-      required:
-      - path
-      - value
-      properties:
-        path:
-          type: array
-          items:
-            type: string
-        value:
-          $ref: '#/components/schemas/ValueAndType'
     PendingUpdate:
       type: object
       title: PendingUpdate
@@ -4567,6 +4569,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/NameOptionTypePair'
+    TypedAgentConfigEntry:
+      type: object
+      title: TypedAgentConfigEntry
+      required:
+      - path
+      - value
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/ValueAndType'
     UnstructuredBinaryElementValue:
       type: object
       title: UnstructuredBinaryElementValue
@@ -4793,18 +4808,6 @@ components:
       properties:
         version:
           type: string
-    WorkerAgentConfigEntry:
-      type: object
-      title: WorkerAgentConfigEntry
-      required:
-      - path
-      - value
-      properties:
-        path:
-          type: array
-          items:
-            type: string
-        value: {}
     WorkerCreationResponse:
       type: object
       title: WorkerCreationResponse
@@ -5046,7 +5049,7 @@ components:
         localAgentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/ParsedWorkerAgentConfigEntry'
+            $ref: '#/components/schemas/TypedAgentConfigEntry'
         originalPhantomId:
           type: string
           format: uuid

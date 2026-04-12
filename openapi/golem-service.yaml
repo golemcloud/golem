@@ -9556,6 +9556,19 @@ components:
             $ref: '#/components/schemas/AgentFilter'
       required:
       - filters
+    AgentConfigEntryDto:
+      title: AgentConfigEntryDto
+      type: object
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/NormalizedJsonValue'
+      required:
+      - path
+      - value
     AgentConfigVarsFilter:
       title: AgentConfigVarsFilter
       type: object
@@ -9601,7 +9614,7 @@ components:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/WorkerAgentConfigEntry'
+            $ref: '#/components/schemas/AgentConfigEntryDto'
       required:
       - name
       - env
@@ -9619,6 +9632,36 @@ components:
       - name
       - comparator
       - value
+    AgentFilePermissions:
+      type: string
+      enum:
+      - read-only
+      - read-write
+    AgentFileSystemNode:
+      title: AgentFileSystemNode
+      type: object
+      properties:
+        name:
+          type: string
+        lastModified:
+          type: integer
+          format: uint64
+        kind:
+          $ref: '#/components/schemas/AgentFileSystemNodeKind'
+        permissions:
+          $ref: '#/components/schemas/AgentFilePermissions'
+        size:
+          type: integer
+          format: uint64
+      required:
+      - name
+      - lastModified
+      - kind
+    AgentFileSystemNodeKind:
+      type: string
+      enum:
+      - directory
+      - file
     AgentFilter:
       discriminator:
         propertyName: type
@@ -9873,7 +9916,7 @@ components:
         agentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/ParsedWorkerAgentConfigEntry'
+            $ref: '#/components/schemas/TypedAgentConfigEntry'
         status:
           $ref: '#/components/schemas/AgentStatus'
         componentRevision:
@@ -10471,11 +10514,6 @@ components:
       required:
       - oplogIdx
       - data
-    ComponentFilePermissions:
-      type: string
-      enum:
-      - read-only
-      - read-write
     ComponentModelElementValue:
       title: ComponentModelElementValue
       type: object
@@ -10503,7 +10541,7 @@ components:
           default: []
           type: array
           items:
-            $ref: '#/components/schemas/WorkerAgentConfigEntry'
+            $ref: '#/components/schemas/AgentConfigEntryDto'
       required:
       - appName
       - envName
@@ -10692,31 +10730,6 @@ components:
       - Greater
       - LessEqual
       - Less
-    FlatComponentFileSystemNode:
-      title: FlatComponentFileSystemNode
-      type: object
-      properties:
-        name:
-          type: string
-        lastModified:
-          type: integer
-          format: uint64
-        kind:
-          $ref: '#/components/schemas/FlatComponentFileSystemNodeKind'
-        permissions:
-          $ref: '#/components/schemas/ComponentFilePermissions'
-        size:
-          type: integer
-          format: uint64
-      required:
-      - name
-      - lastModified
-      - kind
-    FlatComponentFileSystemNodeKind:
-      type: string
-      enum:
-      - directory
-      - file
     ForkWorkerRequest:
       title: ForkWorkerRequest
       type: object
@@ -10739,7 +10752,7 @@ components:
         nodes:
           type: array
           items:
-            $ref: '#/components/schemas/FlatComponentFileSystemNode'
+            $ref: '#/components/schemas/AgentFileSystemNode'
       required:
       - nodes
     GetOplogResponse:
@@ -10915,6 +10928,8 @@ components:
             $ref: '#/components/schemas/NamedElementValue'
       required:
       - elements
+    NormalizedJsonValue:
+      type: object
     OplogCursor:
       title: OplogCursor
       type: object
@@ -10941,19 +10956,6 @@ components:
       required:
       - start
       - end
-    ParsedWorkerAgentConfigEntry:
-      title: ParsedWorkerAgentConfigEntry
-      type: object
-      properties:
-        path:
-          type: array
-          items:
-            type: string
-        value:
-          $ref: '#/components/schemas/ValueAndType'
-      required:
-      - path
-      - value
     PendingUpdate:
       title: PendingUpdate
       type: object
@@ -12383,6 +12385,19 @@ components:
             $ref: '#/components/schemas/NameOptionTypePair'
       required:
       - cases
+    TypedAgentConfigEntry:
+      title: TypedAgentConfigEntry
+      type: object
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/ValueAndType'
+      required:
+      - path
+      - value
     UnstructuredBinaryElementValue:
       title: UnstructuredBinaryElementValue
       type: object
@@ -12609,18 +12624,6 @@ components:
           type: string
       required:
       - version
-    WorkerAgentConfigEntry:
-      title: WorkerAgentConfigEntry
-      type: object
-      properties:
-        path:
-          type: array
-          items:
-            type: string
-        value: {}
-      required:
-      - path
-      - value
     WorkerCreationResponse:
       title: WorkerCreationResponse
       type: object
@@ -12850,7 +12853,7 @@ components:
         localAgentConfig:
           type: array
           items:
-            $ref: '#/components/schemas/ParsedWorkerAgentConfigEntry'
+            $ref: '#/components/schemas/TypedAgentConfigEntry'
         originalPhantomId:
           type: string
           format: uuid
@@ -13449,21 +13452,6 @@ components:
       - source
       - path
       - valueType
-    AgentConfigEntry:
-      title: AgentConfigEntry
-      type: object
-      properties:
-        agent:
-          type: string
-        path:
-          type: array
-          items:
-            type: string
-        value: {}
-      required:
-      - agent
-      - path
-      - value
     AgentConfigSource:
       type: string
       enum:
@@ -13502,6 +13490,18 @@ components:
       - typeName
       - constructor
       - methods
+    AgentFileOptions:
+      title: AgentFileOptions
+      type: object
+      properties:
+        targetPath:
+          description: Absolute path in an agent's filesystem.
+          type: string
+        permissions:
+          $ref: '#/components/schemas/AgentFilePermissions'
+      required:
+      - targetPath
+      - permissions
     AgentHttpAuthDetails:
       title: AgentHttpAuthDetails
       type: object
@@ -13634,6 +13634,105 @@ components:
       - mode
       - snapshotting
       - config
+    AgentTypeProvisionConfig:
+      title: AgentTypeProvisionConfig
+      description: |-
+        Per-agent-type provisioning configuration stored alongside AgentType declarations
+        in ComponentMetadata. Holds runtime setup data separate from agent type declarations.
+      type: object
+      properties:
+        env:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
+        wasiConfig:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
+        config:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/TypedAgentConfigEntry'
+        plugins:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/InstalledPlugin'
+        files:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/InitialAgentFile'
+    AgentTypeProvisionConfigCreation:
+      title: AgentTypeProvisionConfigCreation
+      type: object
+      properties:
+        env:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
+        wasiConfig:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
+        config:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentConfigEntryDto'
+        pluginInstallations:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallation'
+        files:
+          description: key = source path inside uploaded archive; value specifies target path + permissions
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AgentFileOptions'
+    AgentTypeProvisionConfigUpdate:
+      title: AgentTypeProvisionConfigUpdate
+      type: object
+      properties:
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        wasiConfig:
+          type: object
+          additionalProperties:
+            type: string
+        config:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentConfigEntryDto'
+        pluginUpdates:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationAction'
+        filesToAddOrUpdate:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AgentFileOptions'
+        filesToRemove:
+          default: []
+          type: array
+          items:
+            description: Absolute path in an agent's filesystem.
+            type: string
+        filePermissionUpdates:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AgentFilePermissions'
     AnalysedExport:
       discriminator:
         propertyName: type
@@ -13772,36 +13871,16 @@ components:
       properties:
         componentName:
           type: string
-        fileOptions:
-          default: {}
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/ComponentFileOptions'
-        env:
-          default: {}
-          type: object
-          additionalProperties:
-            type: string
-        configVars:
-          default: {}
-          type: object
-          additionalProperties:
-            type: string
-        agentConfig:
-          default: []
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentConfigEntry'
         agentTypes:
           default: []
           type: array
           items:
             $ref: '#/components/schemas/AgentType'
-        plugins:
-          default: []
-          type: array
-          items:
-            $ref: '#/components/schemas/PluginInstallation'
+        agentTypeProvisionConfigs:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AgentTypeProvisionConfigCreation'
       required:
       - componentName
     ComponentDto:
@@ -13836,26 +13915,6 @@ components:
         createdAt:
           type: string
           format: date-time
-        files:
-          type: array
-          items:
-            $ref: '#/components/schemas/InitialComponentFile'
-        installedPlugins:
-          type: array
-          items:
-            $ref: '#/components/schemas/InstalledPlugin'
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        configVars:
-          type: object
-          additionalProperties:
-            type: string
-        agentConfig:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentConfigEntry'
         wasmHash:
           type: string
           format: hash
@@ -13870,23 +13929,7 @@ components:
       - componentSize
       - metadata
       - createdAt
-      - files
-      - installedPlugins
-      - env
-      - configVars
-      - agentConfig
       - wasmHash
-    ComponentFileOptions:
-      title: ComponentFileOptions
-      type: object
-      properties:
-        permissions:
-          description: Path of the file in the uploaded archive
-          allOf:
-          - $ref: '#/components/schemas/ComponentFilePermissions'
-          - description: Path of the file in the uploaded archive
-      required:
-      - permissions
     ComponentMetadata:
       title: ComponentMetadata
       type: object
@@ -13904,6 +13947,7 @@ components:
           items:
             $ref: '#/components/schemas/LinearMemory'
         binaryWit:
+          default: ''
           type: string
           format: bytes
         rootPackageName:
@@ -13911,15 +13955,22 @@ components:
         rootPackageVersion:
           type: string
         agentTypes:
+          default: []
           type: array
           items:
             $ref: '#/components/schemas/AgentType'
+        agentTypeProvisionConfigs:
+          description: |-
+            Per-agent-type provisioning configuration: env, wasi_config, config, plugins, files.
+            Kept separate from agent type declarations so AgentType stays a pure declaration type.
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AgentTypeProvisionConfig'
       required:
       - exports
       - producers
       - memories
-      - binaryWit
-      - agentTypes
     ComponentModelElementSchema:
       title: ComponentModelElementSchema
       type: object
@@ -13935,38 +13986,14 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        removedFiles:
-          default: []
-          type: array
-          items:
-            description: Path inside a component filesystem. Must be absolute.
-            type: string
-        newFileOptions:
-          default: {}
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/ComponentFileOptions'
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        configVars:
-          type: object
-          additionalProperties:
-            type: string
-        agentConfig:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentConfigEntry'
         agentTypes:
           type: array
           items:
             $ref: '#/components/schemas/AgentType'
-        pluginUpdates:
-          default: []
-          type: array
-          items:
-            $ref: '#/components/schemas/PluginInstallationAction'
+        agentTypeProvisionConfigUpdates:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AgentTypeProvisionConfigUpdate'
       required:
       - currentRevision
     CorsOptions:
@@ -14816,21 +14843,18 @@ components:
       - phantomAgent
       - corsOptions
       - webhookSuffix
-    InitialComponentFile:
-      title: InitialComponentFile
+    InitialAgentFile:
+      title: InitialAgentFile
       type: object
       properties:
         contentHash:
-          title: |-
-            Key that can be used to identify a component file.
-            All files with the same content will have the same key.
           type: string
           format: hash
         path:
-          description: Path inside a component filesystem. Must be absolute.
+          description: Absolute path in an agent's filesystem.
           type: string
         permissions:
-          $ref: '#/components/schemas/ComponentFilePermissions'
+          $ref: '#/components/schemas/AgentFilePermissions'
         size:
           type: integer
           format: uint64
