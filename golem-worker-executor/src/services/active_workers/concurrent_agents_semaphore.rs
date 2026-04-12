@@ -21,14 +21,14 @@ use tracing::debug;
 /// Per-account concurrent agent limit semaphore.
 ///
 /// Each account has its own tokio `Semaphore` sized to
-/// `AtomicResourceEntry::max_concurrent_agents_per_executor()`. When an agent
-/// starts it must acquire one permit; when it stops the permit is returned
-/// automatically via `Drop`.
+/// `AtomicResourceEntry::max_concurrent_agents_per_executor()`. Only
+/// **actively running** agents hold permits; idle agents release theirs back
+/// to the pool so new agents can start without eviction.
 ///
-/// Permits are only ever requested at agent startup (`WaitingWorker::new`).
-/// Running agents never request additional permits, so there is no need for a
-/// priority lock or non-blocking `try_acquire` — all callers are on equal
-/// footing in the startup path.
+/// Permits are acquired at agent startup (`WaitingWorker::new`) and each time
+/// an idle agent wakes up to process a command. They are released when the
+/// agent goes idle (via `Drop` of the `OwnedSemaphorePermit` in the
+/// invocation loop) or when the agent is stopped.
 ///
 /// Extracted as a standalone struct (no `WorkerCtx` generic) so it can be
 /// unit-tested in isolation, following the same pattern as

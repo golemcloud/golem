@@ -309,49 +309,20 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
     /// Blocking acquire of one concurrent-agent permit for `account_id`.
     ///
-    /// Before blocking, attempts to evict the oldest idle agent belonging to the
-    /// same account to free up a slot. If no idle agent exists, waits until a
-    /// running agent from the same account stops and returns its permit.
+    /// Only actively running agents hold permits — idle agents release theirs
+    /// back to the pool. In the common case permits are already available and
+    /// the acquire succeeds immediately.
+    ///
+    /// If all permits are held by actively running agents, waits efficiently on
+    /// the semaphore until one of them finishes its current invocation and
+    /// releases its permit by going idle.
     ///
     /// Returns immediately (zero-cost permit) for accounts whose plan limit is
     /// at or above the unlimited sentinel.
     pub async fn acquire_concurrent_agent(&self, account_id: AccountId) -> OwnedSemaphorePermit {
-        let workers = self.workers.clone();
         self.concurrent_agents
-            .acquire(account_id, move || async move {
-                Self::try_free_up_concurrent_agent_slot(&workers, account_id).await
-            })
+            .acquire(account_id, || async { false })
             .await
-    }
-
-    /// Evict the oldest idle agent belonging to `account_id` to free a
-    /// concurrent-agent slot. Returns `true` if an agent was successfully
-    /// stopped (its permit will be returned to the semaphore via `Drop`).
-    async fn try_free_up_concurrent_agent_slot(
-        workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
-        account_id: AccountId,
-    ) -> bool {
-        let mut possibilities = Vec::new();
-
-        for (_agent_id, worker) in workers.iter().await {
-            // Only consider idle agents belonging to the same account.
-            if worker.get_initial_worker_metadata().created_by == account_id
-                && worker.is_currently_idle_but_running().await
-            {
-                let last_changed = worker.last_execution_state_change();
-                possibilities.push((worker, last_changed));
-            }
-        }
-
-        // Evict the oldest idle agent (smallest timestamp).
-        possibilities.sort_by_key(|(_, last_changed)| last_changed.to_millis());
-
-        for (worker, _) in possibilities {
-            if worker.stop_if_idle().await {
-                return true;
-            }
-        }
-        false
     }
 
     async fn try_free_up_filesystem_storage(
