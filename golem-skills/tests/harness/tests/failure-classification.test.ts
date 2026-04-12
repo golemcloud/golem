@@ -13,9 +13,7 @@ describe("classifyFailure", () => {
   });
 
   it("classifies SKILL_MISMATCH as agent", () => {
-    const result = classifyFailure(
-      "SKILL_MISMATCH: unexpected extra skills [foo]",
-    );
+    const result = classifyFailure("SKILL_MISMATCH: unexpected extra skills [foo]");
     assert.equal(result.code, "SKILL_MISMATCH");
     assert.equal(result.category, "agent");
   });

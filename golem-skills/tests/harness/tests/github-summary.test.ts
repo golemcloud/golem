@@ -24,13 +24,8 @@ describe("GitHub Actions summary", () => {
     const totalScenarios = scenarioReports.length;
     const passed = scenarioReports.filter((r) => r.status === "pass").length;
     const failed = scenarioReports.filter((r) => r.status === "fail").length;
-    const totalDuration = scenarioReports.reduce(
-      (sum, r) => sum + r.durationSeconds,
-      0,
-    );
-    const worstFailures = [
-      { scenario: "test-fail", error: "SHELL_FAILED: exit code 1" },
-    ];
+    const totalDuration = scenarioReports.reduce((sum, r) => sum + r.durationSeconds, 0);
+    const worstFailures = [{ scenario: "test-fail", error: "SHELL_FAILED: exit code 1" }];
 
     // Replicate the exact GitHub summary code from run.ts
     const lines: string[] = [];
@@ -40,9 +35,7 @@ describe("GitHub Actions summary", () => {
     lines.push("|----------|--------|----------|");
     for (const r of scenarioReports) {
       const icon = r.status === "pass" ? "\u2705" : "\u274c";
-      lines.push(
-        `| ${r.scenario} | ${icon} ${r.status} | ${r.durationSeconds.toFixed(1)}s |`,
-      );
+      lines.push(`| ${r.scenario} | ${icon} ${r.status} | ${r.durationSeconds.toFixed(1)}s |`);
     }
     lines.push("");
     lines.push(
@@ -53,8 +46,7 @@ describe("GitHub Actions summary", () => {
       lines.push("");
       lines.push("### Failures");
       for (const f of worstFailures) {
-        const truncatedError =
-          f.error.length > 200 ? f.error.slice(0, 197) + "..." : f.error;
+        const truncatedError = f.error.length > 200 ? f.error.slice(0, 197) + "..." : f.error;
         lines.push(`- **${f.scenario}**: ${truncatedError}`);
       }
     }

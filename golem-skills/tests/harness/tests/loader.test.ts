@@ -162,7 +162,7 @@ steps:
   - id: "invoke-step"
     invoke:
       agent: "my-agent"
-      function: "my-func"
+      method: "my-func"
       args: '{"key": "value"}'
     expect:
       exit_code: 0
@@ -173,7 +173,7 @@ steps:
     assert.equal(step.tag, "invoke");
     if (step.tag === "invoke") {
       assert.equal(step.invoke.agent, "my-agent");
-      assert.equal(step.invoke.function, "my-func");
+      assert.equal(step.invoke.method, "my-func");
     }
     assert.equal(step.expect?.exit_code, 0);
     assert.equal(step.expect?.stdout_contains, "success");
@@ -225,14 +225,14 @@ steps:
   - id: "fire"
     trigger:
       agent: "my-agent"
-      function: "do-thing"
+      method: "do-thing"
 `);
     const spec = await ScenarioLoader.load(filePath);
     const step = spec.steps[0];
     assert.equal(step.tag, "trigger");
     if (step.tag === "trigger") {
       assert.equal(step.trigger.agent, "my-agent");
-      assert.equal(step.trigger.function, "do-thing");
+      assert.equal(step.trigger.method, "do-thing");
     }
   });
 

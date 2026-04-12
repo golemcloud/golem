@@ -1,6 +1,25 @@
 <!-- golem-managed:guide:rust:start -->
 <!-- Golem manages this section. Do not edit manually. -->
 
+# Skills
+
+This project includes coding-agent skills in `.agents/skills/`. Load a skill when the task matches its description.
+
+| Skill | Description |
+|-------|-------------|
+| `golem-new-project` | Creating a new Golem application project with `golem new` |
+| `golem-build` | Building a Golem application with `golem build` |
+| `golem-deploy` | Deploying a Golem application with `golem deploy` |
+| `golem-add-rust-crate` | Adding a Rust crate dependency to the project |
+| `golem-add-agent-rust` | Adding a new agent type to a Rust Golem component |
+| `golem-configure-durability-rust` | Choosing between durable and ephemeral agents |
+| `golem-annotate-agent-rust` | Adding prompt and description annotations to agent methods |
+| `golem-call-another-agent-rust` | Calling another agent and awaiting the result (RPC) |
+| `golem-fire-and-forget-rust` | Triggering an agent invocation without waiting for the result |
+| `golem-schedule-future-call-rust` | Scheduling a future agent invocation |
+| `golem-atomic-block-rust` | Atomic blocks, persistence control, and idempotency |
+| `golem-add-transactions-rust` | Saga-pattern transactions with compensation |
+
 # Golem Application Development Guide (Rust)
 
 ## Overview
@@ -205,256 +224,7 @@ err("oops")   // explicit err
 
 ## Defining Agents
 
-Agents are defined using the `#[agent_definition]` and `#[agent_implementation]` macros from `golem-rust`:
-
-```rust
-use golem_rust::{agent_definition, agent_implementation};
-
-#[agent_definition]
-pub trait MyAgent {
-    // Constructor parameters form the agent's identity
-    fn new(name: String) -> Self;
-
-    // Agent methods — can be sync or async
-    fn get_count(&self) -> u32;
-    fn increment(&mut self) -> u32;
-    async fn fetch_data(&self, url: String) -> String;
-}
-
-struct MyAgentImpl {
-    name: String,
-    count: u32,
-}
-
-#[agent_implementation]
-impl MyAgent for MyAgentImpl {
-    fn new(name: String) -> Self {
-        Self { name, count: 0 }
-    }
-
-    fn get_count(&self) -> u32 {
-        self.count
-    }
-
-    fn increment(&mut self) -> u32 {
-        self.count += 1;
-        self.count
-    }
-
-    async fn fetch_data(&self, url: String) -> String {
-        // Use wstd::http for HTTP requests
-        todo!()
-    }
-}
-```
-
-### Ephemeral agents
-
-By default agents are durable (state persists indefinitely). For stateless per-invocation agents:
-
-```rust
-#[agent_definition(ephemeral)]
-pub trait StatelessAgent {
-    fn new() -> Self;
-    fn handle(&self, input: String) -> String;
-}
-```
-
-### Custom types
-
-All parameter and return types must implement the `Schema` trait. For custom types, derive it along with `IntoValue` and `FromValueAndType`:
-
-```rust
-use golem_rust::Schema;
-use serde::{Serialize, Deserialize};
-
-#[derive(Clone, Schema, Serialize, Deserialize)]
-pub struct MyData {
-    pub field1: String,
-    pub field2: u32,
-}
-```
-
-### Method annotations
-
-```rust
-use golem_rust::{agent_definition, prompt, description};
-
-#[agent_definition]
-pub trait MyAgent {
-    fn new(name: String) -> Self;
-
-    #[prompt("Increment the counter")]
-    #[description("Increments the counter by 1 and returns the new value")]
-    fn increment(&mut self) -> u32;
-}
-```
-
-## Agent-to-Agent Communication (RPC)
-
-The `#[agent_definition]` macro auto-generates a `<AgentName>Client` type for calling agents remotely:
-
-```rust
-// Awaited call (blocks until result)
-let other = OtherAgentClient::get("param".to_string());
-let result = other.some_method(arg).await;
-
-// Fire-and-forget (returns immediately)
-other.trigger_some_method(arg);
-
-// Scheduled invocation
-use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
-other.schedule_some_method(Datetime { seconds: ts, nanoseconds: 0 }, arg);
-
-// Phantom agents (multiple instances with same constructor params)
-let phantom = OtherAgentClient::new_phantom("param".to_string());
-let id = phantom.phantom_id().unwrap();
-let same = OtherAgentClient::get_phantom(id, "param".to_string());
-```
-
-Avoid RPC cycles (A calls B calls A) — use `trigger_` to break deadlocks.
-
-## Durability Features
-
-Golem provides **automatic durable execution** — all agents are durable by default without any special code. State is persisted via an oplog (operation log) and agents survive failures, restarts, and updates transparently.
-
-The APIs below are **advanced controls** that most agents will never need. Only use them when you have specific requirements around persistence granularity, idempotency, or transactional compensation:
-
-```rust
-use golem_rust::{
-    with_persistence_level, PersistenceLevel,
-    with_idempotence_mode,
-    atomically,
-    oplog_commit,
-    generate_idempotency_key,
-    with_retry_policy, RetryPolicy,
-};
-
-// Atomic operations — retried together on failure
-let result = atomically(|| {
-let a = side_effect_1();
-let b = side_effect_2(a);
-(a, b)
-});
-
-// Control persistence level
-with_persistence_level(PersistenceLevel::PersistNothing, || {
-// No oplog entries — side effects replayed on recovery
-});
-
-// Control idempotence mode
-with_idempotence_mode(false, || {
-// HTTP requests won't be retried if result is uncertain
-});
-
-// Ensure oplog is replicated
-oplog_commit(3); // Wait for 3 replicas
-
-// Generate a durable idempotency key (persisted, safe for payment APIs etc.)
-let key = generate_idempotency_key();
-```
-
-### Transactions
-
-For saga-pattern compensation:
-
-```rust
-use golem_rust::{fallible_transaction, infallible_transaction, operation};
-
-let op1 = operation(
-|input: String| { /* execute */ Ok(result) },
-|input: String, result| { /* compensate/rollback */ Ok(()) },
-);
-
-// Fallible: compensates on failure, returns error
-let result = fallible_transaction(|tx| {
-let r = tx.execute(op1, "input".to_string())?;
-Ok(r)
-});
-
-// Infallible: compensates and retries on failure
-let result = infallible_transaction(|tx| {
-tx.execute(op1, "input".to_string());
-42
-});
-```
-
-## Using `golem new`
-
-Use `golem new` to create new applications and to add new components or agents to existing applications.
-
-### Create a new application
-
-```shell
-golem new my-app --template rust
-```
-
-This creates a new application directory, initializes `golem.yaml`, and creates the first Rust component with a default agent template.
-
-You can also run `golem new .` in an empty directory to initialize the current folder as a new application.
-
-If the folder name is not a valid Golem application name (lowercase kebab-case), specify one explicitly:
-
-```shell
-golem new . --application-name my-app --template rust
-```
-
-### Add to an existing application
-
-From inside an existing application, use `.` as the path:
-
-```shell
-golem new . --template rust
-```
-
-By default this applies the Rust template to a matching Rust component, or creates one if needed.
-
-### Create or target a specific component
-
-```shell
-golem new . --template rust --component-name my-app:billing
-```
-
-- If `my-app:billing` exists and is Rust, the template is applied there.
-- If it does not exist, `golem new` creates the component and applies the template.
-
-### Applying multiple templates
-
-You can apply multiple templates to the same component in one command:
-
-```shell
-golem new . --template rust --template my:agent-template --component-name my-app:billing
-```
-
-You can also apply templates incrementally by running `golem new` multiple times for the same component.
-
-If multiple templates affect the same files, `golem new` merges the changes and shows the planned updates before applying them.
-
-### Component directory behavior
-
-- If the application has exactly one component, its `dir` in `golem.yaml` is `.`.
-- If the application has multiple components, each component has an explicit `dir` in `golem.yaml`.
-- When needed, `golem new` can promote an existing root component layout into explicit per-component directories.
-
-### Choosing one vs multiple components
-
-In most cases, prefer a single component with multiple agents.
-
-Use multiple components only when you have a technical reason, for example:
-- using different guest languages in the same application (for example Rust + TypeScript)
-- separating components with distinct operational or ownership constraints
-
-### Useful flags
-
-- `--template <name>`: can be used multiple times to apply and merge several templates into one component (in non-interactive mode, at least one template is required)
-- `--component-name <namespace:name>`: target or create a specific component
-- `--application-name <name>`: set the application name when creating a new application
-
-To discover available templates:
-
-```shell
-golem templates
-```
+Load the `golem-add-agent-rust` skill for defining agents and custom types. See also the skill table above for durability configuration, annotations, RPC, atomic blocks, and transactions.
 
 ## Application Manifest (golem.yaml)
 

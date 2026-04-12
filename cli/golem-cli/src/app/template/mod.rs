@@ -27,6 +27,7 @@ pub use plan::{
     UnsafeTemplatePlanStep,
 };
 pub use repo::AppTemplateRepo;
+pub use repo::TEMPLATES_DIR;
 pub use template::{
     AppTemplate, AppTemplateAgent, AppTemplateCommon, AppTemplateCommonOnDemand,
     AppTemplateComponent, AppTemplateName, AppTemplatesForLanguage,

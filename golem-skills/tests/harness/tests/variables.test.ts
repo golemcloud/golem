@@ -9,10 +9,11 @@ describe("substituteVariables", () => {
   });
 
   it("substitutes multiple variables", () => {
-    const result = substituteVariables(
-      "{{agent}} running {{language}} in {{workspace}}",
-      { agent: "claude-code", language: "ts", workspace: "/tmp/work" },
-    );
+    const result = substituteVariables("{{agent}} running {{language}} in {{workspace}}", {
+      agent: "claude-code",
+      language: "ts",
+      workspace: "/tmp/work",
+    });
     assert.equal(result, "claude-code running ts in /tmp/work");
   });
 

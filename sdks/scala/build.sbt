@@ -16,8 +16,9 @@ val Scala212    = "2.12.21"
 // Global settings
 // ---------------------------------------------------------------------------
 
-ThisBuild / organization := "cloud.golem"
-ThisBuild / scalaVersion := Scala3Golem
+ThisBuild / organization     := "cloud.golem"
+ThisBuild / scalaVersion     := Scala3Golem
+ThisBuild / dynverTagPrefix  := "golem-scala-v"
 ThisBuild / licenses     := List("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0"))
 ThisBuild / homepage     := Some(url("https://github.com/golemcloud/golem"))
 ThisBuild / scmInfo := Some(
@@ -214,9 +215,10 @@ lazy val sbtPlugin = project
   .enablePlugins(SbtPlugin)
   .dependsOn(codegen)
   .settings(
-    name           := "golem-scala-sbt",
-    scalaVersion   := Scala212,
-    sbtVersion     := "1.12.0",
+    name               := "golem-scala-sbt",
+    scalaVersion       := Scala212,
+    crossScalaVersions := Seq(Scala212),
+    sbtVersion         := "1.12.0",
     addSbtPlugin("org.scala-js" % "sbt-scalajs" % "1.20.2"),
     libraryDependencies += "org.scalameta" %% "scalafmt-dynamic" % scalafmtDynamicVersion
   )

@@ -29,71 +29,13 @@ jobs:
       - name: Cache scala dependencies
         uses: coursier/cache-action@v8
 
-      - name: Extract version from tag
-        id: get_version
-        run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          VERSION=${TAG#golem-scala-v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Publish to Maven Central (Scala 3.8.2)
+      - name: Publish to Maven Central
         working-directory: sdks/scala
+        run: sbt ci-release
         env:
           PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
           PGP_SECRET: ${{ secrets.PGP_SECRET }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
-        run: |
-          VERSION=${{ steps.get_version.outputs.version }}
-          sbt -batch "++3.8.2; set ThisBuild / version := \"$VERSION\"; modelJVM/publishSigned; modelJS/publishSigned; macros/publishSigned; core/publishSigned"
-
-      - name: Publish to Maven Central (Scala 2.13.18)
-        working-directory: sdks/scala
-        env:
-          PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
-          PGP_SECRET: ${{ secrets.PGP_SECRET }}
-          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
-          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
-        run: |
-          VERSION=${{ steps.get_version.outputs.version }}
-          sbt -batch "++2.13.18; set ThisBuild / version := \"$VERSION\"; modelJVM/publishSigned; modelJS/publishSigned; macros/publishSigned; core/publishSigned"
-
-      - name: Publish codegen (Scala 3.3.7)
-        working-directory: sdks/scala
-        env:
-          PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
-          PGP_SECRET: ${{ secrets.PGP_SECRET }}
-          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
-          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
-        run: |
-          VERSION=${{ steps.get_version.outputs.version }}
-          sbt -batch "++3.3.7; set ThisBuild / version := \"$VERSION\"; codegen/publishSigned"
-
-      - name: Publish codegen (Scala 2.12)
-        working-directory: sdks/scala
-        env:
-          PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
-          PGP_SECRET: ${{ secrets.PGP_SECRET }}
-          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
-          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
-        run: |
-          VERSION=${{ steps.get_version.outputs.version }}
-          sbt -batch "++2.12.21!; set ThisBuild / version := \"$VERSION\"; codegen/publishSigned"
-
-      - name: Publish sbt plugin (Scala 2.12)
-        working-directory: sdks/scala
-        env:
-          PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
-          PGP_SECRET: ${{ secrets.PGP_SECRET }}
-          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
-          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
-        run: |
-          VERSION=${{ steps.get_version.outputs.version }}
-          sbt -batch "++2.12.21!; set ThisBuild / version := \"$VERSION\"; sbtPlugin/publishSigned"
-
-      - name: Release to Maven Central
-        working-directory: sdks/scala
-        env:
-          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
-          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
-        run: sbt -batch sonaRelease
+          CI_RELEASE: "+modelJVM/publishSigned; +modelJS/publishSigned; +codegen/publishSigned; +macros/publishSigned; +core/publishSigned; ++2.12.21; sbtPlugin/publishSigned"
+          CI_SONATYPE_RELEASE: sonaRelease
