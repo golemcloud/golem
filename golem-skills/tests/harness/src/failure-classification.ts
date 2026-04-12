@@ -1,13 +1,6 @@
 export interface FailureClassification {
   code: string;
-  category:
-    | "agent"
-    | "build"
-    | "deploy"
-    | "assertion"
-    | "network"
-    | "infra"
-    | "unknown";
+  category: "agent" | "build" | "deploy" | "assertion" | "network" | "infra" | "unknown";
   guidance: string;
 }
 
@@ -18,7 +11,7 @@ const CLASSIFICATION_MAP: Record<
   SKILL_NOT_ACTIVATED: {
     category: "agent",
     guidance:
-      "Ensure the agent reads SKILL.md. Check the watcher directory and verify skills are copied correctly.",
+      "Ensure the agent reads SKILL.md. Check the watcher scope and verify the bootstrap skill or generated project skill files exist where the agent expects them.",
   },
   SKILL_MISMATCH: {
     category: "agent",
@@ -55,6 +48,11 @@ const CLASSIFICATION_MAP: Record<
     guidance:
       "HTTP request failed. Check the URL, ensure the server is available, and verify expected response status.",
   },
+  CREATE_PROJECT_FAILED: {
+    category: "infra",
+    guidance:
+      "Failed to create a new project with 'golem new'. Verify the Golem CLI is installed and the template name is valid.",
+  },
   CREATE_AGENT_FAILED: {
     category: "infra",
     guidance:
@@ -69,6 +67,11 @@ const CLASSIFICATION_MAP: Record<
     category: "assertion",
     guidance:
       "Output did not match expected assertions. Review the expect block and compare with actual output.",
+  },
+  EXPECTED_FILE_MISSING: {
+    category: "assertion",
+    guidance:
+      "A required file was not created. Check the scenario's expectedFiles list and verify the preceding step generated the expected project output.",
   },
 };
 
@@ -87,15 +90,13 @@ export function classifyFailure(errorString: string): FailureClassification {
     return {
       code: "AGENT_FAILED",
       category: "agent",
-      guidance:
-        "The agent returned an error. Check agent logs and ensure the prompt is clear.",
+      guidance: "The agent returned an error. Check agent logs and ensure the prompt is clear.",
     };
   }
 
   return {
     code: "UNKNOWN",
     category: "unknown",
-    guidance:
-      "An unclassified error occurred. Review the full error output for details.",
+    guidance: "An unclassified error occurred. Review the full error output for details.",
   };
 }
