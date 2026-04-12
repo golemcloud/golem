@@ -23,12 +23,12 @@ describe("parseStep", () => {
 
   it("parses an invoke step", () => {
     const result = parseStep({
-      invoke: { agent: "my-agent", function: "do-thing", args: '{"x":1}' },
+      invoke: { agent: "my-agent", method: "do-thing", args: '{"x":1}' },
     });
     assert.equal(result.tag, "invoke");
     if (result.tag === "invoke") {
       assert.equal(result.invoke.agent, "my-agent");
-      assert.equal(result.invoke.function, "do-thing");
+      assert.equal(result.invoke.method, "do-thing");
       assert.equal(result.invoke.args, '{"x":1}');
     }
   });
@@ -47,12 +47,12 @@ describe("parseStep", () => {
 
   it("parses a trigger step", () => {
     const result = parseStep({
-      trigger: { agent: "worker", function: "run" },
+      trigger: { agent: "worker", method: "run" },
     });
     assert.equal(result.tag, "trigger");
     if (result.tag === "trigger") {
       assert.equal(result.trigger.agent, "worker");
-      assert.equal(result.trigger.function, "run");
+      assert.equal(result.trigger.method, "run");
     }
   });
 
@@ -125,6 +125,38 @@ describe("parseStep", () => {
     assert.deepEqual(result.only_if, { language: "ts" });
     assert.deepEqual(result.skip_if, { os: "windows" });
     assert.deepEqual(result.retry, { attempts: 3, delay: 2 });
+  });
+
+  it("requires expectedSkills when strictSkillMatch is set", async () => {
+    await assert.rejects(
+      () =>
+        loadScenarioYaml(`
+name: "strict-skill-match"
+steps:
+  - prompt: "do it"
+    strictSkillMatch: true
+`),
+      (err: Error) => {
+        assert.ok(err.message.includes("expectedSkills"));
+        return true;
+      },
+    );
+  });
+
+  it("requires expectedSkills when allowedExtraSkills is set", async () => {
+    await assert.rejects(
+      () =>
+        loadScenarioYaml(`
+name: "allowed-extra-skills"
+steps:
+  - prompt: "do it"
+    allowedExtraSkills: ["skill-b"]
+`),
+      (err: Error) => {
+        assert.ok(err.message.includes("expectedSkills"));
+        return true;
+      },
+    );
   });
 
   it("omits undefined common fields from output", () => {
@@ -237,7 +269,7 @@ steps:
   - id: "call-sync"
     invoke:
       agent: "worker-agent"
-      function: "process-item"
+      method: "process-item"
       args: '{"item_id": 42}'
     expect:
       exit_code: 0
@@ -246,7 +278,7 @@ steps:
   - id: "fire-async"
     trigger:
       agent: "worker-agent"
-      function: "background-cleanup"
+      method: "background-cleanup"
 
   - id: "settle"
     sleep: 2
@@ -269,7 +301,7 @@ steps:
     assert.equal(call.tag, "invoke");
     if (call.tag === "invoke") {
       assert.equal(call.invoke.agent, "worker-agent");
-      assert.equal(call.invoke.function, "process-item");
+      assert.equal(call.invoke.method, "process-item");
       assert.equal(call.invoke.args, '{"item_id": 42}');
     }
     assert.equal(call.expect?.stdout_contains, "processed");
@@ -277,7 +309,7 @@ steps:
     assert.equal(fire.tag, "trigger");
     if (fire.tag === "trigger") {
       assert.equal(fire.trigger.agent, "worker-agent");
-      assert.equal(fire.trigger.function, "background-cleanup");
+      assert.equal(fire.trigger.method, "background-cleanup");
     }
 
     assert.equal(settle.tag, "sleep");
@@ -318,6 +350,7 @@ steps:
     skip_if:
       agent: "opencode"
     continue_session: true
+    expectedSkills: ["golem-integration"]
     allowedExtraSkills: ["golem-test-runner"]
 `);
     assert.equal(spec.name, "conditional-flow");
@@ -336,6 +369,7 @@ steps:
     assert.deepEqual(multi.only_if, { language: "ts", os: "linux" });
     assert.deepEqual(multi.skip_if, { agent: "opencode" });
     assert.equal(multi.continue_session, true);
+    assert.deepEqual(multi.expectedSkills, ["golem-integration"]);
     assert.deepEqual(multi.allowedExtraSkills, ["golem-test-runner"]);
   });
 
@@ -410,7 +444,9 @@ steps:
     assert.deepEqual(tags, ["prompt", "http", "http", "http", "http", "shell"]);
 
     // Verify CRUD http methods
-    const httpSteps = spec.steps.filter((s): s is Extract<StepSpec, { tag: "http" }> => s.tag === "http");
+    const httpSteps = spec.steps.filter(
+      (s): s is Extract<StepSpec, { tag: "http" }> => s.tag === "http",
+    );
     const methods = httpSteps.map((s) => s.http.method);
     assert.deepEqual(methods, ["POST", "GET", "PUT", "DELETE"]);
 
@@ -447,11 +483,11 @@ steps:
   - id: "kick-off"
     trigger:
       agent: "bg-worker"
-      function: "start"
+      method: "start"
   - id: "call-worker"
     invoke:
       agent: "bg-worker"
-      function: "status"
+      method: "status"
     expect:
       stdout_contains: "running"
   - id: "check-api"
@@ -470,15 +506,27 @@ steps:
 
     const tags = spec.steps.map((s) => s.tag);
     assert.deepEqual(tags, [
-      "prompt", "create_agent", "shell", "sleep",
-      "trigger", "invoke", "http", "delete_agent",
+      "prompt",
+      "create_agent",
+      "shell",
+      "sleep",
+      "trigger",
+      "invoke",
+      "http",
+      "delete_agent",
     ]);
 
     // Each step has the correct id
     const ids = spec.steps.map((s) => s.id);
     assert.deepEqual(ids, [
-      "init", "spawn-worker", "build", "warmup",
-      "kick-off", "call-worker", "check-api", "cleanup-worker",
+      "init",
+      "spawn-worker",
+      "build",
+      "warmup",
+      "kick-off",
+      "call-worker",
+      "check-api",
+      "cleanup-worker",
     ]);
   });
 
@@ -495,9 +543,23 @@ steps:
       url: "http://localhost"
 `);
     for (const step of spec.steps) {
-      const actionKeys = ["prompt", "invoke", "invoke_json", "shell", "trigger", "create_agent", "delete_agent", "sleep", "http"] as const;
+      const actionKeys = [
+        "prompt",
+        "invoke",
+        "invoke_json",
+        "shell",
+        "trigger",
+        "create_agent",
+        "delete_agent",
+        "sleep",
+        "http",
+      ] as const;
       const present = actionKeys.filter((k) => Object.prototype.hasOwnProperty.call(step, k));
-      assert.equal(present.length, 1, `Step "${step.id}" should have exactly one action field, got: ${present.join(", ")}`);
+      assert.equal(
+        present.length,
+        1,
+        `Step "${step.id}" should have exactly one action field, got: ${present.join(", ")}`,
+      );
       assert.equal(present[0], step.tag, `Step "${step.id}" action field should match tag`);
     }
   });

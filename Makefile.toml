@@ -218,6 +218,20 @@ private = true
 condition = { env_not_set = ["CI"] }
 run_task = [{ name = ["build-registry-service"] }]
 
+[tasks.build-release-full]
+dependencies = [
+    "wit",
+    "set-version",
+]
+command = "cargo"
+args = [
+    "build",
+    "--workspace",
+    "--release",
+    "--exclude",
+    "integration-tests",
+]
+
 [tasks.build-release]
 description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
 to build for other target than the current one, can be linux/amd64 or linux/arm64. This is used for cross-compiling
@@ -320,6 +334,41 @@ exec --fail-on-error %{PNPM_BIN} clean
 
 [tasks.clean-sdk-ts.windows]
 env = { PNPM_BIN = "pnpm.cmd" }
+
+[tasks.build-sdk-scala]
+description = "Publishes the Scala SDK to local Ivy/Maven cache as 0.0.0-SNAPSHOT"
+dependencies = ["wit-sdks"]
+cwd = "./sdks/scala"
+script = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -f target/.local-publish-marker ]; then
+    echo "Scala SDK already published locally, skipping (delete sdks/scala/target/.local-publish-marker to force)"
+else
+    ./scripts/generate-agent-guest-wasm.sh
+    sbt 'set every version := "0.0.0-SNAPSHOT"' \
+        '+modelJVM/publishLocal' \
+        '+modelJS/publishLocal' \
+        '+macros/publishLocal' \
+        'core/publishLocal' \
+        '+codegen/publishLocal' \
+        '++2.12.21' \
+        'sbtPlugin/publishLocal'
+    mkdir -p target
+    touch target/.local-publish-marker
+fi
+'''
+
+[tasks.clean-sdk-scala]
+description = "Cleans the Scala SDK"
+cwd = "./sdks/scala"
+script = '''
+#!/usr/bin/env bash
+set -euo pipefail
+sbt clean
+rm -f target/.local-publish-marker
+'''
 
 ## ** CHECK **
 

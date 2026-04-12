@@ -270,6 +270,35 @@ async fn app_new_language_hints(_tracing: &Tracing) {
 }
 
 #[test]
+async fn app_new_unpacks_embedded_bootstrap_skills(_tracing: &Tracing) {
+    for (app_name, language) in [
+        ("test-app-embedded-skills-ts", "ts"),
+        ("test-app-embedded-skills-rust", "rust"),
+        ("test-app-embedded-skills-scala", "scala"),
+    ] {
+        let mut ctx = TestContext::new();
+        let outputs = ctx
+            .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, language])
+            .await;
+        assert!(outputs.success_or_dump(), "language={language}");
+
+        ctx.cd(app_name);
+
+        assert!(
+            ctx.cwd_path_join(".agents/skills/golem-new-project/SKILL.md")
+                .exists(),
+            "missing embedded bootstrap skill for {language}",
+        );
+
+        let claude_link = ctx.cwd_path_join(".claude");
+        assert!(
+            claude_link.is_symlink(),
+            "missing .claude symlink for {language}",
+        );
+    }
+}
+
+#[test]
 async fn completion(_tracing: &Tracing) {
     let ctx = TestContext::new();
 
