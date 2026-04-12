@@ -51,6 +51,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
+use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
 use test_r::{inherit_test_dep, sequential_suite, tag_suite};
@@ -60,6 +61,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tracing::info;
 use url::Url;
+use uuid::Uuid;
 
 mod cmd {
     pub static NO_ARGS: &[&str] = &[];
@@ -535,6 +537,21 @@ impl TestContext {
         .unwrap()
     }
 
+    async fn cli_interactive_repl_test<I, S, F>(&mut self, args: I, session_fn: F)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+        F: FnOnce(&mut ReplTestSession) -> anyhow::Result<()> + Send + 'static,
+    {
+        let test_sync_events_file = ReplTestSession::init_test_sync_events(self);
+
+        self.cli_interactive(args, move |repl| {
+            let mut session = ReplTestSession::new(repl, test_sync_events_file);
+            session_fn(&mut session)
+        })
+        .await;
+    }
+
     async fn start_server(&mut self) {
         assert!(self.server_process.is_none(), "server is already running");
 
@@ -860,6 +877,161 @@ pub trait InteractiveSession {
         self.expect_regex(expected)
             .with_context(|| format!("after sending line: {line:?}"))?;
         Ok(())
+    }
+}
+
+pub struct ReplTestSyncEventsFile {
+    path: PathBuf,
+    last_seq: u64,
+}
+
+impl ReplTestSyncEventsFile {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path, last_seq: 0 }
+    }
+
+    pub fn wait_for_test_sync_event(
+        &mut self,
+        expected_event: &str,
+        timeout: Duration,
+    ) -> anyhow::Result<()> {
+        let start = std::time::Instant::now();
+        loop {
+            let mut newest_seq = self.last_seq;
+            let content = std::fs::read_to_string(&self.path).unwrap_or_default();
+
+            for line in content.lines() {
+                let value = match serde_json::from_str::<serde_json::Value>(line) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+
+                let seq = match value.get("seq").and_then(|v| v.as_u64()) {
+                    Some(seq) if seq > self.last_seq => seq,
+                    _ => continue,
+                };
+                newest_seq = newest_seq.max(seq);
+
+                if value
+                    .get("event")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|event| is_matching_test_sync_event(expected_event, event))
+                {
+                    self.last_seq = seq;
+                    return Ok(());
+                }
+            }
+
+            self.last_seq = newest_seq;
+
+            if start.elapsed() > timeout {
+                return Err(anyhow::anyhow!(
+                    "Timed out waiting for REPL test sync event {expected_event:?} in {}",
+                    self.path.display()
+                ));
+            }
+
+            sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+fn is_matching_test_sync_event(expected_event: &str, actual_event: &str) -> bool {
+    expected_event == actual_event
+        || (expected_event == "repl_ready" && actual_event == "ready")
+        || (expected_event == "completion_done" && actual_event == "complete_done")
+}
+
+pub struct ReplTestSession<'a> {
+    repl: &'a mut dyn InteractiveSession,
+    test_sync_events: ReplTestSyncEventsFile,
+}
+
+const REPL_TEST_SYNC_EVENT_TIMEOUT: Duration = Duration::from_secs(120);
+
+impl<'a> ReplTestSession<'a> {
+    fn init_test_sync_events(ctx: &mut TestContext) -> PathBuf {
+        let test_sync_events_file = ctx.cwd_path_join(format!(
+            ".golem-ts-repl-test-sync-events-{}.jsonl",
+            Uuid::new_v4()
+        ));
+        std::fs::write(&test_sync_events_file, "").unwrap();
+
+        let path = test_sync_events_file.to_string_lossy().to_string();
+        ctx.add_env_var("GOLEM_TS_REPL_TEST_SYNC_EVENTS_FILE", path);
+
+        test_sync_events_file
+    }
+
+    pub fn new(repl: &'a mut dyn InteractiveSession, test_sync_events_file: PathBuf) -> Self {
+        Self {
+            repl,
+            test_sync_events: ReplTestSyncEventsFile::new(test_sync_events_file),
+        }
+    }
+
+    pub fn set_expect_timeout(&mut self, timeout: Option<Duration>) {
+        self.repl.set_expect_timeout(timeout);
+    }
+
+    pub fn expect_str(&mut self, expected: &str) -> anyhow::Result<()> {
+        self.repl.expect_str(expected)
+    }
+
+    pub fn expect_regex(&mut self, expected: &str) -> anyhow::Result<()> {
+        self.repl.expect_regex(expected)
+    }
+
+    pub fn send_line_and_expect_regex(&mut self, line: &str, expected: &str) -> anyhow::Result<()> {
+        self.repl.send_line_and_expect_regex(line, expected)
+    }
+
+    pub fn send_line_wait_eval_expect_str(
+        &mut self,
+        line: &str,
+        expected: &str,
+    ) -> anyhow::Result<()> {
+        self.repl.send_line(line)?;
+        self.repl.expect_str(expected)?;
+        self.test_sync_events
+            .wait_for_test_sync_event("eval_done", REPL_TEST_SYNC_EVENT_TIMEOUT)
+    }
+
+    pub fn send_line_wait_eval_expect_regex(
+        &mut self,
+        line: &str,
+        expected: &str,
+    ) -> anyhow::Result<()> {
+        self.repl.send_line(line)?;
+        self.repl.expect_regex(expected)?;
+        self.test_sync_events
+            .wait_for_test_sync_event("eval_done", REPL_TEST_SYNC_EVENT_TIMEOUT)
+    }
+
+    pub fn send_tab_wait_completion_expect_str(
+        &mut self,
+        line: &str,
+        expected: &str,
+    ) -> anyhow::Result<()> {
+        self.repl.send(&format!("{line}\t"))?;
+        self.repl.expect_str(expected)?;
+        self.test_sync_events
+            .wait_for_test_sync_event("completion_done", REPL_TEST_SYNC_EVENT_TIMEOUT)
+    }
+
+    pub fn send_tab_list_wait_completion_expect_regex(
+        &mut self,
+        line: &str,
+        expected: &str,
+    ) -> anyhow::Result<()> {
+        self.repl.send(&format!("{line}\t\t"))?;
+        self.repl.expect_regex(expected)?;
+        self.test_sync_events
+            .wait_for_test_sync_event("completion_done", REPL_TEST_SYNC_EVENT_TIMEOUT)
+    }
+
+    pub fn kill_line(&mut self) -> anyhow::Result<()> {
+        self.repl.send("\u{15}")
     }
 }
 

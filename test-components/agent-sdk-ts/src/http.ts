@@ -4,11 +4,9 @@ import {
     agent,
     endpoint,
     UnstructuredBinary,
-    createPromise,
-    awaitPromise,
-    Principal
+    Principal,
+    createWebhook
 } from '@golemcloud/golem-ts-sdk';
-import { createWebhook } from 'golem:agent/host@1.5.0';
 
 @agent({
   mount: '/http-agents/{agentName}',
@@ -179,20 +177,19 @@ class WebhookAgent extends BaseAgent {
     post: "/test-webhook",
   })
   async testWebhook(): Promise<{ payloadLength: number }> {
-    let promiseId = createPromise();
-    let webhookUrl = createWebhook(promiseId);
+    const webhook = createWebhook();
     await fetch(this.testServerUrl!, {
         method: 'POST',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ webhookUrl: webhookUrl })
+        body: JSON.stringify({ webhookUrl: webhook.getUrl() })
       });
 
-    let data = await awaitPromise(promiseId);
+    const data = await webhook;
 
-    return { payloadLength: data.byteLength };
+    return { payloadLength: data.bytes().byteLength };
   }
 }
 

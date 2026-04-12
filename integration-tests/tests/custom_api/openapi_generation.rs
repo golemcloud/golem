@@ -51,10 +51,38 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
 
 #[test]
 #[tracing::instrument]
-async fn test_open_api_generation(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn test_open_api_yaml_generation(agent: &HttpTestContext) -> anyhow::Result<()> {
     let mut mint = Mint::new("tests/goldenfiles");
-
     let mut mint_goldenfile = mint.new_goldenfile("expected_openapi_yaml.yaml")?;
+
+    let response = agent
+        .client
+        .get(agent.base_url.join("/openapi.yaml")?)
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("application/yaml"))
+    );
+
+    let bytes = response.bytes().await?;
+    let yaml_value: serde_yaml::Value = serde_yaml::from_slice(&bytes)?;
+    let encoded_yaml = serde_yaml::to_string(&yaml_value)?;
+    let _ = mint_goldenfile.write(encoded_yaml.as_bytes())?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_open_api_json_generation(agent: &HttpTestContext) -> anyhow::Result<()> {
+    let mut mint = Mint::new("tests/goldenfiles");
+    let mut mint_goldenfile = mint.new_goldenfile("expected_openapi_json.json")?;
 
     let response = agent
         .client
@@ -63,11 +91,44 @@ async fn test_open_api_generation(agent: &HttpTestContext) -> anyhow::Result<()>
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("application/json"))
+    );
 
     let bytes = response.bytes().await?;
-    let decoded_yaml: serde_yaml::Value = serde_yaml::from_slice(&bytes)?;
-    let encoded_yaml = serde_yaml::to_string(&decoded_yaml)?;
-    let _ = mint_goldenfile.write(encoded_yaml.as_bytes())?;
+    let json_value: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let encoded_json = serde_json::to_string_pretty(&json_value)?;
+    let _ = mint_goldenfile.write(encoded_json.as_bytes())?;
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn test_open_api_json_and_yaml_are_equivalent(agent: &HttpTestContext) -> anyhow::Result<()> {
+    let yaml_response = agent
+        .client
+        .get(agent.base_url.join("/openapi.yaml")?)
+        .send()
+        .await?;
+    let json_response = agent
+        .client
+        .get(agent.base_url.join("/openapi.json")?)
+        .send()
+        .await?;
+
+    assert_eq!(yaml_response.status(), reqwest::StatusCode::OK);
+    assert_eq!(json_response.status(), reqwest::StatusCode::OK);
+
+    let yaml_value: serde_yaml::Value = serde_yaml::from_slice(&yaml_response.bytes().await?)?;
+    let json_value: serde_json::Value = serde_json::from_slice(&json_response.bytes().await?)?;
+    let yaml_as_json = serde_json::to_value(&yaml_value)?;
+
+    assert_eq!(json_value, yaml_as_json);
 
     Ok(())
 }
