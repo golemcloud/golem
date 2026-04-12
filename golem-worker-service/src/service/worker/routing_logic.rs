@@ -463,7 +463,9 @@ impl IsRetriableError for CallWorkerExecutorError {
     fn is_retriable(&self) -> bool {
         match self {
             CallWorkerExecutorError::FailedToGetRoutingTable(error) => error.is_retriable(),
-            CallWorkerExecutorError::FailedToConnectToPod(status) => status.is_retriable(),
+            CallWorkerExecutorError::FailedToConnectToPod(status) => {
+                status.is_retriable() || status.code() == tonic::Code::Cancelled
+            }
         }
     }
 

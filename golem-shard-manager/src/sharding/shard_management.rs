@@ -19,9 +19,9 @@ use super::persistence::RoutingTablePersistence;
 use super::rebalancing::Rebalance;
 use super::worker_executor::{WorkerExecutorService, assign_shards, revoke_shards};
 use async_rwlock::RwLock;
-use golem_common::model::Pod;
+use golem_common::model::{Pod, ShardId};
 use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinSet;
@@ -129,10 +129,11 @@ impl ShardManagement {
             debug!("Shard management loop awaiting changes");
             change.notified().await;
 
-            let (new_pods, removed_pods) = updates.lock().await.reset();
+            let (new_pods, removed_pods, retry_full_assignment_pods) = updates.lock().await.reset();
             debug!(
                 new_pods = new_pods.keys().join(", "),
                 removed_pods = removed_pods.iter().join(", "),
+                retry_pods = retry_full_assignment_pods.iter().join(", "),
                 "Shard management loop woken up",
             );
 
@@ -140,7 +141,7 @@ impl ShardManagement {
             //   - the rebalance plan is calculated,
             //   - new and removed pods are added to the routing table and got persisted,
             // but the rebalance plan is NOT applied yet. The lock is then release for apply.
-            let mut rebalance = {
+            let (mut rebalance, full_assignment_pods) = {
                 let mut current_routing_table = routing_table.write().await;
 
                 for pod in removed_pods {
@@ -163,9 +164,20 @@ impl ShardManagement {
                 let mut rebalance =
                     Rebalance::from_routing_table(&current_routing_table, threshold);
 
+                let mut full_assignment_pods: HashSet<Pod> = HashSet::new();
+
                 for pod in send_full_assignment {
                     let assignments = current_routing_table.get_shards(pod).unwrap_or_default();
                     rebalance.add_assignments(&pod, assignments);
+                    full_assignment_pods.insert(pod);
+                }
+
+                for pod in retry_full_assignment_pods {
+                    if current_routing_table.has_pod(pod) {
+                        let assignments = current_routing_table.get_shards(pod).unwrap_or_default();
+                        rebalance.add_assignments(&pod, assignments);
+                        full_assignment_pods.insert(pod);
+                    }
                 }
 
                 persistence_service
@@ -173,24 +185,53 @@ impl ShardManagement {
                     .await
                     .expect("Failed to persist routing table after pod changes");
 
-                rebalance
+                (rebalance, full_assignment_pods)
             };
 
             debug!(rebalance=%rebalance, "Applying rebalance plan");
-            Self::execute_rebalance(worker_executors.clone(), &mut rebalance).await;
+            let failed_assignments =
+                Self::execute_rebalance(worker_executors.clone(), &mut rebalance).await;
+
+            let mut needs_retry = false;
+            if !failed_assignments.is_empty() {
+                let failed_shards: HashSet<ShardId> = failed_assignments
+                    .iter()
+                    .flat_map(|(_, shard_ids)| shard_ids.clone())
+                    .collect();
+                rebalance.remove_assignment_shards(&failed_shards);
+
+                warn!(
+                    failed_shards = failed_shards.iter().join(", "),
+                    "Some shards could not be assigned and will be left unassigned for retry"
+                );
+
+                {
+                    let mut updates_guard = updates.lock().await;
+                    for (pod, _) in &failed_assignments {
+                        if full_assignment_pods.contains(pod) {
+                            updates_guard.retry_full_assignment(*pod);
+                        }
+                    }
+                }
+                needs_retry = true;
+            }
 
             routing_table.write().await.rebalance(rebalance);
             persistence_service
                 .write(&routing_table.read().await.clone())
                 .await
                 .expect("Failed to persist routing table after rebalance");
+
+            if needs_retry {
+                change.notify_one();
+            }
         }
     }
 
     async fn execute_rebalance(
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
         rebalance: &mut Rebalance,
-    ) {
+    ) -> Vec<(Pod, BTreeSet<ShardId>)> {
         info!("Beginning rebalance...");
 
         if !rebalance.get_unassignments().is_empty() {
@@ -219,7 +260,8 @@ impl ShardManagement {
                 "Executing shard assignments",
             );
         }
-        assign_shards(worker_executors.clone(), rebalance.get_assignments()).await;
+
+        assign_shards(worker_executors.clone(), rebalance.get_assignments()).await
     }
 }
 
@@ -227,6 +269,7 @@ impl ShardManagement {
 struct ShardManagementChanges {
     new_pods: HashMap<Pod, Option<String>>,
     removed_pods: HashSet<Pod>,
+    retry_full_assignment_pods: HashSet<Pod>,
 }
 
 impl ShardManagementChanges {
@@ -234,24 +277,35 @@ impl ShardManagementChanges {
         ShardManagementChanges {
             new_pods,
             removed_pods,
+            retry_full_assignment_pods: HashSet::new(),
         }
     }
 
     pub fn add_new_pod(&mut self, pod: Pod, pod_name: Option<String>) {
         self.removed_pods.remove(&pod);
+        self.retry_full_assignment_pods.remove(&pod);
         self.new_pods.insert(pod, pod_name);
     }
 
     pub fn remove_pod(&mut self, pod: Pod) {
         self.new_pods.remove(&pod);
+        self.retry_full_assignment_pods.remove(&pod);
         self.removed_pods.insert(pod);
     }
 
-    pub fn reset(&mut self) -> (HashMap<Pod, Option<String>>, HashSet<Pod>) {
+    pub fn retry_full_assignment(&mut self, pod: Pod) {
+        if !self.removed_pods.contains(&pod) {
+            self.retry_full_assignment_pods.insert(pod);
+        }
+    }
+
+    pub fn reset(&mut self) -> (HashMap<Pod, Option<String>>, HashSet<Pod>, HashSet<Pod>) {
         let new = self.new_pods.clone();
         let removed = self.removed_pods.clone();
+        let retry = self.retry_full_assignment_pods.clone();
         self.new_pods.clear();
         self.removed_pods.clear();
-        (new, removed)
+        self.retry_full_assignment_pods.clear();
+        (new, removed, retry)
     }
 }
