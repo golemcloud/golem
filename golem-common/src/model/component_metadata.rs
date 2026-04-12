@@ -17,7 +17,6 @@ pub use super::parsed_function_name::{
 };
 use crate::SafeDisplay;
 use crate::base_model::component::InitialAgentFile;
-use crate::base_model::component_metadata::AgentTypeProvisionConfig;
 pub use crate::base_model::component_metadata::*;
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::{AgentType, AgentTypeName};

@@ -35,7 +35,7 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{
     AgentFilePermissions, AgentTypeProvisionConfigCreation,
     AgentTypeProvisionConfigUpdate, CanonicalFilePath, ComponentDto, ComponentId,
-    ComponentRevision, PluginInstallation, PluginInstallationAction, PluginPriority,
+    ComponentRevision, PluginInstallation,  PluginPriority,
 };
 use golem_common::model::component_metadata::RawComponentMetadata;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentRevision};

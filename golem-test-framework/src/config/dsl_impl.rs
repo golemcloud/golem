@@ -20,7 +20,6 @@ use crate::dsl::{
 };
 use crate::model::IFSEntry;
 use anyhow::{Context, anyhow};
-use applying::Apply;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::SplitStream;
@@ -43,7 +42,7 @@ use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{
     AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     ComponentCreation, ComponentDto, ComponentId, ComponentName, ComponentRevision,
-    ComponentUpdate, PluginInstallationAction,
+    ComponentUpdate, 
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
