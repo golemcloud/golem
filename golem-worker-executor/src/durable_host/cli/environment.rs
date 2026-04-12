@@ -24,7 +24,7 @@ use wasmtime_wasi::p2::bindings::cli::environment::Host;
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_environment(&mut self) -> wasmtime::Result<Vec<(String, String)>> {
         let default_agent_env = self
-            .agent_type_provision_configs()
+            .agent_type_provision_config()
             .map(|c| c.env.clone())
             .unwrap_or_default();
 

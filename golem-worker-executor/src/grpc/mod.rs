@@ -1536,7 +1536,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let installation = agent_type
                     .as_ref()
                     .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
-                    .find(|p| p.priority == plugin_priority);
+                    .and_then(|plugins| plugins.iter().find(|p| p.priority == plugin_priority));
 
                 match installation {
                     Some(installation) => {
@@ -1616,7 +1616,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let installation = agent_type
             .as_ref()
             .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
-            .find(|p| p.priority == plugin_priority)
+            .and_then(|plugins| plugins.iter().find(|p| p.priority == plugin_priority))
             .cloned();
 
         match installation {

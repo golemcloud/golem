@@ -1396,8 +1396,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         } else {
                             let component_metadata =
                                 store.as_context().data().component_metadata().clone();
-                            let agent_type_provision_configs =
-                                store.as_context().data().agent_type_provision_config();
+                            let agent_type_provision_config =
+                                store.as_context().data().agent_type_provision_config().cloned();
 
                             store
                                 .as_context_mut()
@@ -1406,10 +1406,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     target_revision,
                                     component_metadata.component_size,
                                     HashSet::from_iter(
-                                        agent_type_provision_configs
-                                            .map(|c| c.plugins.as_slice())
-                                            .unwrap_or_default()
-                                            .iter()
+                                        agent_type_provision_config
+                                            .into_iter()
+                                            .flat_map(|c| c.plugins)
                                             .map(|installation| {
                                                 installation.environment_plugin_grant_id
                                             }),
@@ -1671,7 +1670,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 target_revision,
                                 component_metadata.component_size,
                                 HashSet::from_iter({
-                                    self.agent_type_provision_configs()
+                                    self.agent_type_provision_config()
                                         .map(|c| c.plugins.as_slice())
                                         .unwrap_or_default()
                                         .iter()

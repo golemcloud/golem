@@ -129,7 +129,7 @@ pub fn parse_worker_creation_agent_config(
         let component_config = component
             .metadata
             .agent_type_config(&agent_id.agent_type)
-            .clone()
+            .map(|s| s.to_vec())
             .unwrap_or_default();
 
         let agent_config = effective_agent_config(initial_agent_config.clone(), component_config);
