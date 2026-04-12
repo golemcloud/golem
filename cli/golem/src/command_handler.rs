@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::launch::{LaunchArgs, launch_golem_services};
 use anyhow::anyhow;
 use clap_verbosity_flag::Verbosity;
 use golem_cli::command::server::{RunArgs, ServerSubcommand};
@@ -21,6 +20,9 @@ use golem_cli::context::Context;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::debug;
+
+use crate::compat::map_local_server_startup_error;
+use crate::launch::{LaunchArgs, launch_golem_services};
 
 pub struct ServerCommandHandler;
 
@@ -54,10 +56,11 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     custom_request_port: args.custom_request_port(),
                     mcp_port: args.mcp_port(),
                     ports_file: args.ports_file.clone(),
-                    data_dir,
+                    data_dir: data_dir.clone(),
                     agent_filesystem_root: args.agent_filesystem_root.clone(),
                 })
-                .await?;
+                .await
+                .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
 
                 while let Some(res) = join_set.join_next().await {
                     res??;
@@ -71,6 +74,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
 
     async fn run_server() -> anyhow::Result<()> {
         let args = RunArgs::default();
+        let data_dir = default_data_dir()?;
 
         let mut join_set = launch_golem_services(&LaunchArgs {
             router_addr: args.router_addr().to_string(),
@@ -78,10 +82,11 @@ impl CommandHandlerHooks for ServerCommandHandler {
             custom_request_port: args.custom_request_port(),
             mcp_port: args.mcp_port(),
             ports_file: args.ports_file.clone(),
-            data_dir: default_data_dir()?,
+            data_dir: data_dir.clone(),
             agent_filesystem_root: args.agent_filesystem_root.clone(),
         })
-        .await?;
+        .await
+        .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
 
         tokio::spawn(async move {
             while let Some(res) = join_set.join_next().await {

@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::StartedComponents;
+use crate::compat::{preflight_registry_db_compat, write_registry_db_compat};
 use crate::router::start_router;
+use crate::{StartedComponents, registry_db_path};
 use anyhow::Context;
 use golem_cli::fs;
 use golem_common::config::DbConfig;
@@ -117,7 +118,12 @@ pub async fn launch_golem_services(
             )
         })?;
 
+    preflight_registry_db_compat(&args.data_dir)
+        .await
+        .map_err(anyhow::Error::from)?;
+
     let started_components = start_components(args, &mut join_set).await?;
+    write_registry_db_compat(&args.data_dir).await?;
     let custom_request_port = started_components.worker_service.custom_request_port;
     let mcp_port = started_components.worker_service.mcp_port;
 
@@ -213,7 +219,7 @@ fn registry_service_config(
             ..Default::default()
         },
         db: DbConfig::Sqlite(DbSqliteConfig {
-            database: fs::path_to_str(&args.data_dir.join("registry.db"))?.to_string(),
+            database: fs::path_to_str(&registry_db_path(&args.data_dir))?.to_string(),
             max_connections: 4,
             foreign_keys: true,
         }),
