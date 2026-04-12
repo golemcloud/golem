@@ -81,6 +81,9 @@ async fn test_open_api_yaml_generation(agent: &HttpTestContext) -> anyhow::Resul
 #[test]
 #[tracing::instrument]
 async fn test_open_api_json_generation(agent: &HttpTestContext) -> anyhow::Result<()> {
+    let mut mint = Mint::new("tests/goldenfiles");
+    let mut mint_goldenfile = mint.new_goldenfile("expected_openapi_json.json")?;
+
     let response = agent
         .client
         .get(agent.base_url.join("/openapi.json")?)
@@ -98,11 +101,8 @@ async fn test_open_api_json_generation(agent: &HttpTestContext) -> anyhow::Resul
 
     let bytes = response.bytes().await?;
     let json_value: serde_json::Value = serde_json::from_slice(&bytes)?;
-
-    let golden_yaml: serde_yaml::Value =
-        serde_yaml::from_str(include_str!("../goldenfiles/expected_openapi_yaml.yaml"))?;
-    let golden_as_json = serde_json::to_value(&golden_yaml)?;
-    assert_eq!(json_value, golden_as_json);
+    let encoded_json = serde_json::to_string_pretty(&json_value)?;
+    let _ = mint_goldenfile.write(encoded_json.as_bytes())?;
 
     Ok(())
 }
