@@ -107,7 +107,7 @@ const HttpSchema = z.object({
 const InvokeSchema = z.object({
   agent: z.string(),
   method: langConditional(z.string()),
-  args: z.string().optional(),
+  args: langConditional(z.string()).optional(),
 });
 
 const ShellSchema = z.object({
@@ -119,7 +119,7 @@ const ShellSchema = z.object({
 const TriggerSchema = z.object({
   agent: z.string(),
   method: langConditional(z.string()),
-  args: z.string().optional(),
+  args: langConditional(z.string()).optional(),
 });
 
 const CreateAgentSchema = z.object({
@@ -259,9 +259,9 @@ interface StepCommon {
   retry?: { attempts: number; delay: number };
 }
 
-type InvokeSpec = { agent: string; method: LangConditional<string>; args?: string };
+type InvokeSpec = { agent: string; method: LangConditional<string>; args?: LangConditional<string> };
 type ShellSpec = { command: string; args?: string[]; cwd?: string };
-type TriggerSpec = { agent: string; method: LangConditional<string>; args?: string };
+type TriggerSpec = { agent: string; method: LangConditional<string>; args?: LangConditional<string> };
 type ResolvedInvokeSpec = { agent: string; method: string; args?: string };
 type ResolvedTriggerSpec = { agent: string; method: string; args?: string };
 type CreateAgentSpec = {
@@ -514,6 +514,8 @@ export class ScenarioExecutor {
         : Object.fromEntries(
             Object.entries(v).map(([k, s]) => [k, substituteVariables(s, variables)]),
           );
+    const subLangStrOpt = (v: LangConditional<string> | undefined): LangConditional<string> | undefined =>
+      v === undefined ? undefined : subLangStr(v);
 
     switch (step.tag) {
       case "prompt":
@@ -524,7 +526,7 @@ export class ScenarioExecutor {
           invoke: {
             agent: substituteVariables(step.invoke.agent, variables),
             method: subLangStr(step.invoke.method),
-            args: sub(step.invoke.args),
+            args: subLangStrOpt(step.invoke.args),
           },
         };
       case "invoke_json":
@@ -533,7 +535,7 @@ export class ScenarioExecutor {
           invoke_json: {
             agent: substituteVariables(step.invoke_json.agent, variables),
             method: subLangStr(step.invoke_json.method),
-            args: sub(step.invoke_json.args),
+            args: subLangStrOpt(step.invoke_json.args),
           },
         };
       case "shell":
@@ -551,7 +553,7 @@ export class ScenarioExecutor {
           trigger: {
             agent: substituteVariables(step.trigger.agent, variables),
             method: subLangStr(step.trigger.method),
-            args: sub(step.trigger.args),
+            args: subLangStrOpt(step.trigger.args),
           },
         };
       case "create_agent":
@@ -622,6 +624,7 @@ export class ScenarioExecutor {
         invoke: {
           ...step.invoke,
           method: resolveByLanguage(step.invoke.method, lang)!,
+          args: resolveByLanguage(step.invoke.args, lang),
         },
       } as StepSpec;
     }
@@ -632,6 +635,7 @@ export class ScenarioExecutor {
         invoke_json: {
           ...step.invoke_json,
           method: resolveByLanguage(step.invoke_json.method, lang)!,
+          args: resolveByLanguage(step.invoke_json.args, lang),
         },
       } as StepSpec;
     }
@@ -642,6 +646,7 @@ export class ScenarioExecutor {
         trigger: {
           ...step.trigger,
           method: resolveByLanguage(step.trigger.method, lang)!,
+          args: resolveByLanguage(step.trigger.args, lang),
         },
       } as StepSpec;
     }
@@ -652,10 +657,14 @@ export class ScenarioExecutor {
     if (typeof invoke.method !== "string") {
       throw new Error("Invoke method must resolve to a string for the current language");
     }
+    if (invoke.args !== undefined && typeof invoke.args !== "string") {
+      throw new Error("Invoke args must resolve to a string for the current language");
+    }
 
     return {
       ...invoke,
       method: invoke.method,
+      args: invoke.args as string | undefined,
     };
   }
 
@@ -663,10 +672,14 @@ export class ScenarioExecutor {
     if (typeof trigger.method !== "string") {
       throw new Error("Trigger method must resolve to a string for the current language");
     }
+    if (trigger.args !== undefined && typeof trigger.args !== "string") {
+      throw new Error("Trigger args must resolve to a string for the current language");
+    }
 
     return {
       ...trigger,
       method: trigger.method,
+      args: trigger.args as string | undefined,
     };
   }
 

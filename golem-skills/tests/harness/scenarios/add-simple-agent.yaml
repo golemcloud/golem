@@ -35,7 +35,10 @@ steps:
         rust: "create_item"
         ts: "createItem"
         scala: "createItem"
-      args: '{id: "item-1", name: "Hammer"}'
+      args:
+        rust: '{ id: "item-1", name: "Hammer" }'
+        ts: '{ id: "item-1", name: "Hammer" }'
+        scala: 'Item(id = "item-1", name = "Hammer")'
     expect:
       result_json:
         - path: "$.id"
@@ -65,7 +68,10 @@ steps:
         rust: "update_item"
         ts: "updateItem"
         scala: "updateItem"
-      args: '{id: "item-1", name: "Updated Hammer"}'
+      args:
+        rust: '{ id: "item-1", name: "Updated Hammer" }'
+        ts: '{ id: "item-1", name: "Updated Hammer" }'
+        scala: 'Item(id = "item-1", name = "Updated Hammer")'
     expect:
       result_json:
         - path: "$.id"

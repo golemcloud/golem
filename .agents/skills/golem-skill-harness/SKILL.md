@@ -317,7 +317,7 @@ With language-conditional presets:
 ```
 
 Use the real method name as it appears in source code, not a kebab-cased external name. For
-cross-language scenarios, `method` can be language-conditional:
+cross-language scenarios, `method` and `args` can be language-conditional:
 
 ```yaml
 - id: "call-function"
@@ -439,7 +439,8 @@ Available assertion fields:
 ### Language-Conditional Fields
 
 `prompt`, `expectedSkills`, `allowedExtraSkills`, `verify`, `create_project`, `invoke.method`,
-`invoke_json.method`, and `trigger.method` can be language-conditional:
+`invoke_json.method`, `trigger.method`, `invoke.args`, `invoke_json.args`, and `trigger.args`
+can be language-conditional:
 
 ```yaml
 - id: "create-project"
@@ -461,6 +462,32 @@ Another common pattern is language-specific invocation naming:
       rust: "list_items"
       ts: "listItems"
       scala: "listItems"
+```
+
+When method arguments contain records or other composite types, use per-language `args` because
+`golem agent invoke` parses arguments using language-specific syntax. Rust uses `{ field: value }`
+with `:`, TypeScript uses `{ field: value }` with `:`, and Scala uses `TypeName(field = value)`
+with `=`:
+
+```yaml
+- id: "create-item"
+  invoke_json:
+    agent: 'ItemRepositoryAgent("catalog")'
+    method:
+      rust: "create_item"
+      ts: "createItem"
+      scala: "createItem"
+    args:
+      rust: '{ id: "item-1", name: "Hammer" }'
+      ts: '{ id: "item-1", name: "Hammer" }'
+      scala: 'Item(id = "item-1", name = "Hammer")'
+```
+
+For simple scalar arguments (strings, numbers, booleans), the syntax is the same across all
+languages, so a plain `args` string suffices:
+
+```yaml
+    args: '"item-1"'
 ```
 
 ## Scenario Authoring Tips
