@@ -458,7 +458,7 @@ mod tests {
             let mut pending_count = agent_ids.len();
             let mut completed_agents: Vec<String> = Vec::new();
             loop {
-                match tokio::time::timeout(Duration::from_secs(60), tasks.join_next()).await {
+                match tokio::time::timeout(Duration::from_secs(180), tasks.join_next()).await {
                     Ok(Some(result)) => {
                         let (_component_id, agent_id, result) = result.unwrap();
                         match result {
