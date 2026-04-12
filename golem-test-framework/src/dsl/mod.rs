@@ -31,10 +31,11 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{DataValue, ParsedAgentId};
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::auth::EnvironmentRole;
-use golem_common::model::component::{AgentConfigEntry, PluginPriority};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{
-    ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
-    PluginInstallation, PluginInstallationAction,
+    AgentFilePermissions, AgentTypeProvisionConfigCreation,
+    AgentTypeProvisionConfigUpdate, CanonicalFilePath, ComponentDto, ComponentId,
+    ComponentRevision, PluginInstallation, PluginInstallationAction, PluginPriority,
 };
 use golem_common::model::component_metadata::RawComponentMetadata;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentRevision};
@@ -43,10 +44,7 @@ use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
-use golem_common::model::worker::{
-    AgentMetadataDto, FlatComponentFileSystemNode, RevertWorkerTarget, UpdateRecord,
-    WorkerAgentConfigEntry,
-};
+use golem_common::model::worker::{AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget, UpdateRecord};
 use golem_common::model::{AgentFilter, AgentStatus, IdempotencyKey, OplogIndex, ScanCursor};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -121,11 +119,8 @@ pub trait TestDsl {
         name: &str,
         unique: bool,
         unverified: bool,
-        files: Vec<IFSEntry>,
-        env: BTreeMap<String, String>,
-        config_vars: BTreeMap<String, String>,
-        agent_config: Vec<AgentConfigEntry>,
-        plugins: Vec<PluginInstallation>,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto>;
 
     async fn get_latest_component_revision(
@@ -149,10 +144,6 @@ pub trait TestDsl {
             component_id,
             latest_revision.revision,
             Some(name),
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
             None,
             Vec::new(),
         )
@@ -162,20 +153,44 @@ pub trait TestDsl {
     async fn update_component_with_files(
         &self,
         component_id: &ComponentId,
+        agent_type: &str,
         name: &str,
         files: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
+        use golem_common::model::component::{
+            AgentFileOptions, AgentFilePath, ArchiveFilePath,
+        };
         let latest_revision = self.get_latest_component_revision(component_id).await?;
+        // Collect all existing file paths for this agent type to remove them first
+        let files_to_remove = latest_revision
+            .metadata
+            .agent_type_provision_configs()
+            .get(&AgentTypeName(agent_type.to_string()))
+            .map(|c| c.files.iter().map(|f| f.path.clone()).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let files_to_add_or_update = files
+            .iter()
+            .map(|f| {
+                (
+                    ArchiveFilePath(f.target_path.clone()),
+                    AgentFileOptions {
+                        target_path: AgentFilePath(f.target_path.clone()),
+                        permissions: f.permissions,
+                    },
+                )
+            })
+            .collect();
+        let update = AgentTypeProvisionConfigUpdate {
+            files_to_remove,
+            files_to_add_or_update,
+            ..Default::default()
+        };
         self.update_component_with(
             component_id,
             latest_revision.revision,
             Some(name),
+            Some(BTreeMap::from([(AgentTypeName(agent_type.to_string()), update)])),
             files,
-            latest_revision.files.into_iter().map(|f| f.path).collect(),
-            None,
-            None,
-            None,
-            Vec::new(),
         )
         .await
     }
@@ -183,19 +198,20 @@ pub trait TestDsl {
     async fn update_component_with_env(
         &self,
         component_id: &ComponentId,
+        agent_type: &str,
         name: &str,
         env: &[(String, String)],
     ) -> anyhow::Result<ComponentDto> {
         let latest_revision = self.get_latest_component_revision(component_id).await?;
+        let update = AgentTypeProvisionConfigUpdate {
+            env: Some(BTreeMap::from_iter(env.iter().cloned())),
+            ..Default::default()
+        };
         self.update_component_with(
             component_id,
             latest_revision.revision,
             Some(name),
-            Vec::new(),
-            Vec::new(),
-            Some(BTreeMap::from_iter(env.to_vec())),
-            None,
-            None,
+            Some(BTreeMap::from([(AgentTypeName(agent_type.to_string()), update)])),
             Vec::new(),
         )
         .await
@@ -206,12 +222,8 @@ pub trait TestDsl {
         component_id: &ComponentId,
         previous_revision: ComponentRevision,
         wasm_name: Option<&str>,
-        new_files: Vec<IFSEntry>,
-        removed_files: Vec<ComponentFilePath>,
-        env: Option<BTreeMap<String, String>>,
-        config_vars: Option<BTreeMap<String, String>>,
-        agent_config: Option<Vec<AgentConfigEntry>>,
-        plugin_updates: Vec<PluginInstallationAction>,
+        agent_type_provision_config_updates: Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>>,
+        files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto>;
 
     async fn try_start_agent(
@@ -219,7 +231,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: ParsedAgentId,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
-        self.try_start_agent_with(component_id, id, HashMap::new(), HashMap::new(), Vec::new())
+        self.try_start_agent_with(component_id, id, HashMap::new(), HashMap::new(), Vec::<AgentConfigEntryDto>::new())
             .await
     }
 
@@ -229,7 +241,7 @@ pub trait TestDsl {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>>;
 
     async fn start_agent(
@@ -237,7 +249,7 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: ParsedAgentId,
     ) -> anyhow::Result<AgentId> {
-        self.start_agent_with(component_id, id, HashMap::new(), HashMap::new(), Vec::new())
+        self.start_agent_with(component_id, id, HashMap::new(), HashMap::new(), Vec::<AgentConfigEntryDto>::new())
             .await
     }
 
@@ -247,7 +259,7 @@ pub trait TestDsl {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<AgentId> {
         let result = self
             .try_start_agent_with(component_id, id, env, config_vars, agent_config)
@@ -587,7 +599,7 @@ pub trait TestDsl {
         &self,
         agent_id: &AgentId,
         path: &str,
-    ) -> anyhow::Result<Vec<FlatComponentFileSystemNode>>;
+    ) -> anyhow::Result<Vec<AgentFileSystemNode>>;
 
     async fn get_file_contents(&self, agent_id: &AgentId, path: &str) -> anyhow::Result<Bytes>;
 
@@ -686,11 +698,8 @@ pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {
     wasm_name: String,
     unique: bool,
     unverified: bool,
-    files: Vec<IFSEntry>,
-    env: BTreeMap<String, String>,
-    config_vars: BTreeMap<String, String>,
-    agent_config: Vec<AgentConfigEntry>,
-    plugins: Vec<PluginInstallation>,
+    agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+    files_for_archive: Vec<IFSEntry>,
 }
 
 impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
@@ -702,11 +711,8 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
             name,
             unique: false,
             unverified: false,
-            files: Vec::new(),
-            env: BTreeMap::new(),
-            config_vars: BTreeMap::new(),
-            agent_config: Vec::new(),
-            plugins: Vec::new(),
+            agent_type_provision_configs: BTreeMap::new(),
+            files_for_archive: Vec::new(),
         }
     }
 
@@ -741,76 +747,113 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
-    /// Set the initial files for the component
-    pub fn with_files(mut self, files: &[IFSEntry]) -> Self {
-        self.files = files.to_vec();
+    fn provision_config_entry_mut(
+        &mut self,
+        agent_type: &str,
+    ) -> &mut AgentTypeProvisionConfigCreation {
+        self.agent_type_provision_configs
+            .entry(AgentTypeName(agent_type.to_string()))
+            .or_default()
+    }
+
+    /// Set the initial files for an agent type.
+    /// Populates both the provision config files map and the archive source list.
+    pub fn with_files(mut self, agent_type: &str, files: &[IFSEntry]) -> Self {
+        use golem_common::model::component::{AgentFileOptions, AgentFilePath, ArchiveFilePath};
+        // Populate provision config: archive_path -> options
+        let entry = self.provision_config_entry_mut(agent_type);
+        for f in files {
+            entry.files.insert(
+                ArchiveFilePath(f.target_path.clone()),
+                AgentFileOptions {
+                    target_path: AgentFilePath(f.target_path.clone()),
+                    permissions: f.permissions,
+                },
+            );
+        }
+        // Also accumulate source files for archive building
+        self.files_for_archive.extend_from_slice(files);
         self
     }
 
-    /// Adds an initial file to the component
+
+    /// Adds an initial file to the component for a specific agent type.
+    /// Populates both the provision config files map and the archive source list.
     pub fn add_file(
         mut self,
+        agent_type: &str,
         target: &str,
         source: &str,
-        permissions: ComponentFilePermissions,
+        permissions: AgentFilePermissions,
     ) -> anyhow::Result<Self> {
-        let source_path = PathBuf::from(source);
-        let target_path = ComponentFilePath::from_abs_str(target).map_err(|e| anyhow!(e))?;
-        let ifs_entry = IFSEntry {
-            source_path,
+        use golem_common::model::component::{AgentFileOptions, AgentFilePath, ArchiveFilePath};
+        let target_path = CanonicalFilePath::from_abs_str(target).map_err(|e| anyhow!(e))?;
+        let entry = self.provision_config_entry_mut(agent_type);
+        entry.files.insert(
+            ArchiveFilePath(target_path.clone()),
+            AgentFileOptions {
+                target_path: AgentFilePath(target_path.clone()),
+                permissions,
+            },
+        );
+        self.files_for_archive.push(IFSEntry {
+            source_path: std::path::PathBuf::from(source),
             target_path,
             permissions,
-        };
-
-        self.files.push(ifs_entry);
+        });
         Ok(self)
     }
 
-    pub fn add_ro_file(self, target: &str, source: &str) -> anyhow::Result<Self> {
-        self.add_file(target, source, ComponentFilePermissions::ReadOnly)
+    pub fn add_ro_file(self, agent_type: &str, target: &str, source: &str) -> anyhow::Result<Self> {
+        self.add_file(agent_type, target, source, AgentFilePermissions::ReadOnly)
     }
 
-    pub fn add_rw_file(self, target: &str, source: &str) -> anyhow::Result<Self> {
-        self.add_file(target, source, ComponentFilePermissions::ReadWrite)
+    pub fn add_rw_file(self, agent_type: &str, target: &str, source: &str) -> anyhow::Result<Self> {
+        self.add_file(agent_type, target, source, AgentFilePermissions::ReadWrite)
     }
 
-    pub fn with_env(mut self, env: Vec<(String, String)>) -> Self {
-        let map = env.into_iter().collect::<BTreeMap<_, _>>();
-        self.env = map;
+    pub fn with_env(mut self, agent_type: &str, env: Vec<(String, String)>) -> Self {
+        let entry = self.provision_config_entry_mut(agent_type);
+        entry.env = env.into_iter().collect();
         self
     }
 
-    pub fn with_config_vars(mut self, config_vars: Vec<(String, String)>) -> Self {
-        let map = config_vars.into_iter().collect::<BTreeMap<_, _>>();
-        self.config_vars = map;
+    pub fn with_config_vars(mut self, agent_type: &str, config_vars: Vec<(String, String)>) -> Self {
+        let entry = self.provision_config_entry_mut(agent_type);
+        entry.wasi_config = config_vars.into_iter().collect();
         self
     }
 
-    pub fn with_agent_config(mut self, agent_config: Vec<AgentConfigEntry>) -> Self {
-        self.agent_config = agent_config;
+    pub fn with_agent_config(mut self, agent_type: &str, config: Vec<AgentConfigEntryDto>) -> Self {
+        let entry = self.provision_config_entry_mut(agent_type);
+        entry.config = config;
         self
     }
 
-    pub fn add_agent_config(mut self, agent_config: AgentConfigEntry) -> Self {
-        self.agent_config.push(agent_config);
+    pub fn add_agent_config(mut self, agent_type: &str, config_entry: AgentConfigEntryDto) -> Self {
+        let entry = self.provision_config_entry_mut(agent_type);
+        entry.config.push(config_entry);
         self
     }
 
     pub fn with_plugin(
         self,
+        agent_type: &str,
         environment_plugin_id: &EnvironmentPluginGrantId,
         priority: i32,
     ) -> Self {
-        self.with_parametrized_plugin(environment_plugin_id, priority, BTreeMap::new())
+        self.with_parametrized_plugin(agent_type, environment_plugin_id, priority, BTreeMap::new())
     }
 
     pub fn with_parametrized_plugin(
         mut self,
+        agent_type: &str,
         environment_plugin_id: &EnvironmentPluginGrantId,
         priority: i32,
         parameters: BTreeMap<String, String>,
     ) -> Self {
-        self.plugins.push(PluginInstallation {
+        let entry = self.provision_config_entry_mut(agent_type);
+        entry.plugin_installations.push(PluginInstallation {
             environment_plugin_grant_id: *environment_plugin_id,
             priority: PluginPriority(priority),
             parameters,
@@ -828,11 +871,8 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
                 &self.name,
                 self.unique,
                 self.unverified,
-                self.files,
-                self.env,
-                self.config_vars,
-                self.agent_config,
-                self.plugins,
+                self.agent_type_provision_configs,
+                self.files_for_archive,
             )
             .await
     }
@@ -1029,7 +1069,7 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             format!("Worker not found: {:?}", agent_id)
         }
         WorkerExecutorError::ShardingNotReady => "Sharing not ready".to_string(),
-        WorkerExecutorError::InitialComponentFileDownloadFailed { reason, .. } => {
+        WorkerExecutorError::InitialAgentFileDownloadFailed { reason, .. } => {
             format!("Initial File download failed: {}", reason)
         }
         WorkerExecutorError::FileSystemError { reason, .. } => {

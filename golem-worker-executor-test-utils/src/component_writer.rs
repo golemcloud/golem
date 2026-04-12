@@ -19,9 +19,10 @@ use golem_common::model::agent::AgentType;
 use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::EnvironmentRole;
+use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{
-    ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision,
-    InitialComponentFile,
+    ComponentDto, ComponentId, ComponentName, ComponentRevision,
 };
 use golem_common::model::component_metadata::{
     ComponentMetadata, LinearMemory, RawComponentMetadata,
@@ -88,10 +89,8 @@ impl FileSystemComponentWriter {
         component_name: &str,
         component_id: &ComponentId,
         component_revision: ComponentRevision,
-        files: Vec<InitialComponentFile>,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
         skip_analysis: bool,
-        env: BTreeMap<String, String>,
-        config_vars: BTreeMap<String, String>,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
@@ -179,13 +178,11 @@ impl FileSystemComponentWriter {
             component_id: *component_id,
             component_name: component_name.to_string(),
             revision: component_revision,
-            files,
+            agent_type_provision_configs,
             size,
             memories,
             exports,
             wasm_filename,
-            env,
-            config_vars,
             agent_types,
             target_path,
             root_package_name,
@@ -246,10 +243,8 @@ impl FileSystemComponentWriter {
         &self,
         local_path: &Path,
         name: &str,
-        files: Vec<InitialComponentFile>,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
         unverified: bool,
-        env: BTreeMap<String, String>,
-        config_vars: BTreeMap<String, String>,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
@@ -259,10 +254,8 @@ impl FileSystemComponentWriter {
         self.add_component(
             local_path,
             name,
-            files,
+            agent_type_provision_configs,
             unverified,
-            env,
-            config_vars,
             environment_id,
             application_id,
             account_id,
@@ -277,10 +270,8 @@ impl FileSystemComponentWriter {
         &self,
         local_path: &Path,
         name: &str,
-        files: Vec<InitialComponentFile>,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
         unverified: bool,
-        env: BTreeMap<String, String>,
-        config_vars: BTreeMap<String, String>,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
@@ -292,10 +283,8 @@ impl FileSystemComponentWriter {
             name,
             &ComponentId(Uuid::new_v4()),
             ComponentRevision::INITIAL,
-            files,
+            agent_type_provision_configs,
             unverified,
-            env,
-            config_vars,
             environment_id,
             application_id,
             account_id,
@@ -320,10 +309,8 @@ impl FileSystemComponentWriter {
             component_name,
             component_id,
             ComponentRevision::INITIAL,
-            Vec::new(),
+            BTreeMap::new(),
             false,
-            BTreeMap::new(),
-            BTreeMap::new(),
             environment_id,
             application_id,
             account_id,
@@ -337,10 +324,7 @@ impl FileSystemComponentWriter {
         &self,
         component_id: &ComponentId,
         local_path: Option<&Path>,
-        new_files: Vec<InitialComponentFile>,
-        removed_files: Vec<ComponentFilePath>,
-        env: Option<BTreeMap<String, String>>,
-        config_vars: Option<BTreeMap<String, String>>,
+        agent_type_provision_configs: Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfig>>,
         original_source_hash: Option<blake3::Hash>,
     ) -> anyhow::Result<Component> {
         let target_dir = &self.root;
@@ -360,26 +344,14 @@ impl FileSystemComponentWriter {
             .await
             .expect("failed to read metadata");
 
-        let files = {
-            let mut files = old_metadata.files;
-            let removed_files = removed_files.into_iter().collect::<HashSet<_>>();
-            files.retain(|f| !removed_files.contains(&f.path));
-            for f in new_files {
-                files.push(f);
-            }
-            files
-        };
-
         let component = self
             .write_component_to_filesystem(
                 local_path.unwrap_or(old_metadata.target_path.as_path()),
                 &old_metadata.component_name,
                 component_id,
                 new_revision,
-                files,
+                agent_type_provision_configs.unwrap_or(old_metadata.agent_type_provision_configs),
                 false,
-                env.unwrap_or(old_metadata.env),
-                config_vars.unwrap_or(old_metadata.config_vars),
                 old_metadata.environment_id,
                 old_metadata.application_id,
                 old_metadata.account_id,
@@ -544,11 +516,9 @@ pub(super) struct LocalFileSystemComponentMetadata {
     pub size: u64,
     pub memories: Vec<LinearMemory>,
     pub exports: Vec<AnalysedExport>,
-    pub files: Vec<InitialComponentFile>,
+    pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     pub component_name: String,
     pub wasm_filename: String,
-    pub env: BTreeMap<String, String>,
-    pub config_vars: BTreeMap<String, String>,
     pub wasm_hash: golem_common::model::diff::Hash,
     pub agent_types: Vec<AgentType>,
     pub environment_roles_from_shares: HashSet<EnvironmentRole>,
@@ -586,13 +556,9 @@ impl From<LocalFileSystemComponentMetadata> for Component {
                 value.root_package_name,
                 value.root_package_version,
                 value.agent_types,
+                value.agent_type_provision_configs,
             ),
             created_at: Default::default(),
-            files: value.files,
-            installed_plugins: vec![],
-            env: value.env,
-            agent_config: Vec::new(),
-            config_vars: value.config_vars,
             wasm_hash: value.wasm_hash,
             hash: value.final_hash,
             object_store_key: "".to_string(),

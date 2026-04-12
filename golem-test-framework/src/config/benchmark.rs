@@ -46,7 +46,7 @@ use golem_common::model::auth::TokenSecret;
 use golem_common::model::plan::PlanId;
 use golem_common::tracing::directive::warn;
 use golem_common::tracing::{TracingConfig, init_tracing_returning_provider};
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use std::collections::HashMap;
@@ -71,7 +71,7 @@ pub struct BenchmarkTestDependencies {
     worker_service: Arc<dyn WorkerService>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster>,
     blob_storage: Arc<dyn BlobStorage>,
-    initial_component_files_service: Arc<InitialComponentFilesService>,
+    initial_agent_files_service: Arc<InitialAgentFilesService>,
     component_directory: PathBuf,
     component_temp_directory: Arc<TempDir>,
     registry_service: Arc<dyn RegistryService>,
@@ -290,8 +290,8 @@ impl BenchmarkTestDependencies {
                 .await
                 .unwrap(),
         );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let initial_agent_files_service =
+            Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
 
         let rdb: Arc<dyn Rdb> = {
             let unique_network_id = Uuid::new_v4().to_string();
@@ -407,7 +407,7 @@ impl BenchmarkTestDependencies {
             worker_executor_cluster,
             component_directory: Path::new(component_directory).to_path_buf(),
             blob_storage,
-            initial_component_files_service,
+            initial_agent_files_service,
             component_temp_directory: Arc::new(TempDir::new().unwrap()),
             registry_service,
         }
@@ -456,8 +456,8 @@ impl BenchmarkTestDependencies {
                         .await
                         .unwrap(),
                 );
-                let initial_component_files_service =
-                    Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+                let initial_agent_files_service =
+                    Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
 
                 let rdb: Arc<dyn Rdb> = Arc::new(ProvidedPostgresRdb::new(postgres.clone()));
 
@@ -527,7 +527,7 @@ impl BenchmarkTestDependencies {
                     worker_executor_cluster,
                     component_directory: Path::new(component_directory).to_path_buf(),
                     blob_storage,
-                    initial_component_files_service,
+                    initial_agent_files_service,
                     component_temp_directory: Arc::new(TempDir::new().unwrap()),
                     registry_service,
                 }
@@ -631,8 +631,8 @@ impl TestDependencies for BenchmarkTestDependencies {
         self.worker_executor_cluster.clone()
     }
 
-    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
-        self.initial_component_files_service.clone()
+    fn initial_agent_files_service(&self) -> Arc<InitialAgentFilesService> {
+        self.initial_agent_files_service.clone()
     }
 
     fn registry_service(&self) -> Arc<dyn RegistryService> {

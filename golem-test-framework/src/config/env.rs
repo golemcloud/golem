@@ -32,7 +32,7 @@ use crate::components::worker_service::WorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::config::{DbType, TestDependencies};
 use async_trait::async_trait;
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use std::fmt::{Debug, Formatter};
@@ -153,7 +153,7 @@ pub struct EnvBasedTestDependencies {
     worker_service: Arc<dyn WorkerService>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster>,
     blob_storage: Arc<dyn BlobStorage>,
-    initial_component_files_service: Arc<InitialComponentFilesService>,
+    initial_agent_files_service: Arc<InitialAgentFilesService>,
     temp_directory: Arc<TempDir>,
     registry_service: Arc<dyn RegistryService>,
     test_component_dir: PathBuf,
@@ -336,8 +336,8 @@ impl EnvBasedTestDependencies {
 
         let blob_storage = Arc::new(FileSystemBlobStorage::new(blob_storage_root).await.unwrap());
 
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let initial_agent_files_service =
+            Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
 
         let redis = Self::make_redis(&config).await;
         {
@@ -374,7 +374,7 @@ impl EnvBasedTestDependencies {
             redis,
             redis_monitor,
             blob_storage,
-            initial_component_files_service,
+            initial_agent_files_service,
             registry_service,
             temp_directory,
             shard_manager,
@@ -428,8 +428,8 @@ impl TestDependencies for EnvBasedTestDependencies {
         self.worker_executor_cluster.clone()
     }
 
-    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
-        self.initial_component_files_service.clone()
+    fn initial_agent_files_service(&self) -> Arc<InitialAgentFilesService> {
+        self.initial_agent_files_service.clone()
     }
 
     fn registry_service(&self) -> Arc<dyn RegistryService> {

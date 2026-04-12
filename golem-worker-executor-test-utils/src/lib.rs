@@ -33,7 +33,7 @@ use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::component::{ComponentFilePath, ComponentId};
+use golem_common::model::component::{CanonicalFilePath, ComponentId};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
@@ -59,7 +59,7 @@ use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
     DefaultCompiledComponentService,
 };
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_test_framework::components::redis::Redis;
@@ -190,7 +190,7 @@ pub struct WorkerExecutorTestDependencies {
     pub redis: Arc<dyn Redis>,
     pub redis_monitor: Arc<dyn RedisMonitor>,
     pub component_writer: Arc<FileSystemComponentWriter>,
-    pub initial_component_files_service: Arc<InitialComponentFilesService>,
+    pub initial_agent_files_service: Arc<InitialAgentFilesService>,
     pub component_directory: PathBuf,
     pub component_temp_directory: Arc<TempDir>,
     pub component_service_directory: PathBuf,
@@ -231,8 +231,8 @@ impl WorkerExecutorTestDependencies {
                 .unwrap(),
         );
 
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let initial_agent_files_service =
+            Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
 
         let component_directory = Path::new("../test-components").to_path_buf();
 
@@ -245,7 +245,7 @@ impl WorkerExecutorTestDependencies {
             component_directory,
             component_service_directory,
             component_writer,
-            initial_component_files_service,
+            initial_agent_files_service,
             component_temp_directory: Arc::new(TempDir::new().unwrap()),
             data_dir: Arc::new(data_dir),
         }
@@ -1049,6 +1049,10 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.parsed_agent_id()
     }
 
+    fn agent_type_provision_config(&self) -> Option<&golem_common::base_model::component_metadata::AgentTypeProvisionConfig> {
+        self.durable_ctx.agent_type_provision_config()
+    }
+
     fn agent_mode(&self) -> AgentMode {
         self.durable_ctx.agent_mode()
     }
@@ -1133,14 +1137,14 @@ impl ResourceLimiterAsync for TestWorkerCtx {
 impl FileSystemReading for TestWorkerCtx {
     async fn get_file_system_node(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.get_file_system_node(path).await
     }
 
     async fn read_file(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
         self.durable_ctx.read_file(path).await
     }

@@ -14,12 +14,12 @@
 
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::{AgentFileContentHash, AgentType};
+use crate::base_model::worker::AgentConfigEntryDto;
 use crate::base_model::application::ApplicationId;
 use crate::base_model::component_metadata::ComponentMetadata;
 use crate::base_model::diff;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use crate::base_model::json::NormalizedJsonValue;
 use crate::base_model::path::{AgentFilePath, ArchiveFilePath};
 use crate::base_model::plugin_registration::PluginRegistrationId;
 use crate::base_model::validate_lower_kebab_case_identifier;
@@ -109,13 +109,6 @@ impl AsRef<str> for ComponentName {
 }
 
 declare_structs! {
-    #[derive(Eq)]
-    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-    #[cfg_attr(feature = "full", desert(evolution()))]
-    pub struct AgentConfigEntryDto {
-        pub path: Vec<String>,
-        pub value: NormalizedJsonValue,
-    }
     pub struct ComponentDto {
         pub id: ComponentId,
         pub revision: ComponentRevision,
@@ -148,6 +141,7 @@ declare_structs! {
         pub agent_type_provision_config_updates: Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>>,
     }
 
+    #[derive(Default)]
     pub struct AgentTypeProvisionConfigCreation {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
@@ -167,6 +161,7 @@ declare_structs! {
         pub files: BTreeMap<ArchiveFilePath, AgentFileOptions>,
     }
 
+    #[derive(Default)]
     pub struct AgentTypeProvisionConfigUpdate {
         pub env: Option<BTreeMap<String, String>>,
         pub wasi_config: Option<BTreeMap<String, String>>,

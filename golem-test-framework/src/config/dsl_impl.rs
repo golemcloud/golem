@@ -39,10 +39,11 @@ use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::component::{AgentConfigEntry, ComponentCreation, ComponentUpdate};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{
-    ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentId, ComponentName,
-    ComponentRevision, PluginInstallation, PluginInstallationAction,
+    AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
+    ComponentCreation, ComponentDto, ComponentId, ComponentName, ComponentRevision,
+    ComponentUpdate, PluginInstallationAction,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
@@ -50,10 +51,7 @@ use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
-use golem_common::model::worker::{
-    AgentMetadataDto, AgentUpdateMode, FlatComponentFileSystemNode, RevertWorkerTarget,
-    WorkerAgentConfigEntry,
-};
+use golem_common::model::worker::{AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, AgentUpdateMode, RevertWorkerTarget};
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
@@ -210,11 +208,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         name: &str,
         unique: bool,
         unverified: bool,
-        files: Vec<IFSEntry>,
-        env: BTreeMap<String, String>,
-        config_vars: BTreeMap<String, String>,
-        agent_config: Vec<AgentConfigEntry>,
-        plugins: Vec<PluginInstallation>,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
         let source_path = component_directory.join(format!("{wasm_name}.wasm"));
@@ -236,42 +231,27 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             source_path
         };
 
-        let (_tmp_dir, maybe_files_archive) = if !files.is_empty() {
-            let (tmp_dir, files_archive) = build_ifs_archive(component_directory, &files).await?;
-            (Some(tmp_dir), Some(File::open(files_archive).await?))
-        } else {
-            (None, None)
-        };
-
-        let file_options = files
-            .into_iter()
-            .map(|f| {
-                (
-                    f.target_path,
-                    ComponentFileOptions {
-                        permissions: f.permissions,
-                    },
-                )
-            })
-            .apply(BTreeMap::from_iter);
-
         let client = self.deps.registry_service().client(&self.token).await;
 
         let agent_types = extract_agent_types(&source_path, false, true).await?;
 
         trace!("Agent types in component {component_name}:\n{agent_types:#?}");
 
+        let (_tmp_dir, maybe_files_archive) = if !files_for_archive.is_empty() {
+            let (tmp_dir, files_archive) =
+                build_ifs_archive(component_directory, &files_for_archive).await?;
+            (Some(tmp_dir), Some(File::open(files_archive).await?))
+        } else {
+            (None, None)
+        };
+
         let component = client
             .create_component(
                 &environment_id.0,
                 &ComponentCreation {
                     component_name,
-                    file_options,
-                    env,
-                    config_vars,
-                    agent_config,
-                    plugins,
                     agent_types,
+                    agent_type_provision_configs,
                 },
                 File::open(source_path).await?,
                 maybe_files_archive,
@@ -311,12 +291,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         component_id: &ComponentId,
         previous_revision: ComponentRevision,
         wasm_name: Option<&str>,
-        new_files: Vec<IFSEntry>,
-        removed_files: Vec<ComponentFilePath>,
-        env: Option<BTreeMap<String, String>>,
-        config_vars: Option<BTreeMap<String, String>>,
-        agent_config: Option<Vec<AgentConfigEntry>>,
-        plugin_updates: Vec<PluginInstallationAction>,
+        agent_type_provision_config_updates: Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>>,
+        files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
         let client = self.deps.registry_service().client(&self.token).await;
@@ -339,43 +315,29 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             None
         };
 
-        let (_tmp_dir, maybe_new_files_archive) = if !new_files.is_empty() {
-            let (tmp_dir, new_files_archive) =
-                build_ifs_archive(component_directory, &new_files).await?;
-            (Some(tmp_dir), Some(File::open(new_files_archive).await?))
-        } else {
-            (None, None)
-        };
-
-        let new_file_options = new_files
-            .into_iter()
-            .map(|f| {
-                (
-                    f.target_path,
-                    ComponentFileOptions {
-                        permissions: f.permissions,
-                    },
-                )
-            })
-            .apply(BTreeMap::from_iter);
-
         let component = client
             .update_component(
                 &component_id.0,
                 &ComponentUpdate {
                     current_revision: previous_revision,
-                    new_file_options,
-                    removed_files,
-                    env,
-                    config_vars,
-                    agent_config,
                     agent_types: updated_wasm
                         .as_ref()
                         .map(|(_wasm, agent_types)| agent_types.clone()),
-                    plugin_updates,
+                    agent_type_provision_config_updates,
                 },
                 updated_wasm.map(|(wasm, _agent_types)| wasm),
-                maybe_new_files_archive,
+                {
+                    let (_tmp_dir, maybe_new_files_archive) =
+                        if !files_for_archive.is_empty() {
+                            let (tmp_dir, new_files_archive) =
+                                build_ifs_archive(component_directory, &files_for_archive)
+                                    .await?;
+                            (Some(tmp_dir), Some(File::open(new_files_archive).await?))
+                        } else {
+                            (None, None)
+                        };
+                    maybe_new_files_archive
+                },
             )
             .await?;
 
@@ -392,7 +354,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         id: ParsedAgentId,
         env: HashMap<String, String>,
         config_vars: HashMap<String, String>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
         let client = self
             .deps
@@ -828,7 +790,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         &self,
         agent_id: &AgentId,
         path: &str,
-    ) -> anyhow::Result<Vec<FlatComponentFileSystemNode>> {
+    ) -> anyhow::Result<Vec<AgentFileSystemNode>> {
         let client = self
             .deps
             .worker_service()

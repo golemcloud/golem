@@ -1010,7 +1010,7 @@ async fn component_env_variables(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("FOO".to_string(), "bar".to_string())])
+        .with_env("Environment", vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
 
@@ -1069,7 +1069,7 @@ async fn component_env_variables_update(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("FOO".to_string(), "bar".to_string())])
+        .with_env("Environment", vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
 
@@ -1090,6 +1090,7 @@ async fn component_env_variables_update(
     let updated_component = executor
         .update_component_with_env(
             &component.id,
+            "Environment",
             "golem_it_host_api_tests_release",
             &[("BAR".to_string(), "baz".to_string())],
         )
@@ -1136,7 +1137,7 @@ async fn component_env_and_worker_env_priority(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("FOO".to_string(), "bar".to_string())])
+        .with_env("Environment", vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
 

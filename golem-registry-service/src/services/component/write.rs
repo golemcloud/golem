@@ -32,8 +32,9 @@ use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::agent::{AgentConfigSource, AgentType};
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::component::{
-    AgentConfigEntryDto, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
+    AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
 };
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::component::{
     AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
     ComponentRevision, ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginInstallation,
