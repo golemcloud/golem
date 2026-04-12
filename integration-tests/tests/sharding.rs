@@ -456,16 +456,42 @@ mod tests {
 
             info!("Workers invoked");
             let mut pending_count = agent_ids.len();
-            while let Some(result) = tasks.join_next().await {
-                let (_component_id, agent_id, result) = result.unwrap();
-                match result {
-                    Ok(_) => {
-                        pending_count -= 1;
-                        info!("Worker invoke success: {agent_id}, pending: {pending_count}",);
+            let mut completed_agents: Vec<String> = Vec::new();
+            loop {
+                match tokio::time::timeout(Duration::from_secs(60), tasks.join_next()).await {
+                    Ok(Some(result)) => {
+                        let (_component_id, agent_id, result) = result.unwrap();
+                        match result {
+                            Ok(_) => {
+                                pending_count -= 1;
+                                completed_agents.push(agent_id.to_string());
+                                info!(
+                                    "Worker invoke success: {agent_id}, pending: {pending_count}",
+                                );
+                            }
+                            Err(err) => {
+                                error!("Worker invoke error: {agent_id}, {err:?}");
+                                panic!("Worker invoke error: {agent_id}, {err:?}");
+                            }
+                        }
                     }
-                    Err(err) => {
-                        error!("Worker invoke error: {agent_id}, {err:?}");
-                        panic!("Worker invoke error: {agent_id}, {err:?}");
+                    Ok(None) => break,
+                    Err(_) => {
+                        let all_agents: Vec<String> =
+                            agent_ids.iter().map(|a| a.to_string()).collect();
+                        let pending: Vec<&String> = all_agents
+                            .iter()
+                            .filter(|a| !completed_agents.contains(a))
+                            .collect();
+                        tasks.abort_all();
+                        panic!(
+                            "Timed out waiting for worker invocations. Still pending ({pending_count}): {}",
+                            pending
+                                .iter()
+                                .map(|a| a.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
                     }
                 }
             }
