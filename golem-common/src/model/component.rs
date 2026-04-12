@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 pub use crate::base_model::component::*;
 pub use crate::base_model::path::{AgentFilePath, ArchiveFilePath, CanonicalFilePath};
+pub use crate::base_model::worker::AgentConfigEntryDto;
 
 impl ComponentDto {
     pub fn to_diffable(&self) -> diff::Component {
