@@ -175,6 +175,9 @@ async fn fork_running_worker_1(
     user.wait_for_status(&target_agent_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
 
+    user.check_oplog_is_queryable(&source_agent_id).await?;
+    user.check_oplog_is_queryable(&target_agent_id).await?;
+
     let total_invocations = user
         .search_oplog(&target_agent_id, "add AND invoke AND NOT pending")
         .await?;
