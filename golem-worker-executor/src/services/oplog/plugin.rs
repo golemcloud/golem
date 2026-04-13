@@ -1548,7 +1548,7 @@ mod tests {
     fn deterministic_idempotency_key_same_inputs_produce_same_key() {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
-            agent_id: "test-worker".to_string(),
+            agent_id: "TestPlugin(test-worker)".to_string(),
         };
         let plugin_id = EnvironmentPluginGrantId::new();
         let first = OplogIndex::from_u64(10);
@@ -1567,7 +1567,7 @@ mod tests {
     fn deterministic_idempotency_key_different_batch_range_produces_different_key() {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
-            agent_id: "test-worker".to_string(),
+            agent_id: "TestPlugin(test-worker)".to_string(),
         };
         let plugin_id = EnvironmentPluginGrantId::new();
 
@@ -1615,7 +1615,7 @@ mod tests {
     fn deterministic_idempotency_key_different_plugin_produces_different_key() {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
-            agent_id: "test-worker".to_string(),
+            agent_id: "TestPlugin(test-worker)".to_string(),
         };
         let plugin_id1 = EnvironmentPluginGrantId::new();
         let plugin_id2 = EnvironmentPluginGrantId::new();
@@ -1775,6 +1775,22 @@ mod tests {
             component_id: ComponentId,
             _forced_revision: Option<ComponentRevision>,
         ) -> Result<Component, WorkerExecutorError> {
+            use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+            use golem_common::model::agent::AgentTypeName;
+            use std::collections::BTreeMap;
+
+            let provision_configs = if self.installed_plugins.is_empty() {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([(
+                    AgentTypeName("TestPlugin".to_string()),
+                    AgentTypeProvisionConfig {
+                        plugins: self.installed_plugins.clone(),
+                        ..Default::default()
+                    },
+                )])
+            };
+
             Ok(Component {
                 id: component_id,
                 revision: ComponentRevision::INITIAL,
@@ -1784,7 +1800,14 @@ mod tests {
                 application_id: ApplicationId::new(),
                 account_id: AccountId::new(),
                 component_size: 100,
-                metadata: ComponentMetadata::default(),
+                metadata: ComponentMetadata::from_parts(
+                    vec![],
+                    vec![],
+                    None,
+                    None,
+                    vec![],
+                    provision_configs,
+                ),
                 created_at: chrono::Utc::now(),
                 wasm_hash: diff::Hash::empty(),
                 object_store_key: String::new(),
@@ -1908,7 +1931,7 @@ mod tests {
     ) {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
-            agent_id: "test-worker".to_string(),
+            agent_id: "TestPlugin(test-worker)".to_string(),
         };
         let environment_id = EnvironmentId::new();
         let account_id = AccountId::new();

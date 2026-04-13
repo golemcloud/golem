@@ -1042,7 +1042,7 @@ async fn file_update_in_the_middle_of_exported_function(
         let updated_component = executor
             .update_component_with_files(
                 &component.id,
-                "IfsUpdate",
+                "IfsUpdateInsideExportedFunction",
                 "it_initial_file_system_release",
                 vec![IFSEntry {
                     source_path: PathBuf::from("initial-file-system/files/bar.txt"),
@@ -1711,7 +1711,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env("FileSystem", vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-service-4");
@@ -1762,7 +1762,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env("FileSystem", vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-service-5");
@@ -1813,7 +1813,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env("FileSystem", vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-service-6");
@@ -1865,7 +1865,7 @@ async fn sleep_and_awaiting_parallel_responses(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env("FileSystem", vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-service-7");
@@ -1928,7 +1928,7 @@ async fn sleep_below_threshold_between_http_responses(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env("FileSystem", vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-service-8");
@@ -1990,7 +1990,7 @@ async fn sleep_above_threshold_between_http_responses(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env("FileSystem", vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-service-9");
@@ -3281,7 +3281,7 @@ async fn oplog_replay_after_http_requests_with_suspend(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env("FileSystem", vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-oplog-replay-1");
@@ -3375,7 +3375,7 @@ async fn oplog_replay_after_parallel_http_requests(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env("FileSystem", vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-oplog-parallel-1");
