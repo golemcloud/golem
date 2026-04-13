@@ -528,7 +528,6 @@ function extractConfigPropertiesFromTypeLiteral(
     const propType = unwrapAlias(member.getType());
 
     // 1. secret wrapper
-    // TODO: switch to nominal matching using symbols instead of string
     if (isExactly(propType, wellKnownTypes.sdk.secret)) {
       results.push({
         path: nextPath,

@@ -68,8 +68,8 @@ function componentRollupConfig() {
 
     const externalPackages = (id) => {
         return (
-          id === "@golemcloud/golem-ts-sdk" ||
-          id.startsWith("golem:")
+            id === "@golemcloud/golem-ts-sdk" ||
+            id.startsWith("golem:")
         );
     };
 
