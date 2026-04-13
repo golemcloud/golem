@@ -440,6 +440,9 @@ jobs:
         working-directory: sdks/scala
         run: ./scripts/generate-agent-guest-wasm.sh
 
+      - name: Verify Scala WIT d.ts files are committed
+        uses: ./.github/actions/check-scala-sdk-generated
+
       - name: Run Golem tests (Scala 3.8.2)
         working-directory: sdks/scala
         run: sbt -mem 4096 "++3.8.2; modelJVM/test; modelJS/test; core/test; macros/test; codegen/test"
