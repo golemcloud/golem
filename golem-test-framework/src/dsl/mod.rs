@@ -28,14 +28,14 @@ use golem_api_grpc::proto::golem::worker::{LogEvent, StdErrLog, StdOutLog, log_e
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::base_model::{AgentId, PromiseId};
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::{DataValue, ParsedAgentId};
 use golem_common::model::application::{Application, ApplicationId};
 use golem_common::model::auth::EnvironmentRole;
-use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{
-    AgentFilePermissions, AgentTypeProvisionConfigCreation,
-    AgentTypeProvisionConfigUpdate, CanonicalFilePath, ComponentDto, ComponentId,
-    ComponentRevision, PluginInstallation,  PluginPriority,
+    AgentFilePermissions, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
+    CanonicalFilePath, ComponentDto, ComponentId, ComponentRevision, PluginInstallation,
+    PluginPriority,
 };
 use golem_common::model::component_metadata::RawComponentMetadata;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentRevision};
@@ -44,7 +44,9 @@ use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
-use golem_common::model::worker::{AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget, UpdateRecord};
+use golem_common::model::worker::{
+    AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget, UpdateRecord,
+};
 use golem_common::model::{AgentFilter, AgentStatus, IdempotencyKey, OplogIndex, ScanCursor};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -177,9 +179,7 @@ pub trait TestDsl {
         name: &str,
         files: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
-        use golem_common::model::component::{
-            AgentFileOptions, AgentFilePath, ArchiveFilePath,
-        };
+        use golem_common::model::component::{AgentFileOptions, AgentFilePath, ArchiveFilePath};
         let latest_revision = self.get_latest_component_revision(component_id).await?;
         // Collect all existing file paths for this agent type to remove them first
         let files_to_remove = latest_revision
@@ -209,7 +209,10 @@ pub trait TestDsl {
             component_id,
             latest_revision.revision,
             Some(name),
-            Some(BTreeMap::from([(AgentTypeName(agent_type.to_string()), update)])),
+            Some(BTreeMap::from([(
+                AgentTypeName(agent_type.to_string()),
+                update,
+            )])),
             files,
         )
         .await
@@ -231,7 +234,10 @@ pub trait TestDsl {
             component_id,
             latest_revision.revision,
             Some(name),
-            Some(BTreeMap::from([(AgentTypeName(agent_type.to_string()), update)])),
+            Some(BTreeMap::from([(
+                AgentTypeName(agent_type.to_string()),
+                update,
+            )])),
             Vec::new(),
         )
         .await
@@ -242,7 +248,9 @@ pub trait TestDsl {
         component_id: &ComponentId,
         previous_revision: ComponentRevision,
         wasm_name: Option<&str>,
-        agent_type_provision_config_updates: Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>>,
+        agent_type_provision_config_updates: Option<
+            BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>,
+        >,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto>;
 
@@ -251,8 +259,14 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: ParsedAgentId,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
-        self.try_start_agent_with(component_id, id, HashMap::new(), HashMap::new(), Vec::<AgentConfigEntryDto>::new())
-            .await
+        self.try_start_agent_with(
+            component_id,
+            id,
+            HashMap::new(),
+            HashMap::new(),
+            Vec::<AgentConfigEntryDto>::new(),
+        )
+        .await
     }
 
     async fn try_start_agent_with(
@@ -269,8 +283,14 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: ParsedAgentId,
     ) -> anyhow::Result<AgentId> {
-        self.start_agent_with(component_id, id, HashMap::new(), HashMap::new(), Vec::<AgentConfigEntryDto>::new())
-            .await
+        self.start_agent_with(
+            component_id,
+            id,
+            HashMap::new(),
+            HashMap::new(),
+            Vec::<AgentConfigEntryDto>::new(),
+        )
+        .await
     }
 
     async fn start_agent_with(
@@ -832,7 +852,6 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
-
     /// Adds an initial file to the component for a specific agent type.
     /// Populates both the provision config files map and the archive source list.
     pub fn add_file(
@@ -874,7 +893,11 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
-    pub fn with_config_vars(mut self, agent_type: &str, config_vars: Vec<(String, String)>) -> Self {
+    pub fn with_config_vars(
+        mut self,
+        agent_type: &str,
+        config_vars: Vec<(String, String)>,
+    ) -> Self {
         let entry = self.provision_config_entry_mut(agent_type);
         entry.wasi_config = config_vars.into_iter().collect();
         self

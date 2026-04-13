@@ -34,7 +34,7 @@ use golem_registry_service::repo::model::application::{
     ApplicationRepoError, ApplicationRevisionRecord,
 };
 use golem_registry_service::repo::model::audit::{
-    DeletableRevisionAuditFields, ImmutableAuditFields, RevisionAuditFields,
+    DeletableRevisionAuditFields, ImmutableAuditFields,
 };
 use golem_registry_service::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use golem_registry_service::repo::model::deployment::{

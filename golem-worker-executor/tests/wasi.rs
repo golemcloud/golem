@@ -269,7 +269,10 @@ async fn file_write_read_delete(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env("FileSystem", vec![("RUST_BACKTRACE".to_string(), "full".to_string())])
+        .with_env(
+            "FileSystem",
+            vec![("RUST_BACKTRACE".to_string(), "full".to_string())],
+        )
         .store()
         .await?;
     let agent_id = agent_id!("FileSystem", "file-write-read-delete-1");
@@ -318,18 +321,21 @@ async fn initial_file_read_write(
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
-        .with_files("FileReadWrite", &[
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadOnly,
-            },
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadWrite,
-            },
-        ])
+        .with_files(
+            "FileReadWrite",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
         .store()
         .await?;
 
@@ -384,23 +390,26 @@ async fn initial_file_listing_through_api(
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
-        .with_files("FileReadWrite", &[
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadOnly,
-            },
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadWrite,
-            },
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/baz.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadWrite,
-            },
-        ])
+        .with_files(
+            "FileReadWrite",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
         .store()
         .await?;
 
@@ -515,18 +524,21 @@ async fn initial_file_reading_through_api(
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
-        .with_files("FileReadWrite", &[
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadOnly,
-            },
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadWrite,
-            },
-        ])
+        .with_files(
+            "FileReadWrite",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
         .store()
         .await?;
 
@@ -786,11 +798,14 @@ async fn file_update_1(
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
-        .with_files("IfsUpdate", &[IFSEntry {
-            source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-            target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
-            permissions: AgentFilePermissions::ReadOnly,
-        }])
+        .with_files(
+            "IfsUpdate",
+            &[IFSEntry {
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+            }],
+        )
         .store()
         .await?;
 
@@ -986,15 +1001,21 @@ async fn file_update_in_the_middle_of_exported_function(
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
-        .with_files("IfsUpdateInsideExportedFunction", &[IFSEntry {
-            source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-            target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
-            permissions: AgentFilePermissions::ReadOnly,
-        }])
-        .with_env("IfsUpdateInsideExportedFunction", vec![
-            ("PORT".to_string(), host_http_port.to_string()),
-            ("RUST_BACKTRACE".to_string(), "full".to_string()),
-        ])
+        .with_files(
+            "IfsUpdateInsideExportedFunction",
+            &[IFSEntry {
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+            }],
+        )
+        .with_env(
+            "IfsUpdateInsideExportedFunction",
+            vec![
+                ("PORT".to_string(), host_http_port.to_string()),
+                ("RUST_BACKTRACE".to_string(), "full".to_string()),
+            ],
+        )
         .store()
         .await?;
 
@@ -3123,10 +3144,13 @@ async fn wasi_config_component_update(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_config_vars("WasiConfig", vec![
-            ("k1".to_string(), "v0".to_string()),
-            ("k3".to_string(), "v3".to_string()),
-        ])
+        .with_config_vars(
+            "WasiConfig",
+            vec![
+                ("k1".to_string(), "v0".to_string()),
+                ("k3".to_string(), "v3".to_string()),
+            ],
+        )
         .store()
         .await?;
 

@@ -43,7 +43,7 @@ use golem_common::model::oplog::{
     types::ObjectMetadata,
 };
 use golem_common::model::plan::PlanId;
-use golem_common::model::worker::{AgentMetadataDto, AgentConfigEntryDto};
+use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
     IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, TransactionId,
@@ -1056,7 +1056,9 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.parsed_agent_id()
     }
 
-    fn agent_type_provision_config(&self) -> Option<&golem_common::base_model::component_metadata::AgentTypeProvisionConfig> {
+    fn agent_type_provision_config(
+        &self,
+    ) -> Option<&golem_common::base_model::component_metadata::AgentTypeProvisionConfig> {
         self.durable_ctx.agent_type_provision_config()
     }
 

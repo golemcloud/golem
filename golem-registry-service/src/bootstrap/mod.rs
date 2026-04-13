@@ -155,8 +155,7 @@ impl Services {
 
         let blob_storage = make_blob_storage(&config.blob_storage).await?;
 
-        let initial_agent_files =
-            Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
+        let initial_agent_files = Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
         let component_object_store = Arc::new(ComponentObjectStore::new(blob_storage));
 
         let component_compilation_service =

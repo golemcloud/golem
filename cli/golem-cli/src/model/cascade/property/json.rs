@@ -211,8 +211,8 @@ fn merge_json_values(current: Value, layer: Value) -> Value {
 #[cfg(test)]
 mod test {
     use super::{JsonProperty, JsonPropertyTraceElem};
-    use crate::model::cascade::property::test_support::TestLayer;
     use crate::model::cascade::property::Property;
+    use crate::model::cascade::property::test_support::TestLayer;
     use serde_json::json;
     use test_r::test;
 

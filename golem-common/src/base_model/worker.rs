@@ -32,7 +32,6 @@ declare_enums! {
     }
 }
 
-
 declare_unions! {
     pub enum UpdateRecord {
         PendingUpdate(PendingUpdate),

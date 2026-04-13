@@ -14,7 +14,6 @@
 
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::{AgentFileContentHash, AgentType};
-use crate::base_model::worker::AgentConfigEntryDto;
 use crate::base_model::application::ApplicationId;
 use crate::base_model::component_metadata::ComponentMetadata;
 use crate::base_model::diff;
@@ -23,6 +22,7 @@ use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::path::{AgentFilePath, ArchiveFilePath};
 use crate::base_model::plugin_registration::PluginRegistrationId;
 use crate::base_model::validate_lower_kebab_case_identifier;
+use crate::base_model::worker::AgentConfigEntryDto;
 use crate::model::agent::AgentTypeName;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,

@@ -147,8 +147,8 @@ impl<L: Layer, T: Serialize + Clone> Property<L> for VecProperty<L, T> {
 #[cfg(test)]
 mod test {
     use super::{VecMergeMode, VecProperty};
-    use crate::model::cascade::property::test_support::TestLayer;
     use crate::model::cascade::property::Property;
+    use crate::model::cascade::property::test_support::TestLayer;
     use test_r::test;
 
     #[test]

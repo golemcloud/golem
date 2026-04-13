@@ -15,7 +15,9 @@
 use crate::log::{LogColorize, logln};
 use crate::model::text::fmt::TextView;
 use colored::Colorize;
-use golem_common::model::diff::{AgentTypeProvisionConfigDiff, BTreeMapDiffValue, DeploymentDiff, DiffForHashOf};
+use golem_common::model::diff::{
+    AgentTypeProvisionConfigDiff, BTreeMapDiffValue, DeploymentDiff, DiffForHashOf,
+};
 use std::path::Path;
 
 const DIFF_COLLAPSE_THRESHOLD: usize = 12;
@@ -63,7 +65,9 @@ impl TextView for DeploymentDiff {
                             }
                             if !diff.agent_type_provision_config_changes.is_empty() {
                                 logln("    - provision configs");
-                                for (agent_type, change) in &diff.agent_type_provision_config_changes {
+                                for (agent_type, change) in
+                                    &diff.agent_type_provision_config_changes
+                                {
                                     match change {
                                         BTreeMapDiffValue::Create => {
                                             logln(format!(

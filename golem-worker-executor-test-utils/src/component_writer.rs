@@ -13,17 +13,15 @@
 // limitations under the License.
 
 use anyhow::{Context, anyhow};
+use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::EnvironmentRole;
-use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
-use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::{
-    ComponentDto, ComponentId, ComponentName, ComponentRevision,
-};
+use golem_common::model::component::{ComponentDto, ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::{
     ComponentMetadata, LinearMemory, RawComponentMetadata,
 };

@@ -115,10 +115,13 @@ async fn agent_env_inheritance(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc)
-        .with_env("TestAgent", vec![
-            ("ENV1".to_string(), "1".to_string()),
-            ("ENV2".to_string(), "2".to_string()),
-        ])
+        .with_env(
+            "TestAgent",
+            vec![
+                ("ENV1".to_string(), "1".to_string()),
+                ("ENV2".to_string(), "2".to_string()),
+            ],
+        )
         .store()
         .await?;
     let unique_id = context.redis_prefix();

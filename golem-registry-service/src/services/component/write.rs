@@ -26,24 +26,24 @@ use crate::services::environment_plugin_grant::{
     EnvironmentPluginGrantError, EnvironmentPluginGrantService,
 };
 use crate::services::run_cpu_bound_work;
-use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
-use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use anyhow::Context;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::{AgentConfigSource, AgentType};
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
-use golem_common::model::component::{
-    AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
-};
-use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::component::{
     AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
     ComponentRevision, ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginInstallation,
     PluginInstallationAction,
 };
+use golem_common::model::component::{
+    AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
+};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::{Environment, EnvironmentId};
+use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
@@ -165,7 +165,11 @@ impl ComponentWriteService {
         let all_grant_ids: HashSet<EnvironmentPluginGrantId> = component_creation
             .agent_type_provision_configs
             .values()
-            .flat_map(|c| c.plugin_installations.iter().map(|p| p.environment_plugin_grant_id))
+            .flat_map(|c| {
+                c.plugin_installations
+                    .iter()
+                    .map(|p| p.environment_plugin_grant_id)
+            })
             .collect();
         let resolved_grants = self
             .resolve_all_plugin_grants(&environment, all_grant_ids, auth)
@@ -713,7 +717,7 @@ impl ComponentWriteService {
 
         // Config entries: validate and transform new ones, or keep existing
         let config = if let Some(new_config) = update.config {
-            validate_and_transform_config_entries(&agent_type, new_config)?
+            validate_and_transform_config_entries(agent_type, new_config)?
         } else {
             existing.config
         };

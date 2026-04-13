@@ -29,23 +29,25 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     revert_worker_response, search_oplog_response, update_worker_response,
 };
 use golem_common::base_model::agent::{DataValue, ParsedAgentId, UntypedDataValue};
-use golem_common::model::PromiseId;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::model::PromiseId;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::component::{
-    AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate, ArchiveFilePath,
-    ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
+    AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
+    ArchiveFilePath, ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
 };
-use golem_common::widen_infallible;
-use golem_service_base::replayable_stream::ReplayableStream;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
-use golem_common::model::worker::{AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget};
+use golem_common::model::worker::{
+    AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
+};
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
+use golem_common::widen_infallible;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
+use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream, rename_component_if_needed};
 use golem_test_framework::model::IFSEntry;
@@ -86,9 +88,7 @@ impl TestDsl for TestWorkerExecutor {
             .values()
             .any(|c| !c.plugin_installations.is_empty())
         {
-            return Err(anyhow!(
-                "Plugins aren't supported in worker executor tests"
-            ));
+            return Err(anyhow!("Plugins aren't supported in worker executor tests"));
         }
 
         let component_directory = &self.deps.component_directory;
@@ -118,8 +118,7 @@ impl TestDsl for TestWorkerExecutor {
         let mut file_map: std::collections::HashMap<ArchiveFilePath, (AgentFileContentHash, u64)> =
             std::collections::HashMap::new();
         for ifs_entry in &files_for_archive {
-            let full_source_path =
-                component_directory.join(&ifs_entry.source_path);
+            let full_source_path = component_directory.join(&ifs_entry.source_path);
             let data = tokio::fs::read(&full_source_path).await?;
             let size = data.len() as u64;
             let content_hash = self
@@ -131,7 +130,10 @@ impl TestDsl for TestWorkerExecutor {
                         .map_item(|i| i.map_err(widen_infallible::<anyhow::Error>)),
                 )
                 .await?;
-            file_map.insert(ArchiveFilePath(ifs_entry.target_path.clone()), (content_hash, size));
+            file_map.insert(
+                ArchiveFilePath(ifs_entry.target_path.clone()),
+                (content_hash, size),
+            );
         }
 
         let stored_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig> =
@@ -142,14 +144,14 @@ impl TestDsl for TestWorkerExecutor {
                         .files
                         .iter()
                         .filter_map(|(archive_path, options)| {
-                            file_map.get(archive_path).map(|(hash, size)| {
-                                InitialAgentFile {
+                            file_map
+                                .get(archive_path)
+                                .map(|(hash, size)| InitialAgentFile {
                                     content_hash: *hash,
                                     path: options.target_path.clone(),
                                     permissions: options.permissions,
                                     size: *size,
-                                }
-                            })
+                                })
                         })
                         .collect();
                     (
@@ -238,7 +240,9 @@ impl TestDsl for TestWorkerExecutor {
         component_id: &ComponentId,
         previous_revision: ComponentRevision,
         wasm_name: Option<&str>,
-        agent_type_provision_config_updates: Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>>,
+        agent_type_provision_config_updates: Option<
+            BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>,
+        >,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
         if let Some(ref updates) = agent_type_provision_config_updates {
@@ -311,10 +315,7 @@ impl TestDsl for TestWorkerExecutor {
                 .agent_type_provision_configs()
                 .clone();
             for (agent_type_name, update) in updates {
-                let existing = configs
-                    .get(&agent_type_name)
-                    .cloned()
-                    .unwrap_or_default();
+                let existing = configs.get(&agent_type_name).cloned().unwrap_or_default();
 
                 let new_env = update.env.unwrap_or(existing.env);
                 let new_wasi_config = update.wasi_config.unwrap_or(existing.wasi_config);

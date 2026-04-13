@@ -28,9 +28,7 @@ use golem_common::model::component::{
     AgentFilePermissions, ComponentRevision, PluginInstallationAction,
 };
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
-use golem_common::model::worker::{
-    AgentFileSystemNode, AgentFileSystemNodeKind, AgentUpdateMode,
-};
+use golem_common::model::worker::{AgentFileSystemNode, AgentFileSystemNodeKind, AgentUpdateMode};
 use golem_common::model::{AgentFilter, AgentId, OplogIndex, ScanCursor};
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};

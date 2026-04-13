@@ -1583,8 +1583,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         } else {
                             let component_metadata =
                                 store.as_context().data().component_metadata().clone();
-                            let agent_type_provision_config =
-                                store.as_context().data().agent_type_provision_config().cloned();
+                            let agent_type_provision_config = store
+                                .as_context()
+                                .data()
+                                .agent_type_provision_config()
+                                .cloned();
 
                             store
                                 .as_context_mut()

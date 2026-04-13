@@ -256,8 +256,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .and_then(|t| metadata.metadata.agent_type_plugins(t))
                     .unwrap_or_default()
                     .iter()
+                    .filter(|&p| initial_active_plugins.contains(&p.environment_plugin_grant_id))
                     .cloned()
-                    .filter(|p| initial_active_plugins.contains(&p.environment_plugin_grant_id))
                     .map(make_plugin_installation_description)
                     .collect();
 
@@ -510,8 +510,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .and_then(|t| metadata.metadata.agent_type_plugins(t))
                     .unwrap_or_default()
                     .iter()
+                    .filter(|&p| new_active_plugins.contains(&p.environment_plugin_grant_id))
                     .cloned()
-                    .filter(|p| new_active_plugins.contains(&p.environment_plugin_grant_id))
                     .map(make_plugin_installation_description)
                     .collect();
 

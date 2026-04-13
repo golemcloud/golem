@@ -112,9 +112,7 @@ impl desert_rust::BinaryDeserializer for CanonicalFilePath {
     ) -> desert_rust::Result<Self> {
         let s = <String as desert_rust::BinaryDeserializer>::deserialize(context)?;
         Self::from_abs_str(&s).map_err(|e| {
-            desert_rust::Error::DeserializationFailure(
-                format!("Invalid CanonicalFilePath: {e}").into(),
-            )
+            desert_rust::Error::DeserializationFailure(format!("Invalid CanonicalFilePath: {e}"))
         })
     }
 }

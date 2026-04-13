@@ -134,8 +134,8 @@ impl<V: Clone, L: Layer> Property<L> for OptionalProperty<L, V> {
 #[cfg(test)]
 mod test {
     use super::{OptionalProperty, OptionalPropertyTraceElem};
-    use crate::model::cascade::property::test_support::TestLayer;
     use crate::model::cascade::property::Property;
+    use crate::model::cascade::property::test_support::TestLayer;
     use test_r::test;
 
     #[test]

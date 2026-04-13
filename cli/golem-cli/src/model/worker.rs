@@ -24,7 +24,7 @@ use colored::control::SHOULD_COLORIZE;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::worker::{UpdateRecord, AgentConfigEntryDto as AgentConfigEntryDto};
+use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
 use golem_common::model::{AgentId, AgentResourceDescription, AgentStatus, Timestamp};
 use serde_derive::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};

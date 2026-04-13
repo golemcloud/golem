@@ -1053,18 +1053,21 @@ async fn worker_use_initial_files(
         .component(&env.id, "it_initial_file_system_release")
         .name("golem-it:initial-file-system")
         .unique()
-        .with_files("FileReadWrite", &[
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadOnly,
-            },
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadWrite,
-            },
-        ])
+        .with_files(
+            "FileReadWrite",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
         .store()
         .await?;
 
@@ -1119,23 +1122,26 @@ async fn worker_list_files(
         .component(&env.id, "it_initial_file_system_release")
         .name("golem-it:initial-file-system")
         .unique()
-        .with_files("FileReadWrite", &[
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadOnly,
-            },
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadWrite,
-            },
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/baz.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadWrite,
-            },
-        ])
+        .with_files(
+            "FileReadWrite",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
         .store()
         .await?;
 
@@ -1246,18 +1252,21 @@ async fn worker_read_files(
         .component(&env.id, "it_initial_file_system_release")
         .name("golem-it:initial-file-system")
         .unique()
-        .with_files("FileReadWrite", &[
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadOnly,
-            },
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadWrite,
-            },
-        ])
+        .with_files(
+            "FileReadWrite",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
         .store()
         .await?;
 
@@ -1306,18 +1315,21 @@ async fn worker_initial_files_after_automatic_worker_update(
     let component = user
         .component(&env.id, "it_initial_file_system_release")
         .name("golem-it:initial-file-system")
-        .with_files("FileReadWrite", &[
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadOnly,
-            },
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: AgentFilePermissions::ReadWrite,
-            },
-        ])
+        .with_files(
+            "FileReadWrite",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
         .store()
         .await?;
 

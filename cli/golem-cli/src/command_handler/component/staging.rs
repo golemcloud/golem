@@ -29,8 +29,8 @@ use golem_common::model::component::{
     AgentTypeProvisionConfigUpdate, PluginInstallation, PluginInstallationAction,
     PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
-use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::diff::{self, AgentFileDiff, AgentTypeProvisionConfigDiff};
+use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::fs::File;
@@ -105,7 +105,6 @@ impl ComponentDiff {
             }
         }
     }
-
 }
 
 pub struct ChangedComponentFiles {
@@ -312,15 +311,14 @@ impl<'a> ComponentStager<'a> {
                             permissions_changed: true,
                         },
                 }) = change
+                    && let Ok(file_path) = AgentFilePath::from_abs_str(path)
                 {
-                    if let Ok(file_path) = AgentFilePath::from_abs_str(path) {
-                        // Look up the new permissions from the manifest
-                        let new_perms = manifest_files
-                            .get(path.as_str())
-                            .and_then(|f| f.permissions)
-                            .unwrap_or(AgentFilePermissions::ReadOnly);
-                        perm_updates.insert(file_path, new_perms);
-                    }
+                    // Look up the new permissions from the manifest
+                    let new_perms = manifest_files
+                        .get(path.as_str())
+                        .and_then(|f| f.permissions)
+                        .unwrap_or(AgentFilePermissions::ReadOnly);
+                    perm_updates.insert(file_path, new_perms);
                 }
             }
             if !perm_updates.is_empty() {
@@ -456,24 +454,29 @@ impl<'a> ComponentStager<'a> {
                             .map(PluginInstallationAction::Install)
                             .collect(),
                         ComponentDiff::Diff { diff } => {
-                            match diff.agent_type_provision_config_changes.get(name.0.as_str()) {
+                            match diff
+                                .agent_type_provision_config_changes
+                                .get(name.0.as_str())
+                            {
                                 Some(diff::BTreeMapDiffValue::Update(
                                     diff::DiffForHashOf::ValueDiff { diff },
                                 )) if !diff.plugin_changes.is_empty() => {
-                                    let resolved_by_grant: HashMap<uuid::Uuid, &PluginInstallation> =
-                                        creation
-                                            .plugin_installations
-                                            .iter()
-                                            .map(|p| (p.environment_plugin_grant_id.0, p))
-                                            .collect();
+                                    let resolved_by_grant: HashMap<
+                                        uuid::Uuid,
+                                        &PluginInstallation,
+                                    > = creation
+                                        .plugin_installations
+                                        .iter()
+                                        .map(|p| (p.environment_plugin_grant_id.0, p))
+                                        .collect();
                                     diff.plugin_changes
                                         .iter()
                                         .filter_map(|(grant_id, change)| match change {
-                                            diff::BTreeMapDiffValue::Create => resolved_by_grant
-                                                .get(grant_id)
-                                                .map(|&p| {
+                                            diff::BTreeMapDiffValue::Create => {
+                                                resolved_by_grant.get(grant_id).map(|&p| {
                                                     PluginInstallationAction::Install(p.clone())
-                                                }),
+                                                })
+                                            }
                                             diff::BTreeMapDiffValue::Delete => {
                                                 Some(PluginInstallationAction::Uninstall(
                                                     PluginUninstallation {

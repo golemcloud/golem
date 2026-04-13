@@ -33,7 +33,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::{RevertWorkerTarget, AgentConfigEntryDto};
+use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{
     AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, InvocationStatus,
     OwnedAgentId, PromiseId,

@@ -1051,7 +1051,7 @@ pub mod worker {
     use golem_client::model::ScanCursor;
     use golem_common::model::IdempotencyKey;
     use golem_common::model::component::{ComponentName, ComponentRevision};
-    use golem_common::model::worker::AgentConfigEntryDto as AgentConfigEntryDto;
+    use golem_common::model::worker::AgentConfigEntryDto;
     use uuid::Uuid;
 
     #[derive(Debug, Subcommand)]

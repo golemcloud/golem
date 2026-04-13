@@ -22,8 +22,8 @@ use conditional_trait_gen::trait_gen;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
-use golem_service_base::repo::{BindingsStack, ResultExt};
 use golem_service_base::repo::SqlDateTime;
+use golem_service_base::repo::{BindingsStack, ResultExt};
 use indoc::formatdoc;
 use indoc::indoc;
 use tap::Pipe;
@@ -437,10 +437,7 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
                 .pipe(|q| binding_stack.apply(q))
         };
 
-        let result = self
-            .with_ro("get_by_ids")
-            .fetch_all_as(query_as)
-            .await?;
+        let result = self.with_ro("get_by_ids").fetch_all_as(query_as).await?;
 
         Ok(result)
     }

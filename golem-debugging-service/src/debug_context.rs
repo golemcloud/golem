@@ -16,10 +16,10 @@ use crate::additional_deps::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
+use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
-use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{

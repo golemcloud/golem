@@ -107,9 +107,9 @@ impl desert_rust::BinaryDeserializer for NormalizedJsonValue {
     ) -> desert_rust::Result<Self> {
         let s = <String as desert_rust::BinaryDeserializer>::deserialize(context)?;
         let value: serde_json::Value = serde_json::from_str(&s).map_err(|e| {
-            desert_rust::Error::DeserializationFailure(
-                format!("Invalid JSON in NormalizedJsonValue: {e}").into(),
-            )
+            desert_rust::Error::DeserializationFailure(format!(
+                "Invalid JSON in NormalizedJsonValue: {e}"
+            ))
         })?;
         Ok(NormalizedJsonValue::new(value))
     }

@@ -19,7 +19,6 @@ use assert2::let_assert;
 use golem_client::api::WorkerError;
 use golem_common::model::component::AgentTypeProvisionConfigUpdate;
 use golem_common::model::worker::AgentConfigEntryDto;
-use std::collections::BTreeMap;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -27,6 +26,7 @@ use golem_wasm::Value;
 use pretty_assertions::assert_eq;
 use pretty_assertions::assert_matches;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, timeout};
@@ -57,31 +57,34 @@ async fn agent_with_only_component_agent_config(
     let component = user
         .component(&env.id, ctx.test_component_file())
         .name(ctx.test_component_name())
-        .with_agent_config("LocalConfigAgent", vec![
-            AgentConfigEntryDto {
-                path: vec!["foo".to_string()],
-                value: json!(1).into(),
-            },
-            AgentConfigEntryDto {
-                path: vec!["bar".to_string()],
-                value: json!("bar").into(),
-            },
-            AgentConfigEntryDto {
-                path: vec!["nested".to_string(), "a".to_string()],
-                value: json!(true).into(),
-            },
-            AgentConfigEntryDto {
-                path: vec!["nested".to_string(), "b".to_string()],
-                value: json!([1, 2]).into(),
-            },
-            AgentConfigEntryDto {
-                path: vec![
-                    ctx.case_config_path_segment("aliased-nested"),
-                    "c".to_string(),
-                ],
-                value: json!(3).into(),
-            },
-        ])
+        .with_agent_config(
+            "LocalConfigAgent",
+            vec![
+                AgentConfigEntryDto {
+                    path: vec!["foo".to_string()],
+                    value: json!(1).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["bar".to_string()],
+                    value: json!("bar").into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["nested".to_string(), "a".to_string()],
+                    value: json!(true).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["nested".to_string(), "b".to_string()],
+                    value: json!([1, 2]).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec![
+                        ctx.case_config_path_segment("aliased-nested"),
+                        "c".to_string(),
+                    ],
+                    value: json!(3).into(),
+                },
+            ],
+        )
         .store()
         .await?;
 
@@ -217,16 +220,19 @@ async fn agent_with_mixed_agent_config(
     let component = user
         .component(&env.id, ctx.test_component_file())
         .name(ctx.test_component_name())
-        .with_agent_config("LocalConfigAgent", vec![
-            AgentConfigEntryDto {
-                path: vec!["foo".to_string()],
-                value: json!(1).into(),
-            },
-            AgentConfigEntryDto {
-                path: vec!["bar".to_string()],
-                value: json!("bar").into(),
-            },
-        ])
+        .with_agent_config(
+            "LocalConfigAgent",
+            vec![
+                AgentConfigEntryDto {
+                    path: vec!["foo".to_string()],
+                    value: json!(1).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["bar".to_string()],
+                    value: json!("bar").into(),
+                },
+            ],
+        )
         .store()
         .await?;
 
@@ -306,16 +312,19 @@ async fn agent_with_mixed_agent_config_update(
     let component = user
         .component(&env.id, ctx.test_component_file())
         .name(ctx.test_component_name())
-        .with_agent_config("LocalConfigAgent", vec![
-            AgentConfigEntryDto {
-                path: vec!["foo".to_string()],
-                value: json!(1).into(),
-            },
-            AgentConfigEntryDto {
-                path: vec!["bar".to_string()],
-                value: json!("bar").into(),
-            },
-        ])
+        .with_agent_config(
+            "LocalConfigAgent",
+            vec![
+                AgentConfigEntryDto {
+                    path: vec!["foo".to_string()],
+                    value: json!(1).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["bar".to_string()],
+                    value: json!("bar").into(),
+                },
+            ],
+        )
         .store()
         .await?;
 

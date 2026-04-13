@@ -1939,9 +1939,7 @@ impl InitialComponentFile {
             source,
             target: CanonicalFilePathWithPermissions {
                 path: file.target_path,
-                permissions: file
-                    .permissions
-                    .unwrap_or(AgentFilePermissions::ReadOnly),
+                permissions: file.permissions.unwrap_or(AgentFilePermissions::ReadOnly),
             },
         })
     }

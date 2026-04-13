@@ -33,16 +33,15 @@ use golem_client::model::{CompleteParameters, UpdateWorkerRequest, WorkersMetada
 use golem_common::base_model::agent::{DataValue, ParsedAgentId};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::{AccountEmail, AccountId};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{
-    AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
-    ComponentCreation, ComponentDto, ComponentId, ComponentName, ComponentRevision,
-    ComponentUpdate, 
+    AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate, ComponentCreation,
+    ComponentDto, ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentVersion};
@@ -50,7 +49,9 @@ use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
-use golem_common::model::worker::{AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, AgentUpdateMode, RevertWorkerTarget};
+use golem_common::model::worker::{
+    AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, AgentUpdateMode, RevertWorkerTarget,
+};
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
@@ -290,7 +291,9 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         component_id: &ComponentId,
         previous_revision: ComponentRevision,
         wasm_name: Option<&str>,
-        agent_type_provision_config_updates: Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>>,
+        agent_type_provision_config_updates: Option<
+            BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>,
+        >,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -326,15 +329,13 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 },
                 updated_wasm.map(|(wasm, _agent_types)| wasm),
                 {
-                    let (_tmp_dir, maybe_new_files_archive) =
-                        if !files_for_archive.is_empty() {
-                            let (tmp_dir, new_files_archive) =
-                                build_ifs_archive(component_directory, &files_for_archive)
-                                    .await?;
-                            (Some(tmp_dir), Some(File::open(new_files_archive).await?))
-                        } else {
-                            (None, None)
-                        };
+                    let (_tmp_dir, maybe_new_files_archive) = if !files_for_archive.is_empty() {
+                        let (tmp_dir, new_files_archive) =
+                            build_ifs_archive(component_directory, &files_for_archive).await?;
+                        (Some(tmp_dir), Some(File::open(new_files_archive).await?))
+                    } else {
+                        (None, None)
+                    };
                     maybe_new_files_archive
                 },
             )

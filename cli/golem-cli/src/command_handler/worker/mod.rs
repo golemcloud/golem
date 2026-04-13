@@ -66,8 +66,7 @@ use golem_common::model::component_metadata::ParsedFunctionSite;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{
-    RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
-    AgentConfigEntryDto as AgentConfigEntryDto,
+    AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
 use golem_common::model::{IdempotencyKey, OplogIndex};
 
@@ -109,10 +108,7 @@ impl WorkerCommandHandler {
                     env,
                     wasi_config,
                     config,
-                } => {
-                    self.cmd_new(agent_name, env, wasi_config, config)
-                        .await
-                }
+                } => self.cmd_new(agent_name, env, wasi_config, config).await,
                 AgentSubcommand::Invoke {
                     agent_id: agent_name,
                     function_name,

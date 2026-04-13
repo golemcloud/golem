@@ -852,7 +852,8 @@ impl ComponentCommandHandler {
             .collect::<BTreeMap<_, _>>();
         let resolved_agents = app_ctx.application().resolve_agents(&mapping);
 
-        let mut agent_type_configs = BTreeMap::<AgentTypeName, AgentTypeManifestProvisionConfig>::new();
+        let mut agent_type_configs =
+            BTreeMap::<AgentTypeName, AgentTypeManifestProvisionConfig>::new();
         let mut unused_config_by_agent = BTreeMap::<AgentTypeName, Vec<String>>::new();
 
         for agent_type in &agent_types {
@@ -871,10 +872,7 @@ impl ComponentCommandHandler {
                 AgentTypeManifestProvisionConfig {
                     env: resolve_env_vars(component_name, resolved_agent.env())?,
                     wasi_config: resolved_agent.wasi_config().clone(),
-                    config: materialize_agent_config_entries(
-                        agent_type,
-                        resolved_agent.config(),
-                    ),
+                    config: materialize_agent_config_entries(agent_type, resolved_agent.config()),
                     files: resolved_agent.files().to_vec(),
                     plugins: resolved_agent.plugins().to_vec(),
                 },
@@ -956,7 +954,10 @@ impl ComponentCommandHandler {
                 .collect();
 
             let file_hashes = ifs_manager
-                .collect_file_hashes(&format!("{}:{}", component_name.0, agent_type_name.0), &rich_files)
+                .collect_file_hashes(
+                    &format!("{}:{}", component_name.0, agent_type_name.0),
+                    &rich_files,
+                )
                 .await?;
 
             let files_by_path = file_hashes
@@ -1011,8 +1012,7 @@ impl ComponentCommandHandler {
                 plugins_by_grant_id,
             };
 
-            agent_type_provision_configs
-                .insert(agent_type_name.0.clone(), provision_config.into());
+            agent_type_provision_configs.insert(agent_type_name.0.clone(), provision_config.into());
         }
 
         Ok(diff::Component {

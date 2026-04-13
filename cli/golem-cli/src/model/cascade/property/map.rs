@@ -170,8 +170,8 @@ impl<L: Layer, K: Eq + Hash + Clone + Serialize, V: Clone + Serialize> Property<
 #[cfg(test)]
 mod test {
     use super::{MapMergeMode, MapProperty};
-    use crate::model::cascade::property::test_support::TestLayer;
     use crate::model::cascade::property::Property;
+    use crate::model::cascade::property::test_support::TestLayer;
     use indexmap::IndexMap;
     use test_r::test;
 
