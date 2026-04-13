@@ -43,8 +43,8 @@ pub trait GolemHostApi {
     fn atomic_region(&self);
     fn idempotence_flag(&self, enabled: bool);
     fn persist_nothing(&self);
-    fn fallible_transaction_test(&self) -> u64;
-    fn infallible_transaction_test(&self) -> u64;
+    async fn fallible_transaction_test(&self) -> u64;
+    async fn infallible_transaction_test(&self) -> u64;
     fn fork_test(&self, input: String) -> String;
 
     fn checkpoint_test(&self) -> u64;
@@ -210,29 +210,31 @@ impl GolemHostApi for GolemHostApiImpl {
         remote_side_effect("4");
     }
 
-    fn fallible_transaction_test(&self) -> u64 {
-        fallible_transaction(|tx| {
-            tx.transaction_step(1)?;
-            tx.transaction_step(2)?;
-            if tx.transaction_step(3)? {
-                tx.fail("fail after 3".to_string())?
+    async fn fallible_transaction_test(&self) -> u64 {
+        fallible_transaction(|tx| golem_rust::boxed(async move {
+            tx.transaction_step(1).await?;
+            tx.transaction_step(2).await?;
+            if tx.transaction_step(3).await? {
+                tx.fail("fail after 3".to_string()).await?
             }
-            tx.transaction_step(4)?;
+            tx.transaction_step(4).await?;
             Ok(11)
-        })
+        }))
+        .await
         .expect("Transaction failed")
     }
 
-    fn infallible_transaction_test(&self) -> u64 {
-        infallible_transaction(|tx| {
-            let _ = tx.transaction_step(1);
-            let _ = tx.transaction_step(2);
-            if tx.transaction_step(3).unwrap() {
+    async fn infallible_transaction_test(&self) -> u64 {
+        infallible_transaction(|tx| golem_rust::boxed(async move {
+            let _ = tx.transaction_step(1).await;
+            let _ = tx.transaction_step(2).await;
+            if tx.transaction_step(3).await.unwrap() {
                 panic!("crash after 3");
             }
-            let _ = tx.transaction_step(4);
+            let _ = tx.transaction_step(4).await;
             11
-        })
+        }))
+        .await
     }
 
     fn fork_test(&self, input: String) -> String {

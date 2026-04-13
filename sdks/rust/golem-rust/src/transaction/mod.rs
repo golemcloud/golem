@@ -15,6 +15,8 @@
 mod compfn;
 
 use std::fmt::{Debug, Display, Formatter};
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
 
 use crate::bindings::golem::api::host::{OplogIndex, get_oplog_index, set_oplog_index};
@@ -22,30 +24,52 @@ use crate::mark_atomic_operation;
 
 pub use compfn::*;
 
+/// A boxed local future. Used as the return type for transaction closures
+/// to allow the returned future to borrow from the transaction reference.
+///
+/// Use [`boxed`] to construct this from an async block.
+pub type LocalBoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
+
+/// Wraps an async block into a [`LocalBoxFuture`]. Use this when passing
+/// closures to [`fallible_transaction`] or [`infallible_transaction`]:
+///
+/// ```ignore
+/// fallible_transaction(|tx| boxed(async move {
+///     tx.execute(op1, input).await?;
+///     Ok(result)
+/// })).await;
+/// ```
+#[inline]
+pub fn boxed<'a, T>(fut: impl Future<Output = T> + 'a) -> LocalBoxFuture<'a, T> {
+    Box::pin(fut)
+}
+
 /// Represents an atomic operation of the transaction which has a rollback action.
 ///
 /// Implement this trait and use it within a `transaction` block.
-/// Operations can also be constructed from closures using `operation`.
+/// Operations can also be constructed from closures using `operation` or `sync_operation`.
+#[allow(async_fn_in_trait)]
 pub trait Operation: Clone {
     type In: Clone;
     type Out: Clone;
     type Err: Clone;
 
     /// Executes the operation which may fail with a domain error
-    fn execute(&self, input: Self::In) -> Result<Self::Out, Self::Err>;
+    async fn execute(&self, input: Self::In) -> Result<Self::Out, Self::Err>;
 
     /// Executes a compensation action for the operation.
-    fn compensate(&self, input: Self::In, result: Self::Out) -> Result<(), Self::Err>;
+    async fn compensate(&self, input: Self::In, result: Self::Out) -> Result<(), Self::Err>;
 }
 
-/// Constructs an `Operation` from two closures: one for executing the operation,
+/// Constructs an `Operation` from two async closures: one for executing the operation,
 /// and one for rolling it back. The rollback operation always sees the input and
 /// the output of the operation.
 ///
 /// This operation can run the compensation in both fallible and infallible transactions.
+#[allow(clippy::type_complexity)]
 pub fn operation<In: Clone, Out: Clone, Err: Clone>(
-    execute_fn: impl Fn(In) -> Result<Out, Err> + 'static,
-    compensate_fn: impl Fn(In, Out) -> Result<(), Err> + 'static,
+    execute_fn: impl Fn(In) -> Pin<Box<dyn Future<Output = Result<Out, Err>>>> + 'static,
+    compensate_fn: impl Fn(In, Out) -> Pin<Box<dyn Future<Output = Result<(), Err>>>> + 'static,
 ) -> impl Operation<In = In, Out = Out, Err = Err> {
     FnOperation {
         execute_fn: Rc::new(execute_fn),
@@ -53,10 +77,31 @@ pub fn operation<In: Clone, Out: Clone, Err: Clone>(
     }
 }
 
+/// Constructs an `Operation` from two synchronous closures: one for executing the operation,
+/// and one for rolling it back. This is a convenience wrapper around `operation` for
+/// cases where the execute and compensate logic is synchronous.
+pub fn sync_operation<In: Clone + 'static, Out: Clone + 'static, Err: Clone + 'static>(
+    execute_fn: impl Fn(In) -> Result<Out, Err> + 'static,
+    compensate_fn: impl Fn(In, Out) -> Result<(), Err> + 'static,
+) -> impl Operation<In = In, Out = Out, Err = Err> {
+    let execute_fn = Rc::new(execute_fn);
+    let compensate_fn = Rc::new(compensate_fn);
+    operation(
+        move |input| {
+            let f = execute_fn.clone();
+            Box::pin(async move { f(input) })
+        },
+        move |input, output| {
+            let f = compensate_fn.clone();
+            Box::pin(async move { f(input, output) })
+        },
+    )
+}
+
 #[allow(clippy::type_complexity)]
 struct FnOperation<In, Out, Err> {
-    execute_fn: Rc<dyn Fn(In) -> Result<Out, Err>>,
-    compensate_fn: Rc<dyn Fn(In, Out) -> Result<(), Err>>,
+    execute_fn: Rc<dyn Fn(In) -> Pin<Box<dyn Future<Output = Result<Out, Err>>>>>,
+    compensate_fn: Rc<dyn Fn(In, Out) -> Pin<Box<dyn Future<Output = Result<(), Err>>>>>,
 }
 
 impl<In, Out, Err> Clone for FnOperation<In, Out, Err> {
@@ -73,12 +118,12 @@ impl<In: Clone, Out: Clone, Err: Clone> Operation for FnOperation<In, Out, Err> 
     type Out = Out;
     type Err = Err;
 
-    fn execute(&self, input: In) -> Result<Out, Err> {
-        (self.execute_fn)(input)
+    async fn execute(&self, input: In) -> Result<Out, Err> {
+        (self.execute_fn)(input).await
     }
 
-    fn compensate(&self, input: In, result: Out) -> Result<(), Err> {
-        (self.compensate_fn)(input, result)
+    async fn compensate(&self, input: In, result: Out) -> Result<(), Err> {
+        (self.compensate_fn)(input, result).await
     }
 }
 
@@ -121,31 +166,36 @@ impl<Err: Display> Display for TransactionFailure<Err> {
 /// Fallible transaction execution. If any operation fails, all the already executed
 /// successful operation's compensation actions are executed in reverse order and the transaction
 /// returns with a failure.
-pub fn fallible_transaction<Out, Err: Clone + 'static>(
-    f: impl FnOnce(&mut FallibleTransaction<Err>) -> Result<Out, Err>,
-) -> TransactionResult<Out, Err> {
+pub async fn fallible_transaction<Out, Err>(
+    f: impl for<'a> FnOnce(&'a mut FallibleTransaction<Err>) -> LocalBoxFuture<'a, Result<Out, Err>>,
+) -> TransactionResult<Out, Err>
+where
+    Err: Clone + 'static,
+{
     let mut transaction = FallibleTransaction::new();
-    match f(&mut transaction) {
+    match f(&mut transaction).await {
         Ok(output) => Ok(output),
-        Err(error) => Err(transaction.on_fail(error)),
+        Err(error) => Err(transaction.on_fail(error).await),
     }
 }
 
 /// Retry the transaction in case of failure. If any operation returns with a failure, all
 /// the already executed successful operation's compensation actions are executed in reverse order
 /// and the transaction gets retried, using Golem's active retry policy.
-pub fn infallible_transaction<Out>(f: impl FnOnce(&mut InfallibleTransaction) -> Out) -> Out {
+pub async fn infallible_transaction<Out>(
+    f: impl for<'a> FnOnce(&'a mut InfallibleTransaction) -> LocalBoxFuture<'a, Out>,
+) -> Out {
     let oplog_index = get_oplog_index();
     let _atomic_region = mark_atomic_operation();
     let mut transaction = InfallibleTransaction::new(oplog_index);
-    f(&mut transaction)
+    f(&mut transaction).await
 }
 
 /// Same as `infallible_transaction`, but with strong rollback guarantees. The compensation actions
 /// are guaranteed to be always executed before the transaction gets retried, even if it
 /// fails due to a panic or an external executor failure.
-pub fn infallible_transaction_with_strong_rollback_guarantees<Out>(
-    _f: impl FnOnce(&mut InfallibleTransaction) -> Out,
+pub async fn infallible_transaction_with_strong_rollback_guarantees<Out>(
+    _f: impl for<'a> FnOnce(&'a mut InfallibleTransaction) -> LocalBoxFuture<'a, Out>,
 ) -> Out {
     unimplemented!()
 }
@@ -156,23 +206,24 @@ pub fn infallible_transaction_with_strong_rollback_guarantees<Out>(
 /// This makes switching between different transaction guarantees easier, but is more constrained
 /// than using the specific transaction functions where for retried transactions errors does
 /// not have to be handled.
-pub fn transaction<Out, Err, F, T>(f: F) -> TransactionResult<Out, Err>
+pub async fn transaction<Out: 'static, Err, T>(
+    f: impl for<'a> FnOnce(&'a mut T) -> LocalBoxFuture<'a, Result<Out, Err>>,
+) -> TransactionResult<Out, Err>
 where
     T: Transaction<Err>,
-    F: FnOnce(&mut T) -> Result<Out, Err>,
 {
-    T::run(f)
+    T::run(f).await
 }
 
 /// Helper struct for coupling compensation action and the result of the operation.
 #[allow(clippy::type_complexity)]
 struct CompensationAction<Err> {
-    action: Box<dyn Fn() -> Result<(), Err>>,
+    action: Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Result<(), Err>>>>>,
 }
 
 impl<Err> CompensationAction<Err> {
-    pub fn execute(&self) -> Result<(), Err> {
-        (self.action)()
+    pub async fn execute(self) -> Result<(), Err> {
+        (self.action)().await
     }
 }
 
@@ -193,25 +244,31 @@ impl<Err: Clone + 'static> FallibleTransaction<Err> {
         }
     }
 
-    pub fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
+    pub async fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
         &mut self,
         operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
     ) -> Result<OpOut, Err> {
-        let result = operation.execute(input.clone());
+        let result = operation.execute(input.clone()).await;
         if let Ok(output) = &result {
             let cloned_op = operation.clone();
             let cloned_out = output.clone();
             self.compensations.push(CompensationAction {
-                action: Box::new(move || cloned_op.compensate(input.clone(), cloned_out.clone())),
+                action: Box::new(move || {
+                    Box::pin(async move {
+                        cloned_op
+                            .compensate(input.clone(), cloned_out.clone())
+                            .await
+                    })
+                }),
             });
         }
         result
     }
 
-    fn on_fail(&mut self, failure: Err) -> TransactionFailure<Err> {
+    async fn on_fail(&mut self, failure: Err) -> TransactionFailure<Err> {
         for compensation_action in self.compensations.drain(..).rev() {
-            if let Err(compensation_failure) = compensation_action.execute() {
+            if let Err(compensation_failure) = compensation_action.execute().await {
                 return TransactionFailure::FailedAndRolledBackPartially {
                     failure,
                     compensation_failure,
@@ -245,7 +302,7 @@ impl InfallibleTransaction {
         }
     }
 
-    pub fn execute<
+    pub async fn execute<
         OpIn: Clone + 'static,
         OpOut: Clone + 'static,
         OpErr: Debug + Clone + 'static,
@@ -254,31 +311,34 @@ impl InfallibleTransaction {
         operation: impl Operation<In = OpIn, Out = OpOut, Err = OpErr> + 'static,
         input: OpIn,
     ) -> OpOut {
-        match operation.execute(input.clone()) {
+        match operation.execute(input.clone()).await {
             Ok(output) => {
                 let cloned_op = operation.clone();
                 let cloned_out = output.clone();
                 self.compensations.push(CompensationAction {
                     action: Box::new(move || {
-                        cloned_op
-                            .compensate(input.clone(), cloned_out.clone())
-                            .expect("Compensation action failed");
-                        Ok(())
+                        Box::pin(async move {
+                            cloned_op
+                                .compensate(input.clone(), cloned_out.clone())
+                                .await
+                                .expect("Compensation action failed");
+                            Ok(())
+                        })
                     }),
                 });
                 output
             }
             Err(_) => {
-                self.retry();
+                self.retry().await;
                 unreachable!()
             }
         }
     }
 
     /// Stop executing the transaction and retry from the beginning, after executing the compensation actions
-    pub fn retry(&mut self) {
+    pub async fn retry(&mut self) {
         for compensation_action in self.compensations.drain(..).rev() {
-            let _ = compensation_action.execute();
+            let _ = compensation_action.execute().await;
         }
         set_oplog_index(self.begin_oplog_index);
     }
@@ -287,52 +347,62 @@ impl InfallibleTransaction {
 /// A unified interface for the different types of transactions. Using it can make the code
 /// easier to switch between different transactional guarantees but is more constrained in
 /// terms of error types.
+#[allow(async_fn_in_trait)]
 pub trait Transaction<Err> {
-    fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
+    async fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
         &mut self,
         operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
     ) -> Result<OpOut, Err>;
 
-    fn fail(&mut self, error: Err) -> Result<(), Err>;
+    async fn fail(&mut self, error: Err) -> Result<(), Err>;
 
-    fn run<Out>(f: impl FnOnce(&mut Self) -> Result<Out, Err>) -> TransactionResult<Out, Err>;
+    async fn run<Out: 'static>(
+        f: impl for<'a> FnOnce(&'a mut Self) -> LocalBoxFuture<'a, Result<Out, Err>>,
+    ) -> TransactionResult<Out, Err>;
 }
 
 impl<Err: Clone + 'static> Transaction<Err> for FallibleTransaction<Err> {
-    fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
+    async fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
         &mut self,
         operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
     ) -> Result<OpOut, Err> {
-        FallibleTransaction::execute(self, operation, input)
+        FallibleTransaction::execute(self, operation, input).await
     }
 
-    fn fail(&mut self, error: Err) -> Result<(), Err> {
+    async fn fail(&mut self, error: Err) -> Result<(), Err> {
         Err(error)
     }
 
-    fn run<Out>(f: impl FnOnce(&mut Self) -> Result<Out, Err>) -> TransactionResult<Out, Err> {
-        fallible_transaction(f)
+    async fn run<Out: 'static>(
+        f: impl for<'a> FnOnce(&'a mut Self) -> LocalBoxFuture<'a, Result<Out, Err>>,
+    ) -> TransactionResult<Out, Err> {
+        fallible_transaction(f).await
     }
 }
 
 impl<Err: Debug + Clone + 'static> Transaction<Err> for InfallibleTransaction {
-    fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
+    async fn execute<OpIn: Clone + 'static, OpOut: Clone + 'static>(
         &mut self,
         operation: impl Operation<In = OpIn, Out = OpOut, Err = Err> + 'static,
         input: OpIn,
     ) -> Result<OpOut, Err> {
-        Ok(InfallibleTransaction::execute(self, operation, input))
+        Ok(InfallibleTransaction::execute(self, operation, input).await)
     }
 
-    fn fail(&mut self, error: Err) -> Result<(), Err> {
-        InfallibleTransaction::retry(self);
+    async fn fail(&mut self, error: Err) -> Result<(), Err> {
+        InfallibleTransaction::retry(self).await;
         Err(error)
     }
 
-    fn run<Out>(f: impl FnOnce(&mut Self) -> Result<Out, Err>) -> TransactionResult<Out, Err> {
-        Ok(infallible_transaction(|tx| f(tx).unwrap()))
+    async fn run<Out: 'static>(
+        f: impl for<'a> FnOnce(&'a mut Self) -> LocalBoxFuture<'a, Result<Out, Err>>,
+    ) -> TransactionResult<Out, Err> {
+        Ok(infallible_transaction(|tx| -> LocalBoxFuture<'_, Out> {
+            let fut = f(tx);
+            Box::pin(async { fut.await.unwrap() })
+        }).await)
     }
 }
 
@@ -342,12 +412,12 @@ mod tests {
     use std::rc::Rc;
     use test_r::test;
 
-    use crate::{fallible_transaction, infallible_transaction, operation};
+    use crate::{boxed, fallible_transaction, infallible_transaction, sync_operation};
 
     // Not a real test, just verifying that the code compiles
     #[test]
     #[ignore]
-    fn tx_test_1() {
+    async fn tx_test_1() {
         let log = Rc::new(RefCell::new(Vec::new()));
 
         let log1 = log.clone();
@@ -355,7 +425,7 @@ mod tests {
         let log3 = log.clone();
         let log4 = log.clone();
 
-        let op1 = operation(
+        let op1 = sync_operation(
             move |input: String| {
                 log1.borrow_mut().push(format!("op1 execute {input}"));
                 Ok(())
@@ -366,7 +436,7 @@ mod tests {
             },
         );
 
-        let op2 = operation(
+        let op2 = sync_operation(
             move |_: ()| {
                 log3.clone().borrow_mut().push("op2 execute".to_string());
                 Err::<(), &str>("op2 error")
@@ -377,14 +447,15 @@ mod tests {
             },
         );
 
-        let result = fallible_transaction(|tx| {
+        let result = fallible_transaction(|tx| boxed(async move {
             println!("First we execute op1");
-            tx.execute(op1, "hello".to_string())?;
+            tx.execute(op1, "hello".to_string()).await?;
             println!("Then execute op2");
-            tx.execute(op2, ())?;
+            tx.execute(op2, ()).await?;
             println!("Finally compute a result");
             Ok(11)
-        });
+        }))
+        .await;
 
         println!("{log:?}");
         println!("{result:?}");
@@ -393,7 +464,7 @@ mod tests {
     // Not a real test, just verifying that the code compiles
     #[test]
     #[ignore]
-    fn tx_test_2() {
+    async fn tx_test_2() {
         let log = Rc::new(RefCell::new(Vec::new()));
 
         let log1 = log.clone();
@@ -401,7 +472,7 @@ mod tests {
         let log3 = log.clone();
         let log4 = log.clone();
 
-        let op1 = operation(
+        let op1 = sync_operation(
             move |input: String| {
                 log1.borrow_mut().push(format!("op1 execute {input}"));
                 Ok::<(), ()>(())
@@ -412,7 +483,7 @@ mod tests {
             },
         );
 
-        let op2 = operation(
+        let op2 = sync_operation(
             move |_: ()| {
                 log3.clone().borrow_mut().push("op2 execute".to_string());
                 Err::<(), &str>("op2 error")
@@ -425,14 +496,15 @@ mod tests {
             },
         );
 
-        let result = infallible_transaction(|tx| {
+        let result = infallible_transaction(|tx| boxed(async move {
             println!("First we execute op1");
-            tx.execute(op1, "hello".to_string());
+            tx.execute(op1, "hello".to_string()).await;
             println!("Then execute op2");
-            tx.execute(op2, ());
+            tx.execute(op2, ()).await;
             println!("Finally compute a result");
             11
-        });
+        }))
+        .await;
 
         println!("{log:?}");
         println!("{result:?}");
@@ -442,7 +514,7 @@ mod tests {
 #[cfg(test)]
 #[cfg(feature = "macro")]
 mod macro_tests {
-    use crate::{fallible_transaction, infallible_transaction};
+    use crate::{boxed, fallible_transaction, infallible_transaction};
     use golem_rust_macro::golem_operation;
     use test_r::test;
 
@@ -497,16 +569,17 @@ mod macro_tests {
     // Not a real test, just verifying that the code compiles
     #[test]
     #[ignore]
-    fn tx_test_1() {
-        let result = fallible_transaction(|tx| {
+    async fn tx_test_1() {
+        let result = fallible_transaction(|tx| boxed(async move {
             println!("Executing the annotated function as an operation directly");
-            tx.test_operation(1, 0.1)?;
-            tx.test_operation_2(1, 0.1)?;
-            tx.test_operation_3("test".to_string())?;
-            tx.test_operation_4(1)?;
+            tx.test_operation(1, 0.1).await?;
+            tx.test_operation_2(1, 0.1).await?;
+            tx.test_operation_3("test".to_string()).await?;
+            tx.test_operation_4(1).await?;
 
             Ok(11)
-        });
+        }))
+        .await;
 
         println!("{result:?}");
     }
@@ -514,12 +587,13 @@ mod macro_tests {
     // Not a real test, just verifying that the code compiles
     #[test]
     #[ignore]
-    fn tx_test_2() {
-        let result = infallible_transaction(|tx| {
+    async fn tx_test_2() {
+        let result = infallible_transaction(|tx| boxed(async move {
             println!("Executing the annotated function as an operation directly");
-            let _ = tx.test_operation(1, 0.1);
+            let _ = tx.test_operation(1, 0.1).await;
             11
-        });
+        }))
+        .await;
 
         println!("{result:?}");
     }

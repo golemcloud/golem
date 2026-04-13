@@ -12,27 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub fn call_compensation_function<In, Out, Err>(
+pub async fn call_compensation_function<In, Out, Err>(
     f: impl CompensationFunction<In, Out, Err>,
     result: impl TupleOrUnit<Out>,
     input: impl TupleOrUnit<In>,
 ) -> Result<(), Err> {
-    f.call(result, input)
+    f.call(result, input).await
 }
 
 pub trait TupleOrUnit<T> {
     fn into(self) -> T;
 }
 
+#[allow(async_fn_in_trait)]
 pub trait CompensationFunction<In, Out, Err> {
-    fn call(self, result: impl TupleOrUnit<Out>, input: impl TupleOrUnit<In>) -> Result<(), Err>;
+    async fn call(self, result: impl TupleOrUnit<Out>, input: impl TupleOrUnit<In>)
+        -> Result<(), Err>;
 }
 
 impl<F, Err> CompensationFunction<(), (), (Err,)> for F
 where
     F: FnOnce() -> Result<(), Err>,
 {
-    fn call(
+    async fn call(
         self,
         _result: impl TupleOrUnit<()>,
         _input: impl TupleOrUnit<()>,
@@ -46,7 +48,7 @@ impl<F, Out, Err> CompensationFunction<(), (Out,), (Err,)> for F
 where
     F: FnOnce(Out) -> Result<(), Err>,
 {
-    fn call(
+    async fn call(
         self,
         out: impl TupleOrUnit<(Out,)>,
         _input: impl TupleOrUnit<()>,
@@ -66,7 +68,7 @@ macro_rules! compensation_function {
         where
             F: FnOnce(Out, $($ty),*) -> Result<(), Err>,
         {
-            fn call(
+            async fn call(
                 self,
                 out: impl TupleOrUnit<(Out,)>,
                 input: impl TupleOrUnit<($($ty),*,)>,
