@@ -47,6 +47,20 @@ use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::{AgentId, OwnedAgentId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
+/// Capability proving that per-account concurrent-agent state has been registered
+/// in this executor and can be used for subsequent permit acquires.
+#[derive(Clone)]
+pub(crate) struct RegisteredConcurrentAccount {
+    scheduler: Arc<ConcurrentAgentsScheduler>,
+    account_id: AccountId,
+}
+
+impl RegisteredConcurrentAccount {
+    pub(crate) async fn acquire(&self, agent_id: AgentId) -> ConcurrentAgentPermit {
+        self.scheduler.acquire(self.account_id, agent_id).await
+    }
+}
+
 /// Holds the metadata and wasmtime structures of currently active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
     workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
@@ -320,38 +334,21 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
     /// Register an account with the per-account concurrent agent semaphore.
     ///
-    /// Must be called (from `Worker::new`) before any `acquire_concurrent_agent`
-    /// call for the account. Idempotent — safe to call multiple times.
-    pub async fn register_account_concurrency(
+    /// Must be called (from `Worker::new`) before any concurrent-agent permit
+    /// acquire for the account. Idempotent — safe to call multiple times.
+    pub(crate) async fn register_account_concurrency(
         &self,
         account_id: AccountId,
         resource_entry: Arc<AtomicResourceEntry>,
-    ) {
+    ) -> RegisteredConcurrentAccount {
         self.concurrent_agents
             .register_account(account_id, resource_entry)
             .await;
-    }
 
-    /// Blocking acquire of one concurrent-agent permit for `account_id`,
-    /// respecting FIFO ordering within the account.
-    ///
-    /// Only actively running agents hold permits — idle agents release theirs
-    /// back to the pool. In the common case permits are already available and
-    /// the acquire succeeds immediately.
-    ///
-    /// If all permits are held by actively running agents, the agent is queued
-    /// in the per-account FIFO scheduler and waits until a running agent
-    /// finishes and returns its permit. This ensures fairness: a worker that
-    /// finishes and re-requests a slot goes to the back of the queue.
-    ///
-    /// Returns immediately (zero-cost permit) for accounts whose plan limit is
-    /// at or above the unlimited sentinel.
-    pub async fn acquire_concurrent_agent(
-        &self,
-        account_id: AccountId,
-        agent_id: AgentId,
-    ) -> ConcurrentAgentPermit {
-        self.concurrent_agents.acquire(account_id, agent_id).await
+        RegisteredConcurrentAccount {
+            scheduler: self.concurrent_agents.clone(),
+            account_id,
+        }
     }
 
     async fn try_free_up_filesystem_storage(

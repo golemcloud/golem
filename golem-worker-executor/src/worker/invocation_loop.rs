@@ -16,7 +16,7 @@ use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::{CommitLevel, OplogOps};
-use crate::services::{HasActiveWorkers, HasEvents, HasOplog, HasWorker};
+use crate::services::{HasEvents, HasOplog, HasWorker};
 use crate::worker::invocation::{
     InvocationMode, InvokeResult, invoke_observed_and_traced, lower_invocation,
 };
@@ -407,14 +407,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// that just finished goes to the back of the queue.
     async fn acquire_concurrent_agent_permit(&mut self) {
         if self.concurrent_agent_permit.is_none() {
-            let account_id = self.parent.get_initial_worker_metadata().created_by;
             let agent_id = self.owned_agent_id.agent_id();
+            let registered_concurrent_account = self.parent.registered_concurrent_account.clone();
             debug!("Re-acquiring concurrent-agent permit (waking from idle)");
-            let permit = self
-                .parent
-                .active_workers()
-                .acquire_concurrent_agent(account_id, agent_id)
-                .await;
+            let permit = registered_concurrent_account.acquire(agent_id).await;
             *self.concurrent_agent_permit = Some(permit);
         }
     }

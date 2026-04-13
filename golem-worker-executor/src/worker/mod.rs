@@ -26,6 +26,7 @@ use self::status::{
 use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
+use crate::services::active_workers::RegisteredConcurrentAccount;
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
@@ -111,6 +112,7 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
     initial_worker_metadata: AgentMetadata,
+    registered_concurrent_account: RegisteredConcurrentAccount,
     last_known_status: Arc<RwLock<AgentStatusRecord>>,
     last_known_status_detached: AtomicBool,
     // Note: std lock for wasmtime reasons
@@ -307,7 +309,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .resource_limits()
             .initialize_account(owner_account_id)
             .await?;
-        deps.active_workers()
+        let registered_concurrent_account = deps
+            .active_workers()
             .register_account_concurrency(owner_account_id, resource_entry)
             .await;
 
@@ -326,6 +329,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             instance,
             execution_status,
             initial_worker_metadata,
+            registered_concurrent_account,
             last_known_status: current_status,
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
@@ -2253,12 +2257,9 @@ impl WaitingWorker {
 
         let handle = tokio::task::spawn(
             async move {
-                let account_id = parent.initial_worker_metadata.created_by;
                 let agent_id = parent.owned_agent_id.agent_id();
-                let concurrent_agent_permit = parent
-                    .active_workers()
-                    .acquire_concurrent_agent(account_id, agent_id)
-                    .await;
+                let registered_concurrent_account = parent.registered_concurrent_account.clone();
+                let concurrent_agent_permit = registered_concurrent_account.acquire(agent_id).await;
                 // Do not reserve executor memory while waiting for a per-account
                 // concurrency slot. Otherwise one account could fill the memory
                 // pool with workers that are not allowed to run yet.
