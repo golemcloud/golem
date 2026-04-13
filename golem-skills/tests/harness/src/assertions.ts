@@ -36,6 +36,24 @@ export interface AssertionResult {
   message: string;
 }
 
+function previewText(text: string, maxChars = 600): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}...`;
+}
+
+function previewValue(value: unknown, maxChars = 600): string {
+  if (typeof value === "string") {
+    return previewText(value, maxChars);
+  }
+
+  const serialized = JSON.stringify(value);
+  return serialized === undefined ? String(value) : previewText(serialized, maxChars);
+}
+
+function formatResultJsonContext(resultJson: unknown): string {
+  return `; result_json=${previewValue(resultJson)}`;
+}
+
 export function evaluate(context: AssertionContext, expect: ExpectSpec): AssertionResult[] {
   const results: AssertionResult[] = [];
 
@@ -103,7 +121,7 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
       passed,
       message: passed
         ? `body contains "${expect.body_contains}"`
-        : `body does not contain "${expect.body_contains}"`,
+        : `body does not contain "${expect.body_contains}"; received ${JSON.stringify(previewText(body))}`,
     });
   }
 
@@ -116,7 +134,7 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
       passed,
       message: passed
         ? `body matches /${expect.body_matches}/`
-        : `body does not match /${expect.body_matches}/`,
+        : `body does not match /${expect.body_matches}/; received ${JSON.stringify(previewText(body))}`,
     });
   }
 
@@ -146,7 +164,7 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
           passed,
           message: passed
             ? `${jsonAssert.path} equals ${JSON.stringify(jsonAssert.equals)}`
-            : `${jsonAssert.path} expected ${JSON.stringify(jsonAssert.equals)}, got ${JSON.stringify(pathResults[0])}`,
+            : `${jsonAssert.path} expected ${JSON.stringify(jsonAssert.equals)}, got ${JSON.stringify(pathResults[0])}${formatResultJsonContext(context.resultJson)}`,
         });
       }
 
@@ -165,7 +183,7 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
           passed,
           message: passed
             ? `${jsonAssert.path} equals (unordered) ${JSON.stringify(expected)}`
-            : `${jsonAssert.path} expected (unordered) ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
+            : `${jsonAssert.path} expected (unordered) ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}${formatResultJsonContext(context.resultJson)}`,
         });
       }
 
@@ -177,7 +195,7 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
           passed,
           message: passed
             ? `${jsonAssert.path} contains "${jsonAssert.contains}"`
-            : `${jsonAssert.path} does not contain "${jsonAssert.contains}" (got "${value}")`,
+            : `${jsonAssert.path} does not contain "${jsonAssert.contains}" (got "${value}")${formatResultJsonContext(context.resultJson)}`,
         });
       }
     }

@@ -99,6 +99,7 @@ describe("Assertion Engine", () => {
         body_contains: "missing",
       });
       assert.equal(results[0].passed, false);
+      assert.ok(results[0].message.includes('received "{\\"key\\":\\"value\\"}"'));
     });
 
     it("handles missing body gracefully", () => {
@@ -120,6 +121,7 @@ describe("Assertion Engine", () => {
         body_matches: "status:\\s+ok",
       });
       assert.equal(results[0].passed, false);
+      assert.ok(results[0].message.includes('received "status: error"'));
     });
   });
 
@@ -136,6 +138,7 @@ describe("Assertion Engine", () => {
         result_json: [{ path: "$.name", equals: "test" }],
       });
       assert.equal(results[0].passed, false);
+      assert.ok(results[0].message.includes('result_json={"name":"other"}'));
     });
 
     it("passes when json path value contains string", () => {
@@ -150,6 +153,7 @@ describe("Assertion Engine", () => {
         result_json: [{ path: "$.message", contains: "world" }],
       });
       assert.equal(results[0].passed, false);
+      assert.ok(results[0].message.includes('result_json={"message":"hello"}'));
     });
 
     it("handles missing path gracefully", () => {

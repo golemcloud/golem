@@ -1,4 +1,5 @@
 import type { StepResult } from "./executor.js";
+import { formatScenarioMatrixLabel } from "./summary.js";
 
 interface ScenarioReport {
   scenario: string;
@@ -20,7 +21,7 @@ export interface Summary {
   failed: number;
   skipped: number;
   durationSeconds: number;
-  worstFailures: Array<{ scenario: string; error: string }>;
+  worstFailures: Array<{ scenario: string; agent?: string; language?: string; error: string }>;
   scenarios: Array<{ name: string; status: string; durationSeconds: number }>;
 }
 
@@ -155,7 +156,7 @@ function generateScenarioDetails(reports: ScenarioReport[]): string {
     <details>
       <summary class="${statusClass}">
         <span>${statusIcon}</span>
-        <span>${escapeHtml(report.scenario)}</span>
+        <span>${escapeHtml(formatScenarioMatrixLabel(report))}</span>
         <span class="duration">${report.durationSeconds.toFixed(1)}s</span>
       </summary>
       <div class="scenario-body">${steps}</div>
@@ -170,17 +171,43 @@ function generateScenarioDetails(reports: ScenarioReport[]): string {
     </div>`;
 }
 
-function generateFailureSummary(reports: ScenarioReport[]): string {
-  const failures = reports.filter((r) => r.status === "fail");
+function generateFailureSummary(summary: Summary | MergedSummary, reports: ScenarioReport[]): string {
+  const failures = reports
+    .filter((report) => report.status === "fail")
+    .map((report) => {
+      const failedStep = report.results.find((step) => !step.success);
+      return {
+        label: formatScenarioMatrixLabel(report),
+        error: failedStep?.error ?? "unknown",
+        guidance: failedStep?.classification?.guidance,
+      };
+    });
+
+  if (failures.length === 0) {
+    const summaryFailures = isMergedSummary(summary)
+      ? summary.summaries.flatMap((entry) => entry.worstFailures)
+      : summary.worstFailures;
+    failures.push(
+      ...summaryFailures.map((failure) => ({
+        label:
+          failure.agent && failure.language
+            ? formatScenarioMatrixLabel({
+                scenario: failure.scenario,
+                matrix: { agent: failure.agent, language: failure.language },
+              })
+            : failure.scenario,
+        error: failure.error,
+        guidance: undefined,
+      })),
+    );
+  }
+
   if (failures.length === 0) return "";
 
   const items = failures
-    .map((r) => {
-      const failedStep = r.results.find((s) => !s.success);
-      const error = failedStep?.error ?? "unknown";
-      const guidance = failedStep?.classification?.guidance;
-      const guidanceBlock = guidance ? `<br/><em>${escapeHtml(guidance)}</em>` : "";
-      return `<li><strong>${escapeHtml(r.scenario)}</strong>: ${escapeHtml(error)}${guidanceBlock}</li>`;
+    .map((failure) => {
+      const guidanceBlock = failure.guidance ? `<br/><em>${escapeHtml(failure.guidance)}</em>` : "";
+      return `<li><strong>${escapeHtml(failure.label)}</strong>: ${escapeHtml(failure.error)}${guidanceBlock}</li>`;
     })
     .join("\n");
 
@@ -257,7 +284,7 @@ export function generateHtmlReport(
   ${generateOverviewSection(summary)}
   ${matrixSection}
   ${generateScenarioDetails(scenarioReports)}
-  ${generateFailureSummary(scenarioReports)}
+  ${generateFailureSummary(summary, scenarioReports)}
 </body>
 </html>`;
 }

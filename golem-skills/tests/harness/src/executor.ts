@@ -1301,6 +1301,8 @@ export class ScenarioExecutor {
       });
       const body = await response.text();
 
+      log.httpResponse(stepLabel, response.status, body);
+
       if (expect) {
         this.evaluateAssertions(
           {
@@ -1319,8 +1321,10 @@ export class ScenarioExecutor {
       }
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
+        log.httpFailure(stepLabel, `request timed out after ${timeoutSeconds}s`);
         fail(`HTTP_FAILED: request timed out after ${timeoutSeconds}s`);
       } else {
+        log.httpFailure(stepLabel, err instanceof Error ? err.message : String(err));
         fail(`HTTP_FAILED: ${err instanceof Error ? err.message : String(err)}`);
       }
     } finally {
@@ -1339,9 +1343,13 @@ export class ScenarioExecutor {
   ): void {
     for (const ar of evaluate(ctx, expect)) {
       if (ar.passed) {
-        if (stepLabel)
-          log.stepAction(stepLabel, `✓ assertion passed (${ar.assertion}): ${ar.message}`);
+        if (stepLabel) {
+          log.assertionPassed(stepLabel, ar.assertion, ar.message);
+        }
       } else {
+        if (stepLabel) {
+          log.assertionFailed(stepLabel, ar.assertion, ar.message);
+        }
         fail(`ASSERTION_FAILED (${ar.assertion}): ${ar.message}`);
       }
     }
