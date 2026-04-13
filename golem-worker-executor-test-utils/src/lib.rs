@@ -43,7 +43,7 @@ use golem_common::model::oplog::{
     types::ObjectMetadata,
 };
 use golem_common::model::plan::PlanId;
-use golem_common::model::worker::{AgentMetadataDto, WorkerAgentConfigEntry};
+use golem_common::model::worker::{AgentMetadataDto, AgentConfigEntryDto};
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
     IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, TransactionId,
@@ -2635,7 +2635,7 @@ impl Rpc for FailingRpc {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        agent_config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(

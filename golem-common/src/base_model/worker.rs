@@ -32,14 +32,6 @@ declare_enums! {
     }
 }
 
-impl Display for AgentFileSystemNodeKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AgentFileSystemNodeKind::Directory => write!(f, "directory"),
-            AgentFileSystemNodeKind::File => write!(f, "file"),
-        }
-    }
-}
 
 declare_unions! {
     pub enum UpdateRecord {
