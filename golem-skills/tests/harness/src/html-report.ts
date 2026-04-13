@@ -171,7 +171,10 @@ function generateScenarioDetails(reports: ScenarioReport[]): string {
     </div>`;
 }
 
-function generateFailureSummary(summary: Summary | MergedSummary, reports: ScenarioReport[]): string {
+function generateFailureSummary(
+  summary: Summary | MergedSummary,
+  reports: ScenarioReport[],
+): string {
   const failures = reports
     .filter((report) => report.status === "fail")
     .map((report) => {

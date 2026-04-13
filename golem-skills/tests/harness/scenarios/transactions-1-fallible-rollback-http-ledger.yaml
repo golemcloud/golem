@@ -35,7 +35,10 @@ steps:
       requests. After both steps succeed, if the boolean flag is true, deliberately fail the
       transaction so compensation runs. On success return a successful result with no error. On
       transaction failure return an unsuccessful result with an error value.
-
+      
+      Make sure you use test-app.localhost:9006 as the HTTP API endpoint for the OrderLedger.
+      If you are using TypeScript or Scala, use `fetch` for the request.
+      
       Make sure the project builds and deploys successfully.
     expectedSkills:
       rust:
@@ -67,7 +70,13 @@ steps:
       method: "GET"
     expect:
       status: 200
-      body_matches: '(?=.*"reserved"\s*:\s*false)(?=.*"charged"\s*:\s*false)(?=.*"history"\s*:\s*\[\s*"reserve"\s*,\s*"charge"\s*,\s*"refund"\s*,\s*"release"\s*\])'
+      body_json:
+        - path: "$.reserved"
+          equals: false
+        - path: "$.charged"
+          equals: false
+        - path: "$.history"
+          equals: ["reserve", "charge", "refund", "release"]
 
   - id: "successful-transaction"
     invoke_json:
@@ -88,4 +97,10 @@ steps:
       method: "GET"
     expect:
       status: 200
-      body_matches: '(?=.*"reserved"\s*:\s*true)(?=.*"charged"\s*:\s*true)(?=.*"history"\s*:\s*\[\s*"reserve"\s*,\s*"charge"\s*\])'
+      body_json:
+        - path: "$.reserved"
+          equals: true
+        - path: "$.charged"
+          equals: true
+        - path: "$.history"
+          equals: ["reserve", "charge"]

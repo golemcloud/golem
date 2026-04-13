@@ -311,9 +311,13 @@ function formatToolLog(
       command.length <= TOOL_INLINE_VALUE_LIMIT ? ` ${chalk.gray(command)}` : "";
     return {
       summary: commandSummary,
-      details: command.length <= TOOL_INLINE_VALUE_LIMIT
-        ? formatObjectDetails(rest)
-        : limitDetailLines([...formatNamedBlock("command", command), ...formatObjectDetails(rest)]),
+      details:
+        command.length <= TOOL_INLINE_VALUE_LIMIT
+          ? formatObjectDetails(rest)
+          : limitDetailLines([
+              ...formatNamedBlock("command", command),
+              ...formatObjectDetails(rest),
+            ]),
     };
   }
 
@@ -354,7 +358,9 @@ function formatObjectDetails(input: Record<string, unknown>): string[] {
   if (Object.keys(input).length === 0) {
     return [];
   }
-  return limitDetailLines(JSON.stringify(input, null, 2).split(/\r?\n/)).map((line) => chalk.gray(line));
+  return limitDetailLines(JSON.stringify(input, null, 2).split(/\r?\n/)).map((line) =>
+    chalk.gray(line),
+  );
 }
 
 function formatNamedBlock(label: string, value: string): string[] {

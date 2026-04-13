@@ -11,31 +11,33 @@ Golem supports the **saga pattern** for multi-step operations where each step ha
 
 ## Defining Operations
 
-Each operation has an `execute` function and a `compensate` function:
+Each operation has an async `execute` function and an async `compensate` function that return `Future[Either[Err, Out]]`:
 
 ```scala
-import golem.runtime.transactions.operation
-import golem.data.Result
+import golem.Transactions
+import scala.concurrent.Future
 
-val reserveInventory = operation[String, String, String](
-  execute = sku => {
+val reserveInventory = Transactions.operation[String, String, String](
+  sku => {
     val reservationId = callInventoryApi(sku)
-    Result.ok(reservationId)
-  },
-  compensate = (sku, reservationId) => {
+    Future.successful(Right(reservationId))
+  }
+)(
+  (sku, reservationId) => {
     cancelReservation(reservationId)
-    Result.ok(())
+    Future.successful(Right(()))
   }
 )
 
-val chargePayment = operation[Long, String, String](
-  execute = amount => {
+val chargePayment = Transactions.operation[Long, String, String](
+  amount => {
     val chargeId = callPaymentApi(amount)
-    Result.ok(chargeId)
-  },
-  compensate = (amount, chargeId) => {
+    Future.successful(Right(chargeId))
+  }
+)(
+  (amount, chargeId) => {
     refundPayment(chargeId)
-    Result.ok(())
+    Future.successful(Right(()))
   }
 )
 ```
@@ -45,13 +47,18 @@ val chargePayment = operation[Long, String, String](
 On failure, compensates completed steps and returns the error:
 
 ```scala
-import golem.runtime.transactions.fallibleTransaction
+import golem.Transactions
 
-val result = fallibleTransaction { tx =>
-  val reservation = tx.execute(reserveInventory, "SKU-123")
-  val charge = tx.execute(chargePayment, 4999L)
-  reservation.flatMap(r => charge.map(c => (r, c)))
-}
+val result: Future[Either[Transactions.TransactionFailure[String], (String, String)]] =
+  Transactions.fallibleTransaction[(String, String), String] { tx =>
+    for {
+      reservation <- tx.execute(reserveInventory, "SKU-123")
+      charge      <- reservation match {
+        case Right(r) => tx.execute(chargePayment, 4999L).map(_.map(c => (r, c)))
+        case Left(e)  => Future.successful(Left(e))
+      }
+    } yield charge
+  }
 ```
 
 ## Infallible Transactions
@@ -59,13 +66,15 @@ val result = fallibleTransaction { tx =>
 On failure, compensates completed steps and **retries the entire transaction**:
 
 ```scala
-import golem.runtime.transactions.infallibleTransaction
+import golem.Transactions
 
-val result = infallibleTransaction { tx =>
-  val reservation = tx.execute(reserveInventory, "SKU-123")
-  val charge = tx.execute(chargePayment, 4999L)
-  (reservation, charge)
-}
+val result: Future[(String, String)] =
+  Transactions.infallibleTransaction { tx =>
+    for {
+      reservation <- tx.execute(reserveInventory, "SKU-123")
+      charge      <- tx.execute(chargePayment, 4999L)
+    } yield (reservation, charge)
+  }
 // Always succeeds eventually
 ```
 

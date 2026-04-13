@@ -145,6 +145,28 @@ export function executeWithDrop<
 }
 
 /**
+ * Executes an async function and automatically drops the provided resources after execution.
+ * @param resources - An array of resources to be dropped after execution.
+ * @param fn - The async function to execute.
+ * @returns A promise resolving to the result of the executed function.
+ */
+export async function executeWithDropAsync<
+  Resource extends {
+    drop: () => void;
+  },
+  R,
+>(resources: [Resource], fn: () => Promise<R>): Promise<R> {
+  try {
+    const result = await fn();
+    dropAll(true, resources);
+    return result;
+  } catch (e) {
+    dropAll(false, resources);
+    throw e;
+  }
+}
+
+/**
  * Drops all the provided resources and collects any errors that occur during the process.
  * @param resources - An array of resources to be dropped.
  * @throws DropError if any errors occur during the dropping process.
