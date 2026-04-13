@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod concurrent_agents_scheduler;
 pub mod concurrent_agents_semaphore;
 pub mod fs_semaphore;
 #[cfg(test)]
 mod tests;
 
+pub use concurrent_agents_scheduler::{ConcurrentAgentPermit, ConcurrentAgentsScheduler};
 pub use concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
 pub use fs_semaphore::{
     FILESYSTEM_STORAGE_PERMIT_SIZE_KB, FilesystemStorageSemaphore,
@@ -45,12 +47,26 @@ use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, OwnedAgentId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
+/// Capability proving that per-account concurrent-agent state has been registered
+/// in this executor and can be used for subsequent permit acquires.
+#[derive(Clone)]
+pub(crate) struct RegisteredConcurrentAccount {
+    scheduler: Arc<ConcurrentAgentsScheduler>,
+    account_id: AccountId,
+}
+
+impl RegisteredConcurrentAccount {
+    pub(crate) async fn acquire(&self, agent_id: AgentId) -> ConcurrentAgentPermit {
+        self.scheduler.acquire(self.account_id, agent_id).await
+    }
+}
+
 /// Holds the metadata and wasmtime structures of currently active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
     workers: Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
     worker_memory: Arc<Semaphore>,
     worker_filesystem_storage: Arc<FilesystemStorageSemaphore>,
-    concurrent_agents: Arc<ConcurrentAgentsSemaphore>,
+    concurrent_agents: Arc<ConcurrentAgentsScheduler>,
     priority_allocation_lock: Arc<Mutex<()>>,
     acquire_retry_delay: Duration,
 }
@@ -70,7 +86,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
                 storage_config.worker_filesystem_storage(),
                 storage_config.acquire_retry_delay,
             )),
-            concurrent_agents: Arc::new(ConcurrentAgentsSemaphore::new()),
+            concurrent_agents: Arc::new(ConcurrentAgentsScheduler::new()),
             acquire_retry_delay: memory_config.acquire_retry_delay,
             priority_allocation_lock: Arc::new(Mutex::new(())),
         }
@@ -220,34 +236,58 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         let needed = memory.saturating_sub(current_avail as u64);
 
         if needed > 0 {
-            let mut possibilities = Vec::new();
+            let mut idle_candidates = Vec::new();
+            let mut warm_candidates = Vec::new();
 
-            debug!("Collecting possibilities");
-            // Collecting the workers which are currently idle but loaded into memory
+            debug!("Collecting memory eviction candidates");
             let pairs = self.workers.iter().await;
             for (agent_id, worker) in pairs {
-                if worker.is_currently_idle_but_running().await
+                if let Some(class) = worker.eviction_class().await
                     && let Ok(mem) = worker.memory_requirement().await
                 {
                     let last_changed = worker.last_execution_state_change();
-                    possibilities.push((agent_id, worker, mem, last_changed));
+                    let entry = (agent_id, worker, mem, last_changed);
+                    match class {
+                        crate::worker::EvictionClass::LoadedIdle => {
+                            idle_candidates.push(entry);
+                        }
+                        crate::worker::EvictionClass::WarmRunnable => {
+                            warm_candidates.push(entry);
+                        }
+                    }
                 }
             }
 
-            // Sorting them by last time they changed their status - newest first
-            possibilities
-                .sort_by_key(|(_agent_id, _worker, _mem, last_changed)| last_changed.to_millis());
-            possibilities.reverse();
+            // Sort each bucket by timestamp — newest first so we pop oldest
+            idle_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
+            idle_candidates.reverse();
+            warm_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
+            warm_candidates.reverse();
 
-            let mut freed = 0;
+            let mut freed = 0u64;
 
-            // Dropping the oldest ones until we have enough memory available - rechecking the idle status before
-            while freed < needed && !possibilities.is_empty() {
-                let (agent_id, worker, mem, _) = possibilities.pop().unwrap();
+            // First evict LoadedIdle workers (cheapest)
+            while freed < needed && !idle_candidates.is_empty() {
+                let (agent_id, worker, mem, _) = idle_candidates.pop().unwrap();
+                debug!("Trying to stop idle {agent_id} to free up memory");
+                if worker
+                    .stop_if_evictable(crate::worker::EvictionClass::LoadedIdle)
+                    .await
+                {
+                    debug!("Stopped idle {agent_id} to free up {mem} memory");
+                    freed += mem;
+                }
+            }
 
-                debug!("Trying to stop {agent_id} to free up memory");
-                if worker.stop_if_idle().await {
-                    debug!("Stopped {agent_id} to free up {mem} memory");
+            // Then evict WarmRunnable workers if still under pressure
+            while freed < needed && !warm_candidates.is_empty() {
+                let (agent_id, worker, mem, _) = warm_candidates.pop().unwrap();
+                debug!("Trying to stop warm-runnable {agent_id} to free up memory");
+                if worker
+                    .stop_if_evictable(crate::worker::EvictionClass::WarmRunnable)
+                    .await
+                {
+                    debug!("Stopped warm-runnable {agent_id} to free up {mem} memory");
                     freed += mem;
                 }
             }
@@ -258,7 +298,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             freed >= needed
         } else {
             debug!("Memory was freed up in the meantime");
-            // Memory was freed up in the meantime, we can retry
             true
         }
     }
@@ -295,63 +334,74 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
     /// Register an account with the per-account concurrent agent semaphore.
     ///
-    /// Must be called (from `Worker::new`) before any `acquire_concurrent_agent`
-    /// call for the account. Idempotent — safe to call multiple times.
-    pub async fn register_account_concurrency(
+    /// Must be called (from `Worker::new`) before any concurrent-agent permit
+    /// acquire for the account. Idempotent — safe to call multiple times.
+    pub(crate) async fn register_account_concurrency(
         &self,
         account_id: AccountId,
         resource_entry: Arc<AtomicResourceEntry>,
-    ) {
+    ) -> RegisteredConcurrentAccount {
         self.concurrent_agents
             .register_account(account_id, resource_entry)
             .await;
-    }
 
-    /// Blocking acquire of one concurrent-agent permit for `account_id`.
-    ///
-    /// Only actively running agents hold permits — idle agents release theirs
-    /// back to the pool. In the common case permits are already available and
-    /// the acquire succeeds immediately.
-    ///
-    /// If all permits are held by actively running agents, waits efficiently on
-    /// the semaphore until one of them finishes its current invocation and
-    /// releases its permit by going idle.
-    ///
-    /// Returns immediately (zero-cost permit) for accounts whose plan limit is
-    /// at or above the unlimited sentinel.
-    pub async fn acquire_concurrent_agent(&self, account_id: AccountId) -> OwnedSemaphorePermit {
-        self.concurrent_agents
-            .acquire(account_id, || async { false })
-            .await
+        RegisteredConcurrentAccount {
+            scheduler: self.concurrent_agents.clone(),
+            account_id,
+        }
     }
 
     async fn try_free_up_filesystem_storage(
         workers: &Cache<AgentId, (), Arc<Worker<Ctx>>, WorkerExecutorError>,
         storage_bytes: u64,
     ) -> bool {
-        let mut possibilities = Vec::new();
+        let mut idle_candidates = Vec::new();
+        let mut warm_candidates = Vec::new();
 
-        debug!("Collecting storage eviction possibilities");
+        debug!("Collecting storage eviction candidates");
         for (agent_id, worker) in workers.iter().await {
-            if worker.is_currently_idle_but_running().await
+            if let Some(class) = worker.eviction_class().await
                 && let Ok(storage) = worker.filesystem_storage_requirement().await
             {
                 let last_changed = worker.last_execution_state_change();
-                possibilities.push((agent_id, worker, storage, last_changed));
+                let entry = (agent_id, worker, storage, last_changed);
+                match class {
+                    crate::worker::EvictionClass::LoadedIdle => idle_candidates.push(entry),
+                    crate::worker::EvictionClass::WarmRunnable => warm_candidates.push(entry),
+                }
             }
         }
 
-        // Evict oldest-idle first (sort ascending by timestamp, pop from end)
-        possibilities
-            .sort_by_key(|(_agent_id, _worker, _storage, last_changed)| last_changed.to_millis());
-        possibilities.reverse();
+        // Sort each bucket — newest first so we pop oldest
+        idle_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
+        idle_candidates.reverse();
+        warm_candidates.sort_by_key(|(_, _, _, ts)| ts.to_millis());
+        warm_candidates.reverse();
 
         let mut freed: u64 = 0;
-        while freed < storage_bytes && !possibilities.is_empty() {
-            let (agent_id, worker, storage, _) = possibilities.pop().unwrap();
-            debug!("Trying to stop {agent_id} to free up storage");
-            if worker.stop_if_idle().await {
-                debug!("Stopped {agent_id}, freed {storage} bytes of storage");
+
+        // First evict LoadedIdle workers
+        while freed < storage_bytes && !idle_candidates.is_empty() {
+            let (agent_id, worker, storage, _) = idle_candidates.pop().unwrap();
+            debug!("Trying to stop idle {agent_id} to free up storage");
+            if worker
+                .stop_if_evictable(crate::worker::EvictionClass::LoadedIdle)
+                .await
+            {
+                debug!("Stopped idle {agent_id}, freed {storage} bytes of storage");
+                freed += storage;
+            }
+        }
+
+        // Then evict WarmRunnable workers if still under pressure
+        while freed < storage_bytes && !warm_candidates.is_empty() {
+            let (agent_id, worker, storage, _) = warm_candidates.pop().unwrap();
+            debug!("Trying to stop warm-runnable {agent_id} to free up storage");
+            if worker
+                .stop_if_evictable(crate::worker::EvictionClass::WarmRunnable)
+                .await
+            {
+                debug!("Stopped warm-runnable {agent_id}, freed {storage} bytes of storage");
                 freed += storage;
             }
         }

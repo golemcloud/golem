@@ -133,21 +133,15 @@ impl ConcurrentAgentsSemaphore {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = bool>,
     {
-        let semaphore = match self
+        let semaphore = self
             .accounts
             .read_async(&account_id, |_, e| e.semaphore.clone())
             .await
-        {
-            Some(s) => s,
-            None => {
-                // Account not registered — this should not happen in production
-                // surface the bug loudly rather than silently bypassing the limit.
-                debug!(
-                    "ConcurrentAgentsSemaphore: acquire called for unregistered account {account_id}"
-                );
-                Arc::new(Semaphore::new(0))
-            }
-        };
+            .unwrap_or_else(|| {
+                panic!(
+                    "ConcurrentAgentsSemaphore::acquire called for unregistered account {account_id}"
+                )
+            });
 
         // Sync the semaphore pool size with the current plan limit (up or down).
         self.sync_semaphore_limit(&account_id, &semaphore).await;
@@ -235,7 +229,11 @@ impl ConcurrentAgentsSemaphore {
     ///
     /// If the limit is at or above the unlimited sentinel the semaphore is not
     /// touched.
-    async fn sync_semaphore_limit(&self, account_id: &AccountId, semaphore: &Arc<Semaphore>) {
+    pub(crate) async fn sync_semaphore_limit(
+        &self,
+        account_id: &AccountId,
+        semaphore: &Arc<Semaphore>,
+    ) {
         // Step 1: atomically compute and record any pool growth required for the
         // current plan. This avoids races where multiple concurrent acquires can
         // observe the same old limit and all call add_permits(delta).
@@ -332,9 +330,16 @@ impl ConcurrentAgentsSemaphore {
             .await
     }
 
+    /// Returns the inner tokio semaphore Arc for an account.
+    /// Used by the scheduler to perform synchronous try-acquire in Drop paths.
+    pub(crate) async fn raw_semaphore(&self, account_id: &AccountId) -> Option<Arc<Semaphore>> {
+        self.accounts
+            .read_async(account_id, |_, e| e.semaphore.clone())
+            .await
+    }
+
     /// Non-blocking single attempt: returns `Some(permit)` if one is available
     /// right now, `None` otherwise. Does not call `try_free_up` or wait.
-    /// Intended for tests that need to assert exhaustion without blocking.
     #[cfg(test)]
     pub(crate) async fn try_acquire_now(
         &self,
