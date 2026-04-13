@@ -11,10 +11,11 @@
   "scripts": {
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
-    "build": "rollup --failAfterWarnings -c rollup.config.js",
+    "build": "rollup --failAfterWarnings -c",
+    "prepare": "pnpm build",
     "clean-test-data": "node ../../scripts/clean-test-data.mjs",
     "generate-agent-metadata": "node ./dist/golem-typegen.cjs ./tsconfig.json --files 'tests/testData.ts' --golem-ts-sdk-import './tests/sdkPlaceholder.ts'",
-    "test": "npm run build && npm run clean-test-data && npm run generate-agent-metadata && vitest run",
+    "test": "pnpm run clean-test-data && pnpm run generate-agent-metadata && vitest run",
     "dev": "rollup -c -w"
   },
   "bin": {

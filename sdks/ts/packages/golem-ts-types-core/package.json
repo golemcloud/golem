@@ -19,7 +19,8 @@
   "scripts": {
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
-    "build": "rollup --failAfterWarnings -c rollup.config.js",
+    "build": "rollup --failAfterWarnings -c",
+    "prepare": "pnpm build",
     "dev": "rollup -c -w"
   },
   "keywords": [],
