@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use self::check::check_build_tool_requirements;
 use crate::app::build::add_metadata::add_metadata_to_selected_components;
-use crate::app::build::check::check_build_tool_requirements;
 use crate::app::build::componentize::build_components;
 use crate::app::build::gen_bridge::gen_bridge;
 use crate::app::context::BuildContext;

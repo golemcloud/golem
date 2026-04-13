@@ -93,9 +93,9 @@ export function convertTypeInfoToElementSchema(
         val: typeInfoInternal.val,
       });
     case 'principal':
-      return Either.left('Cannot convert `Principal` type information to ElementSchema');
+      return Either.left('Cannot convert `principal` type information to ElementSchema');
     case 'config':
-      return Either.left('Cannot convert `Principal` type information to ElementSchema');
+      return Either.left('Cannot convert `config` type information to ElementSchema');
     case 'multimodal':
       return Either.left('Cannot convert multimodal type information to ElementSchema');
   }
