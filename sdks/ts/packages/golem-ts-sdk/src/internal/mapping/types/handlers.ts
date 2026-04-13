@@ -14,7 +14,7 @@
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../../newTypes/either';
-import { AnalysedType, bool, f64, str, u64 } from './analysedType';
+import { AnalysedType, bool, f64, field, record, s64, str, u32, u64 } from './analysedType';
 import { Ctx } from './ctx';
 import { handleUnion } from './union';
 import { handleTuple } from './tuple';
@@ -68,7 +68,26 @@ const handlers: { [K in TsType['kind']]: Handler<K> } = {
   'unresolved-type': handleUnresolved,
   array: handleArray,
   config: unsupported('Config'),
+  'quota-token': handleQuotaToken,
 };
+
+function handleQuotaToken(): Either.Either<AnalysedType, string> {
+  const envIdType = record('EnvironmentId', [
+    field('uuid', record('Uuid', [field('highBits', u64(true)), field('lowBits', u64(true))])),
+  ]);
+  const datetimeType = record('Datetime', [
+    field('seconds', u64(true)),
+    field('nanoseconds', u32()),
+  ]);
+  const analysedType = record('QuotaTokenRecord', [
+    field('environmentId', envIdType),
+    field('resourceName', str()),
+    field('expectedUse', u64(true)),
+    field('lastCredit', s64(true)),
+    field('lastCreditAt', datetimeType),
+  ]);
+  return Either.right(analysedType);
+}
 
 function unsupported<K extends TsType['kind']>(kind: string): Handler<K> {
   return ({ scopeName, parameterInScope }) =>

@@ -14,12 +14,13 @@
 
 import {
   type FailedReservation,
+  type QuotaTokenRecord,
   QuotaToken as RawQuotaToken,
   Reservation as RawReservation,
-} from 'golem:quota/host@1.5.0';
+} from 'golem:quota/types@1.5.0';
 import { Result } from './result';
 
-export type { FailedReservation };
+export type { FailedReservation, QuotaTokenRecord };
 
 /**
  * A committed or in-flight resource-consumption handle.
@@ -102,6 +103,16 @@ export class QuotaToken {
    */
   merge(other: QuotaToken): void {
     this.raw.merge(other.raw);
+  }
+
+  /** @internal Used by the RPC layer for automatic serialization. */
+  _toRecord(): QuotaTokenRecord {
+    return this.raw.toRecord();
+  }
+
+  /** @internal Used by the RPC layer for automatic deserialization. */
+  static _fromRecord(record: QuotaTokenRecord): QuotaToken {
+    return new QuotaToken(RawQuotaToken.fromRecord(record));
   }
 }
 

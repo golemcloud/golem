@@ -227,6 +227,11 @@ function getTypeFromTsMorphInternal(
   // eslint-disable-next-line eqeqeq
   if (sdkConfigType != null) return sdkConfigType;
 
+  // sdk quota-token type — detected by name; TODO switch to symbol-based matching
+  const sdkQuotaTokenType = getSdkQuotaTokenTypeFromTsMorph(rawName, aliasName, isOptional);
+  // eslint-disable-next-line eqeqeq
+  if (sdkQuotaTokenType != null) return sdkQuotaTokenType;
+
   // These will handle record types. However, record type is devoid
   // of details, and hence we don't support record type at the SDK level
   if (type.isObject() && type.getProperties().length === 0) {
@@ -543,6 +548,8 @@ function getUnionTypeKindRank(kind: Type.Type['kind']): number {
       return 15;
     case 'config':
       return 16;
+    case 'quota-token':
+      return 16;
     case 'alias':
       return 17;
     case 'others':
@@ -577,6 +584,16 @@ function getSdkConfigTypeFromTsMorph(
     optional: isOptional,
     properties,
   };
+}
+
+function getSdkQuotaTokenTypeFromTsMorph(
+  rawName: string | undefined,
+  aliasName: string | undefined,
+  isOptional: boolean,
+): Type.Type | undefined {
+  // Detected by name, same as Config above — TODO: switch to symbol-based matching
+  if (rawName !== 'QuotaToken') return undefined;
+  return { kind: 'quota-token', name: aliasName, optional: isOptional };
 }
 
 // TypeLiteral in TS AST is `type A = {}`. Union types, etc. get other node types

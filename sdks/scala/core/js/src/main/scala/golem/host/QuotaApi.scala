@@ -17,22 +17,29 @@
 package golem.host
 
 import golem.host.js._
+import golem.data.GolemSchema
+import golem.Uuid
+import golem.EnvironmentId
+import zio.blocks.schema.Schema
 
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSImport
 
 /**
- * Scala.js facade for `golem:quota/host@1.5.0`.
+ * Scala.js facade for `golem:quota/types@1.5.0`.
  *
  * WIT interface:
  * {{{
  *   record failed-reservation { estimated-wait-nanos: option<u64> }
+ *   record quota-token-record { environment-id, resource-name, expected-use, last-credit, last-credit-at }
  *   resource reservation { commit: func(used: u64) }
  *   resource quota-token {
  *     constructor(resource-name: string, expected-use: u64);
  *     reserve: func(amount: u64) -> result<reservation, failed-reservation>;
  *     split: func(child-expected-use: u64) -> quota-token;
  *     merge: func(other: quota-token);
+ *     to-record: func() -> quota-token-record;
+ *     from-record: static func(serialized: quota-token-record) -> quota-token;
  *   }
  * }}}
  */
@@ -127,9 +134,50 @@ object QuotaApi {
      */
     def merge(other: QuotaToken): Unit =
       underlying.merge(other.underlying)
+
+    private[golem] def toRecord(): QuotaTokenRecord = {
+      val raw   = underlying.toRecord()
+      val ts    = raw.lastCreditAt
+      QuotaTokenRecord(
+        environmentId        = environmentIdFromJs(raw.environmentId.asInstanceOf[JsEnvironmentId]),
+        resourceName         = raw.resourceName,
+        expectedUse          = BigInt(raw.expectedUse.toString),
+        lastCredit           = BigInt(raw.lastCredit.toString),
+        lastCreditAtSeconds  = BigInt(ts.seconds.toString),
+        lastCreditAtNanos    = ts.nanoseconds,
+      )
+    }
+  }
+
+  /** A serializable snapshot of a [[QuotaToken]], suitable for RPC transfer. */
+  final case class QuotaTokenRecord(
+    environmentId:       EnvironmentId,
+    resourceName:        String,
+    expectedUse:         BigInt,
+    lastCredit:          BigInt,
+    lastCreditAtSeconds: BigInt,
+    lastCreditAtNanos:   Int,
+  )
+
+  object QuotaTokenRecord {
+    implicit val schema: Schema[QuotaTokenRecord] = Schema.derived
   }
 
   object QuotaToken {
+
+    private[golem] def fromRecord(record: QuotaTokenRecord): QuotaToken = {
+      val jsRecord = js.Dynamic.literal(
+        environmentId = environmentIdToJs(record.environmentId),
+        resourceName  = record.resourceName,
+        expectedUse   = js.BigInt(record.expectedUse.toString),
+        lastCredit    = js.BigInt(record.lastCredit.toString),
+        lastCreditAt  = JsDatetime(
+          js.BigInt(record.lastCreditAtSeconds.toString),
+          record.lastCreditAtNanos,
+        ),
+      ).asInstanceOf[JsQuotaTokenRecord]
+      new QuotaToken(JsQuotaTokenStaticClass.fromRecord(jsRecord).asInstanceOf[JsQuotaToken])
+    }
 
     /**
      * Request a quota capability for the named resource.
@@ -143,19 +191,56 @@ object QuotaApi {
         new JsQuotaTokenClass(resourceName, js.BigInt(expectedUse.toString))
           .asInstanceOf[JsQuotaToken]
       )
+
+    /**
+     * Automatic serialization for RPC: `QuotaToken` is transparently converted
+     * to/from [[QuotaTokenRecord]] when passing across agent boundaries.
+     *
+     * Users do not need to call `toRecord` / `fromRecord` manually.
+     */
+    implicit val golemSchema: GolemSchema[QuotaToken] = {
+      val recordSchema = GolemSchema.fromBlocksSchema[QuotaTokenRecord]
+      new GolemSchema[QuotaToken] {
+        override def schema             = recordSchema.schema
+        override def elementSchema      = recordSchema.elementSchema
+        override def encode(value: QuotaToken)          = recordSchema.encode(value.toRecord())
+        override def decode(value: golem.data.StructuredValue)   = recordSchema.decode(value).map(fromRecord)
+        override def encodeElement(value: QuotaToken)   = recordSchema.encodeElement(value.toRecord())
+        override def decodeElement(value: golem.data.ElementValue) = recordSchema.decodeElement(value).map(fromRecord)
+      }
+    }
   }
 
-  // --- WIT constructor import ---
-  // `quota-token` has a WIT constructor, which jco maps to a JS class.
-
   @js.native
-  @JSImport("golem:quota/host@1.5.0", "QuotaToken")
-  private class JsQuotaTokenClass(resourceName: String, expectedUse: js.BigInt)
-      extends js.Object {
+  @JSImport("golem:quota/types@1.5.0", "QuotaToken")
+  private class JsQuotaTokenClass(resourceName: String, expectedUse: js.BigInt) extends js.Object {
     def reserve(amount: js.BigInt): JsReservation        = js.native
     def split(childExpectedUse: js.BigInt): JsQuotaToken = js.native
     def merge(other: JsQuotaToken): Unit                 = js.native
+    def toRecord(): JsQuotaTokenRecord                   = js.native
   }
 
+  @js.native
+  @JSImport("golem:quota/types@1.5.0", "QuotaToken")
+  private object JsQuotaTokenStaticClass extends js.Object {
+    def fromRecord(serialized: JsQuotaTokenRecord): js.Object = js.native
+  }
 
+  private def environmentIdToJs(environmentId: EnvironmentId): JsEnvironmentId = {
+    JsEnvironmentId(
+      uuid = JsUuid(
+        highBits = js.BigInt(environmentId.uuid.highBits.toString),
+        lowBits = js.BigInt(environmentId.uuid.lowBits.toString)
+      )
+    )
+  }
+
+  private def environmentIdFromJs(raw: JsEnvironmentId): EnvironmentId = {
+    EnvironmentId(
+      uuid = Uuid(
+        highBits = BigInt(raw.uuid.highBits.toString),
+        lowBits = BigInt(raw.uuid.lowBits.toString)
+      )
+    )
+  }
 }

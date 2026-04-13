@@ -4,7 +4,10 @@ package golem:quota@1.5.0;
 ///
 /// Agents use quota-tokens to declare intent to consume a named resource and to
 /// reserve / commit actual usage.
-interface host {
+interface types {
+    use golem:api/host@1.5.0.{environment-id};
+    use wasi:clocks/wall-clock@0.2.3.{datetime};
+
     /// Error returned when a reservation cannot be satisfied because the
     /// resource's enforcement policy is `reject`.
     ///
@@ -25,6 +28,15 @@ interface host {
         /// If `used` > reserved  — the excess is deducted from the token's
         ///                          remaining allocation as "debt".
         commit: static func(this: reservation, used: u64);
+    }
+
+    /// A serializable represenation of a quota-token, useful when sending across rpc boundaries.
+    record quota-token-record {
+        environment-id: environment-id,
+        resource-name: string,
+        expected-use: u64,
+        last-credit: s64,
+        last-credit-at: datetime
     }
 
     /// An unforgeable capability granting the right to consume a named
@@ -62,5 +74,11 @@ interface host {
         ///
         /// Traps if the tokens refer to different resources.
         merge: func(other: quota-token);
+
+        /// Serialize this token to a quota-token-record
+        to-record: func() -> quota-token-record;
+
+        /// Deserialize a token from this record, restoring all associated state
+        from-record: static func(serialized: quota-token-record) -> quota-token;
     }
 }
