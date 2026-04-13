@@ -26,6 +26,7 @@ use self::status::{
 use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
+use crate::services::active_workers::RegisteredConcurrentAccount;
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
@@ -111,6 +112,7 @@ pub struct Worker<Ctx: WorkerCtx> {
 
     invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
     initial_worker_metadata: AgentMetadata,
+    registered_concurrent_account: RegisteredConcurrentAccount,
     last_known_status: Arc<RwLock<AgentStatusRecord>>,
     last_known_status_detached: AtomicBool,
     // Note: std lock for wasmtime reasons
@@ -307,7 +309,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .resource_limits()
             .initialize_account(owner_account_id)
             .await?;
-        deps.active_workers()
+        let registered_concurrent_account = deps
+            .active_workers()
             .register_account_concurrency(owner_account_id, resource_entry)
             .await;
 
@@ -326,6 +329,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             instance,
             execution_status,
             initial_worker_metadata,
+            registered_concurrent_account,
             last_known_status: current_status,
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
@@ -846,6 +850,95 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && !has_queued_internal_work
             && !has_resume_replay
             && !has_interrupt
+    }
+
+    /// Classifies the worker for eviction ordering under memory/filesystem
+    /// pressure. Returns `None` if the worker is not evictable.
+    ///
+    /// - `LoadedIdle`: resident in memory, not executing, no durable pending work.
+    ///   Evicted first.
+    /// - `WarmRunnable`: resident in memory, not executing, has durable pending
+    ///   invocations. Evicted only when `LoadedIdle` workers are exhausted.
+    /// - `None`: worker is actively executing, has non-durable in-memory work
+    ///   pending, or is not loaded. Never evicted.
+    pub async fn eviction_class(&self) -> Option<EvictionClass> {
+        match &*self.instance.lock().await {
+            WorkerInstance::Running(running) => {
+                let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
+                let has_queued_internal_work = !running.queue.read().await.is_empty();
+                let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
+                let has_interrupt = running.interrupt_signal.lock().await.is_some();
+
+                // Non-evictable if actively executing or has non-durable in-memory work
+                if !waiting_for_command
+                    || has_queued_internal_work
+                    || has_resume_replay
+                    || has_interrupt
+                {
+                    return None;
+                }
+
+                let has_pending_invocations = !self.pending_invocations().await.is_empty();
+                if has_pending_invocations {
+                    Some(EvictionClass::WarmRunnable)
+                } else {
+                    Some(EvictionClass::LoadedIdle)
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Stop this worker if it matches the given eviction class.
+    ///
+    /// Re-checks the eviction classification under the instance lock to avoid
+    /// races. Returns `true` if the worker was actually stopped.
+    pub async fn stop_if_evictable(&self, target_class: EvictionClass) -> bool {
+        let mut instance_guard = self.lock_non_stopping_worker().await;
+        let should_stop = match &*instance_guard {
+            WorkerInstance::Running(running) => {
+                let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
+                let has_queued_internal_work = !running.queue.read().await.is_empty();
+                let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
+                let has_interrupt = running.interrupt_signal.lock().await.is_some();
+
+                if !waiting_for_command
+                    || has_queued_internal_work
+                    || has_resume_replay
+                    || has_interrupt
+                {
+                    false
+                } else {
+                    let has_pending_invocations = !self.pending_invocations().await.is_empty();
+                    let current_class = if has_pending_invocations {
+                        EvictionClass::WarmRunnable
+                    } else {
+                        EvictionClass::LoadedIdle
+                    };
+                    current_class.eviction_priority() <= target_class.eviction_priority()
+                }
+            }
+            _ => false,
+        };
+
+        if should_stop {
+            let stop_result = self
+                .stop_internal_locked(
+                    &mut instance_guard,
+                    false,
+                    None,
+                    FinalWorkerState::Unloaded {
+                        startup_failure: None,
+                    },
+                )
+                .await;
+            drop(instance_guard);
+            self.handle_stop_result(stop_result).await;
+            true
+        } else {
+            drop(instance_guard);
+            false
+        }
     }
 
     /// Gets the timestamp of the last time the execution status changed
@@ -2047,7 +2140,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         this: Arc<Worker<Ctx>>,
         permit: OwnedSemaphorePermit,
         filesystem_storage_permit: Option<OwnedSemaphorePermit>,
-        concurrent_agent_permit: OwnedSemaphorePermit,
+        concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
         start_attempt: Uuid,
     ) {
@@ -2164,11 +2257,9 @@ impl WaitingWorker {
 
         let handle = tokio::task::spawn(
             async move {
-                let account_id = parent.initial_worker_metadata.created_by;
-                let concurrent_agent_permit = parent
-                    .active_workers()
-                    .acquire_concurrent_agent(account_id)
-                    .await;
+                let agent_id = parent.owned_agent_id.agent_id();
+                let registered_concurrent_account = parent.registered_concurrent_account.clone();
+                let concurrent_agent_permit = registered_concurrent_account.acquire(agent_id).await;
                 // Do not reserve executor memory while waiting for a per-account
                 // concurrency slot. Otherwise one account could fill the memory
                 // pool with workers that are not allowed to run yet.
@@ -2287,7 +2378,7 @@ impl RunningWorker {
         queue: Arc<RwLock<VecDeque<QueuedWorkerInvocation>>>,
         parent: Arc<Worker<Ctx>>,
         permit: OwnedSemaphorePermit,
-        concurrent_agent_permit: OwnedSemaphorePermit,
+        concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         oom_retry_count: u32,
     ) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -2585,7 +2676,7 @@ impl RunningWorker {
         waiting_for_command: Arc<AtomicBool>,
         interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
         oom_retry_count: u32,
-        concurrent_agent_permit: OwnedSemaphorePermit,
+        concurrent_agent_permit: crate::services::active_workers::ConcurrentAgentPermit,
         resume_replay_pending: Arc<AtomicBool>,
     ) {
         let mut invocation_loop = InvocationLoop {
@@ -2600,6 +2691,34 @@ impl RunningWorker {
             resume_replay_pending,
         };
         invocation_loop.run().await;
+    }
+}
+
+/// Classification of a loaded worker for eviction ordering.
+///
+/// Under memory/filesystem pressure, workers are evicted in priority order:
+/// 1. `LoadedIdle` — no pending work, lowest cost to evict.
+/// 2. `WarmRunnable` — has durable pending invocations but is not actively
+///    executing. Evicting requires oplog recovery on next start, so it is the
+///    expensive fallback path.
+///
+/// Workers with non-durable in-memory work (internal queue, `ResumeReplay`,
+/// interrupt) or that are actively executing are never evictable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvictionClass {
+    /// Resident in memory, not executing, no durable pending work.
+    LoadedIdle,
+    /// Resident in memory, not executing, has durable pending invocations.
+    WarmRunnable,
+}
+
+impl EvictionClass {
+    /// Lower values are evicted first.
+    pub fn eviction_priority(self) -> u8 {
+        match self {
+            EvictionClass::LoadedIdle => 0,
+            EvictionClass::WarmRunnable => 1,
+        }
     }
 }
 

@@ -2526,7 +2526,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
         )
         .await?;
 
-    let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
         .invoke_agent(&component, &agent_id, "start_polling", data_value!("first"))
@@ -2536,9 +2536,37 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
         .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
         .await?;
 
+    // AgentStatus::Running is set when the invocation is recorded, before the guest
+    // reaches the poll loop. Wait for the first loop iteration so interrupting this
+    // worker reliably exercises the interrupted-connection path instead of racing a
+    // not-yet-started invocation.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut saw_call = false;
+        let mut saw_initial = false;
+        while !(saw_call && saw_initial) {
+            match rx.recv().await {
+                Some(Some(event)) => {
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") {
+                        saw_call = true;
+                    } else if stdout_event_matching(&event, "Received initial\n") {
+                        saw_initial = true;
+                    }
+                }
+                _ => {
+                    return Err(anyhow!("Did not receive expected poll-loop log events"));
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| anyhow!("Timed out waiting for poll loop to start"))??;
+
     executor.interrupt(&worker_id).await?;
 
-    drain_connection(rx).await;
+    tokio::time::timeout(Duration::from_secs(30), drain_connection(rx))
+        .await
+        .map_err(|_| anyhow!("Timed out waiting for log stream termination after interrupt"))?;
     let status2 = executor.get_worker_metadata(&worker_id).await?;
 
     executor.resume(&worker_id, false).await?;
