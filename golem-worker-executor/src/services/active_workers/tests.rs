@@ -7,7 +7,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
 use std::sync::Arc;
 use std::time::Duration;
-use test_r::test;
+use test_r::{non_flaky, test, timeout};
 use tokio::sync::Barrier;
 use uuid::Uuid;
 
@@ -544,6 +544,23 @@ fn scheduler() -> Arc<ConcurrentAgentsScheduler> {
     Arc::new(ConcurrentAgentsScheduler::new())
 }
 
+async fn wait_for_queue_len(
+    sched: &ConcurrentAgentsScheduler,
+    acc: &AccountId,
+    expected: usize,
+) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if sched.queue_len(acc).await == Some(expected) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("timed out waiting for scheduler queue length");
+}
+
 #[test]
 async fn scheduler_acquire_panics_for_unregistered_account() {
     let sched = scheduler();
@@ -558,6 +575,8 @@ async fn scheduler_acquire_panics_for_unregistered_account() {
 }
 
 #[test]
+#[timeout("5s")]
+#[non_flaky(10)]
 async fn scheduler_fifo_admission() {
     let sched = scheduler();
     let acc = account();
@@ -571,16 +590,15 @@ async fn scheduler_fifo_admission() {
     assert_eq!(sched.running_count(&acc).await, Some(2));
     assert_eq!(sched.queue_len(&acc).await, Some(0));
 
-    // C and D queue.
+    // C queues first, then D queues behind it.
     let sched2 = sched.clone();
     let acc2 = acc;
     let c_handle = tokio::spawn(async move { sched2.acquire(acc2, agent("C")).await });
+    wait_for_queue_len(&sched, &acc, 1).await;
+
     let sched3 = sched.clone();
     let d_handle = tokio::spawn(async move { sched3.acquire(acc, agent("D")).await });
-
-    // Give time for C and D to be queued.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(sched.queue_len(&acc).await, Some(2));
+    wait_for_queue_len(&sched, &acc, 2).await;
 
     // Drop A => C should get slot.
     drop(a);
@@ -609,18 +627,17 @@ async fn scheduler_back_of_queue_reentry() {
     let a = sched.acquire(acc, agent("A")).await;
     assert_eq!(sched.running_count(&acc).await, Some(1));
 
-    // B and C queue.
+    // B queues first, then C queues behind it.
     let sched2 = sched.clone();
     let b_handle = tokio::spawn(async move { sched2.acquire(acc, agent("B")).await });
+    wait_for_queue_len(&sched, &acc, 1).await;
+
     let sched3 = sched.clone();
     let c_handle = tokio::spawn(async move { sched3.acquire(acc, agent("C")).await });
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(sched.queue_len(&acc).await, Some(2));
+    wait_for_queue_len(&sched, &acc, 2).await;
 
     // A finishes and re-requests. It should go to the back of the queue.
     drop(a);
-    // Give B time to receive the permit via oneshot.
-    tokio::time::sleep(Duration::from_millis(20)).await;
 
     // B should get the slot first (it was queued before A's re-request).
     let b = b_handle.await.unwrap();
@@ -629,7 +646,7 @@ async fn scheduler_back_of_queue_reentry() {
     // Now A re-requests — it should go to the back of the queue behind C.
     let sched4 = sched.clone();
     let a2_handle = tokio::spawn(async move { sched4.acquire(acc, agent("A")).await });
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    wait_for_queue_len(&sched, &acc, 2).await;
 
     // Drop B => C should get next, not A.
     drop(b);
@@ -656,16 +673,20 @@ async fn scheduler_cancelled_waiter_is_skipped() {
     // B queues then is cancelled.
     let sched2 = sched.clone();
     let b_handle = tokio::spawn(async move { sched2.acquire(acc, agent("B")).await });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_queue_len(&sched, &acc, 1).await;
 
     // C also queues.
     let sched3 = sched.clone();
     let c_handle = tokio::spawn(async move { sched3.acquire(acc, agent("C")).await });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_queue_len(&sched, &acc, 2).await;
 
     // Cancel B.
     b_handle.abort();
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    let err = match b_handle.await {
+        Ok(_) => panic!("cancelled waiter should not complete successfully"),
+        Err(err) => err,
+    };
+    assert!(err.is_cancelled());
 
     // Drop A => scheduler should skip cancelled B and grant C.
     drop(a);
