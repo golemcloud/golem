@@ -1,4 +1,5 @@
 import { ImportedSourceOrderedUnion } from './importedTypes';
+import { Config, Secret } from './sdkPlaceholder';
 
 interface SimpleInterfaceType {
   n: number;
@@ -180,10 +181,6 @@ class MyAgent {
     return Promise.resolve(`Weather in is sunny!`);
   }
 }
-
-export class Secret<T> {}
-
-export class Config<T> {}
 
 type AliasedNested = {
   c: number;

@@ -6,48 +6,31 @@
     "access": "public"
   },
   "files": [
-    "types",
     "dist"
   ],
-  "main": "dist/index.mjs",
-  "exports": {
-    ".": {
-      "import": "./dist/index.mjs",
-      "types": "./dist/index.d.mts"
-    }
-  },
-  "typesVersions": {
-    "*": {
-      "agentic-guest": [
-        "types/exports.d.ts"
-      ],
-      "golem:agent/common": [
-        "types/golem_agent_common.d.ts"
-      ],
-      "golem:agent/host": [
-        "types/golem_agent_host.d.ts"
-      ]
-    }
-  },
   "scripts": {
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
-    "test": "tsc --noEmit && vitest run",
-    "build": "pnpm run build:lib && pnpm run build:cli",
-    "build:lib": "tsc --noEmit && rollup -c",
-    "build:cli": "tsc src/bin/golem-typegen.ts --outDir dist --module node16 --target ES2020 --esModuleInterop",
+    "build": "rollup --failAfterWarnings -c rollup.config.js",
+    "clean-test-data": "node ../../scripts/clean-test-data.mjs",
+    "generate-agent-metadata": "node ./dist/golem-typegen.cjs ./tsconfig.json --files 'tests/testData.ts' --golem-ts-sdk-import './tests/sdkPlaceholder.ts'",
+    "test": "npm run build && npm run clean-test-data && npm run generate-agent-metadata && vitest run",
     "dev": "rollup -c -w"
   },
   "bin": {
-    "golem-typegen": "./dist/bin/golem-typegen.js"
+    "golem-typegen": "./dist/golem-typegen.cjs"
   },
   "keywords": [],
-  "sideEffects": [
-    "src/index.ts"
-  ],
   "author": "",
   "license": "SEE LICENSE IN LICENSE",
   "description": "",
+  "dependencies": {
+    "@golemcloud/golem-ts-types-core": "workspace:*",
+    "picocolors": "^1.1.1",
+    "commander": "^14.0.0",
+    "log-symbols": "^7.0.1",
+    "ts-morph": "^26.0.0"
+  },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
     "@rollup/plugin-commonjs": "^28.0.6",
@@ -67,12 +50,5 @@
     "vitest": "^3.2.4"
   },
   "private": false,
-  "dependencies": {
-    "@golemcloud/golem-ts-types-core": "workspace:*",
-    "picocolors": "^1.1.1",
-    "commander": "^14.0.0",
-    "log-symbols": "^7.0.1",
-    "ts-morph": "^26.0.0"
-  },
   "repository": "https://github.com/golemcloud/golem"
 }

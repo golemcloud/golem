@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { agent, BaseAgent, endpoint } from '../src';
-import { Principal } from 'golem:agent/common@1.5.0';
+import { agent, BaseAgent, endpoint, Principal } from '../src';
 
 @agent({
   mount: '/chats/{agent-type}/{foo}/{bar}',

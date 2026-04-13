@@ -25,6 +25,7 @@ import {
   Symbol as TsMorphSymbol,
   TypeLiteralNode,
   UnionTypeNode,
+  Project,
 } from 'ts-morph';
 import {
   buildJSONFromType,
@@ -34,17 +35,24 @@ import {
   Type,
   TypeMetadata,
 } from '@golemcloud/golem-ts-types-core';
-
+import { createWellKnownTypes, WellKnown, WellKnownTypes } from './wellknownTypes.js';
 import * as fs from 'node:fs';
 import path from 'path';
 
 export function getTypeFromTsMorph(
   tsMorphType: TsMorphType,
   isOptional: boolean,
+  wellKnownTypes: WellKnownTypes,
   sourceTypeNode?: TsMorphNode,
 ): Type.Type {
   try {
-    return getTypeFromTsMorphInternal(tsMorphType, isOptional, new Set(), sourceTypeNode);
+    return getTypeFromTsMorphInternal(
+      tsMorphType,
+      isOptional,
+      wellKnownTypes,
+      new Set(),
+      sourceTypeNode,
+    );
   } catch (e) {
     if (e instanceof Error) {
       let error = e.message;
@@ -69,6 +77,7 @@ export function getTypeFromTsMorph(
 function getTypeFromTsMorphInternal(
   tsMorphType: TsMorphType,
   isOptional: boolean,
+  wellKnownTypes: WellKnownTypes,
   visitedTypes: Set<TsMorphType>,
   sourceTypeNode?: TsMorphNode,
 ): Type.Type {
@@ -77,7 +86,7 @@ function getTypeFromTsMorphInternal(
   const aliasName = getAliasTypeName(tsMorphType) ?? getAliasTypeName(type);
   const owner = getTypeOwner(tsMorphType, sourceTypeNode) ?? getTypeOwner(type);
 
-  if (visitedTypes.has(tsMorphType)) {
+  if (visitedTypes.has(type)) {
     return {
       kind: 'others',
       name: rawName ?? aliasName ?? type.getText(),
@@ -88,187 +97,82 @@ function getTypeFromTsMorphInternal(
   }
   visitedTypes.add(tsMorphType);
 
-  switch (rawName) {
-    case 'Object':
-      return {
-        kind: 'others',
-        name: rawName,
-        owner,
-        optional: isOptional,
-        recursive: false,
-      };
-    case 'Float64Array':
-      return {
-        kind: 'array',
-        name: 'Float64Array',
-        owner,
-        element: {
-          kind: 'number',
-          owner: undefined,
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'Float32Array':
-      return {
-        kind: 'array',
-        name: 'Float32Array',
-        owner,
-        element: {
-          kind: 'number',
-          owner: undefined,
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'Int8Array':
-      return {
-        kind: 'array',
-        name: 'Int8Array',
-        owner,
-        element: {
-          kind: 'number',
-          owner: undefined,
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'Uint8Array':
-      return {
-        kind: 'array',
-        name: 'Uint8Array',
-        owner,
-        element: {
-          kind: 'number',
-          owner: undefined,
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'Int16Array':
-      return {
-        kind: 'array',
-        name: 'Int16Array',
-        owner,
-        element: {
-          kind: 'number',
-          owner: undefined,
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'Uint16Array':
-      return {
-        kind: 'array',
-        name: 'Uint16Array',
-        owner,
-        element: {
-          kind: 'number',
-          owner: undefined,
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'Int32Array':
-      return {
-        kind: 'array',
-        name: 'Int32Array',
-        owner,
-        element: {
-          kind: 'number',
-          owner: undefined,
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'Uint32Array':
-      return {
-        kind: 'array',
-        name: 'Uint32Array',
-        owner,
-        element: {
-          kind: 'number',
-          owner: undefined,
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'BigInt64Array':
-      return {
-        kind: 'array',
-        name: 'BigInt64Array',
-        owner,
-        element: {
-          kind: 'number',
-          owner: undefined,
-          optional: false,
-        },
-        optional: isOptional,
-      };
-    case 'BigUint64Array':
-      return {
-        kind: 'array',
-        name: 'BigUint64Array',
-        owner,
-        element: {
-          kind: 'number',
-          owner: undefined,
-          optional: false,
-        },
-        optional: isOptional,
-      };
-  }
-
-  // sdk config type
-  // because config type detection is unreliable currently, fall through to other detection if the node is malformed.
-  // Once we can reliably detect the node using symbols, we should surface an error to users here that they are using
-  // config in an unsupported way.
-  const sdkConfigType = getSdkConfigTypeFromTsMorph(type, rawName, aliasName, isOptional);
-  // eslint-disable-next-line eqeqeq
-  if (sdkConfigType != null) return sdkConfigType;
-
-  // sdk quota-token type — detected by name; TODO switch to symbol-based matching
-  const sdkQuotaTokenType = getSdkQuotaTokenTypeFromTsMorph(rawName, aliasName, isOptional);
-  // eslint-disable-next-line eqeqeq
-  if (sdkQuotaTokenType != null) return sdkQuotaTokenType;
-
-  // These will handle record types. However, record type is devoid
-  // of details, and hence we don't support record type at the SDK level
-  if (type.isObject() && type.getProperties().length === 0) {
+  if (isExactly(type, wellKnownTypes.object)) {
     const name = rawName ?? aliasName ?? type.getText();
-
     return {
       kind: 'others',
-      name: name,
-      owner,
+      name,
       optional: isOptional,
       recursive: false,
     };
   }
 
-  if (rawName === 'Promise' && type.getTypeArguments().length === 1) {
+  for (const [name, wk] of wellKnownTypes.containers.typedArrays) {
+    if (isExactly(type, wk)) {
+      return {
+        kind: 'array',
+        name,
+        element: {
+          kind: 'number',
+          optional: false,
+        },
+        optional: isOptional,
+      };
+    }
+  }
+
+  if (isExactly(type, wellKnownTypes.containers.promise)) {
     const inner = type.getTypeArguments()[0];
-    const promiseType = getTypeFromTsMorphInternal(inner, false, visitedTypes);
+    const promiseType = getTypeFromTsMorphInternal(inner, false, wellKnownTypes, visitedTypes);
 
     return {
       kind: 'promise',
       name: aliasName,
-      owner,
       element: promiseType,
       optional: isOptional,
     };
   }
 
-  if (rawName === 'Map' && type.getTypeArguments().length === 2) {
+  if (isExactly(type, wellKnownTypes.containers.map)) {
     const [keyT, valT] = type.getTypeArguments();
-    const key = getTypeFromTsMorphInternal(keyT, false, new Set(visitedTypes));
-    const value = getTypeFromTsMorphInternal(valT, false, new Set(visitedTypes));
+    const key = getTypeFromTsMorphInternal(keyT, false, wellKnownTypes, new Set(visitedTypes));
+    const value = getTypeFromTsMorphInternal(valT, false, wellKnownTypes, new Set(visitedTypes));
     return {
       kind: 'map',
       name: aliasName,
-      owner,
       key: key,
       value: value,
+      optional: isOptional,
+    };
+  }
+
+  if (isExactly(type, wellKnownTypes.sdk.config)) {
+    const rawInner = type.getTypeArguments()[0];
+    const innerType = unwrapAlias(rawInner);
+
+    const typeLiteral = resolveStrictTypeLiteralNode(innerType);
+    if (!typeLiteral) throw 'Config type parameter must be a type literal';
+
+    const properties = extractConfigPropertiesFromTypeLiteral(typeLiteral, [], wellKnownTypes);
+    if (!properties) throw 'Config type parameter must be a type literal';
+
+    return {
+      kind: 'config',
+      name: aliasName,
+      owner: getTypeOwner(type),
+      optional: isOptional,
+      properties,
+    };
+  }
+
+  if (isExactly(type, wellKnownTypes.sdk.quotaToken)) {
+    return { kind: 'quota-token', name: aliasName, optional: isOptional };
+  }
+
+  if (!containsInvalidTypes(type) && type.isAssignableTo(wellKnownTypes.sdk.principal)) {
+    return {
+      kind: 'principal',
+      name: aliasName,
       optional: isOptional,
     };
   }
@@ -296,7 +200,7 @@ function getTypeFromTsMorphInternal(
   if (type.isTuple()) {
     const tupleElems = type
       .getTupleElements()
-      .map((el) => getTypeFromTsMorphInternal(el, false, new Set(visitedTypes)));
+      .map((el) => getTypeFromTsMorphInternal(el, false, wellKnownTypes, new Set(visitedTypes)));
 
     return {
       kind: 'tuple',
@@ -322,7 +226,12 @@ function getTypeFromTsMorphInternal(
       throw new Error('Array type without element type');
     }
 
-    const element = getTypeFromTsMorphInternal(resolvedElementType, false, visitedTypes);
+    const element = getTypeFromTsMorphInternal(
+      resolvedElementType,
+      false,
+      wellKnownTypes,
+      visitedTypes,
+    );
 
     return {
       kind: 'array',
@@ -339,13 +248,13 @@ function getTypeFromTsMorphInternal(
     const aliased = getAliasTypeArgumentsSafe(tsMorphType);
 
     const unionTypes =
-      getSourceOrderedUnionTypes(type, sourceTypeNode, visitedTypes) ??
-      getCanonicalFallbackUnionTypes(type.getUnionTypes(), visitedTypes);
+      getSourceOrderedUnionTypes(type, sourceTypeNode, wellKnownTypes, visitedTypes) ??
+      getCanonicalFallbackUnionTypes(type.getUnionTypes(), wellKnownTypes, visitedTypes);
 
     const [aliasRawName, aliasedTypeArgs] = aliased;
 
     if (argsInternal.length > 0 || !aliasRawName) {
-      const args = argsInternal.map((arg) => getTypeFromTsMorph(arg, false));
+      const args = argsInternal.map((arg) => getTypeFromTsMorph(arg, false, wellKnownTypes));
 
       return {
         kind: 'union',
@@ -358,7 +267,9 @@ function getTypeFromTsMorphInternal(
       };
     }
 
-    const aliasedArgs = aliasedTypeArgs.map((arg) => getTypeFromTsMorph(arg, false));
+    const aliasedArgs = aliasedTypeArgs.map((arg) =>
+      getTypeFromTsMorph(arg, false, wellKnownTypes),
+    );
 
     return {
       kind: 'union',
@@ -376,7 +287,7 @@ function getTypeFromTsMorphInternal(
       kind: 'class',
       name: aliasName ?? rawName,
       owner,
-      properties: propertiesAsSymbols(type, visitedTypes),
+      properties: propertiesAsSymbols(type, wellKnownTypes, visitedTypes),
       optional: isOptional,
     };
   }
@@ -386,20 +297,38 @@ function getTypeFromTsMorphInternal(
       kind: 'interface',
       name: aliasName ?? rawName,
       owner,
-      properties: propertiesAsSymbols(type, visitedTypes),
+      properties: propertiesAsSymbols(type, wellKnownTypes, visitedTypes),
       optional: isOptional,
-      typeParams: type.getAliasTypeArguments().map((arg) => getTypeFromTsMorph(arg, false)),
+      typeParams: type
+        .getAliasTypeArguments()
+        .map((arg) => getTypeFromTsMorph(arg, false, wellKnownTypes)),
+    };
+  }
+
+  // These will handle record types. However, record type is devoid
+  // of details, and hence we don't support record type at the SDK level
+  if (type.isObject() && type.getProperties().length === 0) {
+    const name = rawName ?? aliasName ?? type.getText();
+
+    return {
+      kind: 'others',
+      name: name,
+      owner,
+      optional: isOptional,
+      recursive: false,
     };
   }
 
   if (type.isObject()) {
-    const args = tsMorphType.getAliasTypeArguments().map((arg) => getTypeFromTsMorph(arg, false));
+    const args = tsMorphType
+      .getAliasTypeArguments()
+      .map((arg) => getTypeFromTsMorph(arg, false, wellKnownTypes));
 
     return {
       kind: 'object',
       name: aliasName,
       owner,
-      properties: propertiesAsSymbols(type, visitedTypes),
+      properties: propertiesAsSymbols(type, wellKnownTypes, visitedTypes),
       typeParams: args,
       optional: isOptional,
     };
@@ -442,10 +371,11 @@ function getTypeFromTsMorphInternal(
 // Source-order recovery (when AST nodes are available) overrides this fallback.
 function getCanonicalFallbackUnionTypes(
   unionTypes: TsMorphType[],
+  wellKnownTypes: WellKnownTypes,
   visitedTypes: Set<TsMorphType>,
 ): Type.Type[] {
   const withKeys = unionTypes.map((member, index) => {
-    const mapped = getTypeFromTsMorphInternal(member, false, new Set(visitedTypes));
+    const mapped = getTypeFromTsMorphInternal(member, false, wellKnownTypes, new Set(visitedTypes));
     return {
       index,
       mapped,
@@ -465,6 +395,7 @@ function getCanonicalFallbackUnionTypes(
 function getSourceOrderedUnionTypes(
   unionType: TsMorphType,
   sourceTypeNode: TsMorphNode | undefined,
+  wellKnownTypes: WellKnownTypes,
   visitedTypes: Set<TsMorphType>,
 ): Type.Type[] | undefined {
   const sourceUnionTypeNode =
@@ -475,7 +406,13 @@ function getSourceOrderedUnionTypes(
   return sourceUnionTypeNode
     .getTypeNodes()
     .map((member) =>
-      getTypeFromTsMorphInternal(member.getType(), false, new Set(visitedTypes), member),
+      getTypeFromTsMorphInternal(
+        member.getType(),
+        false,
+        wellKnownTypes,
+        new Set(visitedTypes),
+        member,
+      ),
     );
 }
 
@@ -549,51 +486,16 @@ function getUnionTypeKindRank(kind: Type.Type['kind']): number {
     case 'config':
       return 16;
     case 'quota-token':
-      return 16;
-    case 'alias':
       return 17;
-    case 'others':
+    case 'principal':
       return 18;
-    case 'unresolved-type':
+    case 'alias':
       return 19;
+    case 'others':
+      return 20;
+    case 'unresolved-type':
+      return 21;
   }
-}
-
-function getSdkConfigTypeFromTsMorph(
-  type: TsMorphType,
-  rawName: string | undefined,
-  aliasName: string | undefined,
-  isOptional: boolean,
-): Type.Type | undefined {
-  if (rawName !== 'Config') return undefined;
-  if (type.getTypeArguments().length !== 1) return undefined;
-
-  const rawInner = type.getTypeArguments()[0];
-  const innerType = unwrapAlias(rawInner);
-
-  const typeLiteral = resolveStrictTypeLiteralNode(innerType);
-  if (!typeLiteral) return undefined;
-
-  const properties = extractConfigPropertiesFromTypeLiteral(typeLiteral, []);
-  if (!properties) return undefined;
-
-  return {
-    kind: 'config',
-    name: aliasName,
-    owner: getTypeOwner(type),
-    optional: isOptional,
-    properties,
-  };
-}
-
-function getSdkQuotaTokenTypeFromTsMorph(
-  rawName: string | undefined,
-  aliasName: string | undefined,
-  isOptional: boolean,
-): Type.Type | undefined {
-  // Detected by name, same as Config above — TODO: switch to symbol-based matching
-  if (rawName !== 'QuotaToken') return undefined;
-  return { kind: 'quota-token', name: aliasName, optional: isOptional };
 }
 
 // TypeLiteral in TS AST is `type A = {}`. Union types, etc. get other node types
@@ -609,6 +511,7 @@ function resolveStrictTypeLiteralNode(type: TsMorphType): TypeLiteralNode | unde
 function extractConfigPropertiesFromTypeLiteral(
   node: TypeLiteralNode,
   path: string[],
+  wellKnownTypes: WellKnownTypes,
 ): Type.ConfigProperty[] | undefined {
   const members = node.getMembers();
 
@@ -626,14 +529,14 @@ function extractConfigPropertiesFromTypeLiteral(
 
     // 1. secret wrapper
     // TODO: switch to nominal matching using symbols instead of string
-    if (propType.getSymbol()?.getName() === 'Secret' && propType.getTypeArguments().length === 1) {
+    if (isExactly(propType, wellKnownTypes.sdk.secret)) {
       results.push({
         path: nextPath,
         secret: true,
         type: getTypeFromTsMorph(
           propType.getTypeArguments()[0],
           member.hasQuestionToken(),
-          member.getTypeNode(),
+          wellKnownTypes,
         ),
       });
       continue;
@@ -643,7 +546,11 @@ function extractConfigPropertiesFromTypeLiteral(
     const nestedTypeLiteral = resolveStrictTypeLiteralNode(propType);
     // eslint-disable-next-line eqeqeq
     if (nestedTypeLiteral != null) {
-      const nested = extractConfigPropertiesFromTypeLiteral(nestedTypeLiteral, nextPath);
+      const nested = extractConfigPropertiesFromTypeLiteral(
+        nestedTypeLiteral,
+        nextPath,
+        wellKnownTypes,
+      );
       // eslint-disable-next-line eqeqeq
       if (nested == null) return undefined;
       results.push(...nested);
@@ -654,7 +561,7 @@ function extractConfigPropertiesFromTypeLiteral(
     results.push({
       path: nextPath,
       secret: false,
-      type: getTypeFromTsMorph(propType, member.hasQuestionToken(), member.getTypeNode()),
+      type: getTypeFromTsMorph(propType, member.hasQuestionToken(), wellKnownTypes),
     });
   }
 
@@ -776,14 +683,22 @@ export type ClassMetadataGenConfig = {
   classDecorators: string[];
   includeOnlyPublicScope: boolean;
   excludeOverriddenMethods: boolean;
+  golemTsSdkImport: string;
 };
 
-export function generateClassMetadata(classMetadataGenConfig: ClassMetadataGenConfig) {
-  updateMetadataFromSourceFiles(classMetadataGenConfig);
+export function generateClassMetadata(
+  classMetadataGenConfig: ClassMetadataGenConfig,
+  project: Project,
+) {
+  updateMetadataFromSourceFiles(classMetadataGenConfig, project);
   return saveAndClearInMemoryMetadata();
 }
 
-export function updateMetadataFromSourceFiles(classMetadataGenConfig: ClassMetadataGenConfig) {
+export function updateMetadataFromSourceFiles(
+  classMetadataGenConfig: ClassMetadataGenConfig,
+  project: Project,
+) {
+  const wellKnownTypes = createWellKnownTypes(project, classMetadataGenConfig.golemTsSdkImport);
   for (const sourceFile of classMetadataGenConfig.sourceFiles) {
     const classes = sourceFile.getClasses();
 
@@ -810,7 +725,12 @@ export function updateMetadataFromSourceFiles(classMetadataGenConfig: ClassMetad
           ? []
           : publicConstructors[0].getParameters().map((p) => ({
               name: p.getName(),
-              type: getTypeFromTsMorph(p.getType(), p.isOptional(), p.getTypeNode()),
+              type: getTypeFromTsMorph(
+                p.getType(),
+                p.isOptional(),
+                wellKnownTypes,
+                p.getTypeNode(),
+              ),
             }));
 
       const methods = new Map();
@@ -829,13 +749,17 @@ export function updateMetadataFromSourceFiles(classMetadataGenConfig: ClassMetad
 
         const methodParams = new Map(
           method.getParameters().map((p) => {
-            return [p.getName(), getTypeFromTsMorph(p.getType(), p.isOptional(), p.getTypeNode())];
+            return [
+              p.getName(),
+              getTypeFromTsMorph(p.getType(), p.isOptional(), wellKnownTypes, p.getTypeNode()),
+            ];
           }),
         );
 
         const returnType = getTypeFromTsMorph(
           method.getReturnType(),
           false,
+          wellKnownTypes,
           method.getReturnTypeNode(),
         );
         methods.set(method.getName(), { methodParams, returnType });
@@ -880,11 +804,14 @@ export function updateMetadataFromSourceFiles(classMetadataGenConfig: ClassMetad
             const sourceTypeNode = TsMorphNode.isParameterDeclaration(decl)
               ? decl.getTypeNode()
               : undefined;
-            return [p.getName(), getTypeFromTsMorph(paramType, isOptional, sourceTypeNode)];
+            return [
+              p.getName(),
+              getTypeFromTsMorph(paramType, isOptional, wellKnownTypes, sourceTypeNode),
+            ];
           }),
         );
 
-        const returnType = getTypeFromTsMorph(callSignature.getReturnType(), false);
+        const returnType = getTypeFromTsMorph(callSignature.getReturnType(), false, wellKnownTypes);
         methods.set(publicArrow.getName(), { methodParams, returnType });
       }
 
@@ -997,11 +924,14 @@ export function loadTypeMetadataFromJsonFile() {
 
   const raw = fs.readFileSync(filePath, 'utf-8');
   const json = JSON.parse(raw);
-
   TypeMetadata.loadFromJson(json);
 }
 
-function propertiesAsSymbols(type: TsMorphType, visitedTypes: Set<TsMorphType>): Symbol[] {
+function propertiesAsSymbols(
+  type: TsMorphType,
+  wellknownTypes: WellKnownTypes,
+  visitedTypes: Set<TsMorphType>,
+): Symbol[] {
   return type.getProperties().map((prop) => {
     const firstDeclaration = prop.getDeclarations()[0];
     // NOTE: falling back to firstDeclaration if no value declaration found,
@@ -1012,7 +942,13 @@ function propertiesAsSymbols(type: TsMorphType, visitedTypes: Set<TsMorphType>):
       TsMorphNode.isPropertyDeclaration(firstDeclaration)
         ? firstDeclaration.getTypeNode()
         : undefined;
-    const tsType = getTypeFromTsMorphInternal(type, false, new Set(visitedTypes), sourceTypeNode);
+    const tsType = getTypeFromTsMorphInternal(
+      type,
+      false,
+      wellknownTypes,
+      new Set(visitedTypes),
+      sourceTypeNode,
+    );
     const propName = prop.getName();
 
     if (
@@ -1041,4 +977,44 @@ function getValueDeclaration(symbol: TsMorphSymbol): TsMorphNode | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function getNominalSymbol(type: TsMorphType): TsMorphSymbol | undefined {
+  const aliasSymbol = type.getAliasSymbol();
+  if (aliasSymbol) {
+    const declared = aliasSymbol.getDeclaredType?.();
+    if (declared) {
+      type = declared;
+    }
+  }
+
+  const target = type.getTargetType?.();
+  if (target) {
+    type = target;
+  }
+
+  return type.getSymbol();
+}
+
+function isExactly(type: TsMorphType, wellKnown: WellKnown): boolean {
+  const nominalSymbol = getNominalSymbol(type);
+  // eslint-disable-next-line eqeqeq
+  if (nominalSymbol == null) {
+    return false;
+  }
+
+  return nominalSymbol === wellKnown.symbol;
+}
+
+function isConcreteType(type: TsMorphType): boolean {
+  const flags = type.getFlags();
+  return !(flags & ts.TypeFlags.Any || flags & ts.TypeFlags.Never || flags & ts.TypeFlags.Unknown);
+}
+
+function containsInvalidTypes(type: TsMorphType): boolean {
+  if (!type.isUnion()) {
+    return !isConcreteType(type);
+  }
+
+  return type.getUnionTypes().some((t) => !isConcreteType(t));
 }

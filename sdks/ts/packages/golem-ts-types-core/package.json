@@ -16,30 +16,13 @@
       "types": "./dist/index.d.mts"
     }
   },
-  "typesVersions": {
-    "*": {
-      "agentic-guest": [
-        "types/exports.d.ts"
-      ],
-      "golem:agent/common": [
-        "types/golem_agent_common.d.ts"
-      ],
-      "golem:agent/host": [
-        "types/golem_agent_host.d.ts"
-      ]
-    }
-  },
   "scripts": {
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
-    "build": "tsc --noEmit && rollup -c",
-    "test": "tsc --noEmit",
+    "build": "rollup --failAfterWarnings -c rollup.config.js",
     "dev": "rollup -c -w"
   },
   "keywords": [],
-  "sideEffects": [
-    "src/index.ts"
-  ],
   "author": "",
   "license": "SEE LICENSE IN LICENSE",
   "description": "",

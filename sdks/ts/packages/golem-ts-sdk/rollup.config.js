@@ -12,10 +12,13 @@ const external = [
   'golem:agent/common@1.5.0',
   'golem:agent/host@1.5.0',
   'golem:api/host@1.5.0',
+  'golem:api/oplog@1.5.0',
+  'golem:api/retry@1.5.0',
   'golem:core/types@1.5.0',
-  'node:sqlite',
+  'golem:quota/types@1.5.0',
   'wasi:cli/environment@0.2.3',
   'wasi:clocks/wall-clock@0.2.3',
+  'node:sqlite',
 ];
 
 export default defineConfig([
@@ -34,12 +37,9 @@ export default defineConfig([
       commonjs(),
       typescript({
         tsconfig: './tsconfig.json',
-        useTsconfigDeclarationDir: true,
+        include: ['src/**/*', 'types'],
         tsconfigOverride: {
-          compilerOptions: {
-            declaration: true,
-            declarationDir: 'dist',
-          },
+          compilerOptions: { declaration: false },
         },
       }),
     ],

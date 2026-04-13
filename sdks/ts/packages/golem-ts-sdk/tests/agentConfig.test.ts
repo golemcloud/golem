@@ -42,12 +42,12 @@ describe('agent config handling', () => {
       {
         path: ['secret'],
         secret: true,
-        type: { kind: 'boolean', name: undefined, owner: '../src', optional: false },
+        type: { kind: 'boolean', name: undefined, owner: undefined, optional: false },
       },
       {
         path: ['nested', 'nestedSecret'],
         secret: true,
-        type: { kind: 'number', name: undefined, owner: '../src', optional: false },
+        type: { kind: 'number', name: undefined, owner: undefined, optional: false },
       },
       {
         path: ['nested', 'a'],

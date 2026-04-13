@@ -26,6 +26,11 @@ program
     'Exclude methods that override parent class methods',
     true,
   )
+  .option(
+    '--golem-ts-sdk-import <value>',
+    'Statement to use for importing the golem-ts-sdk',
+    '@golemcloud/golem-ts-sdk',
+  )
   .action(
     (
       tsconfig: string,
@@ -34,6 +39,7 @@ program
         includeClassDecorators: string[];
         includeOnlyPublicScope: boolean;
         excludeOverriddenMethods: boolean;
+        golemTsSdkImport: string;
       },
     ) => {
       console.log(logSymbols.info, pc.cyan('Starting type metadata generation…'));
@@ -51,9 +57,10 @@ program
         classDecorators: options.includeClassDecorators,
         includeOnlyPublicScope: options.includeOnlyPublicScope,
         excludeOverriddenMethods: options.excludeOverriddenMethods,
+        golemTsSdkImport: options.golemTsSdkImport,
       };
 
-      updateMetadataFromSourceFiles(genConfig);
+      updateMetadataFromSourceFiles(genConfig, project);
 
       const result = TypeMetadata.getAll();
 
