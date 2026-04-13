@@ -3,6 +3,7 @@ import resolve from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import typescript from 'rollup-plugin-typescript2';
 import dts from 'rollup-plugin-dts';
+import terser from '@rollup/plugin-terser';
 import { defineConfig } from 'rollup';
 import * as fs from 'node:fs';
 import path from 'path';
@@ -42,6 +43,7 @@ export default defineConfig([
           compilerOptions: { declaration: false },
         },
       }),
+      terser()
     ],
   },
 
