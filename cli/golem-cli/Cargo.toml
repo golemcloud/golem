@@ -35,6 +35,7 @@ golem-wasm = { workspace = true, default-features = true }
 
 # External deps
 anyhow = { workspace = true }
+applying = { workspace = true }
 ariadne = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true }

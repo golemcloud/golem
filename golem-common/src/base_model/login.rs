@@ -15,7 +15,6 @@
 use crate::{declare_enums, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use anyhow::anyhow;
 use chrono::Utc;
-use std::fmt::Display;
 use std::str::FromStr;
 
 newtype_uuid!(OAuth2WebflowStateId);
@@ -48,14 +47,6 @@ declare_enums! {
     }
 }
 
-impl Display for OAuth2Provider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            OAuth2Provider::Github => write!(f, "github"),
-        }
-    }
-}
-
 impl FromStr for OAuth2Provider {
     type Err = anyhow::Error;
 
@@ -64,5 +55,22 @@ impl FromStr for OAuth2Provider {
             "github" => Ok(OAuth2Provider::Github),
             _ => Err(anyhow!("Invalid OAuth2Provider: {s}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow;
+    use pretty_assertions::assert_eq;
+    use test_r::test;
+
+    #[test]
+    fn github_oauth2_provider_roundtrip() -> anyhow::Result<()> {
+        assert_eq!(
+            OAuth2Provider::from_str(&OAuth2Provider::Github.to_string())?,
+            OAuth2Provider::Github
+        );
+        Ok(())
     }
 }

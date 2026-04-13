@@ -3927,6 +3927,7 @@ name = "golem-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "applying",
  "ariadne",
  "async-trait",
  "async_zip",
