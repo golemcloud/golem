@@ -43,7 +43,7 @@ export default defineConfig([
           compilerOptions: { declaration: false },
         },
       }),
-      terser()
+      terser(),
     ],
   },
 
