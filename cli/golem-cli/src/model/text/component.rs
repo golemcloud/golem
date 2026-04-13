@@ -15,8 +15,6 @@
 use crate::model::component::ComponentView;
 use crate::model::text::fmt::*;
 use cli_table::{Table, format::Justify};
-
-use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::ComponentName;
 use serde::{Deserialize, Serialize};
 

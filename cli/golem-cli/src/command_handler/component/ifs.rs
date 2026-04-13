@@ -19,9 +19,8 @@ use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
-use golem_common::model::component::{AgentFileOptions, ArchiveFilePath};
 use itertools::Itertools;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::fs::File;
@@ -44,7 +43,6 @@ pub struct HashedFile {
 #[derive(Debug)]
 pub struct ComponentFilesArchive {
     pub archive_path: PathBuf,
-    pub file_options: BTreeMap<golem_common::model::component::ArchiveFilePath, AgentFileOptions>,
     _temp_dir: TempDir, // archive_path is only valid as long as this is alive
 }
 
@@ -91,8 +89,6 @@ impl IfsFileManager {
             .with_context(|| "Error creating zip file for IFS archive")?;
         let mut zip_writer = ZipFileWriter::with_tokio(zip_file);
 
-        let mut file_options = BTreeMap::<ArchiveFilePath, AgentFileOptions>::new();
-
         for component_file in component_files {
             for LoadedFile { content, target } in self
                 .process_component_file(&file_processor, component_file)
@@ -117,14 +113,6 @@ impl IfsFileManager {
                     .with_context(|| {
                         anyhow!("Error writing zip entry for IFS archive {}", zip_entry_name)
                     })?;
-
-                file_options.insert(
-                    ArchiveFilePath(target.path.clone()),
-                    AgentFileOptions {
-                        target_path: golem_common::model::component::AgentFilePath(target.path.clone()),
-                        permissions: target.permissions,
-                    },
-                );
             }
         }
 
@@ -138,7 +126,6 @@ impl IfsFileManager {
         Ok(ComponentFilesArchive {
             _temp_dir: temp_dir,
             archive_path,
-            file_options,
         })
     }
 

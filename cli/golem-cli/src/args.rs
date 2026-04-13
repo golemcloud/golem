@@ -160,7 +160,7 @@ mod parse_agent_config_tests {
         let e = parse(r#"a.b.c=1"#);
 
         assert_eq!(e.path, vec!["a", "b", "c"]);
-        assert_eq!(e.value, json!(1));
+        assert_eq!(e.value, json!(1).into());
     }
 
     #[test]
@@ -168,7 +168,7 @@ mod parse_agent_config_tests {
         let e = parse(r#"a.b="hello""#);
 
         assert_eq!(e.path, vec!["a", "b"]);
-        assert_eq!(e.value, json!("hello"));
+        assert_eq!(e.value, json!("hello").into());
     }
 
     #[test]
@@ -176,7 +176,7 @@ mod parse_agent_config_tests {
         let e = parse(r#"a.b={"x":1,"y":2}"#);
 
         assert_eq!(e.path, vec!["a", "b"]);
-        assert_eq!(e.value, json!({"x":1,"y":2}));
+        assert_eq!(e.value, json!({"x":1,"y":2}).into());
     }
 
     #[test]
@@ -184,7 +184,7 @@ mod parse_agent_config_tests {
         let e = parse(r#""foo.bar".baz=1"#);
 
         assert_eq!(e.path, vec!["foo.bar", "baz"]);
-        assert_eq!(e.value, json!(1));
+        assert_eq!(e.value, json!(1).into());
     }
 
     #[test]
@@ -192,7 +192,7 @@ mod parse_agent_config_tests {
         let e = parse(r#""foo bar".baz=1"#);
 
         assert_eq!(e.path, vec!["foo bar", "baz"]);
-        assert_eq!(e.value, json!(1));
+        assert_eq!(e.value, json!(1).into());
     }
 
     #[test]
@@ -200,7 +200,7 @@ mod parse_agent_config_tests {
         let e = parse(r#"foo\.bar.baz=1"#);
 
         assert_eq!(e.path, vec!["foo.bar", "baz"]);
-        assert_eq!(e.value, json!(1));
+        assert_eq!(e.value, json!(1).into());
     }
 
     #[test]
@@ -208,7 +208,7 @@ mod parse_agent_config_tests {
         let e = parse(r#"a.b="foo=bar""#);
 
         assert_eq!(e.path, vec!["a", "b"]);
-        assert_eq!(e.value, json!("foo=bar"));
+        assert_eq!(e.value, json!("foo=bar").into());
     }
 
     #[test]
@@ -216,7 +216,7 @@ mod parse_agent_config_tests {
         let e = parse(r#""foo=bar".baz=1"#);
 
         assert_eq!(e.path, vec!["foo=bar", "baz"]);
-        assert_eq!(e.value, json!(1));
+        assert_eq!(e.value, json!(1).into());
     }
 
     #[test]
@@ -224,7 +224,7 @@ mod parse_agent_config_tests {
         let e = parse(r#"foo\=bar.baz=1"#);
 
         assert_eq!(e.path, vec!["foo=bar", "baz"]);
-        assert_eq!(e.value, json!(1));
+        assert_eq!(e.value, json!(1).into());
     }
 
     #[test]
@@ -232,7 +232,7 @@ mod parse_agent_config_tests {
         let e = parse(r#""foo.bar=baz"."x.y"={"hello":"world"}"#);
 
         assert_eq!(e.path, vec!["foo.bar=baz", "x.y"]);
-        assert_eq!(e.value, json!({"hello":"world"}));
+        assert_eq!(e.value, json!({"hello":"world"}).into());
     }
 
     #[test]

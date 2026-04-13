@@ -35,7 +35,6 @@ use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate, ArchiveFilePath,
     ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
-    PluginInstallationAction,
 };
 use golem_common::widen_infallible;
 use golem_service_base::replayable_stream::ReplayableStream;

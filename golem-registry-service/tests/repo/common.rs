@@ -22,7 +22,6 @@ use golem_common::model::agent::{
     Snapshotting,
 };
 use golem_common::model::auth::EnvironmentRole;
-use golem_common::model::component::ComponentFilePermissions;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::environment_share::EnvironmentShareId;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
@@ -37,9 +36,7 @@ use golem_registry_service::repo::model::application::{
 use golem_registry_service::repo::model::audit::{
     DeletableRevisionAuditFields, ImmutableAuditFields, RevisionAuditFields,
 };
-use golem_registry_service::repo::model::component::{
-    ComponentFileRecord, ComponentRepoError, ComponentRevisionRecord,
-};
+use golem_registry_service::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use golem_registry_service::repo::model::deployment::{
     DeploymentRegisteredAgentTypeRecord, DeploymentRevisionCreationRecord,
 };
@@ -616,23 +613,11 @@ pub async fn test_component_stage(deps: &Deps) {
             Some("test".to_string()),
             Some("1.0".to_string()),
             vec![],
+            std::collections::BTreeMap::new(),
         )),
-        env: BTreeMap::from([("X".to_string(), "value".to_string())]).into(),
-        config_vars: BTreeMap::from([("WC".to_string(), "value".to_string())]).into(),
-        agent_config: Blob::new(Vec::new()),
+
         object_store_key: "xys".to_string(),
         binary_hash: blake3::hash("test".as_bytes()).into(),
-        plugins: vec![],
-        files: vec![ComponentFileRecord {
-            component_id,
-            revision_id: 0,
-            agent_type_name: "agent_type_name".to_string(),
-            file_path: "file".to_string(),
-            file_content_hash: blake3::hash("test-2".as_bytes()).into(),
-            audit: RevisionAuditFields::new(user.revision.account_id),
-            file_permissions: ComponentFilePermissions::ReadWrite.into(),
-            file_size: 512.into(),
-        }],
     }
     .with_updated_hash();
 
@@ -693,16 +678,7 @@ pub async fn test_component_stage(deps: &Deps) {
     let revision_1 = ComponentRevisionRecord {
         revision_id: 1,
         size: 12345.into(),
-        env: Default::default(),
         binary_hash: SqlBlake3Hash::empty(),
-        files: revision_0
-            .files
-            .iter()
-            .map(|file| ComponentFileRecord {
-                revision_id: 1,
-                ..file.clone()
-            })
-            .collect(),
         ..revision_0.clone()
     }
     .with_updated_hash();
@@ -732,8 +708,6 @@ pub async fn test_component_stage(deps: &Deps) {
     let other_component_name = "test-component-other";
     let other_component_revision_0 = ComponentRevisionRecord {
         component_id: other_component_id,
-        plugins: Default::default(),
-        files: Default::default(),
         ..revision_0.clone()
     }
     .with_updated_hash();
@@ -781,8 +755,6 @@ pub async fn test_component_stage(deps: &Deps) {
 
     let revision_after_delete = ComponentRevisionRecord {
         component_id: new_repo_uuid(),
-        plugins: Default::default(),
-        files: Default::default(),
         ..revision_0.clone()
     };
     let created_after_delete = deps
@@ -1111,14 +1083,10 @@ pub async fn test_account_usage(deps: &Deps) {
                         None,
                         None,
                         vec![],
+                        BTreeMap::new(),
                     )),
-                    env: Default::default(),
-                    config_vars: Default::default(),
-                    agent_config: Blob::new(Vec::new()),
                     object_store_key: "".to_string(),
                     binary_hash: SqlBlake3Hash::empty(),
-                    plugins: vec![],
-                    files: vec![],
                 },
             )
             .await
@@ -1240,14 +1208,10 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
                     None,
                     None,
                     vec![],
+                    BTreeMap::new(),
                 )),
-                env: Default::default(),
-                config_vars: Default::default(),
                 object_store_key: "".to_string(),
                 binary_hash: SqlBlake3Hash::empty(),
-                plugins: vec![],
-                files: vec![],
-                agent_config: Blob::new(vec![]),
             },
         )
         .await

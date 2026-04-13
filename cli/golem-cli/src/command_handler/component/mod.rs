@@ -52,7 +52,7 @@ use golem_common::model::component::{
     AgentConfigEntryDto, ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
-use golem_common::model::diff::{self, VecDiffable};
+use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};

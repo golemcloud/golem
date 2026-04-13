@@ -24,7 +24,7 @@ use golem_common::model::deployment::{
     CurrentDeploymentRevision, DeploymentPlanComponentEntry, DeploymentPlanHttpApiDeploymentEntry,
 };
 use golem_common::model::diff;
-use golem_common::model::diff::{Diffable, HashOf, Hashable};
+use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentCurrentDeploymentView;
 use golem_common::model::http_api_deployment::HttpApiDeployment;

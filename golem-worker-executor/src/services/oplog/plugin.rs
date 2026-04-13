@@ -1760,11 +1760,6 @@ mod tests {
                 component_size: 100,
                 metadata: ComponentMetadata::default(),
                 created_at: chrono::Utc::now(),
-                files: Vec::new(),
-                installed_plugins: self.installed_plugins.clone(),
-                env: BTreeMap::new(),
-                config_vars: BTreeMap::new(),
-                agent_config: Vec::new(),
                 wasm_hash: diff::Hash::empty(),
                 object_store_key: String::new(),
             })
