@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::model::text::fmt::*;
-use cli_table::Table;
 use golem_common::model::quota::ResourceDefinition;
 use serde_derive::{Deserialize, Serialize};
 
@@ -92,52 +91,33 @@ fn resource_definition_fields(r: &ResourceDefinition) -> Vec<(String, String)> {
         .fmt_field("Limit", &r.limit, |l| {
             serde_json::to_string(l).unwrap_or_else(|_| format!("{:?}", l))
         })
-        .fmt_field("Enforcement", &r.enforcement_action, |a| {
-            serde_json::to_string(a)
-                .unwrap_or_else(|_| format!("{:?}", a))
-                .trim_matches('"')
-                .to_string()
-        })
-        .fmt_field("Unit", &r.unit, ToString::to_string)
-        .fmt_field("Units", &r.units, ToString::to_string);
+        .field("Enforcement", &r.enforcement_action)
+        .field("Unit", &r.unit)
+        .field("Units", &r.units);
 
     fields.build()
 }
 
-#[derive(Table)]
-struct ResourceDefinitionTableView {
-    #[table(title = "Name")]
-    pub name: String,
-    #[table(title = "ID")]
-    pub id: String,
-    #[table(title = "Revision", Justify = "Right")]
-    pub revision: u64,
-    #[table(title = "Limit")]
-    pub limit: String,
-    #[table(title = "Enforcement")]
-    pub enforcement_action: String,
-    #[table(title = "Unit")]
-    pub unit: String,
-}
-
-impl From<&ResourceDefinition> for ResourceDefinitionTableView {
-    fn from(r: &ResourceDefinition) -> Self {
-        Self {
-            name: r.name.0.clone(),
-            id: r.id.to_string(),
-            revision: r.revision.get(),
-            limit: serde_json::to_string(&r.limit).unwrap_or_else(|_| format!("{:?}", r.limit)),
-            enforcement_action: serde_json::to_string(&r.enforcement_action)
-                .unwrap_or_else(|_| format!("{:?}", r.enforcement_action))
-                .trim_matches('"')
-                .to_string(),
-            unit: r.unit.clone(),
-        }
-    }
-}
-
 impl TextView for Vec<ResourceDefinition> {
     fn log(&self) {
-        log_table::<_, ResourceDefinitionTableView>(self.as_slice())
+        let mut table = new_table(vec![
+            Column::new("Name"),
+            Column::new("Revision").fixed_right(),
+            Column::new("Limit").fixed_right(),
+            Column::new("Enforcement Action").fixed_right(),
+            Column::new("Unit").fixed_right(),
+            Column::new("Units").fixed_right(),
+        ]);
+        for row in self {
+            table.add_row(vec![
+                row.name.to_string(),
+                row.revision.to_string(),
+                serde_json::to_string(&row.limit).unwrap_or_else(|_| format!("{:?}", row.limit)),
+                row.enforcement_action.to_string(),
+                row.unit.to_string(),
+                row.units.to_string(),
+            ]);
+        }
+        log_table(table);
     }
 }

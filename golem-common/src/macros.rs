@@ -407,10 +407,11 @@ macro_rules! declare_unions {
 #[macro_export]
 macro_rules! declare_enums {
     ($($i:item)*) => { $(
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-        #[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize, ::derive_more::Display)]
+        #[cfg_attr(feature = "full", derive(::poem_openapi::Enum))]
         #[cfg_attr(feature = "full", oai(rename_all = "kebab-case"))]
         #[serde(rename_all = "kebab-case")]
+        #[display(rename_all = "kebab-case")]
         $i
     )* }
 }
