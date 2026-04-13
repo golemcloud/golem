@@ -54,6 +54,11 @@ jobs:
         working-directory: sdks/scala
         run: ./scripts/generate-agent-guest-wasm.sh
 
+      - name: Verify Scala generated files and clean publish tree
+        uses: ./.github/actions/check-scala-sdk-generated
+        with:
+          verify-clean-tree: "true"
+
       - name: Publish to Maven Central
         working-directory: sdks/scala
         run: sbt ci-release
