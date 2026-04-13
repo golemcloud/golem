@@ -48,9 +48,10 @@ export function usePersistenceLevel(level: PersistenceLevel) {
 
 /**
  * Executes a function with a specific persistence level for the oplog.
+ * Supports both sync and async callbacks.
  * @param level - The persistence level to set.
- * @param f - The function to execute.
- * @returns The result of the executed function.
+ * @param f - The function to execute (sync or async).
+ * @returns The result of the executed function, or a Promise if an async function was passed.
  */
 export function withPersistenceLevel<R>(level: PersistenceLevel, f: () => R): R {
   const guard = usePersistenceLevel(level);
@@ -82,9 +83,10 @@ export function useIdempotenceMode(mode: boolean): IdempotenceModeGuard {
 
 /**
  * Executes a function with a specific idempotence mode.
+ * Supports both sync and async callbacks.
  * @param mode - The idempotence mode to set.
- * @param f - The function to execute.
- * @returns The result of the executed function.
+ * @param f - The function to execute (sync or async).
+ * @returns The result of the executed function, or a Promise if an async function was passed.
  */
 export function withIdempotenceMode<R>(mode: boolean, f: () => R): R {
   const guard = useIdempotenceMode(mode);
@@ -114,19 +116,26 @@ export function markAtomicOperation(): AtomicOperationGuard {
 
 /**
  * Executes a function atomically.
- * @param f - The function to execute atomically.
- * @returns The result of the executed function.
+ * Supports both sync and async callbacks.
+ * @param f - The function to execute atomically (sync or async).
+ * @returns The result of the executed function, or a Promise if an async function was passed.
  */
 export function atomically<T>(f: () => T): T {
   const guard = markAtomicOperation();
   return executeWithDrop([guard], f);
 }
 
+function isPromiseLike(value: unknown): value is Promise<unknown> {
+  return value != null && typeof (value as any).then === 'function';
+}
+
 /**
  * Executes a function and automatically drops the provided resources after execution.
+ * Supports both sync and async callbacks — if the callback returns a Promise,
+ * the resources are dropped after the Promise settles.
  * @param resources - An array of resources to be dropped after execution.
- * @param fn - The function to execute.
- * @returns The result of the executed function.
+ * @param fn - The function to execute (sync or async).
+ * @returns The result of the executed function, or a Promise if an async function was passed.
  */
 export function executeWithDrop<
   Resource extends {
@@ -136,6 +145,18 @@ export function executeWithDrop<
 >(resources: [Resource], fn: () => R): R {
   try {
     const result = fn();
+    if (isPromiseLike(result)) {
+      return result.then(
+        (val) => {
+          dropAll(true, resources);
+          return val;
+        },
+        (err) => {
+          dropAll(false, resources);
+          throw err;
+        },
+      ) as R;
+    }
     dropAll(true, resources);
     return result;
   } catch (e) {
@@ -149,6 +170,7 @@ export function executeWithDrop<
  * @param resources - An array of resources to be dropped after execution.
  * @param fn - The async function to execute.
  * @returns A promise resolving to the result of the executed function.
+ * @deprecated Use {@link executeWithDrop} instead, which handles both sync and async callbacks.
  */
 export async function executeWithDropAsync<
   Resource extends {

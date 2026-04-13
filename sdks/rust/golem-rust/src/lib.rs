@@ -218,6 +218,8 @@ pub mod quota;
 mod transaction;
 pub mod value_and_type;
 
+use std::future::Future;
+
 use bindings::golem::api::host::*;
 
 pub use golem_wasm;
@@ -330,6 +332,15 @@ pub mod retry {
         let _guard = use_retry_policy(policy);
         f()
     }
+
+    /// Executes the given async function with a named retry policy temporarily set.
+    pub async fn with_retry_policy_async<R, F: std::future::Future<Output = R>>(
+        policy: NamedRetryPolicy,
+        f: impl FnOnce() -> F,
+    ) -> R {
+        let _guard = use_retry_policy(policy);
+        f().await
+    }
 }
 
 pub struct PersistenceLevelGuard {
@@ -358,6 +369,15 @@ pub fn with_persistence_level<R>(level: PersistenceLevel, f: impl FnOnce() -> R)
     f()
 }
 
+/// Executes the given async function with the oplog persistence level set to the given value.
+pub async fn with_persistence_level_async<R, F: Future<Output = R>>(
+    level: PersistenceLevel,
+    f: impl FnOnce() -> F,
+) -> R {
+    let _guard = use_persistence_level(level);
+    f().await
+}
+
 pub struct IdempotenceModeGuard {
     original: bool,
 }
@@ -382,6 +402,15 @@ pub fn use_idempotence_mode(mode: bool) -> IdempotenceModeGuard {
 pub fn with_idempotence_mode<R>(mode: bool, f: impl FnOnce() -> R) -> R {
     let _guard = use_idempotence_mode(mode);
     f()
+}
+
+/// Executes the given async function with the idempotence mode set to the given value.
+pub async fn with_idempotence_mode_async<R, F: Future<Output = R>>(
+    mode: bool,
+    f: impl FnOnce() -> F,
+) -> R {
+    let _guard = use_idempotence_mode(mode);
+    f().await
 }
 
 /// Generates an idempotency key. This operation will never be replayed —
@@ -417,4 +446,12 @@ pub fn mark_atomic_operation() -> AtomicOperationGuard {
 pub fn atomically<T>(f: impl FnOnce() -> T) -> T {
     let _guard = mark_atomic_operation();
     f()
+}
+
+/// Executes the given async function as an atomic operation.
+///
+/// In case of a failure, the whole operation will be re-executed during retry.
+pub async fn atomically_async<T, F: Future<Output = T>>(f: impl FnOnce() -> F) -> T {
+    let _guard = mark_atomic_operation();
+    f().await
 }

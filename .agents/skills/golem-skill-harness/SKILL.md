@@ -500,6 +500,22 @@ languages, so a plain `args` string suffices:
   casing or naming style.
 - When writing prompts for new agents, it is fine to describe the intended public behavior in
   kebab-case, but the verification steps should invoke the real method names used in code.
+- **Helper agents with HTTP APIs for observable side effects**: Some skills (atomic blocks,
+  transactions, durability controls) need an external service to observe side effects — e.g., to
+  verify that operations were retried, compensated, or executed in the correct order. The harness
+  does not provide a built-in mock HTTP server, but you can achieve the same effect by prompting
+  the coding agent to create a **helper agent** that exposes an HTTP API and records events.
+  Configure `settings.golem_server.custom_request_port` so the app has a known HTTP endpoint, then
+  ask the agent to add a second agent type with an HTTP mount that acts as the "other side." For
+  example, a `SideEffectRecorder` agent with `POST /record` (appends an event string to an
+  internal list) and `GET /events` (returns the full event history as JSON). The agent under test
+  then makes HTTP requests to this recorder during its operation. After the invocation, the
+  scenario can use an `http` step to `GET /events` and assert on the recorded sequence. This
+  pattern mirrors how the worker executor tests use a `TestHttpServer` to capture side-effect
+  ordering, but uses a real Golem agent instead — no external infrastructure needed. See
+  `transactions-1-fallible-rollback-http-ledger.yaml` for a concrete example where `OrderLedger`
+  serves this role, recording reserve/charge/refund/release history via HTTP endpoints and
+  exposing a `GET /state` endpoint that the harness asserts against.
 
 ### Template Variables
 

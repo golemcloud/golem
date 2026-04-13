@@ -771,6 +771,188 @@ async fn golem_rust_infallible_transaction(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+async fn golem_rust_atomic_region_async(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let http_server = TestHttpServer::start(2).await;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let agent_id = agent_id!("GolemHostApi", "atomic-region-async");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "atomic_region_async", data_value!())
+        .await?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    let events = http_server.get_events();
+    info!("events:\n - {}", events.join("\n - "));
+
+    assert_eq!(
+        events,
+        vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn golem_rust_persist_nothing_async(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let http_server = TestHttpServer::start(2).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let agent_id = agent_id!("GolemHostApi", "persist-nothing-async");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "persist_nothing_async", data_value!())
+        .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    let events = http_server.get_events();
+    info!("events:\n - {}", events.join("\n - "));
+    info!("result: {:?}", result);
+
+    assert_eq!(events, vec!["1", "2", "3"]);
+    assert!(result.is_err());
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn golem_rust_checkpoint_async(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let http_server = TestHttpServer::start(1).await;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let agent_id = agent_id!("GolemHostApi", "checkpoint-async");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            env,
+            HashMap::new(),
+            Vec::new(),
+        )
+        .await?;
+
+    let (rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "checkpoint_test_async", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    while (rx.len() as u64) < 17 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    http_server.abort();
+
+    abort_capture.send(()).unwrap();
+    let mut events = drain_connection(rx).await;
+    events.retain(|e| match e {
+        Some(e) => {
+            !stdout_event_starting_with(e, "Sending") && !stdout_event_starting_with(e, "Received")
+        }
+        None => false,
+    });
+
+    info!("events: {:?}", events);
+
+    assert_eq!(result, Value::U64(4));
+    assert_eq!(
+        stdout_events(events.into_iter().flatten()),
+        vec![
+            "started: 0\n",
+            "second: 2\n",
+            "second: 2\n",
+            "third: 3\n",
+            "second: 2\n",
+            "third: 3\n",
+            "fourth: 4\n",
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
 async fn idempotency_keys_in_ephemeral_workers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

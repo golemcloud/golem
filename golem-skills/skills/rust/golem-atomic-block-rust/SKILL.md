@@ -23,6 +23,18 @@ let (a, b) = atomically(|| {
 });
 ```
 
+### Async version
+
+```rust
+use golem_rust::atomically_async;
+
+let (a, b) = atomically_async(|| async {
+    let a = side_effect_1().await;
+    let b = side_effect_2(a).await;
+    (a, b)
+}).await;
+```
+
 If the agent fails mid-block, the entire block is re-executed on recovery rather than resuming from the middle.
 
 ## Persistence Level Control
@@ -38,6 +50,16 @@ with_persistence_level(PersistenceLevel::PersistNothing, || {
 });
 ```
 
+### Async version
+
+```rust
+use golem_rust::{with_persistence_level_async, PersistenceLevel};
+
+with_persistence_level_async(PersistenceLevel::PersistNothing, || async {
+    // No oplog entries — side effects will be replayed on recovery
+}).await;
+```
+
 ## Idempotence Mode
 
 Control whether HTTP requests are retried when the result is uncertain:
@@ -49,6 +71,16 @@ with_idempotence_mode(false, || {
     // HTTP requests won't be automatically retried
     // Use for non-idempotent external API calls (e.g., payments)
 });
+```
+
+### Async version
+
+```rust
+use golem_rust::with_idempotence_mode_async;
+
+with_idempotence_mode_async(false, || async {
+    // HTTP requests won't be automatically retried
+}).await;
 ```
 
 ## Oplog Commit
@@ -83,4 +115,14 @@ use golem_rust::{with_retry_policy, RetryPolicy};
 with_retry_policy(RetryPolicy { /* ... */ }, || {
     // Code with custom retry behavior
 });
+```
+
+### Async version
+
+```rust
+use golem_rust::{with_retry_policy_async, RetryPolicy};
+
+with_retry_policy_async(RetryPolicy { /* ... */ }, || async {
+    // Code with custom retry behavior
+}).await;
 ```

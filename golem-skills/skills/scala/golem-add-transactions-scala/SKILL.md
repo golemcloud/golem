@@ -11,34 +11,42 @@ Golem supports the **saga pattern** for multi-step operations where each step ha
 
 ## Defining Operations
 
-Each operation has an async `execute` function and an async `compensate` function that return `Future[Either[Err, Out]]`:
+Each operation has an async `execute` function and an async `compensate` function that return `Future[Either[Err, Out]]`.
+
+**Critical:** Both `execute` and `compensate` must return a `Future` that completes only **after** the underlying work finishes. If the work involves a JS Promise (e.g., `fetch`), convert it to a `Future` via `FutureInterop.fromPromise` and chain with `flatMap`/`map`. Never fire a Promise and ignore the result — doing so makes operation ordering non-deterministic, which breaks compensation ordering.
 
 ```scala
-import golem.Transactions
+import golem.{Transactions, FutureInterop}
 import scala.concurrent.Future
+import scala.scalajs.js
 
-val reserveInventory = Transactions.operation[String, String, String](
-  sku => {
-    val reservationId = callInventoryApi(sku)
-    Future.successful(Right(reservationId))
+// Correct: awaits the fetch Promise before completing the Future
+val reserveInventory = Transactions.operation[String, Unit, String](
+  orderId => {
+    val promise = js.Dynamic.global.fetch(
+      s"http://example.com/orders/$orderId/reserve",
+      js.Dynamic.literal(method = "POST")
+    ).asInstanceOf[js.Promise[js.Dynamic]]
+    FutureInterop.fromPromise(promise).map(_ => Right(()))
   }
 )(
-  (sku, reservationId) => {
-    cancelReservation(reservationId)
-    Future.successful(Right(()))
+  (orderId, _) => {
+    val promise = js.Dynamic.global.fetch(
+      s"http://example.com/orders/$orderId/reserve",
+      js.Dynamic.literal(method = "DELETE")
+    ).asInstanceOf[js.Promise[js.Dynamic]]
+    FutureInterop.fromPromise(promise).map(_ => Right(()))
   }
 )
+```
 
-val chargePayment = Transactions.operation[Long, String, String](
-  amount => {
-    val chargeId = callPaymentApi(amount)
-    Future.successful(Right(chargeId))
-  }
+For synchronous operations, `Future.successful` is fine:
+
+```scala
+val incrementCounter = Transactions.operation[Unit, Int, String](
+  _ => { counter += 1; Future.successful(Right(counter)) }
 )(
-  (amount, chargeId) => {
-    refundPayment(chargeId)
-    Future.successful(Right(()))
-  }
+  (_, oldValue) => { counter = oldValue - 1; Future.successful(Right(())) }
 )
 ```
 

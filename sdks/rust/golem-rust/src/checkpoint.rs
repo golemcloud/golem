@@ -47,6 +47,17 @@ impl Checkpoint {
         }
     }
 
+    /// Runs the given async function, reverting to the checkpoint on error.
+    pub async fn run_or_revert_async<T, E, F: std::future::Future<Output = Result<T, E>>>(
+        &self,
+        f: impl FnOnce() -> F,
+    ) -> T {
+        match f().await {
+            Ok(value) => value,
+            Err(_) => self.revert(),
+        }
+    }
+
     /// Reverts to the checkpoint if the condition is false.
     pub fn assert_or_revert(&self, condition: bool) {
         if !condition {
@@ -115,6 +126,17 @@ impl<T> CheckpointOptionExt<T> for Option<T> {
 pub fn with_checkpoint<T, E>(f: impl FnOnce(&Checkpoint) -> Result<T, E>) -> T {
     let checkpoint = Checkpoint::new();
     match f(&checkpoint) {
+        Ok(value) => value,
+        Err(_) => checkpoint.revert(),
+    }
+}
+
+/// Creates a checkpoint, runs the given async function, and reverts on error.
+pub async fn with_checkpoint_async<T, E, F: std::future::Future<Output = Result<T, E>>>(
+    f: impl FnOnce(&Checkpoint) -> F,
+) -> T {
+    let checkpoint = Checkpoint::new();
+    match f(&checkpoint).await {
         Ok(value) => value,
         Err(_) => checkpoint.revert(),
     }

@@ -15,11 +15,15 @@
 import { type OplogIndex, getOplogIndex, setOplogIndex } from './hostapi';
 import { Result } from './result';
 
+function isPromiseLike(value: unknown): value is Promise<unknown> {
+  return value != null && typeof (value as any).then === 'function';
+}
+
 /**
  * A checkpoint that captures the current oplog index and can revert execution to that point.
  *
  * Use {@link checkpoint} to create a new checkpoint, or {@link withCheckpoint} /
- * {@link withCheckpointAsync} to execute a block with automatic revert on failure.
+ * {@link withCheckpointTry} to execute a block with automatic revert on failure.
  */
 export class Checkpoint {
   private readonly oplogIndex: OplogIndex;
@@ -49,34 +53,34 @@ export class Checkpoint {
 
   /**
    * Runs the given function that returns a Result, reverting to the checkpoint if the result is an error.
-   * @param fn - The function to execute.
-   * @returns The successful value.
+   * Supports both sync and async callbacks.
+   * @param fn - The function to execute (sync or async).
+   * @returns The successful value, or a Promise of it if an async function was passed.
    */
-  runOrRevert<T, E>(fn: () => Result<T, E>): T {
-    return fn().unwrapOrRevert(this);
+  runOrRevert<T, E>(fn: () => Result<T, E>): T;
+  runOrRevert<T, E>(fn: () => Promise<Result<T, E>>): Promise<T>;
+  runOrRevert<T, E>(fn: () => Result<T, E> | Promise<Result<T, E>>): T | Promise<T> {
+    const result = fn();
+    if (isPromiseLike(result)) {
+      return (result as Promise<Result<T, E>>).then((r) => r.unwrapOrRevert(this));
+    }
+    return (result as Result<T, E>).unwrapOrRevert(this);
   }
 
   /**
-   * Executes the given function and returns its result. If the function throws, reverts to the checkpoint.
-   * @param fn - The function to execute.
-   * @returns The result of the function.
+   * Executes the given function and returns its result. If the function throws
+   * (or the returned Promise rejects), reverts to the checkpoint.
+   * Supports both sync and async callbacks.
+   * @param fn - The function to execute (sync or async).
+   * @returns The result of the function, or a Promise of it if an async function was passed.
    */
   tryOrRevert<T>(fn: () => T): T {
     try {
-      return fn();
-    } catch {
-      this.revert();
-    }
-  }
-
-  /**
-   * Executes the given async function and returns its result. If the promise rejects, reverts to the checkpoint.
-   * @param fn - The async function to execute.
-   * @returns A promise resolving to the result of the function.
-   */
-  async tryOrRevertAsync<T>(fn: () => Promise<T>): Promise<T> {
-    try {
-      return await fn();
+      const result = fn();
+      if (isPromiseLike(result)) {
+        return (result as Promise<unknown>).catch(() => this.revert()) as T;
+      }
+      return result;
     } catch {
       this.revert();
     }
@@ -103,52 +107,55 @@ export function checkpoint(): Checkpoint {
 
 /**
  * Creates a checkpoint and executes the given function. If the function returns an error Result,
- * reverts to the checkpoint.
- * @param fn - The function to execute with a checkpoint. Must return a Result.
- * @returns The successful value.
+ * reverts to the checkpoint. Supports both sync and async callbacks.
+ * @param fn - The function to execute with a checkpoint. Must return a Result (or Promise of Result).
+ * @returns The successful value, or a Promise of it if an async function was passed.
  */
-export function withCheckpoint<T, E>(fn: (cp: Checkpoint) => Result<T, E>): T {
+export function withCheckpoint<T, E>(fn: (cp: Checkpoint) => Result<T, E>): T;
+export function withCheckpoint<T, E>(fn: (cp: Checkpoint) => Promise<Result<T, E>>): Promise<T>;
+export function withCheckpoint<T, E>(
+  fn: (cp: Checkpoint) => Result<T, E> | Promise<Result<T, E>>,
+): T | Promise<T> {
   const cp = new Checkpoint();
-  return fn(cp).unwrapOrRevert(cp);
+  const result = fn(cp);
+  if (isPromiseLike(result)) {
+    return (result as Promise<Result<T, E>>).then((r) => r.unwrapOrRevert(cp));
+  }
+  return (result as Result<T, E>).unwrapOrRevert(cp);
 }
 
 /**
- * Creates a checkpoint and executes the given async function. If the returned promise resolves
- * to an error Result, reverts to the checkpoint.
- * @param fn - The async function to execute with a checkpoint. Must return a Promise of Result.
- * @returns A promise resolving to the successful value.
- */
-export async function withCheckpointAsync<T, E>(
-  fn: (cp: Checkpoint) => Promise<Result<T, E>>,
-): Promise<T> {
-  const cp = new Checkpoint();
-  return (await fn(cp)).unwrapOrRevert(cp);
-}
-
-/**
- * Creates a checkpoint and executes the given function. If the function throws, reverts to the checkpoint.
- * @param fn - The function to execute with a checkpoint.
- * @returns The result of the function.
+ * Creates a checkpoint and executes the given function. If the function throws
+ * (or the returned Promise rejects), reverts to the checkpoint.
+ * Supports both sync and async callbacks.
+ * @param fn - The function to execute with a checkpoint (sync or async).
+ * @returns The result of the function, or a Promise of it if an async function was passed.
  */
 export function withCheckpointTry<T>(fn: (cp: Checkpoint) => T): T {
   const cp = new Checkpoint();
   try {
-    return fn(cp);
+    const result = fn(cp);
+    if (isPromiseLike(result)) {
+      return (result as Promise<unknown>).catch(() => cp.revert()) as T;
+    }
+    return result;
   } catch {
     return cp.revert();
   }
 }
 
 /**
- * Creates a checkpoint and executes the given async function. If the promise rejects, reverts to the checkpoint.
- * @param fn - The async function to execute with a checkpoint.
- * @returns A promise resolving to the result of the function.
+ * @deprecated Use {@link withCheckpoint} instead, which handles both sync and async callbacks.
+ */
+export async function withCheckpointAsync<T, E>(
+  fn: (cp: Checkpoint) => Promise<Result<T, E>>,
+): Promise<T> {
+  return withCheckpoint(fn);
+}
+
+/**
+ * @deprecated Use {@link withCheckpointTry} instead, which handles both sync and async callbacks.
  */
 export async function withCheckpointTryAsync<T>(fn: (cp: Checkpoint) => Promise<T>): Promise<T> {
-  const cp = new Checkpoint();
-  try {
-    return await fn(cp);
-  } catch {
-    return cp.revert();
-  }
+  return withCheckpointTry(fn);
 }

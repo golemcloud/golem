@@ -315,6 +315,20 @@ Options:
     (f) => f.endsWith(".yaml") || f.endsWith(".yml"),
   );
 
+  // Validate that the --scenario filter matches an existing scenario
+  if (scenarioFilter) {
+    const allSpecs = await Promise.all(
+      scenarioFiles.map((f) => ScenarioLoader.load(path.join(scenariosDir, f))),
+    );
+    const scenarioNames = allSpecs.map((s) => s.name);
+    if (!scenarioNames.includes(scenarioFilter)) {
+      log.error(
+        `Scenario '${scenarioFilter}' not found. Available scenarios: ${scenarioNames.join(", ")}`,
+      );
+      process.exit(1);
+    }
+  }
+
   // Dry-run mode: validate and print step summaries, then exit
   if (dryRun) {
     log.bold("=== Dry Run ===");
