@@ -211,9 +211,6 @@ object QuotaApi {
     }
   }
 
-  // --- WIT constructor import ---
-  // `quota-token` has a WIT constructor, which jco maps to a JS class.
-
   @js.native
   @JSImport("golem:quota/types@1.5.0", "QuotaToken")
   private class JsQuotaTokenClass(resourceName: String, expectedUse: js.BigInt) extends js.Object {
@@ -223,7 +220,6 @@ object QuotaApi {
     def toRecord(): JsQuotaTokenRecord                   = js.native
   }
 
-  // `from-record` is a WIT static function on quota-token, mapped to a JS static method.
   @js.native
   @JSImport("golem:quota/types@1.5.0", "QuotaToken")
   private object JsQuotaTokenStaticClass extends js.Object {
