@@ -54,6 +54,24 @@ jobs:
         working-directory: sdks/scala
         run: ./scripts/generate-agent-guest-wasm.sh
 
+      - name: Verify Scala WIT d.ts files are committed
+        run: |
+          if ! git diff --exit-code sdks/scala/wit/dts; then
+            echo "❌ The files in sdks/scala/wit/dts differ from the committed version."
+            echo "Please regenerate the d.ts files and commit the updated files before tagging."
+            exit 1
+          fi
+
+      - name: Verify Scala SDK publish tree is clean
+        run: |
+          CHANGES="$(git status --porcelain -- sdks/scala)"
+          if [ -n "$CHANGES" ]; then
+            echo "❌ sdks/scala has uncommitted changes after pre-publish generation."
+            echo "Publishing from a dirty tree would produce a SNAPSHOT version."
+            echo "$CHANGES"
+            exit 1
+          fi
+
       - name: Publish to Maven Central
         working-directory: sdks/scala
         run: sbt ci-release
