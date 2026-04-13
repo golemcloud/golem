@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use self::api::agent_secret::AgentSecretSubcommand;
+use self::api::resource_definition::ResourceDefinitionSubcommand;
 use self::api::retry_policy::RetryPolicySubcommand;
 use crate::app::template::AppTemplateName;
 use crate::command::api::ApiSubcommand;
@@ -768,6 +769,11 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: RetryPolicySubcommand,
     },
+    /// Manage quota resource definitions
+    Resource {
+        #[clap(subcommand)]
+        subcommand: ResourceDefinitionSubcommand,
+    },
     /// Generate shell completion
     Completion {
         /// Selects shell
@@ -1321,6 +1327,79 @@ pub mod api {
             },
 
             /// List Agent Secrets
+            List,
+        }
+    }
+
+    pub mod resource_definition {
+        use crate::model::EnforcementActionArg;
+        use clap::Subcommand;
+        use golem_common::model::quota::{ResourceDefinitionId, ResourceDefinitionRevision};
+
+        #[derive(Debug, Subcommand)]
+        pub enum ResourceDefinitionSubcommand {
+            /// Create a quota resource definition in the environment
+            Create {
+                /// Name of the resource (unique within the environment)
+                #[arg(long)]
+                name: String,
+                /// Resource limit as JSON: one of
+                ///   {"type":"rate","value":N,"period":"second|minute|hour|day|month|year","max":N}
+                ///   {"type":"capacity","value":N}
+                ///   {"type":"concurrency","value":N}
+                #[arg(long)]
+                limit: String,
+                /// Enforcement action when the limit is exceeded: throttle | reject | terminate
+                #[arg(long, default_value_t = EnforcementActionArg::Throttle)]
+                enforcement_action: EnforcementActionArg,
+                /// Singular unit label (e.g. "token")
+                #[arg(long, default_value = "unit")]
+                unit: String,
+                /// Plural unit label (e.g. "tokens")
+                #[arg(long, default_value = "units")]
+                units: String,
+            },
+
+            /// Update an existing quota resource definition
+            Update {
+                /// ID of the resource definition to update
+                #[arg(long)]
+                id: ResourceDefinitionId,
+                /// Current revision of the resource definition
+                #[arg(long)]
+                current_revision: ResourceDefinitionRevision,
+                /// New resource limit as JSON (optional)
+                #[arg(long)]
+                limit: Option<String>,
+                /// New enforcement action (optional): throttle | reject | terminate
+                #[arg(long)]
+                enforcement_action: Option<EnforcementActionArg>,
+                /// New singular unit label (optional)
+                #[arg(long)]
+                unit: Option<String>,
+                /// New plural unit label (optional)
+                #[arg(long)]
+                units: Option<String>,
+            },
+
+            /// Delete a quota resource definition
+            Delete {
+                /// ID of the resource definition to delete
+                #[arg(long)]
+                id: ResourceDefinitionId,
+                /// Current revision of the resource definition
+                #[arg(long)]
+                current_revision: ResourceDefinitionRevision,
+            },
+
+            /// Get a quota resource definition by ID
+            Get {
+                /// ID of the resource definition
+                #[arg(long)]
+                id: ResourceDefinitionId,
+            },
+
+            /// List quota resource definitions in the environment
             List,
         }
     }

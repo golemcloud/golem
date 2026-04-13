@@ -67,9 +67,7 @@ impl Error for ContextInitHintError {}
 
 pub mod service {
     use crate::log::LogColorize;
-
     use bytes::Bytes;
-
     use golem_common::base_model::api;
     use golem_common::model::{AgentId, PromiseId};
     use reqwest::StatusCode;
