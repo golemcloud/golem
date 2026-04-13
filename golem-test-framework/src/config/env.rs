@@ -45,6 +45,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct EnvBasedTestDependenciesConfig {
     pub worker_executor_cluster_size: usize,
+    pub environment_state_cache_capacity: Option<usize>,
     pub number_of_shards_override: Option<usize>,
     pub shared_client: bool,
     pub db_type: DbType,
@@ -130,6 +131,7 @@ impl Default for EnvBasedTestDependenciesConfig {
     fn default() -> Self {
         Self {
             worker_executor_cluster_size: 4,
+            environment_state_cache_capacity: None,
             number_of_shards_override: None,
             shared_client: false,
             db_type: DbType::Postgres,
@@ -278,6 +280,7 @@ impl EnvBasedTestDependencies {
         config: &EnvBasedTestDependenciesConfig,
         shard_manager: &Arc<dyn ShardManager>,
         rdb: &Arc<dyn Rdb>,
+        redis: &Arc<dyn Redis>,
         registry_service: &Arc<dyn RegistryService>,
     ) -> Arc<dyn WorkerService> {
         Arc::new(
@@ -287,8 +290,10 @@ impl EnvBasedTestDependencies {
                 8082,
                 9092,
                 9093,
+                9095,
                 shard_manager,
                 rdb,
+                redis,
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
@@ -304,7 +309,7 @@ impl EnvBasedTestDependencies {
         config: &EnvBasedTestDependenciesConfig,
         shard_manager: Arc<dyn ShardManager>,
         worker_service: Arc<dyn WorkerService>,
-        redis: Arc<dyn Redis>,
+        rdb: Arc<dyn Rdb>,
         registry_service: Arc<dyn RegistryService>,
     ) -> Arc<dyn WorkerExecutorCluster> {
         Arc::new(
@@ -314,13 +319,14 @@ impl EnvBasedTestDependencies {
                 9100,
                 &config.debug_targets_dirs().join("worker-executor"),
                 &config.golem_repo_root.join("golem-worker-executor"),
-                redis,
+                rdb,
                 shard_manager,
                 worker_service,
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
                 registry_service,
+                config.environment_state_cache_capacity,
                 false,
             )
             .await,
@@ -358,13 +364,14 @@ impl EnvBasedTestDependencies {
             Self::make_shard_manager(&config, rdb.clone(), registry_service.clone()).await;
 
         let worker_service =
-            Self::make_worker_service(&config, &shard_manager, &rdb, &registry_service).await;
+            Self::make_worker_service(&config, &shard_manager, &rdb, &redis, &registry_service)
+                .await;
 
         let worker_executor_cluster = Self::make_worker_executor_cluster(
             &config,
             shard_manager.clone(),
             worker_service.clone(),
-            redis.clone(),
+            rdb.clone(),
             registry_service.clone(),
         )
         .await;

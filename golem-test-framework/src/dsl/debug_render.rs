@@ -132,39 +132,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "EXITED");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
         }
-        PublicOplogEntry::ChangeRetryPolicy(params) => {
-            let _ = writeln!(result, "CHANGE RETRY POLICY");
-            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(
-                result,
-                "{pad}max attempts:      {}",
-                &params.new_policy.max_attempts,
-            );
-            let _ = writeln!(
-                result,
-                "{pad}min delay:         {} ms",
-                &params.new_policy.min_delay.as_millis(),
-            );
-            let _ = writeln!(
-                result,
-                "{pad}max delay:         {} ms",
-                &params.new_policy.max_delay.as_millis(),
-            );
-            let _ = writeln!(
-                result,
-                "{pad}multiplier:        {}",
-                &params.new_policy.multiplier,
-            );
-            let _ = writeln!(
-                result,
-                "{pad}max jitter factor: {}",
-                &params
-                    .new_policy
-                    .max_jitter_factor
-                    .map(|x| x.to_string())
-                    .unwrap_or("-".to_string()),
-            );
-        }
         PublicOplogEntry::BeginAtomicRegion(params) => {
             let _ = writeln!(result, "BEGIN ATOMIC REGION");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
@@ -468,6 +435,21 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 &params.confirmed_up_to
             );
             let _ = writeln!(result, "{pad}sending up to:     {}", &params.sending_up_to);
+        }
+        PublicOplogEntry::SetRetryPolicy(params) => {
+            let _ = writeln!(result, "SET RETRY POLICY");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}name:              {}", &params.policy.name);
+            let _ = writeln!(
+                result,
+                "{pad}priority:          {}",
+                &params.policy.priority
+            );
+        }
+        PublicOplogEntry::RemoveRetryPolicy(params) => {
+            let _ = writeln!(result, "REMOVE RETRY POLICY");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}name:              {}", &params.name);
         }
     }
 

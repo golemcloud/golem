@@ -17,6 +17,9 @@ service ShardManagerService {
   // Executors call these RPCs to acquire, renew, and release quota leases.
   rpc AcquireQuotaLease(AcquireQuotaLeaseRequest) returns (AcquireQuotaLeaseResponse);
   rpc RenewQuotaLease(RenewQuotaLeaseRequest) returns (RenewQuotaLeaseResponse);
+  // Renew multiple leases in one round-trip. Results are in the same order
+  // as the request entries.
+  rpc BatchRenewQuotaLeases(BatchRenewQuotaLeasesRequest) returns (BatchRenewQuotaLeasesResponse);
   rpc ReleaseQuotaLease(ReleaseQuotaLeaseRequest) returns (ReleaseQuotaLeaseResponse);
 }
 
@@ -65,6 +68,16 @@ message AcquireQuotaLeaseSuccessResponse {
   golem.common.QuotaLease lease = 1;
 }
 
+// A pending reservation request from an agent on this executor.
+// Included in RenewQuotaLeaseRequest so the shard manager can
+// weight allocations across executors based on demand.
+message PendingReservation {
+  uint64 amount = 1;
+  // Priority score: credit / amount_requested.  Higher values
+  // indicate more deserving requests.
+  double priority = 2;
+}
+
 // Renews an existing lease before it expires.
 // The executor reports how much of its previous allocation was unused
 // so the shard manager can reclaim and reallocate.
@@ -75,8 +88,11 @@ message RenewQuotaLeaseRequest {
   // manager rejects renewals for stale epochs.
   uint64 epoch = 3;
   // Units from the previous allocation that were not consumed.
-  // Ignored for Unlimited and Exhausted allocations.
   uint64 unused = 4;
+  // Outstanding reservation requests on this executor, ordered by
+  // priority (highest first).  The shard manager may use this to
+  // weight allocations between executors.
+  repeated PendingReservation pending_reservations = 5;
 }
 
 message RenewQuotaLeaseResponse {
@@ -108,3 +124,19 @@ message ReleaseQuotaLeaseResponse {
 }
 
 message ReleaseQuotaLeaseSuccessResponse { }
+
+message BatchRenewQuotaLeasesRequest {
+  repeated RenewQuotaLeaseRequest renewals = 1;
+}
+
+// One result per entry in the request, in the same order.
+message BatchRenewQuotaLeasesResponse {
+  repeated RenewQuotaLeaseResult results = 1;
+}
+
+message RenewQuotaLeaseResult {
+  oneof result {
+    RenewQuotaLeaseSuccessResponse success = 1;
+    golem.shardmanager.v1.QuotaError error = 2;
+  }
+}

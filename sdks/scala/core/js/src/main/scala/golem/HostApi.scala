@@ -52,31 +52,6 @@ object HostApi {
   def oplogCommit(replicas: Int): Unit =
     AgentHostApi.oplogCommit(replicas)
 
-  // ----- Retry policy ----------------------------------------------------------------------
-
-  /**
-   * Retry policy as defined by `golem:api/host@1.5.0`.
-   *
-   *   - `maxAttempts`: u32
-   *   - `minDelayNanos`: duration (u64, in nanoseconds)
-   *   - `maxDelayNanos`: duration (u64, in nanoseconds)
-   *   - `multiplier`: f64
-   *   - `maxJitterFactor`: option<f64>
-   */
-  final case class RetryPolicy(
-    maxAttempts: Int,
-    minDelayNanos: BigInt,
-    maxDelayNanos: BigInt,
-    multiplier: Double,
-    maxJitterFactor: Option[Double]
-  )
-
-  def getRetryPolicy(): RetryPolicy =
-    fromHostRetryPolicy(AgentHostApi.getRetryPolicy())
-
-  def setRetryPolicy(policy: RetryPolicy): Unit =
-    AgentHostApi.setRetryPolicy(toHostRetryPolicy(policy))
-
   // ----- Persistence level -----------------------------------------------------------------
 
   sealed trait PersistenceLevel extends Product with Serializable {
@@ -631,25 +606,6 @@ object HostApi {
   private def tuplesToMap(arr: js.Array[js.Tuple2[String, String]]): Map[String, String] =
     if (arr == null || js.isUndefined(arr)) Map.empty
     else arr.map(t => (t._1, t._2)).toMap
-
-  private def fromHostRetryPolicy(policy: AgentHostApi.RetryPolicy): RetryPolicy = {
-    // jco guest-types represent u32 as number and u64 as bigint (BigInt).
-    val maxAttempts = policy.maxAttempts
-    val minDelay    = fromJsBigInt(policy.minDelay)
-    val maxDelay    = fromJsBigInt(policy.maxDelay)
-    val multiplier  = policy.multiplier
-    val maxJitter   = policy.maxJitterFactor.toOption
-    RetryPolicy(maxAttempts, minDelay, maxDelay, multiplier, maxJitter)
-  }
-
-  private def toHostRetryPolicy(policy: RetryPolicy): AgentHostApi.RetryPolicy =
-    Dictionary[js.Any](
-      "maxAttempts"     -> policy.maxAttempts,
-      "minDelay"        -> toJsBigInt(policy.minDelayNanos),
-      "maxDelay"        -> toJsBigInt(policy.maxDelayNanos),
-      "multiplier"      -> policy.multiplier,
-      "maxJitterFactor" -> policy.maxJitterFactor.fold[js.Any](null)(identity)
-    ).asInstanceOf[AgentHostApi.RetryPolicy]
 
   private def fromHostPersistenceLevel(level: AgentHostApi.PersistenceLevel): PersistenceLevel = {
     val tag = level.asInstanceOf[HasTag].tag.toOption.getOrElse(level.toString)

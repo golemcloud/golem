@@ -481,9 +481,13 @@ async fn write_metadata_to_file(
 ) -> anyhow::Result<()> {
     let json = serde_json::to_string(metadata)
         .map_err(|_| anyhow!("Failed to serialize component file properties".to_string()))?;
-    tokio::fs::write(path, json)
+    let tmp = path.with_extension("json.tmp");
+    tokio::fs::write(&tmp, json)
         .await
-        .map_err(|_| anyhow!("Failed to write component file properties".to_string()))
+        .map_err(|_| anyhow!("Failed to write component file properties".to_string()))?;
+    tokio::fs::rename(&tmp, path)
+        .await
+        .map_err(|_| anyhow!("Failed to rename component file properties".to_string()))
 }
 
 async fn load_metadata_from(

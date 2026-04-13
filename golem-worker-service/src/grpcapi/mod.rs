@@ -25,6 +25,7 @@ use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerServi
 use golem_api_grpc::proto::golem::worker::v1::{
     AgentError, WorkerExecutionError, agent_error, worker_execution_error,
 };
+use golem_common::base_model::api;
 use golem_common::model::AgentId;
 use golem_common::model::component::CanonicalFilePath;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
@@ -99,39 +100,59 @@ pub fn validate_protobuf_agent_id(
 }
 
 pub fn validate_component_file_path(file_path: String) -> Result<CanonicalFilePath, AgentError> {
-    CanonicalFilePath::from_abs_str(&file_path).map_err(|_| bad_request_error("Invalid file path"))
+    CanonicalFilePath::from_abs_str(&file_path).map_err(|_| {
+        bad_request_error_with_code(
+            api::error_code::INVALID_COMPONENT_FILE_PATH,
+            "Invalid file path",
+        )
+    })
 }
 
 pub fn bad_request_error<T>(error: T) -> AgentError
 where
     T: Into<String>,
 {
+    bad_request_error_with_code(api::error_code::VALIDATION_ERROR, error)
+}
+
+pub fn bad_request_error_with_code<T>(code: &str, error: T) -> AgentError
+where
+    T: Into<String>,
+{
     AgentError {
         error: Some(agent_error::Error::BadRequest(ErrorsBody {
             errors: vec![error.into()],
+            code: code.to_string(),
         })),
     }
 }
 
 pub fn bad_request_errors(errors: Vec<String>) -> AgentError {
+    bad_request_errors_with_code(api::error_code::VALIDATION_ERROR, errors)
+}
+
+pub fn bad_request_errors_with_code(code: &str, errors: Vec<String>) -> AgentError {
     AgentError {
-        error: Some(agent_error::Error::BadRequest(ErrorsBody { errors })),
+        error: Some(agent_error::Error::BadRequest(ErrorsBody {
+            errors,
+            code: code.to_string(),
+        })),
     }
 }
 
 pub fn error_to_status(error: AgentError) -> Status {
     match error.error {
-        Some(agent_error::Error::BadRequest(ErrorsBody { errors })) => {
+        Some(agent_error::Error::BadRequest(ErrorsBody { errors, .. })) => {
             Status::invalid_argument(format!("Bad Request: {errors:?}"))
         }
-        Some(agent_error::Error::Unauthorized(ErrorBody { error })) => {
+        Some(agent_error::Error::Unauthorized(ErrorBody { error, .. })) => {
             Status::unauthenticated(error)
         }
-        Some(agent_error::Error::LimitExceeded(ErrorBody { error })) => {
+        Some(agent_error::Error::LimitExceeded(ErrorBody { error, .. })) => {
             Status::resource_exhausted(error)
         }
-        Some(agent_error::Error::NotFound(ErrorBody { error })) => Status::not_found(error),
-        Some(agent_error::Error::AlreadyExists(ErrorBody { error })) => {
+        Some(agent_error::Error::NotFound(ErrorBody { error, .. })) => Status::not_found(error),
+        Some(agent_error::Error::AlreadyExists(ErrorBody { error, .. })) => {
             Status::already_exists(error)
         }
         Some(agent_error::Error::InternalError(WorkerExecutionError { error: None })) => {

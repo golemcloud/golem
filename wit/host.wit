@@ -3,6 +3,7 @@ package golem:api;
 world golem {
   import golem:agent/host@1.5.0;
   import golem:api/host@1.5.0;
+  import golem:api/retry@1.5.0;
   import golem:api/context@1.5.0;
   import golem:api/oplog@1.5.0;
   import golem:durability/durability@1.5.0;
@@ -22,4 +23,5 @@ world golem {
   import golem:rdbms/postgres@1.5.0;
   import golem:rdbms/types@1.5.0;
   import golem:websocket/client@1.5.0;
+  import golem:quota/types@1.5.0;
 }

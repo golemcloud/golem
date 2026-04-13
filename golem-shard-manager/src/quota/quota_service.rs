@@ -22,9 +22,10 @@ use chrono::Utc;
 use golem_common::SafeDisplay;
 use golem_common::model::Pod;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::resource_definition::{ResourceDefinitionId, ResourceName};
-use golem_service_base::model::quota_lease::LeaseEpoch;
-use sqlx::types::Json;
+use golem_common::model::quota::LeaseEpoch;
+use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
+use golem_service_base::model::quota_lease::PendingReservation;
+use golem_service_base::repo::Blob;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -83,7 +84,6 @@ pub struct QuotaService {
     ttl: Duration,
     lease_duration: Duration,
     min_executors: u64,
-    exhausted_retry_after: Duration,
 }
 
 impl QuotaService {
@@ -100,7 +100,6 @@ impl QuotaService {
             ttl: config.definition_staleness_ttl,
             lease_duration: config.lease_duration,
             min_executors: config.min_executors,
-            exhausted_retry_after: config.exhausted_retry_after,
         })
     }
 
@@ -136,7 +135,7 @@ impl QuotaService {
             {
                 for lr in lease_records {
                     let pod = Pod {
-                        ip: lr.pod_ip.0,
+                        ip: lr.pod_ip.into_value(),
                         port: lr
                             .pod_port
                             .try_into()
@@ -149,6 +148,7 @@ impl QuotaService {
                             allocated: lr.allocated.into(),
                             granted_at: lr.granted_at.into(),
                             expires_at: lr.expires_at.into(),
+                            pending_reservations: lr.pending_reservations.into_value(),
                         },
                     );
                 }
@@ -214,12 +214,7 @@ impl QuotaService {
                 })?;
                 let snapshot = state.clone();
                 let prev_rev = state.current_revision();
-                let (epoch, allocation, expires_at, expired) = state.acquire_lease(
-                    pod,
-                    self.lease_duration,
-                    self.min_executors,
-                    self.exhausted_retry_after,
-                );
+                let result = state.acquire_lease(pod, self.lease_duration, self.min_executors);
 
                 if let Err(e) = state.bump_revision() {
                     warn!(error = %e, "failed to bump revision, rolling back");
@@ -230,15 +225,16 @@ impl QuotaService {
                 let lease = QuotaLease::Bounded {
                     resource_definition_id: id,
                     pod,
-                    epoch,
-                    allocation,
-                    expires_at,
+                    epoch: result.epoch,
+                    allocated_amount: result.allocated_amount,
+                    expires_at: result.expires_at,
                     resource_limit: state.definition.limit.clone(),
                     enforcement_action: state.definition.enforcement_action,
+                    total_available_amount: result.total_available_amount,
                 };
 
                 if let Err(e) = self
-                    .persist_after_lease_change(state, prev_rev, &pod, &expired)
+                    .persist_after_lease_change(state, prev_rev, &pod, &result.expired)
                     .await
                 {
                     log_on_failed_persistence(&e);
@@ -258,6 +254,7 @@ impl QuotaService {
         pod: Pod,
         epoch: LeaseEpoch,
         unused: u64,
+        pending_reservations: Vec<PendingReservation>,
     ) -> Result<QuotaLease, QuotaError> {
         self.refresh_if_stale(resource_definition_id).await;
 
@@ -276,13 +273,13 @@ impl QuotaService {
         })?;
         let snapshot = state.clone();
         let prev_rev = state.current_revision();
-        let (new_epoch, allocation, expires_at, expired) = state.renew_lease(
+        let result = state.renew_lease(
             &pod,
             epoch,
             unused,
             self.lease_duration,
             self.min_executors,
-            self.exhausted_retry_after,
+            pending_reservations,
         )?;
 
         if let Err(e) = state.bump_revision() {
@@ -292,7 +289,7 @@ impl QuotaService {
         }
 
         if let Err(e) = self
-            .persist_after_lease_change(state, prev_rev, &pod, &expired)
+            .persist_after_lease_change(state, prev_rev, &pod, &result.expired)
             .await
         {
             log_on_failed_persistence(&e);
@@ -303,14 +300,35 @@ impl QuotaService {
         let lease = QuotaLease::Bounded {
             resource_definition_id,
             pod,
-            epoch: new_epoch,
-            allocation,
-            expires_at,
+            epoch: result.new_epoch,
+            allocated_amount: result.allocated_amount,
+            expires_at: result.expires_at,
             resource_limit: state.definition.limit.clone(),
             enforcement_action: state.definition.enforcement_action,
+            total_available_amount: result.total_available_amount,
         };
 
         Ok(lease)
+    }
+
+    /// Renew multiple leases in one call.  Results are in the same order as
+    /// the input entries.  Each entry is processed independently — failure of
+    /// one does not affect others.
+    pub async fn batch_renew_leases(
+        &self,
+        renewals: Vec<(
+            ResourceDefinitionId,
+            Pod,
+            LeaseEpoch,
+            u64,
+            Vec<PendingReservation>,
+        )>,
+    ) -> Vec<Result<QuotaLease, QuotaError>> {
+        let mut results = Vec::with_capacity(renewals.len());
+        for (rid, pod, epoch, unused, pending) in renewals {
+            results.push(self.renew_lease(rid, pod, epoch, unused, pending).await);
+        }
+        results
     }
 
     pub async fn release_lease(
@@ -401,9 +419,9 @@ impl QuotaService {
             .to_lease_record(pod)
             .ok_or_else(|| anyhow::anyhow!("pod lease not found after mutation"))?;
 
-        let expired: Vec<(Json<IpAddr>, i32)> = expired_pods
+        let expired: Vec<(Blob<IpAddr>, i32)> = expired_pods
             .iter()
-            .map(|p| (Json(p.ip), p.port.into()))
+            .map(|p| (Blob::new(p.ip), p.port.into()))
             .collect();
 
         self.repo
@@ -422,7 +440,7 @@ impl QuotaService {
             .save_lease_release(
                 &resource_record,
                 previous_revision,
-                Json(pod.ip),
+                Blob::new(pod.ip),
                 pod.port.into(),
             )
             .await
@@ -467,10 +485,7 @@ impl QuotaService {
         Some(handle)
     }
 
-    async fn ensure_entry(
-        &self,
-        definition: &golem_common::model::resource_definition::ResourceDefinition,
-    ) {
+    async fn ensure_entry(&self, definition: &golem_common::model::quota::ResourceDefinition) {
         let _ = self
             .entries
             .entry_async(definition.id)

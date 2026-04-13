@@ -175,6 +175,9 @@ async fn fork_running_worker_1(
     user.wait_for_status(&target_agent_id, AgentStatus::Idle, Duration::from_secs(10))
         .await?;
 
+    user.check_oplog_is_queryable(&source_agent_id).await?;
+    user.check_oplog_is_queryable(&target_agent_id).await?;
+
     let total_invocations = user
         .search_oplog(&target_agent_id, "add AND invoke AND NOT pending")
         .await?;
@@ -541,7 +544,12 @@ async fn fork_invalid_worker(
         .unwrap_err()
         .to_string();
 
-    assert!(error.contains(&format!("Worker not found: {source_agent_id}")));
+    assert!(
+        error.contains("AGENT_NOT_FOUND")
+            && error.contains("Worker not found")
+            && error.contains(&source_name),
+        "actual error: {error}"
+    );
     Ok(())
 }
 

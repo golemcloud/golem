@@ -84,7 +84,7 @@ pub trait TestDependencies: Send + Sync + Clone {
 
         let name = Uuid::new_v4().to_string();
         let account_data = AccountCreation {
-            email: AccountEmail(format!("{name}@golem.cloud")),
+            email: AccountEmail::new(format!("{name}@golem.cloud")),
             name,
         };
 
@@ -122,7 +122,7 @@ pub trait TestDependencies: Send + Sync + Clone {
 
         let name = Uuid::new_v4().to_string();
         let account_data = AccountCreation {
-            email: AccountEmail(format!("{name}@golem.cloud")),
+            email: AccountEmail::new(format!("{name}@golem.cloud")),
             name,
         };
 

@@ -146,7 +146,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
         let pod = make_pod(source_ip, request.port)?;
 
-        let name = golem_common::model::resource_definition::ResourceName(request.resource_name);
+        let name = golem_common::model::quota::ResourceName(request.resource_name);
 
         match self
             .quota_service
@@ -197,11 +197,23 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
         let pod = make_pod(source_ip, request.port)?;
 
-        let epoch = golem_service_base::model::quota_lease::LeaseEpoch(request.epoch);
+        let epoch = golem_common::model::quota::LeaseEpoch(request.epoch);
+
+        let pending_reservations = request
+            .pending_reservations
+            .into_iter()
+            .map(Into::into)
+            .collect();
 
         match self
             .quota_service
-            .renew_lease(resource_definition_id, pod, epoch, request.unused)
+            .renew_lease(
+                resource_definition_id,
+                pod,
+                epoch,
+                request.unused,
+                pending_reservations,
+            )
             .await
         {
             Ok(lease) => {
@@ -230,6 +242,68 @@ impl ShardManagerService for ShardManagerServiceImpl {
         }
     }
 
+    async fn batch_renew_quota_leases(
+        &self,
+        request: tonic::Request<golem::shardmanager::v1::BatchRenewQuotaLeasesRequest>,
+    ) -> Result<Response<golem::shardmanager::v1::BatchRenewQuotaLeasesResponse>, tonic::Status>
+    {
+        let source_ip = request
+            .remote_addr()
+            .ok_or_else(|| tonic::Status::invalid_argument("missing source IP"))?
+            .ip();
+        let request = request.into_inner();
+
+        let mut renewals = Vec::with_capacity(request.renewals.len());
+        for r in request.renewals {
+            let resource_definition_id = r
+                .resource_definition_id
+                .ok_or_else(|| tonic::Status::invalid_argument("missing resource_definition_id"))?
+                .try_into()
+                .map_err(|e: String| tonic::Status::invalid_argument(e))?;
+            let pod = make_pod(source_ip, r.port)?;
+            let epoch = golem_common::model::quota::LeaseEpoch(r.epoch);
+            let pending_reservations = r.pending_reservations.into_iter().map(Into::into).collect();
+            renewals.push((
+                resource_definition_id,
+                pod,
+                epoch,
+                r.unused,
+                pending_reservations,
+            ));
+        }
+
+        let lease_results = self.quota_service.batch_renew_leases(renewals).await;
+
+        let results = lease_results
+            .into_iter()
+            .map(|result| match result {
+                Ok(lease) => {
+                    let grpc_lease: golem_api_grpc::proto::golem::common::QuotaLease = lease.into();
+                    golem::shardmanager::v1::RenewQuotaLeaseResult {
+                        result: Some(
+                            golem::shardmanager::v1::renew_quota_lease_result::Result::Success(
+                                golem::shardmanager::v1::RenewQuotaLeaseSuccessResponse {
+                                    lease: Some(grpc_lease),
+                                },
+                            ),
+                        ),
+                    }
+                }
+                Err(err) => golem::shardmanager::v1::RenewQuotaLeaseResult {
+                    result: Some(
+                        golem::shardmanager::v1::renew_quota_lease_result::Result::Error(
+                            err.into(),
+                        ),
+                    ),
+                },
+            })
+            .collect();
+
+        Ok(Response::new(
+            golem::shardmanager::v1::BatchRenewQuotaLeasesResponse { results },
+        ))
+    }
+
     async fn release_quota_lease(
         &self,
         request: tonic::Request<golem::shardmanager::v1::ReleaseQuotaLeaseRequest>,
@@ -248,7 +322,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
         let pod = make_pod(source_ip, request.port)?;
 
-        let epoch = golem_service_base::model::quota_lease::LeaseEpoch(request.epoch);
+        let epoch = golem_common::model::quota::LeaseEpoch(request.epoch);
 
         match self
             .quota_service

@@ -319,10 +319,12 @@ export class LanguageService {
   ): Array<{ name: string; signature: string }> | undefined {
     if (!isValidIdentifier(agentTypeName)) return;
 
-    // Use Awaited<> to unwrap Promise if .get() is async
+    const constructorMethod = this.getAgentTypePrimaryFactoryMethodName(agentTypeName);
+
+    // Use Awaited<> to unwrap Promise if constructor method is async
     const sourceText =
       this.snippetImports +
-      `const __client = null! as Awaited<ReturnType<typeof ${agentTypeName}.get>>;\n` +
+      `const __client = null! as Awaited<ReturnType<typeof ${agentTypeName}.${constructorMethod}>>;\n` +
       'void __client;\n';
     const sourceFile = this.project.createSourceFile('__client_info__.ts', sourceText, {
       overwrite: true,
@@ -342,7 +344,7 @@ export class LanguageService {
         const signatures = propType.getCallSignatures();
         if (signatures.length === 0) return;
         const rawTypeText = checker.getTypeText(propType, clientDecl);
-        let typeText = rawTypeText.replace(/import\([^)]*\)\./g, '');
+        let typeText = normalizeTypeText(rawTypeText);
         const methodParameterNames =
           this.config.agents[agentTypeName]?.methodParameterNames?.[symbol.getName()];
         const remoteMethodSignature = getRemoteMethodClientSignature(
@@ -363,8 +365,10 @@ export class LanguageService {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  getAgentTypeGetSignature(agentTypeName: string): string | undefined {
+  getAgentTypePrimaryFactoryMethodSignature(agentTypeName: string): string | undefined {
     if (!isValidIdentifier(agentTypeName)) return;
+
+    const constructorMethod = this.getAgentTypePrimaryFactoryMethodName(agentTypeName);
 
     const sourceText =
       this.snippetImports + `const __agentType = ${agentTypeName};\n` + 'void __agentType;\n';
@@ -376,7 +380,7 @@ export class LanguageService {
     if (!agentTypeDecl) return;
 
     const checker = this.project.getTypeChecker();
-    const getSymbol = agentTypeDecl.getType().getProperty('get');
+    const getSymbol = agentTypeDecl.getType().getProperty(constructorMethod);
     if (!getSymbol) return;
 
     const getType = checker.getTypeOfSymbolAtLocation(getSymbol, agentTypeDecl);
@@ -390,7 +394,7 @@ export class LanguageService {
         const paramName = paramSymbol.getName();
         const paramType = checker.getTypeOfSymbolAtLocation(paramSymbol, decl ?? agentTypeDecl);
         let typeText = checker.getTypeText(paramType, decl ?? agentTypeDecl);
-        typeText = typeText.replace(/import\([^)]*\)\./g, '');
+        typeText = normalizeTypeText(typeText);
 
         const parameterDecl = decl && tsm.Node.isParameterDeclaration(decl) ? decl : undefined;
         const prefix = parameterDecl?.isRestParameter() ? '...' : '';
@@ -400,7 +404,11 @@ export class LanguageService {
       })
       .join(', ');
 
-    return `${agentTypeName}.get(${parameters})`;
+    return `${agentTypeName}.${constructorMethod}(${parameters})`;
+  }
+
+  private getAgentTypePrimaryFactoryMethodName(agentTypeName: string): 'get' | 'newPhantom' {
+    return this.config.agents[agentTypeName]?.mode === 'ephemeral' ? 'newPhantom' : 'get';
   }
 
   private getSnippetPlaceholderCompletions(
@@ -538,6 +546,10 @@ function matchTriggerCharacter(
     return ch as ts.CompletionsTriggerCharacter;
   }
   return undefined;
+}
+
+function normalizeTypeText(typeText: string): string {
+  return typeText.replace(/import\([^)]*\)\./g, '');
 }
 
 type CallArgumentContext = {
@@ -963,7 +975,7 @@ function getArgumentTypePlaceholders(
     return buildTypePlaceholders(type, checker);
   }
 
-  const variant = tagged.variants.find((entry) => entry.tagValue === tagValue);
+  const variant = tagged.variants.find((entry) => entry.tagKey === tagValue);
   if (!variant) {
     return buildTypePlaceholders(type, checker);
   }
@@ -1180,38 +1192,44 @@ function buildTaggedObjectPlaceholder(
 function getTaggedUnionInfo(
   unionTypes: tsm.Type[],
   checker: tsm.TypeChecker,
-): { tagName: string; variants: Array<{ type: tsm.Type; tagValue: string }> } | undefined {
+):
+  | {
+      tagName: string;
+      variants: Array<{ type: tsm.Type; tagValue: string; tagKey: string }>;
+    }
+  | undefined {
   if (!unionTypes.length) return;
   if (!unionTypes.every((type) => isObjectType(type))) return;
 
-  const firstProps = unionTypes[0].getProperties();
-  for (const prop of firstProps) {
-    const name = prop.getName();
-    const variants: Array<{ type: tsm.Type; tagValue: string }> = [];
+  const variants: Array<{ type: tsm.Type; tagValue: string; tagKey: string }> = [];
 
-    for (const variantType of unionTypes) {
-      const variantProp = variantType.getProperty(name);
-      if (!variantProp) {
-        variants.length = 0;
-        break;
-      }
+  for (const variantType of unionTypes) {
+    const variantProps = variantType.getProperties();
+    const payloadProps = variantProps.filter((prop) => prop.getName() !== 'tag');
 
-      const propType = getSymbolType(variantProp, checker);
-      const literalValue = propType ? getLiteralPlaceholder(propType) : undefined;
-      if (!literalValue) {
-        variants.length = 0;
-        break;
-      }
-
-      variants.push({ type: variantType, tagValue: literalValue });
+    if (payloadProps.length > 1) {
+      return undefined;
     }
 
-    if (variants.length === unionTypes.length) {
-      return { tagName: name, variants };
+    const variantProp = variantType.getProperty('tag');
+    if (!variantProp) {
+      return undefined;
     }
+
+    const propType = getSymbolType(variantProp, checker);
+    const literalValue = propType ? getLiteralPlaceholder(propType) : undefined;
+    if (!literalValue) {
+      return undefined;
+    }
+
+    variants.push({
+      type: variantType,
+      tagValue: literalValue,
+      tagKey: normalizeLiteralValue(literalValue),
+    });
   }
 
-  return undefined;
+  return { tagName: 'tag', variants };
 }
 
 function getObjectLiteralTagValue(
@@ -1230,12 +1248,23 @@ function getObjectLiteralTagValue(
       case tsm.SyntaxKind.NumericLiteral:
       case tsm.SyntaxKind.TrueKeyword:
       case tsm.SyntaxKind.FalseKeyword:
-        return initializer.getText();
+        return normalizeLiteralValue(initializer.getText());
       default:
         return undefined;
     }
   }
   return undefined;
+}
+
+function normalizeLiteralValue(text: string): string {
+  if (text.length >= 2) {
+    const quote = text[0];
+    if ((quote === '"' || quote === "'" || quote === '`') && text[text.length - 1] === quote) {
+      return text.slice(1, -1);
+    }
+  }
+
+  return text;
 }
 
 function uniquePlaceholders(entries: string[]): string[] {

@@ -15,7 +15,7 @@
 use super::call_agent::CallAgentHandler;
 use super::cors::{apply_cors_outgoing_middleware, handle_cors_preflight_behaviour};
 use super::error::RequestHandlerError;
-use super::model::RichRouteBehaviour;
+use super::model::{OpenApiSpecFormat, RichRouteBehaviour};
 use super::oidc::handler::OidcHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
 use super::session_from_header_security::apply_session_from_header_security_middleware;
@@ -25,6 +25,7 @@ use crate::custom_api::RichRequest;
 use anyhow::anyhow;
 use golem_service_base::custom_api::CorsPreflightBehaviour;
 use golem_service_base::custom_api::OpenApiSpecBehaviour;
+use golem_service_base::custom_api::PathSegment;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use http::StatusCode;
 use poem::{Request, Response};
@@ -132,10 +133,24 @@ impl RequestHandler {
                     .clone()
                     .ok_or(RequestHandlerError::OpenApiSpecGenerationFailed)?;
 
+                let format = match resolved_route.route.path.as_slice() {
+                    [PathSegment::Literal { value }] if value == "openapi.json" => {
+                        OpenApiSpecFormat::Json
+                    }
+                    [PathSegment::Literal { value }] if value == "openapi.yaml" => {
+                        OpenApiSpecFormat::Yaml
+                    }
+                    _ => {
+                        return Err(RequestHandlerError::invariant_violated(
+                            "Unexpected OpenAPI route path",
+                        ));
+                    }
+                };
+
                 Ok(RouteExecutionResult {
                     status: StatusCode::OK,
                     headers: HashMap::new(),
-                    body: ResponseBody::OpenApiSchema { spec },
+                    body: ResponseBody::OpenApiSchema { spec, format },
                 })
             }
 
@@ -174,13 +189,27 @@ fn route_execution_result_to_response(
             .body(body.data)
             .set_content_type(body.binary_type.mime_type)),
 
-        ResponseBody::OpenApiSchema { spec: body } => {
-            let body_json = serde_json::to_value(&body.0)
-                .map_err(|e| anyhow!("OpenApiSchema body serialization error: {e}"))?;
+        ResponseBody::OpenApiSchema { spec: body, format } => {
+            let response = match format {
+                OpenApiSpecFormat::Json => {
+                    let body_json = serde_json::to_vec(&body.0)
+                        .map_err(|e| anyhow!("OpenApiSchema body serialization error: {e}"))?;
 
-            let body = poem::Body::from_json(body_json).map_err(anyhow::Error::from)?;
+                    response_builder
+                        .body(body_json)
+                        .set_content_type("application/json")
+                }
+                OpenApiSpecFormat::Yaml => {
+                    let body_yaml = serde_yaml::to_string(&body.0)
+                        .map_err(|e| anyhow!("OpenApiSchema body serialization error: {e}"))?;
 
-            Ok(response_builder.body(body))
+                    response_builder
+                        .body(body_yaml)
+                        .set_content_type("application/yaml")
+                }
+            };
+
+            Ok(response)
         }
     }
 }

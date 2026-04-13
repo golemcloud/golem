@@ -4,7 +4,6 @@ pub mod dsl;
 
 use crate::debug_mode::debug_bootstrap::TestDebuggingServerBootStrap;
 use crate::debug_mode::debug_worker_executor::DebugWorkerExecutorClient;
-use golem_common::config::RedisConfig;
 use golem_debugging_service::bootstrap_and_run_debug_worker_executor;
 use golem_debugging_service::config::DebugConfig;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
@@ -13,9 +12,9 @@ use golem_service_base::service::compiled_component::{
 };
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig,
+    IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig,
 };
-use golem_worker_executor_test_utils::TestWorkerExecutor;
+use golem_worker_executor_test_utils::{TestWorkerExecutor, sqlite_storage_config};
 use prometheus::Registry;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
@@ -26,12 +25,11 @@ pub async fn start_debug_worker_executor(
     test_worker_executor: &TestWorkerExecutor,
 ) -> anyhow::Result<DebugWorkerExecutorClient> {
     let config = DebugConfig {
-        key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
-            port: test_worker_executor.deps.redis.public_port(),
-            key_prefix: test_worker_executor.context.redis_prefix(),
-            ..Default::default()
-        }),
-        indexed_storage: IndexedStorageConfig::KVStoreRedis(IndexedStorageKVStoreRedisConfig {}),
+        key_value_storage: KeyValueStorageConfig::Sqlite(sqlite_storage_config(
+            &test_worker_executor.deps,
+            &test_worker_executor.context,
+        )),
+        indexed_storage: IndexedStorageConfig::KVStoreSqlite(IndexedStorageKVStoreSqliteConfig {}),
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
             root: test_worker_executor.deps.blob_storage_root(),
         }),

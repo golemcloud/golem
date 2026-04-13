@@ -32,11 +32,15 @@ use anyhow::Error;
 use async_trait::async_trait;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::storage::blob::BlobStorage;
+pub use golem_worker_executor::RunDetails;
+use golem_worker_executor::durable_host::DurableWorkerCtx;
+use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
+use golem_worker_executor::services::direct_invocation_auth::DirectInvocationAuthService;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
@@ -59,6 +63,7 @@ use golem_worker_executor::services::worker_enumeration::{
 use golem_worker_executor::services::worker_fork::DefaultWorkerFork;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{All, rdbms};
+use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::{Bootstrap, create_worker_executor_impl};
 use humansize::ISizeFormatter;
 use poem::EndpointExt;
@@ -68,39 +73,21 @@ use poem::listener::{Acceptor, Listener};
 use poem::middleware::{CookieJarManager, Cors};
 use prometheus::Registry;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tracing::{Instrument, debug, info};
 use wasmtime::Engine;
-use wasmtime::component::Linker;
+use wasmtime::component::{HasSelf, Linker};
 
 #[cfg(test)]
 test_r::enable!();
 
-pub struct RunDetails {
-    pub http_port: u16,
-    pub epoch_thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
-    pub epoch_stop: Arc<AtomicBool>,
-    pub shutdown: golem_worker_executor::services::shutdown::Shutdown,
-}
-
-impl Drop for RunDetails {
-    fn drop(&mut self) {
-        self.shutdown.cancel();
-        self.epoch_stop.store(true, Ordering::Release);
-        if let Some(handle) = self.epoch_thread.lock().unwrap().take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-pub struct DebugServerBootstrap {
+pub struct ServerBootstrap {
     pub debug_config: DebugConfig,
 }
 
 #[async_trait]
-impl Bootstrap<DebugContext> for DebugServerBootstrap {
+impl Bootstrap<DebugContext> for ServerBootstrap {
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
@@ -111,6 +98,8 @@ impl Bootstrap<DebugContext> for DebugServerBootstrap {
     fn create_quota_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _golem_config: &GolemConfig,
+        _shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn golem_worker_executor::services::quota::QuotaService> {
         Arc::new(golem_worker_executor::services::quota::UnlimitedQuotaService)
     }
@@ -130,8 +119,7 @@ impl Bootstrap<DebugContext> for DebugServerBootstrap {
     }
 
     fn create_additional_deps(&self, registry_service: Arc<dyn RegistryService>) -> AdditionalDeps {
-        let auth_service: Arc<dyn AuthService> =
-            Arc::new(GrpcAuthService::new(registry_service.clone()));
+        let auth_service: Arc<dyn AuthService> = Arc::new(GrpcAuthService::new(registry_service));
         let debug_sessions: Arc<dyn DebugSessions> = Arc::new(DebugSessionsDefault::default());
 
         AdditionalDeps::new(auth_service, debug_sessions)
@@ -139,6 +127,7 @@ impl Bootstrap<DebugContext> for DebugServerBootstrap {
 
     async fn create_services(
         &self,
+        direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
         active_workers: Arc<ActiveWorkers<DebugContext>>,
         engine: Arc<Engine>,
         linker: Arc<Linker<DebugContext>>,
@@ -173,6 +162,7 @@ impl Bootstrap<DebugContext> for DebugServerBootstrap {
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<DebugContext>> {
         create_debugging_service_services(
+            direct_invocation_auth_service,
             active_workers,
             engine,
             linker,
@@ -206,11 +196,17 @@ impl Bootstrap<DebugContext> for DebugServerBootstrap {
             websocket_connection_pool,
             leak_sentinel,
         )
+        .await
+    }
+
+    fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<DebugContext>> {
+        create_debug_wasmtime_linker(engine)
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn create_debugging_service_services(
+pub async fn create_debugging_service_services(
+    direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
     active_workers: Arc<ActiveWorkers<DebugContext>>,
     engine: Arc<Engine>,
     linker: Arc<Linker<DebugContext>>,
@@ -245,10 +241,11 @@ pub fn create_debugging_service_services(
     leak_sentinel: Arc<()>,
 ) -> anyhow::Result<All<DebugContext>> {
     let debug_oplog_service = Arc::new(DebugOplogService::new(
-        oplog_service.clone(),
+        Arc::clone(&oplog_service),
         additional_deps.debug_session(),
     ));
 
+    // When it comes to fork, we need the original oplog service
     let worker_fork = Arc::new(DefaultWorkerFork::new(
         Arc::new(RemoteInvocationRpc::new(
             worker_proxy.clone(),
@@ -295,6 +292,7 @@ pub fn create_debugging_service_services(
             worker_proxy.clone(),
             shard_service.clone(),
         )),
+        direct_invocation_auth_service,
         active_workers.clone(),
         engine.clone(),
         linker.clone(),
@@ -367,10 +365,8 @@ pub fn create_debugging_service_services(
     ))
 }
 
-pub async fn bootstrap_and_run_debug_worker_executor<
-    BootstrapImpl: Bootstrap<DebugContext> + ?Sized + Send + Sync,
->(
-    bootstrap: &BootstrapImpl,
+pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized + Send + Sync>(
+    bootstrap: &T,
     golem_config: GolemConfig,
     cors_origin_regex: &str,
     prometheus_registry: Registry,
@@ -393,7 +389,7 @@ pub async fn bootstrap_and_run_debug_worker_executor<
     let shutdown = golem_worker_executor::services::shutdown::Shutdown::new();
 
     let (worker_executor_impl, epoch_thread, epoch_stop, _registry_service) =
-        create_worker_executor_impl::<DebugContext, BootstrapImpl>(
+        create_worker_executor_impl::<DebugContext, T>(
             golem_config.clone(),
             bootstrap,
             runtime.clone(),
@@ -413,10 +409,71 @@ pub async fn bootstrap_and_run_debug_worker_executor<
 
     Ok(RunDetails {
         http_port,
+        // TODO: no grpc config running, this should not be exposed here
+        grpc_port: golem_config.grpc.port,
         epoch_thread: std::sync::Mutex::new(Some(epoch_thread)),
         epoch_stop,
         shutdown,
+        leak_detector: worker_executor_impl.leak_detector(),
     })
+}
+
+pub async fn bootstrap_and_run_debug_worker_executor<
+    T: Bootstrap<DebugContext> + ?Sized + Send + Sync,
+>(
+    bootstrap: &T,
+    golem_config: GolemConfig,
+    cors_origin_regex: &str,
+    prometheus_registry: Registry,
+    runtime: Handle,
+    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+) -> anyhow::Result<RunDetails> {
+    run_debug_worker_executor(
+        bootstrap,
+        golem_config,
+        cors_origin_regex,
+        prometheus_registry,
+        runtime,
+        join_set,
+    )
+    .await
+}
+
+fn get_durable_ctx(ctx: &mut DebugContext) -> &mut DurableWorkerCtx<DebugContext> {
+    &mut ctx.durable_ctx
+}
+
+pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<DebugContext>> {
+    let mut linker = create_linker(engine, get_durable_ctx)?;
+    golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
+        &mut linker,
+        get_durable_ctx,
+    )?;
+    golem_api_1_x::retry::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
+        &mut linker,
+        get_durable_ctx,
+    )?;
+    golem_api_1_x::oplog::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
+        &mut linker,
+        get_durable_ctx,
+    )?;
+    golem_api_1_x::context::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
+        &mut linker,
+        get_durable_ctx,
+    )?;
+    golem_durability::durability::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
+        &mut linker,
+        get_durable_ctx,
+    )?;
+    golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_wasm::golem_core_1_5_x::types::add_to_linker::<_, HasSelf<DurableWorkerCtx<DebugContext>>>(
+        &mut linker,
+        get_durable_ctx,
+    )?;
+    Ok(linker)
 }
 
 async fn start_http_server(
@@ -472,15 +529,13 @@ pub async fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("Golem Debug Worker Executor starting up...");
     let mut join_set = JoinSet::new();
-
-    let cors_origin_regex = debug_config.cors_origin_regex.clone();
-
-    bootstrap_and_run_debug_worker_executor(
-        &DebugServerBootstrap {
-            debug_config: debug_config.clone(),
-        },
+    let bootstrap = ServerBootstrap {
+        debug_config: debug_config.clone(),
+    };
+    run_debug_worker_executor(
+        &bootstrap,
         debug_config.into_golem_config(),
-        &cors_origin_regex,
+        &bootstrap.debug_config.cors_origin_regex,
         prometheus_registry,
         runtime,
         &mut join_set,

@@ -25,12 +25,14 @@ mod tests {
     use golem_common::model::base64::Base64;
     use golem_common::model::component::ComponentDto;
     use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
+    use golem_common::model::oplog::PublicOplogEntry;
     use golem_common::model::plugin_registration::{
         OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
     };
-    use golem_common::model::{AgentStatus, IdempotencyKey};
+    use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex};
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
     use golem_common::{agent_id, data_value};
+    use golem_test_framework::components::rdb::DbInfo;
     use golem_test_framework::config::{
         EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
@@ -67,7 +69,6 @@ mod tests {
     pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
         let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
             number_of_shards_override: Some(16),
-            db_type: golem_test_framework::config::DbType::Sqlite,
             ..EnvBasedTestDependenciesConfig::new()
         })
         .await
@@ -367,7 +368,7 @@ mod tests {
         async fn start_shard_manager(&self, number_of_shards: Option<usize>);
         async fn stop_shard_manager(&self);
         async fn restart_shard_manager(&self);
-        async fn clean_shard_manager_sqlite(&self);
+        async fn clean_shard_manager_state(&self);
         fn flush_redis_db(&self);
     }
 
@@ -382,7 +383,7 @@ mod tests {
             info!("Reset started");
             self.stop_all_worker_executors().await;
             self.stop_shard_manager().await;
-            self.clean_shard_manager_sqlite().await;
+            self.clean_shard_manager_state().await;
             self.flush_redis_db();
             self.start_shard_manager(Some(number_of_shards)).await;
             self.start_all_worker_executors().await;
@@ -455,16 +456,42 @@ mod tests {
 
             info!("Workers invoked");
             let mut pending_count = agent_ids.len();
-            while let Some(result) = tasks.join_next().await {
-                let (_component_id, agent_id, result) = result.unwrap();
-                match result {
-                    Ok(_) => {
-                        pending_count -= 1;
-                        info!("Worker invoke success: {agent_id}, pending: {pending_count}",);
+            let mut completed_agents: Vec<String> = Vec::new();
+            loop {
+                match tokio::time::timeout(Duration::from_secs(180), tasks.join_next()).await {
+                    Ok(Some(result)) => {
+                        let (_component_id, agent_id, result) = result.unwrap();
+                        match result {
+                            Ok(_) => {
+                                pending_count -= 1;
+                                completed_agents.push(agent_id.to_string());
+                                info!(
+                                    "Worker invoke success: {agent_id}, pending: {pending_count}",
+                                );
+                            }
+                            Err(err) => {
+                                error!("Worker invoke error: {agent_id}, {err:?}");
+                                panic!("Worker invoke error: {agent_id}, {err:?}");
+                            }
+                        }
                     }
-                    Err(err) => {
-                        error!("Worker invoke error: {agent_id}, {err:?}");
-                        panic!("Worker invoke error: {agent_id}, {err:?}");
+                    Ok(None) => break,
+                    Err(_) => {
+                        let all_agents: Vec<String> =
+                            agent_ids.iter().map(|a| a.to_string()).collect();
+                        let pending: Vec<&String> = all_agents
+                            .iter()
+                            .filter(|a| !completed_agents.contains(a))
+                            .collect();
+                        tasks.abort_all();
+                        panic!(
+                            "Timed out waiting for worker invocations. Still pending ({pending_count}): {}",
+                            pending
+                                .iter()
+                                .map(|a| a.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
                     }
                 }
             }
@@ -564,17 +591,40 @@ mod tests {
             self.redis().flush_db(0);
         }
 
-        async fn clean_shard_manager_sqlite(&self) {
-            let sqlite_files = [
-                "golem_shard_manager.db",
-                "golem_shard_manager.db-shm",
-                "golem_shard_manager.db-wal",
-            ];
+        async fn clean_shard_manager_state(&self) {
+            match self.rdb().info() {
+                DbInfo::Sqlite(_) => {
+                    let sqlite_files = [
+                        "golem_shard_manager.db",
+                        "golem_shard_manager.db-shm",
+                        "golem_shard_manager.db-wal",
+                    ];
 
-            for file in sqlite_files {
-                tokio::fs::remove_file(self.temp_directory().join("sqlite").join(file))
-                    .await
-                    .unwrap()
+                    for file in sqlite_files {
+                        let _ =
+                            tokio::fs::remove_file(self.temp_directory().join("sqlite").join(file))
+                                .await;
+                    }
+                }
+                DbInfo::Postgres(pg) => {
+                    let pool = sqlx::PgPool::connect(&pg.public_connection_string())
+                        .await
+                        .expect("Failed to connect to Postgres");
+                    sqlx::query("DELETE FROM golem_shard_manager.shard_manager_state")
+                        .execute(&pool)
+                        .await
+                        .expect("Failed to clean shard_manager_state");
+                    let _ = sqlx::query("DELETE FROM golem_shard_manager.quota_leases")
+                        .execute(&pool)
+                        .await;
+                    let _ = sqlx::query("DELETE FROM golem_shard_manager.quota_resources")
+                        .execute(&pool)
+                        .await;
+                    pool.close().await;
+                }
+                DbInfo::Mysql(_) => {
+                    panic!("Mysql is not supported in sharding tests");
+                }
             }
         }
     }
@@ -920,6 +970,47 @@ mod tests {
         }
     }
 
+    async fn wait_for_oplog_completions(
+        user: &(impl TestDsl + Send + Sync + ?Sized),
+        worker_id: &golem_common::model::AgentId,
+        expected_count: usize,
+        timeout: Duration,
+        received: &Arc<Mutex<Vec<BatchCallback>>>,
+    ) {
+        let start = tokio::time::Instant::now();
+        loop {
+            let oplog = user
+                .get_oplog(worker_id, OplogIndex::INITIAL)
+                .await
+                .unwrap_or_default();
+
+            let completed = oplog
+                .iter()
+                .filter(|e| matches!(&e.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+                .count();
+
+            if completed >= expected_count {
+                return;
+            }
+
+            if start.elapsed() > timeout {
+                let batches = received.lock().unwrap().clone();
+                panic!(
+                    "Timed out waiting for oplog completions \
+                     (got {} of {} expected AgentInvocationFinished entries; \
+                     {} callback invocations across {} batches: {:?})",
+                    completed,
+                    expected_count,
+                    invocation_count(&batches),
+                    batches.len(),
+                    batches,
+                );
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
     // ========================================================================
     // I1: Shard reassignment — no entry loss
     // ========================================================================
@@ -999,15 +1090,17 @@ mod tests {
             .unwrap();
         }
 
-        let _ = wait_for_invocations(&received, 4, Duration::from_secs(60)).await;
+        // Two-phase setup gate: wait for oplog persistence, then for callbacks.
+        wait_for_oplog_completions(&user, &worker_id, 4, Duration::from_secs(120), &received).await;
+        let _ = wait_for_invocations(&received, 4, Duration::from_secs(120)).await;
 
-        // Shard reassignment: stop 2 executors, wait, start them back
+        // Shard reassignment: stop 2 executors, allow reassignment, then start them back.
         deps.stop_random_worker_executors(2).await;
+        // Give the shard manager time to detect executor loss and reassign shards.
         tokio::time::sleep(Duration::from_secs(5)).await;
         deps.start_random_worker_executors(2).await;
-        tokio::time::sleep(Duration::from_secs(5)).await;
 
-        // Wait for worker to be available again
+        // Wait for the worker to become usable again after shard movement.
         user.wait_for_statuses(
             &worker_id,
             &[AgentStatus::Idle, AgentStatus::Running],
@@ -1027,7 +1120,7 @@ mod tests {
             .unwrap();
         }
 
-        let batches = wait_for_invocations(&received, 7, Duration::from_secs(60)).await;
+        let batches = wait_for_invocations(&received, 7, Duration::from_secs(120)).await;
         let fn_names = extract_function_names(&batches);
         // Exactly-once: exactly 1 init + 6 adds, no duplicates across shard reassignment.
         // Current bug: no checkpoint, so shard reassignment causes re-delivery.
@@ -1121,6 +1214,8 @@ mod tests {
             .unwrap();
         }
 
+        wait_for_oplog_completions(&user, &worker_id, 3, Duration::from_secs(120), &received).await;
+
         // Stop all executors immediately — before flush timer fires
         deps.stop_all_worker_executors().await;
         deps.start_all_worker_executors().await;
@@ -1145,7 +1240,8 @@ mod tests {
             .unwrap();
         }
 
-        let batches = wait_for_invocations(&received, 5, Duration::from_secs(60)).await;
+        wait_for_oplog_completions(&user, &worker_id, 5, Duration::from_secs(120), &received).await;
+        let batches = wait_for_invocations(&received, 5, Duration::from_secs(120)).await;
         let fn_names = extract_function_names(&batches);
         // Exactly-once: exactly 1 init + 4 adds, no duplicates across shard move.
         // Current bug: no checkpoint, in-flight batch may be re-delivered.
@@ -1239,12 +1335,14 @@ mod tests {
             .unwrap();
         }
 
+        // Two-phase setup gate: wait for oplog persistence, then for callbacks
+        wait_for_oplog_completions(&user, &worker_id, 4, Duration::from_secs(120), &received).await;
         let _ = wait_for_invocations(&received, 4, Duration::from_secs(60)).await;
 
         deps.stop_random_worker_executors(2).await;
+        // Give the shard manager time to detect executor loss and reassign shards
         tokio::time::sleep(Duration::from_secs(5)).await;
         deps.start_random_worker_executors(2).await;
-        tokio::time::sleep(Duration::from_secs(5)).await;
 
         user.wait_for_statuses(
             &worker_id,
@@ -1265,7 +1363,7 @@ mod tests {
             .unwrap();
         }
 
-        let batches = wait_for_invocations(&received, 7, Duration::from_secs(60)).await;
+        let batches = wait_for_invocations(&received, 7, Duration::from_secs(120)).await;
         let fn_names = extract_function_names(&batches);
         // Exactly-once: exactly 1 init + 6 adds, no duplicates after locality recovery.
         // Current bug: no checkpoint, so shard reassignment causes re-delivery.

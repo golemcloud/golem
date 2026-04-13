@@ -446,12 +446,14 @@ impl OplogArchive for BlobOplogArchive {
         result
     }
 
-    async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) {
+    async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) -> u64 {
         self.ensure_is_created().await;
 
         if chunk.is_empty() {
-            return;
+            return 0;
         }
+
+        let mut total_bytes = 0u64;
 
         for sub_chunk in chunk.chunks(BlobOplogArchiveService::MAX_CHUNK_SIZE) {
             let last = sub_chunk.last().unwrap();
@@ -463,6 +465,8 @@ impl OplogArchive for BlobOplogArchive {
 
             let compressed_chunk = CompressedOplogChunk::compress(entries)
                 .unwrap_or_else(|err| panic!("failed to compress oplog chunk: {err}"));
+
+            total_bytes += compressed_chunk.compressed_data.len() as u64;
 
             let mut entries_map = self.entries.write().await;
 
@@ -487,6 +491,8 @@ impl OplogArchive for BlobOplogArchive {
 
             entries_map.insert(oplog_index, path);
         }
+
+        total_bytes
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {

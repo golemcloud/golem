@@ -37,6 +37,7 @@ pub async fn gen_bridge(ctx: &BuildContext<'_>) -> anyhow::Result<()> {
                     target.agent_type.type_name.clone(),
                     ReplAgentMetadata {
                         client_dir: target.output_dir.clone(),
+                        mode: target.agent_type.mode,
                     },
                 );
         }

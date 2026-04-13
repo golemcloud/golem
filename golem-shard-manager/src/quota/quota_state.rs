@@ -16,13 +16,29 @@ use super::quota_repo::{QuotaLeaseRecord, QuotaResourceRecord};
 use super::quota_service::QuotaError;
 use chrono::{DateTime, Utc};
 use golem_common::model::Pod;
-use golem_common::model::resource_definition::{ResourceDefinition, ResourceLimit, TimePeriod};
-use golem_service_base::model::quota_lease::{LeaseEpoch, QuotaAllocation};
+use golem_common::model::quota::LeaseEpoch;
+use golem_common::model::quota::{ResourceDefinition, ResourceLimit};
+use golem_service_base::model::quota_lease::PendingReservation;
 use golem_service_base::repo::Blob;
-use sqlx::types::Json;
 use std::collections::HashMap;
 use std::time::Duration;
 use tracing::debug;
+
+pub(super) struct AcquireLeaseResult {
+    pub epoch: LeaseEpoch,
+    pub allocated_amount: u64,
+    pub expires_at: DateTime<Utc>,
+    pub expired: Vec<Pod>,
+    pub total_available_amount: u64,
+}
+
+pub(super) struct RenewLeaseResult {
+    pub new_epoch: LeaseEpoch,
+    pub allocated_amount: u64,
+    pub expires_at: DateTime<Utc>,
+    pub expired: Vec<Pod>,
+    pub total_available_amount: u64,
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(super) struct QuotaResourceRevision(u64);
@@ -71,12 +87,13 @@ fn elapsed_since(dt: DateTime<Utc>) -> Duration {
         .unwrap_or(Duration::ZERO)
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub(super) struct PodLease {
     pub epoch: LeaseEpoch,
     pub allocated: u64,
     pub granted_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    pub pending_reservations: Vec<PendingReservation>,
 }
 
 #[derive(Clone)]
@@ -126,17 +143,6 @@ impl QuotaState {
             ResourceLimit::Capacity(c) => c.value,
             ResourceLimit::Concurrency(c) => c.value,
             ResourceLimit::Rate(r) => r.max,
-        }
-    }
-
-    fn period_duration(period: &TimePeriod) -> Duration {
-        match period {
-            TimePeriod::Second => Duration::from_secs(1),
-            TimePeriod::Minute => Duration::from_secs(60),
-            TimePeriod::Hour => Duration::from_secs(3600),
-            TimePeriod::Day => Duration::from_secs(86400),
-            TimePeriod::Month => Duration::from_secs(30 * 86400),
-            TimePeriod::Year => Duration::from_secs(365 * 86400),
         }
     }
 
@@ -198,7 +204,7 @@ impl QuotaState {
             _ => return,
         };
 
-        let period = Self::period_duration(&rate.period);
+        let period = rate.period.duration();
         let elapsed = elapsed_since(self.last_refilled);
         let full_periods = elapsed.as_nanos() / period.as_nanos();
 
@@ -218,35 +224,62 @@ impl QuotaState {
         expired
     }
 
-    pub fn compute_allocation(
-        &self,
-        active_count: u64,
-        min_executors: u64,
-        exhausted_retry_after: Duration,
-    ) -> QuotaAllocation {
+    /// Computes the allocation share for a single executor.
+    pub fn compute_allocation(&self, pod: &Pod, min_executors: u64) -> u64 {
+        /// How much more than the exact pending demand to grant, to avoid
+        /// immediately hitting the limit again on the next invocation.
+        const OVERFETCH_FACTOR: f64 = 1.5;
+
+        let active_count = self.leases.len() as u64;
         debug_assert!(active_count > 0);
         debug_assert!(min_executors > 0);
-        let divisor = active_count.max(min_executors);
-        let share = self.remaining / divisor;
-        if share > 0 {
-            QuotaAllocation::Budget { amount: share }
-        } else {
-            QuotaAllocation::Exhausted {
-                retry_after: self
-                    .time_until_next_refill()
-                    .unwrap_or(exhausted_retry_after),
-            }
+
+        fn priority_weighted_demand(reservations: &[PendingReservation]) -> f64 {
+            reservations
+                .iter()
+                .map(|r| r.amount as f64 * r.priority.max(0.1))
+                .sum()
         }
+
+        fn total_pending_amount(reservations: &[PendingReservation]) -> u64 {
+            reservations.iter().map(|r| r.amount).sum()
+        }
+
+        let pod_lease = self.leases.get(pod);
+
+        let pod_score: f64 = pod_lease
+            .map(|l| priority_weighted_demand(&l.pending_reservations))
+            .unwrap_or(0.0);
+
+        let pod_pending_amount: u64 = pod_lease
+            .map(|l| total_pending_amount(&l.pending_reservations))
+            .unwrap_or(0);
+
+        let total_score: f64 = self
+            .leases
+            .values()
+            .map(|l| priority_weighted_demand(&l.pending_reservations))
+            .sum();
+
+        // even-split baseline — also the floor when there is no demand.
+        let baseline = self.remaining / active_count.max(min_executors);
+
+        // proportional share; 0 when there is no demand (total_score=0).
+        let proportional =
+            (self.remaining as f64 * pod_score / total_score.max(f64::MIN_POSITIVE)) as u64;
+
+        // cap at pending_amount * OVERFETCH_FACTOR, but never below
+        // baseline so the cap is always a valid upper bound for clamp.
+        let cap = ((pod_pending_amount as f64 * OVERFETCH_FACTOR) as u64).max(baseline);
+
+        proportional.clamp(baseline, cap).min(self.remaining)
     }
 
-    fn time_until_next_refill(&self) -> Option<Duration> {
-        let rate = match &self.definition.limit {
-            ResourceLimit::Rate(r) => r,
-            _ => return None,
-        };
-        let period = Self::period_duration(&rate.period);
-        let elapsed = elapsed_since(self.last_refilled);
-        Some(period.saturating_sub(elapsed))
+    /// Total capacity for this resource: remaining pool + all outstanding
+    /// lease allocations.
+    pub fn total_available_amount(&self) -> u64 {
+        let total_allocated: u64 = self.leases.values().map(|l| l.allocated).sum();
+        self.remaining + total_allocated
     }
 
     pub fn acquire_lease(
@@ -254,8 +287,7 @@ impl QuotaState {
         pod: Pod,
         lease_duration: Duration,
         min_executors: u64,
-        exhausted_retry_after: Duration,
-    ) -> (LeaseEpoch, QuotaAllocation, DateTime<Utc>, Vec<Pod>) {
+    ) -> AcquireLeaseResult {
         let expired = self.housekeep();
 
         if let Some(existing) = self.leases.get(&pod) {
@@ -275,12 +307,11 @@ impl QuotaState {
             allocated: 0,
             granted_at: now,
             expires_at,
+            pending_reservations: Vec::new(),
         });
 
-        let active_count = self.leases.len() as u64;
-        let allocation =
-            self.compute_allocation(active_count, min_executors, exhausted_retry_after);
-        let allocated_amount = allocation.amount();
+        let allocated_amount = self.compute_allocation(&pod, min_executors);
+        let total_available_amount = self.total_available_amount();
 
         let pod_lease = self.leases.get_mut(&pod).expect("just inserted");
         let epoch = pod_lease.epoch;
@@ -290,7 +321,13 @@ impl QuotaState {
         pod_lease.granted_at = now;
         pod_lease.expires_at = expires_at;
 
-        (epoch, allocation, expires_at, expired)
+        AcquireLeaseResult {
+            epoch,
+            allocated_amount,
+            expires_at,
+            expired,
+            total_available_amount,
+        }
     }
 
     pub fn renew_lease(
@@ -300,8 +337,8 @@ impl QuotaState {
         unused: u64,
         lease_duration: Duration,
         min_executors: u64,
-        exhausted_retry_after: Duration,
-    ) -> Result<(LeaseEpoch, QuotaAllocation, DateTime<Utc>, Vec<Pod>), QuotaError> {
+        pending_reservations: Vec<PendingReservation>,
+    ) -> Result<RenewLeaseResult, QuotaError> {
         let pod_lease = self.leases.get_mut(pod).ok_or(QuotaError::LeaseNotFound {
             resource_definition_id: self.definition.id,
         })?;
@@ -317,10 +354,12 @@ impl QuotaState {
         let expires_at = now + lease_duration;
 
         let returned = unused.min(pod_lease.allocated);
-        self.remaining += returned;
+        self.remaining = self.remaining.saturating_add(returned);
+
         pod_lease.allocated = 0;
         pod_lease.granted_at = now;
         pod_lease.expires_at = expires_at;
+        pod_lease.pending_reservations = pending_reservations;
 
         let expired = self.housekeep();
 
@@ -331,21 +370,24 @@ impl QuotaState {
         let new_epoch = pod_lease.epoch;
         pod_lease.epoch = new_epoch.next();
 
-        let active_count = self.leases.len() as u64;
-        let allocation =
-            self.compute_allocation(active_count, min_executors, exhausted_retry_after);
-        let allocated_amount = allocation.amount();
+        let allocated_amount = self.compute_allocation(pod, min_executors);
+        let total_available_amount = self.total_available_amount();
 
         let pod_lease = self
             .leases
             .get_mut(pod)
             .expect("just validated and refreshed");
+
         self.remaining -= allocated_amount;
         pod_lease.allocated = allocated_amount;
-        pod_lease.granted_at = now;
-        pod_lease.expires_at = expires_at;
 
-        Ok((new_epoch, allocation, expires_at, expired))
+        Ok(RenewLeaseResult {
+            new_epoch,
+            allocated_amount,
+            expires_at,
+            expired,
+            total_available_amount,
+        })
     }
 
     pub fn release_lease(
@@ -388,12 +430,13 @@ impl QuotaState {
     pub fn to_lease_record(&self, pod: &Pod) -> Option<QuotaLeaseRecord> {
         self.leases.get(pod).map(|lease| QuotaLeaseRecord {
             resource_definition_id: self.definition.id.0,
-            pod_ip: Json(pod.ip),
+            pod_ip: Blob::new(pod.ip),
             pod_port: pod.port.into(),
             epoch: lease.epoch.0.into(),
             allocated: lease.allocated.into(),
             granted_at: lease.granted_at.into(),
             expires_at: lease.expires_at.into(),
+            pending_reservations: Blob::new(lease.pending_reservations.clone()),
         })
     }
 }

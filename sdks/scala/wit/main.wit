@@ -10,7 +10,9 @@ world agent-guest {
 
   import golem:api/context@1.5.0;
   import golem:api/oplog@1.5.0;
+  import golem:api/retry@1.5.0;
   import golem:durability/durability@1.5.0;
+  import golem:quota/types@1.5.0;
 
   import wasi:cli/environment@0.2.3;
 

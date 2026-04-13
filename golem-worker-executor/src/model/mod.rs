@@ -22,7 +22,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
-use golem_common::model::oplog::{AgentError, PersistenceLevel};
+use golem_common::model::oplog::{AgentError, AgentTerminatedByQuotaError, PersistenceLevel};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
@@ -328,6 +328,21 @@ impl TrapType {
                         Some(GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted) => {
                             TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc()))
                         }
+                        Some(GolemSpecificWasmTrap::AgentTerminatedByQuota {
+                            environment_id,
+                            resource_name,
+                        }) => TrapType::Error {
+                            error: AgentError::AgentTerminatedByQuota(
+                                AgentTerminatedByQuotaError {
+                                    environment_id: *environment_id,
+                                    resource_name: resource_name.clone(),
+                                },
+                            ),
+                            retry_from,
+                        },
+                        Some(GolemSpecificWasmTrap::AgentThrottledByQuota {
+                            timestamp, ..
+                        }) => TrapType::Interrupt(InterruptKind::Suspend(*timestamp)),
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
                                 TrapType::Error {

@@ -16,6 +16,7 @@ pub mod provided;
 pub mod spawned;
 
 use super::rdb::Rdb;
+use super::redis::Redis;
 use super::registry_service::RegistryService;
 use super::shard_manager::ShardManager;
 use super::{
@@ -42,6 +43,8 @@ pub trait WorkerService: Send + Sync {
 
     fn custom_request_host(&self) -> String;
     fn custom_request_port(&self) -> u16;
+
+    fn mcp_port(&self) -> u16;
 
     async fn kill(&self);
 
@@ -96,12 +99,17 @@ async fn env_vars(
     custom_request_port: u16,
     shard_manager: &Arc<dyn ShardManager>,
     rdb: &Arc<dyn Rdb>,
+    redis: &Arc<dyn Redis>,
     verbosity: Level,
     rdb_private_connection: bool,
     registry_service: &Arc<dyn RegistryService>,
     enable_fs_cache: bool,
     otlp: bool,
 ) -> HashMap<String, String> {
+    // Keep the MCP listener on a dedicated test port so it does not inherit the
+    // production default and collide with other local Golem processes.
+    let mcp_port = custom_request_port + 2;
+
     EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
         .with_str(
@@ -117,6 +125,19 @@ async fn env_vars(
             registry_service.grpc_port().to_string(),
         )
         .with_str("GOLEM__ENVIRONMENT", "local")
+        .with_str("GOLEM__GATEWAY_SESSION_STORAGE__TYPE", "Redis")
+        .with(
+            "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__HOST",
+            redis.private_host(),
+        )
+        .with(
+            "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PORT",
+            redis.private_port().to_string(),
+        )
+        .with(
+            "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__KEY_PREFIX",
+            redis.prefix().to_string(),
+        )
         .with("GOLEM__SHARD_MANAGER__HOST", shard_manager.grpc_host())
         .with(
             "GOLEM__SHARD_MANAGER__PORT",
@@ -126,6 +147,7 @@ async fn env_vars(
             "GOLEM__CUSTOM_REQUEST_PORT",
             custom_request_port.to_string(),
         )
+        .with("GOLEM__MCP_PORT", mcp_port.to_string())
         .with("GOLEM__GRPC__PORT", grpc_port.to_string())
         .with("GOLEM__PORT", http_port.to_string())
         .with(

@@ -14,7 +14,8 @@
 
 import { ClassMetadata, Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as WitValue from './mapping/values/WitValue';
-import { makeAgentId, Uuid, WasmRpc, Datetime } from 'golem:agent/host@1.5.0';
+import { makeAgentId, WasmRpc, Datetime } from 'golem:agent/host@1.5.0';
+import { Uuid } from '../uuid';
 import { AgentClassName } from '../agentClassName';
 import * as WitType from './mapping/types/WitType';
 import * as Either from '../newTypes/either';
@@ -37,8 +38,8 @@ import {
 } from './mapping/values/serializer';
 import { TypeInfoInternal } from './typeInfoInternal';
 import { deserializeDataValue, serializeToDataValue } from './mapping/values/dataValue';
-import { randomUuid, ValueAndType } from '../host/hostapi';
-import { AgentId } from '../agentId';
+import { ValueAndType } from '../host/hostapi';
+import { ParsedAgentId } from '../agentId';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   agentClassName: AgentClassName,
@@ -107,7 +108,7 @@ export function getNewPhantomRemoteClient<T extends new (...args: any[]) => any>
   return (...args: any[]) => {
     const instance = Object.create(ctor.prototype);
 
-    const finalPhantomId = randomUuid();
+    const finalPhantomId = Uuid.generate();
     const constructedId = shared.constructWasmRpcParams(args, configIncludedInArgs, finalPhantomId);
 
     return new Proxy(instance, new WasmRpcProxyHandler(shared, constructedId));
@@ -159,6 +160,10 @@ class WasmRpcProxyHandlerShared {
       }
       this.constructorParamTypes.push(typeInfo);
     }
+  }
+
+  hasMethod(methodName: string): boolean {
+    return this.metadata.methods.has(methodName);
   }
 
   constructWasmRpcParams(
@@ -302,12 +307,12 @@ class WasmRpcProxyHandlerShared {
 
 class WasmRpcProxyHandler implements ProxyHandler<any> {
   private readonly shared: WasmRpcProxyHandlerShared;
-  private readonly agentId: AgentId;
+  private readonly agentId: ParsedAgentId;
   private readonly wasmRpc: WasmRpc;
 
   private readonly methodProxyCache = new Map<string, RemoteMethod<any[], any>>();
 
-  private readonly getIdMethod: () => AgentId = () => this.agentId;
+  private readonly getIdMethod: () => ParsedAgentId = () => this.agentId;
   private readonly phantomIdMethod: () => Uuid | undefined = () => {
     const [, , phantomId] = this.agentId.parsed();
     return phantomId;
@@ -316,7 +321,7 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
 
   constructor(shared: WasmRpcProxyHandlerShared, rpcParams: WasmRpcParams) {
     this.shared = shared;
-    this.agentId = new AgentId(rpcParams.agentIdString);
+    this.agentId = new ParsedAgentId(rpcParams.agentIdString);
 
     this.wasmRpc = new WasmRpc(
       rpcParams.agentTypeName,
@@ -347,18 +352,21 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
         case 'saveSnapshot': {
           throw new Error('Cannot call saveSnapshot on a remote client');
         }
-        default:
-          const methodProxy = this.methodProxyCache.get(propString);
-          if (methodProxy) {
-            return methodProxy;
-          } else {
-            const methodProxy = this.createMethodProxy(propString);
-            this.methodProxyCache.set(propString, methodProxy);
-            return methodProxy;
-          }
       }
     }
-    return undefined;
+
+    if (typeof prop === 'string' && this.shared.hasMethod(prop)) {
+      const methodProxy = this.methodProxyCache.get(prop);
+      if (methodProxy) {
+        return methodProxy;
+      } else {
+        const methodProxy = this.createMethodProxy(prop);
+        this.methodProxyCache.set(prop, methodProxy);
+        return methodProxy;
+      }
+    }
+
+    return val;
   }
 
   private createMethodProxy(prop: string): RemoteMethod<any[], any> {
@@ -445,7 +453,11 @@ function serializeArgs(params: CachedParamInfo[], fnArgs: any[]): DataValue {
 
     switch (param.type.tag) {
       case 'analysed': {
-        const witValue = WitValue.fromTsValueDefault(fnArg, param.type.val);
+        // If this is a QuotaToken, convert to its record representation first.
+        const serializableVal =
+          param.type.tsType.kind === 'quota-token' ? fnArg._toRecord() : fnArg;
+
+        const witValue = WitValue.fromTsValueDefault(serializableVal, param.type.val);
         elementValues.push({ tag: 'component-model', val: witValue });
         break;
       }

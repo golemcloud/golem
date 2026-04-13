@@ -25,6 +25,7 @@ sdks/**/dist/
 golem-skills/**/node_modules/
 golem-skills/**/dist/
 .DS_Store
+/.scala-build/**
 
 # locally kept custom dev files
 /.local/
@@ -36,3 +37,4 @@ golem-skills/**/dist/
 .cursorignore
 .cqs/
 .ck
+.ckignore

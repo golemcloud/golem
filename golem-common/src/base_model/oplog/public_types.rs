@@ -17,6 +17,7 @@ use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
 use crate::base_model::oplog::PublicOplogEntry;
 use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
+use crate::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
 use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
 use crate::declare_structs;
 use crate::model::agent::{DataSchema, DataValue, UntypedDataValue};
@@ -24,10 +25,13 @@ use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::time::Duration;
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "full", derive(IntoValue, FromValue))]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "typed-data-value", owner = "golem:api@1.5.0/oplog")
+)]
 pub struct TypedDataValue {
     pub value: UntypedDataValue,
     pub schema: DataSchema,
@@ -85,6 +89,10 @@ declare_structs! {
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[wit(
+    name = "plugin-installation-description",
+    owner = "golem:api@1.5.0/oplog"
+)]
 pub struct PluginInstallationDescription {
     pub environment_plugin_grant_id: EnvironmentPluginGrantId,
     pub plugin_priority: PluginPriority,
@@ -106,6 +114,7 @@ pub struct WriteRemoteBatchedParameters {
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[wit_transparent]
 pub struct WriteRemoteTransactionParameters {
     pub index: Option<OplogIndex>,
 }
@@ -114,6 +123,7 @@ pub struct WriteRemoteTransactionParameters {
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
+#[wit(name = "wrapped-function-type", owner = "golem:api@1.5.0/oplog")]
 pub enum PublicDurableFunctionType {
     /// The side-effect reads from the worker's local state (for example local file system,
     /// random generator, etc.)
@@ -160,6 +170,7 @@ pub struct StringAttributeValue {
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[wit(name = "attribute-value", owner = "golem:api@1.5.0/context")]
 pub enum PublicAttributeValue {
     String(StringAttributeValue),
 }
@@ -172,9 +183,11 @@ pub enum PublicAttributeValue {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[wit(name = "local-span-data", owner = "golem:api@1.5.0/oplog")]
 pub struct PublicLocalSpanData {
     pub span_id: SpanId,
     pub start: Timestamp,
+    #[wit_field(rename = "parent")]
     pub parent_id: Option<SpanId>,
     pub linked_context: Option<u64>,
     pub attributes: Vec<PublicAttribute>,
@@ -189,6 +202,7 @@ pub struct PublicLocalSpanData {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[wit(name = "attribute", owner = "golem:api@1.5.0/context")]
 pub struct PublicAttribute {
     pub key: String,
     pub value: PublicAttributeValue,
@@ -202,6 +216,7 @@ pub struct PublicAttribute {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[wit(name = "external-span-data", owner = "golem:api@1.5.0/oplog")]
 pub struct PublicExternalSpanData {
     pub span_id: SpanId,
 }
@@ -214,6 +229,7 @@ pub struct PublicExternalSpanData {
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[wit(name = "span-data", owner = "golem:api@1.5.0/oplog")]
 pub enum PublicSpanData {
     LocalSpan(PublicLocalSpanData),
     ExternalSpan(PublicExternalSpanData),
@@ -228,24 +244,61 @@ impl PublicSpanData {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue, FromValue)]
-#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+/// API-facing representation of a named retry policy for public oplog entries.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct PublicRetryConfig {
-    pub max_attempts: u32,
-    #[serde(with = "humantime_serde")]
-    pub min_delay: Duration,
-    #[serde(with = "humantime_serde")]
-    pub max_delay: Duration,
-    pub multiplier: f64,
-    pub max_jitter_factor: Option<f64>,
+#[cfg_attr(
+    feature = "full",
+    wit(name = "named-retry-policy", owner = "golem:api@1.5.0/retry")
+)]
+pub struct PublicNamedRetryPolicy {
+    /// Human-readable identifier for this policy.
+    pub name: String,
+    /// Selection priority — higher values are evaluated first.
+    pub priority: u32,
+    /// The predicate that determines when this retry policy applies.
+    pub predicate: ApiPredicate,
+    /// The retry policy to use when the predicate matches.
+    pub policy: ApiRetryPolicy,
+}
+
+#[cfg(feature = "full")]
+impl From<crate::model::retry_policy::NamedRetryPolicy> for PublicNamedRetryPolicy {
+    fn from(value: crate::model::retry_policy::NamedRetryPolicy) -> Self {
+        Self {
+            name: value.name,
+            priority: value.priority,
+            predicate: value.predicate.into(),
+            policy: value.policy.into(),
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+impl From<PublicNamedRetryPolicy> for crate::model::retry_policy::NamedRetryPolicy {
+    fn from(value: PublicNamedRetryPolicy) -> Self {
+        Self {
+            name: value.name,
+            priority: value.priority,
+            predicate: value.predicate.into(),
+            policy: value.policy.into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    feature = "full",
+    wit(
+        name = "agent-initialization-parameters",
+        owner = "golem:api@1.5.0/oplog"
+    )
+)]
 pub struct AgentInitializationParameters {
     pub idempotency_key: IdempotencyKey,
     #[cfg_attr(feature = "full", wit_field(try_convert = TypedDataValue))]
@@ -259,6 +312,13 @@ pub struct AgentInitializationParameters {
 #[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    feature = "full",
+    wit(
+        name = "agent-method-invocation-parameters",
+        owner = "golem:api@1.5.0/oplog"
+    )
+)]
 pub struct AgentMethodInvocationParameters {
     pub idempotency_key: IdempotencyKey,
     pub method_name: String,
@@ -273,6 +333,10 @@ pub struct AgentMethodInvocationParameters {
 #[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "load-snapshot-parameters", owner = "golem:api@1.5.0/oplog")
+)]
 pub struct LoadSnapshotParameters {
     pub snapshot: PublicSnapshotData,
 }
@@ -281,6 +345,13 @@ pub struct LoadSnapshotParameters {
 #[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    feature = "full",
+    wit(
+        name = "process-oplog-entries-parameters",
+        owner = "golem:api@1.5.0/oplog"
+    )
+)]
 pub struct ProcessOplogEntriesParameters {
     pub idempotency_key: IdempotencyKey,
     // TODO
@@ -290,6 +361,10 @@ pub struct ProcessOplogEntriesParameters {
 #[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "manual-update-parameters", owner = "golem:api@1.5.0/oplog")
+)]
 pub struct ManualUpdateParameters {
     pub target_revision: ComponentRevision,
 }
@@ -298,6 +373,10 @@ pub struct ManualUpdateParameters {
 #[cfg_attr(feature = "full", derive(poem_openapi::Union, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "agent-invocation", owner = "golem:api@1.5.0/oplog")
+)]
 pub enum PublicAgentInvocation {
     AgentInitialization(AgentInitializationParameters),
     AgentMethodInvocation(AgentMethodInvocationParameters),
@@ -312,6 +391,13 @@ pub enum PublicAgentInvocation {
 #[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    feature = "full",
+    wit(
+        name = "agent-invocation-output-parameters",
+        owner = "golem:api@1.5.0/oplog"
+    )
+)]
 pub struct AgentInvocationOutputParameters {
     #[cfg_attr(feature = "full", wit_field(try_convert = TypedDataValue))]
     pub output: DataValue,
@@ -321,6 +407,10 @@ pub struct AgentInvocationOutputParameters {
 #[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "fallible-result-parameters", owner = "golem:api@1.5.0/oplog")
+)]
 pub struct FallibleResultParameters {
     pub error: Option<String>,
 }
@@ -329,6 +419,13 @@ pub struct FallibleResultParameters {
 #[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    feature = "full",
+    wit(
+        name = "save-snapshot-result-parameters",
+        owner = "golem:api@1.5.0/oplog"
+    )
+)]
 pub struct SaveSnapshotResultParameters {
     pub snapshot: PublicSnapshotData,
 }
@@ -337,6 +434,10 @@ pub struct SaveSnapshotResultParameters {
 #[cfg_attr(feature = "full", derive(poem_openapi::Object, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "fallible-result-parameters", owner = "golem:api@1.5.0/oplog")
+)]
 pub struct ProcessOplogEntriesResultParameters {
     pub error: Option<String>,
 }
@@ -345,6 +446,10 @@ pub struct ProcessOplogEntriesResultParameters {
 #[cfg_attr(feature = "full", derive(poem_openapi::Union, IntoValue, FromValue))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
+#[cfg_attr(
+    feature = "full",
+    wit(name = "agent-invocation-result", owner = "golem:api@1.5.0/oplog")
+)]
 pub enum PublicAgentInvocationResult {
     AgentInitialization(AgentInvocationOutputParameters),
     AgentMethod(AgentInvocationOutputParameters),
@@ -359,7 +464,7 @@ pub enum PublicAgentInvocationResult {
 #[cfg_attr(feature = "full", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-#[wit_transparent]
+#[wit(name = "snapshot", owner = "golem:api@1.5.0/host")]
 pub struct SnapshotBasedUpdateParameters {
     pub payload: Vec<u8>,
     pub mime_type: String,
@@ -369,8 +474,10 @@ pub struct SnapshotBasedUpdateParameters {
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
+#[wit(name = "update-description", owner = "golem:api@1.5.0/oplog")]
 pub enum PublicUpdateDescription {
     #[unit_case]
+    #[wit_case(rename = "auto-update")]
     Automatic(Empty),
     SnapshotBased(SnapshotBasedUpdateParameters),
 }
@@ -394,6 +501,7 @@ pub enum PublicUpdateDescription {
     derive(desert_rust::BinaryCodec, poem_openapi::NewType)
 )]
 #[cfg_attr(feature = "full", desert(transparent))]
+#[wit(name = "agent-resource-id", owner = "golem:api@1.5.0/oplog")]
 pub struct AgentResourceId(pub u64);
 
 impl AgentResourceId {
@@ -684,33 +792,75 @@ pub enum PublicSnapshotData {
 }
 
 #[cfg(feature = "full")]
+fn multipart_to_raw_bytes(multipart: MultipartSnapshotData) -> (Vec<u8>, String) {
+    use crate::base_model::oplog::multipart::extract_boundary;
+
+    let boundary = extract_boundary(&multipart.mime_type)
+        .unwrap_or("boundary")
+        .to_string();
+
+    let mut output = Vec::new();
+    for part in &multipart.parts {
+        output.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        output.extend_from_slice(format!("Content-Type: {}\r\n", part.content_type).as_bytes());
+        output.extend_from_slice(
+            format!(
+                "Content-Disposition: attachment; name=\"{}\"\r\n",
+                part.name
+            )
+            .as_bytes(),
+        );
+        output.extend_from_slice(b"\r\n");
+        match &part.data {
+            MultipartPartData::Json(json) => {
+                output.extend_from_slice(
+                    serde_json::to_vec(&json.data)
+                        .unwrap_or_default()
+                        .as_slice(),
+                );
+            }
+            MultipartPartData::Raw(raw) => {
+                output.extend_from_slice(&raw.data);
+            }
+        }
+        output.extend_from_slice(b"\r\n");
+    }
+    output.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (output, multipart.mime_type)
+}
+
+#[cfg(feature = "full")]
 impl golem_wasm::IntoValue for PublicSnapshotData {
     fn into_value(self) -> golem_wasm::Value {
-        match self {
-            PublicSnapshotData::Raw(raw) => golem_wasm::Value::Variant {
-                case_idx: 0,
-                case_value: Some(Box::new(raw.into_value())),
-            },
-            PublicSnapshotData::Json(json) => golem_wasm::Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(json.into_value())),
-            },
-            PublicSnapshotData::Multipart(multipart) => golem_wasm::Value::Variant {
-                case_idx: 2,
-                case_value: Some(Box::new(multipart.into_value())),
-            },
-        }
+        let (data, mime_type) = match self {
+            PublicSnapshotData::Raw(raw) => (raw.data, raw.mime_type),
+            PublicSnapshotData::Json(json) => (
+                serde_json::to_vec(&json.data).unwrap_or_default(),
+                "application/json".to_string(),
+            ),
+            PublicSnapshotData::Multipart(multipart) => multipart_to_raw_bytes(multipart),
+        };
+        golem_wasm::Value::Record(vec![
+            golem_wasm::Value::List(data.into_iter().map(golem_wasm::Value::U8).collect()),
+            golem_wasm::Value::String(mime_type),
+        ])
     }
 
     fn get_type() -> golem_wasm::analysis::AnalysedType {
-        golem_wasm::analysis::analysed_type::variant(vec![
-            golem_wasm::analysis::analysed_type::case("Raw", RawSnapshotData::get_type()),
-            golem_wasm::analysis::analysed_type::case("Json", JsonSnapshotData::get_type()),
-            golem_wasm::analysis::analysed_type::case(
-                "Multipart",
-                MultipartSnapshotData::get_type(),
+        golem_wasm::analysis::analysed_type::record(vec![
+            golem_wasm::analysis::analysed_type::field(
+                "data",
+                golem_wasm::analysis::analysed_type::list(
+                    golem_wasm::analysis::analysed_type::u8(),
+                ),
+            ),
+            golem_wasm::analysis::analysed_type::field(
+                "mime-type",
+                golem_wasm::analysis::analysed_type::str(),
             ),
         ])
+        .named("snapshot-data")
+        .owned("golem:api@1.5.0/oplog")
     }
 }
 
@@ -718,37 +868,189 @@ impl golem_wasm::IntoValue for PublicSnapshotData {
 impl golem_wasm::FromValue for PublicSnapshotData {
     fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
         match value {
-            golem_wasm::Value::Variant {
-                case_idx: 0,
-                case_value,
-            } => {
-                let inner = case_value.ok_or("Missing case value for Raw")?;
-                Ok(PublicSnapshotData::Raw(
-                    <RawSnapshotData as golem_wasm::FromValue>::from_value(*inner)?,
-                ))
-            }
-            golem_wasm::Value::Variant {
-                case_idx: 1,
-                case_value,
-            } => {
-                let inner = case_value.ok_or("Missing case value for Json")?;
-                Ok(PublicSnapshotData::Json(
-                    <JsonSnapshotData as golem_wasm::FromValue>::from_value(*inner)?,
-                ))
-            }
-            golem_wasm::Value::Variant {
-                case_idx: 2,
-                case_value,
-            } => {
-                let inner = case_value.ok_or("Missing case value for Multipart")?;
-                Ok(PublicSnapshotData::Multipart(
-                    <MultipartSnapshotData as golem_wasm::FromValue>::from_value(*inner)?,
-                ))
+            golem_wasm::Value::Record(mut fields) if fields.len() == 2 => {
+                let mime_type = <String as golem_wasm::FromValue>::from_value(fields.remove(1))?;
+                let data = match fields.remove(0) {
+                    golem_wasm::Value::List(items) => items
+                        .into_iter()
+                        .map(|v| match v {
+                            golem_wasm::Value::U8(b) => Ok(b),
+                            other => Err(format!("Expected U8, got {:?}", other)),
+                        })
+                        .collect::<Result<Vec<u8>, String>>()?,
+                    other => return Err(format!("Expected List for data, got {:?}", other)),
+                };
+                Ok(PublicSnapshotData::Raw(RawSnapshotData { data, mime_type }))
             }
             _ => Err(format!(
-                "Expected Variant for PublicSnapshotData, got {:?}",
+                "Expected Record with 2 fields for PublicSnapshotData, got {:?}",
                 value
             )),
         }
+    }
+}
+
+/// API-facing counter state for a retry policy.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(poem_openapi::Object, golem_wasm_derive::IntoValue)
+)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicRetryPolicyStateCounter {
+    /// Number of retry attempts recorded so far.
+    pub count: u32,
+}
+
+/// API-facing wrapper state that delegates to an inner retry policy state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(poem_openapi::Object, golem_wasm_derive::IntoValue)
+)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicRetryPolicyStateWrapper {
+    /// The wrapped inner retry policy state.
+    pub inner: Box<PublicRetryPolicyState>,
+}
+
+/// API-facing count-box state that tracks both an attempt count and an inner state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicRetryPolicyStateCountBox {
+    /// Number of attempts consumed so far.
+    pub attempts: u32,
+    /// The inner retry policy state.
+    pub inner: Box<PublicRetryPolicyState>,
+}
+
+/// API-facing and-then state tracking left/right sub-states and which side is active.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicRetryPolicyStateAndThen {
+    /// State of the first (left) policy.
+    pub left: Box<PublicRetryPolicyState>,
+    /// State of the second (right) policy.
+    pub right: Box<PublicRetryPolicyState>,
+    /// Whether execution has moved to the right policy.
+    pub on_right: bool,
+}
+
+/// API-facing pair state tracking two independent sub-states (for union/intersect).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicRetryPolicyStatePair {
+    /// State of the first sub-policy.
+    pub first: Box<PublicRetryPolicyState>,
+    /// State of the second sub-policy.
+    pub second: Box<PublicRetryPolicyState>,
+}
+
+/// API-facing representation of a [`RetryPolicyState`](crate::model::retry_policy::RetryPolicyState),
+/// exposed through the public REST/OpenAPI interface.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum PublicRetryPolicyState {
+    /// Counter-based state (e.g. periodic, exponential).
+    Counter(PublicRetryPolicyStateCounter),
+    /// Terminal state — policy has given up.
+    Terminal(Empty),
+    /// Wrapper state delegating to an inner policy.
+    Wrapper(PublicRetryPolicyStateWrapper),
+    /// Count-box state with attempt tracking.
+    CountBox(PublicRetryPolicyStateCountBox),
+    /// And-then sequential composition state.
+    AndThen(PublicRetryPolicyStateAndThen),
+    /// Pair state for union/intersect composition.
+    Pair(PublicRetryPolicyStatePair),
+}
+
+#[cfg(feature = "full")]
+impl From<crate::model::retry_policy::RetryPolicyState> for PublicRetryPolicyState {
+    fn from(value: crate::model::retry_policy::RetryPolicyState) -> Self {
+        use crate::model::retry_policy::RetryPolicyState;
+        match value {
+            RetryPolicyState::Counter(n) => {
+                PublicRetryPolicyState::Counter(PublicRetryPolicyStateCounter { count: n })
+            }
+            RetryPolicyState::Terminal => PublicRetryPolicyState::Terminal(Empty {}),
+            RetryPolicyState::Wrapper(inner) => {
+                PublicRetryPolicyState::Wrapper(PublicRetryPolicyStateWrapper {
+                    inner: Box::new((*inner).into()),
+                })
+            }
+            RetryPolicyState::CountBox { attempts, inner } => {
+                PublicRetryPolicyState::CountBox(PublicRetryPolicyStateCountBox {
+                    attempts,
+                    inner: Box::new((*inner).into()),
+                })
+            }
+            RetryPolicyState::AndThen {
+                left,
+                right,
+                on_right,
+            } => PublicRetryPolicyState::AndThen(PublicRetryPolicyStateAndThen {
+                left: Box::new((*left).into()),
+                right: Box::new((*right).into()),
+                on_right,
+            }),
+            RetryPolicyState::Pair(first, second) => {
+                PublicRetryPolicyState::Pair(PublicRetryPolicyStatePair {
+                    first: Box::new((*first).into()),
+                    second: Box::new((*second).into()),
+                })
+            }
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+impl From<PublicRetryPolicyState> for crate::model::retry_policy::RetryPolicyState {
+    fn from(value: PublicRetryPolicyState) -> Self {
+        use crate::model::retry_policy::RetryPolicyState;
+        match value {
+            PublicRetryPolicyState::Counter(c) => RetryPolicyState::Counter(c.count),
+            PublicRetryPolicyState::Terminal(_) => RetryPolicyState::Terminal,
+            PublicRetryPolicyState::Wrapper(w) => {
+                RetryPolicyState::Wrapper(Box::new((*w.inner).into()))
+            }
+            PublicRetryPolicyState::CountBox(cb) => RetryPolicyState::CountBox {
+                attempts: cb.attempts,
+                inner: Box::new((*cb.inner).into()),
+            },
+            PublicRetryPolicyState::AndThen(at) => RetryPolicyState::AndThen {
+                left: Box::new((*at.left).into()),
+                right: Box::new((*at.right).into()),
+                on_right: at.on_right,
+            },
+            PublicRetryPolicyState::Pair(p) => {
+                RetryPolicyState::Pair(Box::new((*p.first).into()), Box::new((*p.second).into()))
+            }
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::IntoValue for PublicRetryPolicyState {
+    fn into_value(self) -> golem_wasm::Value {
+        let internal: crate::model::retry_policy::RetryPolicyState = self.into();
+        internal.into_value()
+    }
+
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
+        crate::model::retry_policy::RetryPolicyState::get_type()
+    }
+}
+
+#[cfg(feature = "full")]
+impl golem_wasm::FromValue for PublicRetryPolicyState {
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+        let internal = crate::model::retry_policy::RetryPolicyState::from_value(value)?;
+        Ok(internal.into())
     }
 }

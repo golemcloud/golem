@@ -36,6 +36,7 @@ golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 applying = { workspace = true }
+arc-swap = { workspace = true }
 async-lock = { workspace = true }
 async-recursion = { workspace = true }
 async-scoped = { workspace = true, features = ["use-tokio"] }
@@ -55,6 +56,7 @@ figment = { workspace = true }
 fred = { workspace = true }
 fs-set-times = { workspace = true }
 futures = { workspace = true }
+governor = { workspace = true }
 half = { workspace = true }
 heck = { workspace = true }
 hex = { workspace = true }
@@ -73,6 +75,7 @@ mac_address = { workspace = true, features = ["serde"] }
 md5 = { workspace = true }
 metrohash = { workspace = true }
 nonempty-collections = { workspace = true }
+nonzero_ext = { workspace = true }
 pgvector = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
@@ -113,7 +116,7 @@ assert2 = { workspace = true }
 axum = { workspace = true }
 futures-concurrency = { workspace = true }
 goldenfile = { workspace = true }
-pretty_assertions = { workspace = true }
+pretty_assertions = { workspace = true, features = [ "unstable" ] }
 proptest = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }

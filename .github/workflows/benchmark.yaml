@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  WASM_RQUICKJS_VERSION: "v0.1.5"
+  WASM_RQUICKJS_VERSION: "v0.2.1"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 
@@ -25,28 +25,17 @@ jobs:
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-binstall: 'true'
       - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
+        uses: shogo82148/actions-setup-redis@v1.49.0
         with:
           redis-version: latest
           auto-start: false
 
-      - uses: actions/setup-node@v4
+      - uses: ./.github/actions/setup-js-wasm-tools
         with:
-          node-version: "lts/*"
-      - uses: pnpm/action-setup@v2
-        with:
-          version: latest
-
-      - name: Install WASI SDK
-        run: |
-          curl -sSfL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_VERSION}/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux.tar.gz | sudo tar xz -C /opt
-          sudo mv /opt/wasi-sdk-${WASI_SDK_VERSION}.0-x86_64-linux /opt/wasi-sdk
-
-      - name: Install cargo-component
-        run: cargo binstall --force cargo-component@0.21.1
-
-      - name: Install wasm-rquickjs
-        run: cargo install wasm-rquickjs-cli --git https://github.com/golemcloud/wasm-rquickjs.git --tag $WASM_RQUICKJS_VERSION
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          install-cargo-component: 'true'
 
       - name: Building release executables
         run: cargo make --profile ci build-release

@@ -30,7 +30,6 @@ service RegistryService {
 
   // limits api
   rpc GetResourceLimits (GetResourceLimitsRequest) returns (GetResourceLimitsResponse);
-  rpc UpdateWorkerLimit (UpdateWorkerLimitRequest) returns (UpdateWorkerLimitResponse);
   rpc UpdateWorkerConnectionLimit (UpdateWorkerConnectionLimitRequest) returns (UpdateWorkerConnectionLimitResponse);
   rpc BatchUpdateResourceUsage (BatchUpdateResourceUsageRequest) returns (BatchUpdateResourceUsageResponse);
 
@@ -106,19 +105,6 @@ message GetResourceLimitsResponse {
 
 message GetResourceLimitsSuccessResponse {
   golem.common.ResourceLimits limits = 1;
-}
-
-message UpdateWorkerLimitRequest {
-  golem.common.AccountId accountId = 1;
-  golem.worker.AgentId agentId = 2;
-  bool added = 3;
-}
-
-message UpdateWorkerLimitResponse {
-  oneof result {
-    golem.common.Empty success = 1;
-    RegistryServiceError error = 2;
-  }
 }
 
 message UpdateWorkerConnectionLimitRequest {
@@ -382,6 +368,7 @@ message RegistryInvalidationEvent {
     DomainRegistrationChangedEvent domain_registration_changed = 6;
     SecuritySchemeChangedEvent security_scheme_changed = 7;
     ResourceDefinitionChangedEvent resource_definition_changed = 8;
+    RetryPolicyChangedEvent retry_policy_changed = 9;
   }
 }
 
@@ -423,4 +410,9 @@ message ResourceDefinitionChangedEvent {
   golem.common.EnvironmentId environment_id = 1;
   golem.common.ResourceDefinitionId resource_definition_id = 2;
   string resource_name = 3;
+}
+
+// Sent when an environment retry policy is created, updated, or deleted.
+message RetryPolicyChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
 }

@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use crate::model::text::fmt::{
-    FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id,
-    format_message_highlight, log_table,
+    Column, FieldsBuilder, MessageWithFields, TextView, format_id, format_main_id,
+    format_message_highlight, log_table, new_table,
 };
-use cli_table::Table;
 use golem_common::model::plugin_registration::PluginRegistrationDto;
 use serde_derive::Serialize;
 
@@ -26,35 +25,25 @@ pub struct PluginNameAndVersion {
     pub version: String,
 }
 
-#[derive(Table)]
-struct PluginRegistrationTableView {
-    #[table(title = "Plugin name")]
-    pub name: String,
-    #[table(title = "Plugin version")]
-    pub version: String,
-    #[table(title = "Description")]
-    pub description: String,
-    #[table(title = "Homepage")]
-    pub homepage: String,
-    #[table(title = "Type")]
-    pub typ: String,
-}
-
-impl From<&PluginRegistrationDto> for PluginRegistrationTableView {
-    fn from(value: &PluginRegistrationDto) -> Self {
-        Self {
-            name: value.name.clone(),
-            version: value.version.clone(),
-            description: value.description.clone(),
-            homepage: value.homepage.clone(),
-            typ: value.typ_as_str().to_string(),
-        }
-    }
-}
-
 impl TextView for Vec<PluginRegistrationDto> {
     fn log(&self) {
-        log_table::<_, PluginRegistrationTableView>(self.as_slice())
+        let mut table = new_table(vec![
+            Column::new("Plugin name").fixed(),
+            Column::new("Plugin version").fixed(),
+            Column::new("Type").fixed(),
+            Column::new("Description"),
+            Column::new("Homepage"),
+        ]);
+        for plugin in self {
+            table.add_row(vec![
+                plugin.name.clone(),
+                plugin.version.clone(),
+                plugin.typ_as_str().to_string(),
+                plugin.description.clone(),
+                plugin.homepage.clone(),
+            ]);
+        }
+        log_table(table);
     }
 }
 

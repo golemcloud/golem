@@ -5,8 +5,51 @@ interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
     use golem:core/types@1.5.0.{value-and-type, account-id, data-value, data-schema, wit-value};
 
-    use host.{component-revision, oplog-index, persistence-level, environment-id, retry-policy, uuid, agent-id, snapshot};
+    use host.{component-revision, oplog-index, persistence-level, environment-id, uuid, agent-id, snapshot};
+    use wasi:clocks/monotonic-clock@0.2.3.{duration};
+
     use context.{attribute, attribute-value, span-id, trace-id};
+    use retry.{retry-predicate, retry-policy, named-retry-policy};
+
+    /// Index into a retry-policy-state's node list
+    type state-node-index = s32;
+
+    /// Persistent state of a retry policy across retry attempts.
+    /// Root is nodes[0]. Children referenced by state-node-index.
+    record retry-policy-state {
+        nodes: list<state-node>,
+    }
+
+    variant state-node {
+        /// Counter-based state (e.g. periodic, exponential, fibonacci).
+        counter(u32),
+        /// Terminal state — policy has given up.
+        terminal,
+        /// Wrapper state delegating to an inner policy state.
+        wrapper(state-node-index),
+        /// Count-box state with attempt tracking.
+        count-box(count-box-state),
+        /// And-then sequential composition state.
+        and-then(and-then-state),
+        /// Pair state for union/intersect composition.
+        pair(pair-state),
+    }
+
+    record count-box-state {
+        attempts: u32,
+        inner: state-node-index,
+    }
+
+    record and-then-state {
+        left: state-node-index,
+        right: state-node-index,
+        on-right: bool,
+    }
+
+    record pair-state {
+        left: state-node-index,
+        right: state-node-index,
+    }
 
     record environment-plugin-grant-id {
         uuid: uuid,
@@ -34,8 +77,10 @@ interface oplog {
     }
 
     record plugin-installation-description {
-        name: string,
-        version: string,
+        environment-plugin-grant-id: environment-plugin-grant-id,
+        plugin-priority: s32,
+        plugin-name: string,
+        plugin-version: string,
         parameters: list<tuple<string, string>>
     }
 
@@ -53,7 +98,6 @@ interface oplog {
         timestamp: datetime,
         agent-id: agent-id,
         component-revision: component-revision,
-        args: list<string>,
         env: list<tuple<string, string>>,
         created-by: account-id,
         environment-id: environment-id,
@@ -62,7 +106,8 @@ interface oplog {
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<plugin-installation-description>,
         config-vars: list<tuple<string, string>>,
-        local-agent-config: list<local-agent-config-entry>
+        local-agent-config: list<local-agent-config-entry>,
+        original-phantom-id: option<uuid>
     }
 
     record host-call-parameters {
@@ -70,7 +115,7 @@ interface oplog {
         function-name: string,
         request: value-and-type,
         response: value-and-type,
-        wrapped-function-type: wrapped-function-type,
+        durable-function-type: wrapped-function-type,
     }
 
     record local-span-data {
@@ -99,7 +144,7 @@ interface oplog {
 
     record agent-invocation-finished-parameters {
         timestamp: datetime,
-        invocation-result: agent-invocation-result,
+        %result: agent-invocation-result,
         consumed-fuel: s64,
         component-revision: u64,
     }
@@ -107,7 +152,10 @@ interface oplog {
     record error-parameters {
         timestamp: datetime,
         error: string,
-        retry-from: oplog-index
+        retry-from: oplog-index,
+        inside-atomic-region: bool,
+        /// Persistent retry policy state, if a semantic retry policy is active.
+        retry-policy-state: option<retry-policy-state>,
     }
 
     record oplog-region {
@@ -120,9 +168,16 @@ interface oplog {
         jump: oplog-region
     }
 
-    record change-retry-policy-parameters {
+    /// Parameters for a set-retry-policy oplog entry.
+    record set-retry-policy-parameters {
         timestamp: datetime,
-        new-policy: retry-policy
+        policy: named-retry-policy,
+    }
+
+    /// Parameters for a remove-retry-policy oplog entry.
+    record remove-retry-policy-parameters {
+        timestamp: datetime,
+        name: string,
     }
 
     record end-atomic-region-parameters {
@@ -158,7 +213,7 @@ interface oplog {
     }
 
     record load-snapshot-parameters {
-        snapshot: snapshot,
+        snapshot: snapshot-data,
     }
 
     record process-oplog-entries-parameters {
@@ -196,7 +251,7 @@ interface oplog {
     }
 
     record save-snapshot-result-parameters {
-        snapshot: snapshot,
+        snapshot: snapshot-data,
     }
 
     record pending-agent-invocation-parameters {
@@ -214,7 +269,7 @@ interface oplog {
     record pending-update-parameters {
         timestamp: datetime,
         target-revision: component-revision,
-        update-description: update-description
+        description: update-description
     }
 
     record successful-update-parameters {
@@ -244,14 +299,14 @@ interface oplog {
 
     record create-resource-parameters {
         timestamp: datetime,
-        resource-id: agent-resource-id,
+        id: agent-resource-id,
         name: string,
         owner: string
     }
 
     record drop-resource-parameters {
         timestamp: datetime,
-        resource-id: agent-resource-id,
+        id: agent-resource-id,
         name: string,
         owner: string
     }
@@ -329,10 +384,14 @@ interface oplog {
         begin-index: oplog-index
     }
 
+    record snapshot-data {
+        data: list<u8>,
+        mime-type: string,
+    }
+
     record snapshot-parameters {
         timestamp: datetime,
-        data: list<u8>,
-        mime-type: string
+        data: snapshot-data,
     }
 
     record oplog-processor-checkpoint-parameters {
@@ -359,6 +418,11 @@ interface oplog {
         md5-hash: list<u8>
     }
 
+    record agent-terminated-by-quota-error {
+        environment-id: environment-id,
+        resource-name: string
+    }
+
     /// Describes the error that occurred in the agent
     variant worker-error {
         unknown(string),
@@ -375,6 +439,7 @@ interface oplog {
         exceeded-rpc-call-limit,
         node-out-of-filesystem-storage,
         agent-exceeded-filesystem-storage-limit,
+        agent-terminated-by-quota(agent-terminated-by-quota-error)
     }
 
     record raw-create-parameters {
@@ -422,6 +487,8 @@ interface oplog {
         error: worker-error,
         retry-from: oplog-index,
         inside-atomic-region: bool,
+        /// Persistent retry policy state, if a semantic retry policy is active.
+        retry-policy-state: option<retry-policy-state>,
     }
 
     record raw-pending-agent-invocation-parameters {
@@ -533,8 +600,6 @@ interface oplog {
         interrupted(timestamp),
         /// Indicates that the agent has been exited using WASI's exit function.
         exited(timestamp),
-        /// Overrides the agent's retry policy
-        change-retry-policy(change-retry-policy-parameters),
         /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
         /// recovery except if there is a corresponding `EndAtomicRegion` entry.
         begin-atomic-region(timestamp),
@@ -597,7 +662,11 @@ interface oplog {
         /// A snapshot of the agent's state
         snapshot(raw-snapshot-parameters),
         /// Checkpoint for oplog processor plugin delivery tracking
-        oplog-processor-checkpoint(raw-oplog-processor-checkpoint-parameters)
+        oplog-processor-checkpoint(raw-oplog-processor-checkpoint-parameters),
+        /// Sets or overwrites a named retry policy
+        set-retry-policy(set-retry-policy-parameters),
+        /// Removes a named retry policy by name
+        remove-retry-policy(remove-retry-policy-parameters)
     }
 
     variant public-oplog-entry {
@@ -626,8 +695,6 @@ interface oplog {
         interrupted(timestamp),
         /// Indicates that the agent has been exited using WASI's exit function.
         exited(timestamp),
-        /// Overrides the agent's retry policy
-        change-retry-policy(change-retry-policy-parameters),
         /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
         /// recovery except if there is a corresponding `EndAtomicRegion` entry.
         begin-atomic-region(timestamp),
@@ -690,7 +757,11 @@ interface oplog {
         /// A snapshot of the worker's state
         snapshot(snapshot-parameters),
         /// Checkpoint for oplog processor plugin delivery tracking
-        oplog-processor-checkpoint(oplog-processor-checkpoint-parameters)
+        oplog-processor-checkpoint(oplog-processor-checkpoint-parameters),
+        /// Sets or overwrites a named retry policy
+        set-retry-policy(set-retry-policy-parameters),
+        /// Removes a named retry policy by name
+        remove-retry-policy(remove-retry-policy-parameters)
     }
 
     /// Enriches raw oplog entries into public oplog entries by resolving oplog payloads

@@ -17,6 +17,7 @@ pub mod agent_types;
 pub mod agent_webhooks;
 pub mod blob_store;
 pub mod component;
+pub mod direct_invocation_auth;
 pub mod environment_state;
 pub mod events;
 pub mod file_loader;

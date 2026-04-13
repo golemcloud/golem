@@ -20,9 +20,9 @@ use crate::service::worker::ConnectWorkerStream;
 use crate::service::worker::{WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
+use golem_common::base_model::api;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
-use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::{AgentCreationRequest, AgentMetadataDto, RevertWorkerTarget};
@@ -409,10 +409,10 @@ impl WorkerApi {
         let filter = match filter {
             Some(filters) if !filters.is_empty() => {
                 Some(AgentFilter::from(filters).map_err(|e| {
-                    ApiEndpointError::BadRequest(Json(ErrorsBody {
-                        errors: vec![e],
-                        cause: None,
-                    }))
+                    ApiEndpointError::bad_request(
+                        api::error_code::INVALID_AGENT_FILTER,
+                        golem_common::safe(e),
+                    )
                 })?)
             }
             _ => None,
@@ -420,10 +420,10 @@ impl WorkerApi {
 
         let cursor = match cursor {
             Some(cursor) => Some(ScanCursor::from_str(&cursor).map_err(|e| {
-                ApiEndpointError::BadRequest(Json(ErrorsBody {
-                    errors: vec![e],
-                    cause: None,
-                }))
+                ApiEndpointError::bad_request(
+                    api::error_code::INVALID_SCAN_CURSOR,
+                    golem_common::safe(e),
+                )
             })?),
             None => None,
         };
@@ -640,12 +640,12 @@ impl WorkerApi {
     ) -> Result<Json<GetOplogResponse>> {
         let response = match (from, query) {
             (Some(_), Some(_)) => {
-                return Err(ApiEndpointError::BadRequest(Json(ErrorsBody {
-                    errors: vec![
+                return Err(ApiEndpointError::bad_request(
+                    api::error_code::INVALID_OPLOG_QUERY_PARAMS,
+                    golem_common::safe(
                         "Cannot specify both the 'from' and the 'query' parameters".to_string(),
-                    ],
-                    cause: None,
-                })));
+                    ),
+                ));
             }
             (Some(from), None) => {
                 self.worker_service
@@ -1102,22 +1102,22 @@ impl WorkerApi {
             .get_latest_by_id_uncached(component_id)
             .await
             .map_err(|error| {
-                ApiEndpointError::NotFound(Json(ErrorBody {
-                    error: format!(
+                ApiEndpointError::not_found(
+                    api::error_code::COMPONENT_NOT_FOUND,
+                    golem_common::safe(format!(
                         "Couldn't retrieve the component: {}. error: {}",
                         &component_id,
                         error.to_safe_string()
-                    ),
-                    cause: None,
-                }))
+                    )),
+                )
             })?;
 
         let agent_id =
             AgentId::from_agent_name_string(component_id, agent_id).map_err(|error| {
-                ApiEndpointError::BadRequest(Json(ErrorsBody {
-                    errors: vec![format!("Invalid worker id: {error}")],
-                    cause: None,
-                }))
+                ApiEndpointError::bad_request(
+                    api::error_code::INVALID_WORKER_ID,
+                    golem_common::safe(format!("Invalid worker id: {error}")),
+                )
             })?;
         Ok((agent_id, latest_component))
     }
@@ -1128,19 +1128,19 @@ impl WorkerApi {
         agent_id: &str,
     ) -> Result<AgentId> {
         AgentId::from_agent_name_string(component_id, agent_id).map_err(|error| {
-            ApiEndpointError::BadRequest(Json(ErrorsBody {
-                errors: vec![format!("Invalid worker id: {error}")],
-                cause: None,
-            }))
+            ApiEndpointError::bad_request(
+                api::error_code::INVALID_WORKER_ID,
+                golem_common::safe(format!("Invalid worker id: {error}")),
+            )
         })
     }
 }
 
 fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
     CanonicalFilePath::from_rel_str(&name).map_err(|error| {
-        ApiEndpointError::BadRequest(Json(ErrorsBody {
-            errors: vec![format!("Invalid file name: {error}")],
-            cause: None,
-        }))
+        ApiEndpointError::bad_request(
+            api::error_code::INVALID_FILE_NAME,
+            golem_common::safe(format!("Invalid file name: {error}")),
+        )
     })
 }

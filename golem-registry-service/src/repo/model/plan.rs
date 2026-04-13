@@ -30,7 +30,6 @@ pub struct PlanRecord {
     pub total_app_count: NumericU64,
     pub total_env_count: NumericU64,
     pub total_component_count: NumericU64,
-    pub total_worker_count: NumericU64,
     pub total_worker_connection_count: NumericU64,
     pub total_component_storage_bytes: NumericU64,
     pub monthly_gas_limit: NumericU64,
@@ -39,6 +38,7 @@ pub struct PlanRecord {
     pub per_invocation_rpc_call_limit: NumericU64,
     pub monthly_http_call_limit: NumericU64,
     pub monthly_rpc_call_limit: NumericU64,
+    pub oplog_writes_per_second: NumericU64,
 }
 
 impl PlanRecord {
@@ -52,7 +52,6 @@ impl PlanRecord {
             UsageType::TotalEnvCount => self.total_env_count.get(),
             UsageType::TotalComponentCount => self.total_component_count.get(),
             UsageType::TotalComponentStorageBytes => self.total_component_storage_bytes.get(),
-            UsageType::TotalWorkerCount => self.total_worker_count.get(),
             UsageType::TotalWorkerConnectionCount => self.total_worker_connection_count.get(),
             UsageType::MonthlyHttpCalls => self.monthly_http_call_limit.get(),
             UsageType::MonthlyRpcCalls => self.monthly_rpc_call_limit.get(),
@@ -66,7 +65,6 @@ impl From<PlanRecord> for Plan {
             app_limit: value.total_app_count.get(),
             env_limit: value.total_env_count.get(),
             component_limit: value.total_component_count.get(),
-            worker_limit: value.total_worker_count.get(),
             worker_connection_limit: value.total_worker_connection_count.get(),
             storage_limit: value.total_component_storage_bytes.get(),
             monthly_gas_limit: value.monthly_gas_limit.get(),
@@ -79,6 +77,7 @@ impl From<PlanRecord> for Plan {
             monthly_http_call_limit: value.monthly_http_call_limit.get(),
             monthly_rpc_call_limit: value.monthly_rpc_call_limit.get(),
             max_concurrent_agents_per_executor: value.max_concurrent_agents_per_executor.get(),
+            oplog_writes_per_second: value.oplog_writes_per_second.get(),
             plan_id: PlanId(value.plan_id),
             name: PlanName(value.name),
         }

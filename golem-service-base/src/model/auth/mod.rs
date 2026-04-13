@@ -197,6 +197,7 @@ pub enum EnvironmentAction {
     CreateHttpApiDeployment,
     CreateMcpDeployment,
     CreateResourceDefinition,
+    CreateRetryPolicy,
     CreateSecurityScheme,
     CreateShare,
     CreateWorker,
@@ -209,6 +210,7 @@ pub enum EnvironmentAction {
     DeleteHttpApiDeployment,
     DeleteMcpDeployment,
     DeleteResourceDefinition,
+    DeleteRetryPolicy,
     DeleteSecurityScheme,
     DeleteShare,
     DeleteWorker,
@@ -220,6 +222,7 @@ pub enum EnvironmentAction {
     UpdateHttpApiDeployment,
     UpdateMcpDeployment,
     UpdateResourceDefinition,
+    UpdateRetryPolicy,
     UpdateSecurityScheme,
     UpdateShare,
     UpdateWorker,
@@ -235,6 +238,7 @@ pub enum EnvironmentAction {
     ViewHttpApiDeployment,
     ViewMcpDeployment,
     ViewResourceDefinition,
+    ViewRetryPolicy,
     ViewSecurityScheme,
     ViewShares,
     ViewWorker,
@@ -698,6 +702,23 @@ impl AuthCtx {
                     EnvironmentRole::Viewer,
                 ],
             ),
+            // retry policies
+            EnvironmentAction::CreateRetryPolicy => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::UpdateRetryPolicy => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::DeleteRetryPolicy => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::ViewRetryPolicy => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
         };
 
         if !is_allowed {
@@ -1087,6 +1108,7 @@ mod protobuf {
 
             Self::Unauthorized(ErrorBody {
                 error: error.to_string(),
+                code: golem_common::base_model::api::error_code::AUTH_UNAUTHORIZED.to_string(),
             })
         }
     }

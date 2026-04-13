@@ -16,9 +16,7 @@ use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::error::SharedError;
-use golem_common::model::resource_definition::{
-    ResourceDefinition, ResourceDefinitionId, ResourceName,
-};
+use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
 use golem_common::{IntoAnyhow, SafeDisplay};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use std::sync::Arc;

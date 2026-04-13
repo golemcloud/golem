@@ -17,6 +17,7 @@
 package example.integrationtests
 
 import golem.{Guards, HostApi}
+import golem.host.RetryApi
 import golem.runtime.annotations.agentImplementation
 
 import scala.annotation.unused
@@ -25,22 +26,27 @@ import scala.concurrent.Future
 @agentImplementation()
 final class GuardsDemoImpl(@unused private val name: String) extends GuardsDemo {
 
+  private val expectedCliRetryPolicyNames = List(
+    "scala-integration-immediate",
+    "scala-integration-never"
+  )
+
+  private def appendRetryPolicyVisibility(sb: StringBuilder): Unit = {
+    val policies = RetryApi.getRetryPolicies().sortBy(_.name)
+    val missing  = expectedCliRetryPolicyNames.filterNot(name => RetryApi.getRetryPolicyByName(name).isDefined)
+
+    sb.append(s"original retry policies count=${policies.size}\n")
+    sb.append(s"visible retry policies=${policies.map(_.name).mkString(",")}\n")
+    if (missing.isEmpty) sb.append("result=retry-visible-ok\n")
+    else sb.append(s"result=retry-visible-missing (${missing.mkString(",")})\n")
+  }
+
   override def guardsBlockDemo(): Future[String] = Future.successful {
     val sb = new StringBuilder
     sb.append("=== Block-scoped Guards Demo ===\n")
 
     // withRetryPolicy
-    val origPolicy = HostApi.getRetryPolicy()
-    sb.append(s"original retry maxAttempts=${origPolicy.maxAttempts}\n")
-    val retryResult = Guards.withRetryPolicy(
-      HostApi.RetryPolicy(10, BigInt(1000), BigInt(60000000000L), 2.0, Some(0.1))
-    ) {
-      val inner = HostApi.getRetryPolicy()
-      sb.append(s"inside withRetryPolicy: maxAttempts=${inner.maxAttempts}\n")
-      "retry-ok"
-    }
-    val afterRetry = HostApi.getRetryPolicy()
-    sb.append(s"after withRetryPolicy: maxAttempts=${afterRetry.maxAttempts}, result=$retryResult\n")
+    appendRetryPolicyVisibility(sb)
 
     // withPersistenceLevel
     val origLevel = HostApi.getOplogPersistenceLevel()
@@ -79,16 +85,7 @@ final class GuardsDemoImpl(@unused private val name: String) extends GuardsDemo 
     sb.append("=== Resource-style Guards Demo ===\n")
 
     // useRetryPolicy
-    val origPolicy = HostApi.getRetryPolicy()
-    sb.append(s"original retry maxAttempts=${origPolicy.maxAttempts}\n")
-    val retryGuard = Guards.useRetryPolicy(
-      HostApi.RetryPolicy(7, BigInt(500), BigInt(30000000000L), 1.5, None)
-    )
-    val innerPolicy = HostApi.getRetryPolicy()
-    sb.append(s"after useRetryPolicy: maxAttempts=${innerPolicy.maxAttempts}\n")
-    retryGuard.drop()
-    val afterRetry = HostApi.getRetryPolicy()
-    sb.append(s"after drop(): maxAttempts=${afterRetry.maxAttempts}\n")
+    appendRetryPolicyVisibility(sb)
 
     // usePersistenceLevel
     val origLevel = HostApi.getOplogPersistenceLevel()

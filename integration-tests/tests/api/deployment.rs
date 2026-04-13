@@ -64,6 +64,7 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
                 version: DeploymentVersion("0.0.1".to_string()),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
             },
         )
         .await?;
@@ -118,6 +119,7 @@ async fn fail_with_409_on_hash_mismatch(deps: &EnvBasedTestDependencies) -> anyh
                     version: DeploymentVersion("0.0.1".to_string()),
                     agent_secret_defaults: Vec::new(),
                     quota_resource_defaults: Vec::new(),
+                    retry_policy_defaults: Vec::new(),
                 },
             )
             .await;
@@ -159,6 +161,7 @@ async fn get_component_version_from_previous_deployment(
                 version: DeploymentVersion("0.0.1".to_string()),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
             },
         )
         .await?;
@@ -196,6 +199,7 @@ async fn get_component_version_from_previous_deployment(
                 version: DeploymentVersion("0.0.2".to_string()),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
             },
         )
         .await?;
@@ -291,6 +295,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
                 version: DeploymentVersion("0.0.1".to_string()),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
             },
         )
         .await?;
@@ -490,6 +495,7 @@ async fn deploy_creates_missing_secret_from_default(
                     secret_value: json!("foo"),
                 }],
                 quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
             },
         )
         .await?;
@@ -551,6 +557,7 @@ async fn deploy_ignores_default_if_secret_already_exists(
                     secret_value: json!("foo"),
                 }],
                 quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
             },
         )
         .await?;
@@ -614,6 +621,7 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
                     secret_value: json!("foo"),
                 }],
                 quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
             },
         )
         .await?;
@@ -676,6 +684,7 @@ async fn deploy_fails_if_existing_secret_type_mismatches_default(
                     secret_value: json!("abc"),
                 }],
                 quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
             },
         )
         .await;
@@ -720,6 +729,7 @@ async fn deploy_fails_if_secret_default_mismatches_component(
                     secret_value: json!(false),
                 }],
                 quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
             },
         )
         .await;

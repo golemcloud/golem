@@ -61,6 +61,7 @@ pub enum RegistryEventType {
     DomainRegistrationChanged = 3,
     SecuritySchemeChanged = 4,
     ResourceDefinitionChanged = 5,
+    RetryPolicyChanged = 6,
 }
 
 impl TryFrom<i16> for RegistryEventType {
@@ -74,6 +75,7 @@ impl TryFrom<i16> for RegistryEventType {
             3 => Ok(RegistryEventType::DomainRegistrationChanged),
             4 => Ok(RegistryEventType::SecuritySchemeChanged),
             5 => Ok(RegistryEventType::ResourceDefinitionChanged),
+            6 => Ok(RegistryEventType::RetryPolicyChanged),
             other => Err(RepoError::InternalError(anyhow::anyhow!(
                 "Unknown registry event type: {other}"
             ))),
@@ -114,6 +116,10 @@ pub enum RegistryChangeEvent {
         event_id: ChangeEventId,
         environment_id: Uuid,
     },
+    RetryPolicyChanged {
+        event_id: ChangeEventId,
+        environment_id: Uuid,
+    },
     ResourceDefinitionChanged {
         event_id: ChangeEventId,
         environment_id: Uuid,
@@ -130,6 +136,7 @@ impl RegistryChangeEvent {
             Self::EnvironmentPermissionsChanged { event_id, .. } => *event_id,
             Self::DomainRegistrationChanged { event_id, .. } => *event_id,
             Self::SecuritySchemeChanged { event_id, .. } => *event_id,
+            Self::RetryPolicyChanged { event_id, .. } => *event_id,
             Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
         }
     }
@@ -225,6 +232,17 @@ impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
                     ))
                 })?;
                 Ok(RegistryChangeEvent::SecuritySchemeChanged {
+                    event_id: row.event_id,
+                    environment_id,
+                })
+            }
+            RegistryEventType::RetryPolicyChanged => {
+                let environment_id = row.environment_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "RetryPolicyChanged event missing environment_id"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::RetryPolicyChanged {
                     event_id: row.event_id,
                     environment_id,
                 })
@@ -357,6 +375,20 @@ impl NewRegistryChangeEvent {
     pub fn security_scheme_changed(environment_id: Uuid) -> Self {
         Self {
             event_type: RegistryEventType::SecuritySchemeChanged,
+            environment_id: Some(environment_id),
+            deployment_revision_id: None,
+            current_deployment_revision_id: None,
+            account_id: None,
+            grantee_account_id: None,
+            domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
+        }
+    }
+
+    pub fn retry_policy_changed(environment_id: Uuid) -> Self {
+        Self {
+            event_type: RegistryEventType::RetryPolicyChanged,
             environment_id: Some(environment_id),
             deployment_revision_id: None,
             current_deployment_revision_id: None,
@@ -770,6 +802,18 @@ mod tests {
             RegistryChangeEventRow {
                 event_id,
                 event_type: RegistryEventType::SecuritySchemeChanged,
+                environment_id: Some(environment_id),
+                deployment_revision_id: None,
+                current_deployment_revision_id: None,
+                account_id: None,
+                grantee_account_id: None,
+                domains: Vec::new(),
+                resource_definition_id: None,
+                resource_name: None,
+            },
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::RetryPolicyChanged,
                 environment_id: Some(environment_id),
                 deployment_revision_id: None,
                 current_deployment_revision_id: None,

@@ -18,12 +18,12 @@ use crate::repo::registry_change::{
 use golem_api_grpc::proto::golem::registry::v1::{
     AccountTokensInvalidatedEvent, CursorExpiredEvent, DeploymentChangedEvent,
     DomainRegistrationChangedEvent, EnvironmentPermissionsChangedEvent, RegistryInvalidationEvent,
-    ResourceDefinitionChangedEvent, SecuritySchemeChangedEvent,
+    ResourceDefinitionChangedEvent, RetryPolicyChangedEvent, SecuritySchemeChangedEvent,
     registry_invalidation_event::Payload,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::resource_definition::ResourceDefinitionId;
+use golem_common::model::quota::ResourceDefinitionId;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast, mpsc};
 
@@ -349,6 +349,15 @@ fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvali
                 environment_id: Some(EnvironmentId(*environment_id).into()),
             }),
         ),
+        RegistryChangeEvent::RetryPolicyChanged {
+            event_id,
+            environment_id,
+        } => (
+            *event_id,
+            Payload::RetryPolicyChanged(RetryPolicyChangedEvent {
+                environment_id: Some(EnvironmentId(*environment_id).into()),
+            }),
+        ),
         RegistryChangeEvent::ResourceDefinitionChanged {
             event_id,
             environment_id,
@@ -616,6 +625,35 @@ mod tests {
     struct MockRegistryChangeRepo {
         events: std::sync::Mutex<Vec<RegistryChangeEvent>>,
         latest_event_id_override: std::sync::Mutex<Option<ChangeEventId>>,
+        block_next_get_events_since: std::sync::Mutex<Option<Arc<BlockingGetEventsSince>>>,
+        get_events_since_call_count: std::sync::atomic::AtomicUsize,
+        get_events_since_called: tokio::sync::Notify,
+    }
+
+    struct BlockingGetEventsSince {
+        entered: tokio::sync::Semaphore,
+        release: tokio::sync::Semaphore,
+    }
+
+    impl BlockingGetEventsSince {
+        fn new() -> Self {
+            Self {
+                entered: tokio::sync::Semaphore::new(0),
+                release: tokio::sync::Semaphore::new(0),
+            }
+        }
+
+        async fn wait_until_entered(&self) {
+            self.entered
+                .acquire()
+                .await
+                .expect("blocking semaphore closed")
+                .forget();
+        }
+
+        fn unblock(&self) {
+            self.release.add_permits(1);
+        }
     }
 
     impl MockRegistryChangeRepo {
@@ -623,6 +661,9 @@ mod tests {
             Self {
                 events: std::sync::Mutex::new(Vec::new()),
                 latest_event_id_override: std::sync::Mutex::new(None),
+                block_next_get_events_since: std::sync::Mutex::new(None),
+                get_events_since_call_count: std::sync::atomic::AtomicUsize::new(0),
+                get_events_since_called: tokio::sync::Notify::new(),
             }
         }
 
@@ -633,6 +674,26 @@ mod tests {
         fn set_latest_event_id_override(&self, id: ChangeEventId) {
             *self.latest_event_id_override.lock().unwrap() = Some(id);
         }
+
+        fn block_next_get_events_since(&self) -> Arc<BlockingGetEventsSince> {
+            let blocker = Arc::new(BlockingGetEventsSince::new());
+            *self.block_next_get_events_since.lock().unwrap() = Some(blocker.clone());
+            blocker
+        }
+
+        async fn wait_for_get_events_since_calls(&self, target: usize) {
+            loop {
+                let notified = self.get_events_since_called.notified();
+                if self
+                    .get_events_since_call_count
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                    >= target
+                {
+                    return;
+                }
+                notified.await;
+            }
+        }
     }
 
     #[async_trait::async_trait]
@@ -641,6 +702,21 @@ mod tests {
             &self,
             last_seen_event_id: ChangeEventId,
         ) -> golem_service_base::repo::RepoResult<Vec<RegistryChangeEvent>> {
+            self.get_events_since_call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.get_events_since_called.notify_waiters();
+
+            let blocker = self.block_next_get_events_since.lock().unwrap().take();
+            if let Some(blocker) = blocker {
+                blocker.entered.add_permits(1);
+                blocker
+                    .release
+                    .acquire()
+                    .await
+                    .expect("blocking semaphore closed")
+                    .forget();
+            }
+
             let events = self.events.lock().unwrap();
             Ok(events
                 .iter()
@@ -864,38 +940,48 @@ mod tests {
 
     #[test]
     async fn test_lagged_receiver() {
-        // Create notifier with capacity of 2
+        // Block the first repo fetch so the worker is definitely waiting in the
+        // notifier path before we enqueue the burst of events.
         let repo = Arc::new(MockRegistryChangeRepo::new());
+        let first_fetch_blocker = repo.block_next_get_events_since();
         let notifier = SqliteRegistryChangeNotifier::new(2, repo.clone());
         let mut join_set = tokio::task::JoinSet::new();
         notifier.start_background_tasks(&mut join_set);
         let mut rx = notifier.subscribe();
 
-        // Send 3 events to overflow the capacity-2 buffer
+        notifier.signal_new_events_available();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            first_fetch_blocker.wait_until_entered(),
+        )
+        .await
+        .expect("worker never entered get_events_since");
+
+        // Queue 3 live events while the worker is blocked. Once released, the worker
+        // fetches and broadcasts the whole burst, overflowing the capacity-2 channel.
         for i in 1..=3 {
-            repo.push(RegistryChangeEvent::DeploymentChanged {
-                event_id: ChangeEventId(i),
-                environment_id: Uuid::new_v4(),
-                deployment_revision_id: i * 10,
-                current_deployment_revision_id: i,
-            });
+            repo.push(make_deployment_change_event(i));
             notifier.signal_new_events_available();
         }
 
-        // Depending on scheduling and coalescing, first recv may be Lagged or an event.
-        let event = match rx.recv().await {
-            Err(broadcast::error::RecvError::Lagged(_)) => rx.recv().await.unwrap(),
-            Ok(event) => event,
-            Err(err) => panic!("unexpected recv error: {err:?}"),
-        };
+        first_fetch_blocker.unblock();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            repo.wait_for_get_events_since_calls(2),
+        )
+        .await
+        .expect("worker did not finish the burst replay");
 
-        // We can still receive buffered events.
-        // With capacity=2, after lag recovery we get the oldest surviving event
-        assert!(
-            event.event_id() >= ChangeEventId(2),
-            "expected surviving event, got {}",
-            event.event_id().0
-        );
+        assert!(matches!(
+            rx.recv().await,
+            Err(broadcast::error::RecvError::Lagged(1))
+        ));
+
+        let first_surviving_event = rx.recv().await.unwrap();
+        let second_surviving_event = rx.recv().await.unwrap();
+
+        assert_eq!(first_surviving_event.event_id(), ChangeEventId(2));
+        assert_eq!(second_surviving_event.event_id(), ChangeEventId(3));
         join_set.abort_all();
     }
 }

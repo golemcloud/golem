@@ -20,7 +20,7 @@ use golem_worker_executor_test_utils::{
 use std::fmt::Debug;
 use std::path::Path;
 use std::sync::atomic::AtomicU16;
-use test_r::{sequential_suite, tag_suite, test_dep};
+use test_r::{sequential_suite, tag_suite, test_dep, timeout_suite};
 
 pub mod agent;
 pub mod api;
@@ -37,9 +37,11 @@ pub mod key_value_storage;
 pub mod keyvalue;
 pub mod namespace_routed_key_value_storage;
 pub mod observability;
+pub mod oplog_metrics;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod resource_limits;
+pub mod retry_policies;
 pub mod revert;
 pub mod rpc;
 pub mod scalability;
@@ -62,6 +64,7 @@ tag_suite!(agent, group1);
 tag_suite!(hot_update, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
+tag_suite!(retry_policies, group2);
 
 tag_suite!(durability, group3);
 tag_suite!(rpc, group3);
@@ -72,11 +75,14 @@ tag_suite!(revert, group3);
 tag_suite!(ignite_service, ignite_service);
 tag_suite!(rdbms_service, rdbms_service);
 tag_suite!(resource_limits, group1);
+tag_suite!(oplog_metrics, group1);
 tag_suite!(storage_quota, group1);
 
 sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);
 sequential_suite!(indexed_storage);
+
+timeout_suite!(in_function_retry, "2 minutes");
 
 #[derive(Debug)]
 pub struct Tracing;

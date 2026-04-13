@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::agent_webhooks::AgentWebhooksService;
+use super::direct_invocation_auth::DirectInvocationAuthService;
 use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
 use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasWebSocketConnectionPool};
@@ -46,7 +47,9 @@ use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
 };
+
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::EnvironmentAction;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -375,6 +378,7 @@ fn caller_agent_principal(self_agent_id: &AgentId) -> Principal {
 
 pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     remote_rpc: Arc<RemoteInvocationRpc>,
+    direct_invocation_auth: Arc<dyn DirectInvocationAuthService>,
     active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -414,6 +418,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
     fn clone(&self) -> Self {
         Self {
             remote_rpc: self.remote_rpc.clone(),
+            direct_invocation_auth: self.direct_invocation_auth.clone(),
             active_workers: self.active_workers.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
@@ -657,6 +662,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         remote_rpc: Arc<RemoteInvocationRpc>,
+        direct_invocation_auth: Arc<dyn DirectInvocationAuthService>,
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -694,6 +700,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     ) -> Self {
         Self {
             remote_rpc,
+            direct_invocation_auth,
             active_workers,
             engine,
             linker,
@@ -728,6 +735,26 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             leak_sentinel,
         }
     }
+    /// Rewrites the `OwnedAgentId` so that `environment_id` comes from the
+    /// target component's metadata rather than from the caller. This ensures
+    /// that auth checks, shard routing, and all downstream code use the
+    /// component-authoritative environment.
+    async fn canonicalize_owned_agent_id(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Result<OwnedAgentId, RpcError> {
+        let component = self
+            .component_service()
+            .get_metadata(owned_agent_id.component_id(), None)
+            .await
+            .map_err(|e| RpcError::RemoteInternalError {
+                details: format!("Failed to resolve target component metadata: {e}"),
+            })?;
+        Ok(OwnedAgentId::new(
+            component.environment_id,
+            &owned_agent_id.agent_id,
+        ))
+    }
 }
 
 #[async_trait]
@@ -742,6 +769,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_stack: InvocationContextStack,
         agent_config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
+
         if self
             .shard_service()
             .check_worker(&owned_agent_id.agent_id)
@@ -749,9 +778,16 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             debug!(target_agent_id = %owned_agent_id, "Ensuring local target worker exists");
 
+            self.direct_invocation_auth
+                .check(
+                    self_created_by,
+                    owned_agent_id.environment_id,
+                    EnvironmentAction::CreateWorker,
+                )
+                .await?;
+
             let _worker = Worker::get_or_create_running(
                 self,
-                self_created_by,
                 owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),
@@ -794,6 +830,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<UntypedDataValue, RpcError> {
+        let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
+
         if self
             .shard_service()
             .check_worker(&owned_agent_id.agent_id)
@@ -801,10 +839,17 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             debug!(target_agent_id = %owned_agent_id, "Local direct agent invoke_and_await");
 
+            self.direct_invocation_auth
+                .check(
+                    self_created_by,
+                    owned_agent_id.environment_id,
+                    EnvironmentAction::UpdateWorker,
+                )
+                .await?;
+
             let principal = caller_agent_principal(self_agent_id);
             let worker = Worker::get_or_create_running(
                 self,
-                self_created_by,
                 owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),
@@ -863,6 +908,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
+        let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
+
         if self
             .shard_service()
             .check_worker(&owned_agent_id.agent_id)
@@ -870,10 +917,17 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             debug!(target_agent_id = %owned_agent_id, "Local direct agent invoke (fire-and-forget)");
 
+            self.direct_invocation_auth
+                .check(
+                    self_created_by,
+                    owned_agent_id.environment_id,
+                    EnvironmentAction::UpdateWorker,
+                )
+                .await?;
+
             let principal = caller_agent_principal(self_agent_id);
             let worker = Worker::get_or_create_running(
                 self,
-                self_created_by,
                 owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),

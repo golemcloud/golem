@@ -52,8 +52,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     ResolveAgentTypeByNamesResponse, ResolveAgentTypeByNamesSuccessResponse,
     ResolveComponentRequest, ResolveComponentResponse, ResolveComponentSuccessResponse,
     SubscribeRegistryInvalidationsRequest, UpdateWorkerConnectionLimitRequest,
-    UpdateWorkerConnectionLimitResponse, UpdateWorkerLimitRequest, UpdateWorkerLimitResponse,
-    authenticate_token_response, batch_update_resource_usage_response, download_component_response,
+    UpdateWorkerConnectionLimitResponse, authenticate_token_response,
+    batch_update_resource_usage_response, download_component_response,
     get_active_mcp_for_domain_response, get_active_routes_for_domain_response,
     get_agent_type_response, get_all_agent_types_response,
     get_all_deployed_component_revisions_response, get_auth_details_for_environment_response,
@@ -61,7 +61,7 @@ use golem_api_grpc::proto::golem::registry::v1::{
     get_deployed_component_metadata_response, get_resource_definition_by_id_response,
     get_resource_definition_by_name_response, get_resource_limits_response, registry_service_error,
     resolve_agent_type_by_names_response, resolve_component_response,
-    update_worker_connection_limit_response, update_worker_limit_response,
+    update_worker_connection_limit_response,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, RegisteredAgentType};
@@ -71,7 +71,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-use golem_common::model::resource_definition::{ResourceDefinitionId, ResourceName};
+use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
 use std::collections::HashMap;
@@ -182,26 +182,6 @@ impl RegistryServiceGrpcApi {
         Ok(GetResourceLimitsSuccessResponse {
             limits: Some(limits.into()),
         })
-    }
-
-    async fn update_worker_limit_internal(
-        &self,
-        request: UpdateWorkerLimitRequest,
-    ) -> Result<EmptySuccessResponse, GrpcApiError> {
-        let account_id: AccountId = request
-            .account_id
-            .ok_or("missing account_id field")?
-            .try_into()?;
-        if request.added {
-            self.account_usage_service
-                .add_worker(account_id, &AuthCtx::System)
-                .await?;
-        } else {
-            self.account_usage_service
-                .remove_worker(account_id, &AuthCtx::System)
-                .await?;
-        }
-        Ok(EmptySuccessResponse {})
     }
 
     async fn update_worker_connection_limit_internal(
@@ -377,9 +357,20 @@ impl RegistryServiceGrpcApi {
             .ok_or("missing environment_id field")?
             .try_into()?;
 
+        let component_id: ComponentId = request
+            .component_id
+            .ok_or("missing component_id field")?
+            .try_into()?;
+
+        let component_revision: ComponentRevision = request.component_revision.try_into()?;
+
         let agent_types = self
             .deployment_service
-            .list_deployed_agent_types(environment_id)
+            .list_latest_deployed_agent_types_by_component_revision(
+                environment_id,
+                component_id,
+                component_revision,
+            )
             .await?;
 
         Ok(GetAllAgentTypesSuccessResponse {
@@ -399,11 +390,23 @@ impl RegistryServiceGrpcApi {
             .ok_or("missing environment_id field")?
             .try_into()?;
 
+        let component_id: ComponentId = request
+            .component_id
+            .ok_or("missing component_id field")?
+            .try_into()?;
+
+        let component_revision: ComponentRevision = request.component_revision.try_into()?;
+
         let agent_type_name = AgentTypeName(request.agent_type);
 
         let agent_type = self
             .deployment_service
-            .get_deployed_agent_type(environment_id, &agent_type_name)
+            .get_latest_deployed_agent_type_by_component_revision(
+                environment_id,
+                component_id,
+                component_revision,
+                &agent_type_name,
+            )
             .await?;
 
         Ok(GetAgentTypeSuccessResponse {
@@ -609,31 +612,6 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(GetResourceLimitsResponse {
-            result: Some(response),
-        }))
-    }
-
-    async fn update_worker_limit(
-        &self,
-        request: Request<UpdateWorkerLimitRequest>,
-    ) -> Result<Response<UpdateWorkerLimitResponse>, tonic::Status> {
-        let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "update_worker_limit",
-            account_id = AccountId::render_proto(request.account_id)
-        );
-
-        let response = match self
-            .update_worker_limit_internal(request)
-            .instrument(record.span.clone())
-            .await
-            .apply(|r| record.result(r))
-        {
-            Ok(result) => update_worker_limit_response::Result::Success(result),
-            Err(error) => update_worker_limit_response::Result::Error(error.into()),
-        };
-
-        Ok(Response::new(UpdateWorkerLimitResponse {
             result: Some(response),
         }))
     }
@@ -1067,6 +1045,7 @@ fn internal_error(error: &str) -> RegistryServiceError {
         error: Some(registry_service_error::Error::InternalError(
             golem_api_grpc::proto::golem::common::ErrorBody {
                 error: error.to_string(),
+                code: golem_common::base_model::api::error_code::INTERNAL_UNKNOWN.to_string(),
             },
         )),
     }

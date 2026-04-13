@@ -102,6 +102,7 @@ export type LiteTypeJSON =
       optional: boolean;
       properties: { path: string[]; secret: boolean; type: LiteTypeJSON }[];
     }
+  | { kind: 'quota-token'; name?: string; owner?: string; optional: boolean }
   | {
       kind: 'unresolved-type';
       name?: string;

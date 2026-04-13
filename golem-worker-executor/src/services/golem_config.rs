@@ -62,8 +62,10 @@ pub struct GolemConfig {
     pub component_cache: ComponentCacheConfig,
     pub agent_types_service: AgentTypesServiceConfig,
     pub environment_state_service: EnvironmentStateServiceConfig,
+    pub direct_invocation_auth_cache: DirectInvocationAuthCacheConfig,
     pub agent_webhooks_service: AgentWebhooksServiceConfig,
     pub registry_service: GrpcRegistryServiceConfig,
+    pub quota_service: QuotaServiceConfig,
     pub engine: EngineConfig,
     pub grpc: GrpcApiConfig,
     pub http_client: HttpClientConfig,
@@ -164,6 +166,12 @@ impl SafeDisplay for GolemConfig {
             "{}",
             self.registry_service.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "quota service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.quota_service.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "component cache:");
         let _ = writeln!(
             &mut result,
@@ -183,6 +191,13 @@ impl SafeDisplay for GolemConfig {
             &mut result,
             "{}",
             self.environment_state_service.to_safe_string_indented()
+        );
+
+        let _ = writeln!(&mut result, "direct invocation auth cache:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.direct_invocation_auth_cache.to_safe_string_indented()
         );
 
         let _ = writeln!(&mut result, "agent webhooks service:");
@@ -242,6 +257,7 @@ impl Default for GolemConfig {
             component_cache: ComponentCacheConfig::default(),
             agent_types_service: AgentTypesServiceConfig::default(),
             environment_state_service: EnvironmentStateServiceConfig::default(),
+            direct_invocation_auth_cache: DirectInvocationAuthCacheConfig::default(),
             agent_webhooks_service: AgentWebhooksServiceConfig::default(),
             registry_service: GrpcRegistryServiceConfig {
                 client_config: GrpcClientConfig {
@@ -250,6 +266,7 @@ impl Default for GolemConfig {
                 },
                 ..GrpcRegistryServiceConfig::default()
             },
+            quota_service: QuotaServiceConfig::default(),
             engine: EngineConfig::default(),
             grpc: GrpcApiConfig::default(),
             http_client: HttpClientConfig::default(),
@@ -480,6 +497,11 @@ pub struct OplogConfig {
     /// entries to oplog processor plugins.
     #[serde(with = "humantime_serde")]
     pub plugin_max_elapsed_time: Duration,
+    /// When true, wraps the oplog service with a per-account rate-limiting layer that
+    /// throttles `add` calls according to each account's plan limit
+    /// (`oplog_writes_per_second`). Defaults to false (disabled).
+    #[serde(default)]
+    pub oplog_rate_limit_enabled: bool,
 }
 
 impl SafeDisplay for OplogConfig {
@@ -529,6 +551,11 @@ impl SafeDisplay for OplogConfig {
             &mut result,
             "plugin max elapsed time: {:?}",
             self.plugin_max_elapsed_time
+        );
+        let _ = writeln!(
+            &mut result,
+            "oplog rate limit enabled: {}",
+            self.oplog_rate_limit_enabled
         );
         result
     }
@@ -1076,6 +1103,39 @@ impl SafeDisplay for EnvironmentStateServiceConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DirectInvocationAuthCacheConfig {
+    pub cache_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub cache_ttl: Duration,
+    #[serde(with = "humantime_serde")]
+    pub cache_eviction_interval: Duration,
+}
+
+impl Default for DirectInvocationAuthCacheConfig {
+    fn default() -> Self {
+        Self {
+            cache_capacity: 1024,
+            cache_ttl: Duration::from_mins(5),
+            cache_eviction_interval: Duration::from_mins(1),
+        }
+    }
+}
+
+impl SafeDisplay for DirectInvocationAuthCacheConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "cache_capacity: {}", self.cache_capacity);
+        let _ = writeln!(&mut result, "cache_ttl: {:?}", self.cache_ttl);
+        let _ = writeln!(
+            &mut result,
+            "cache_eviction_interval: {:?}",
+            self.cache_eviction_interval
+        );
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentWebhooksServiceConfig {
     pub use_https_for_webhook_url: bool,
     pub hmac_key: Base64,
@@ -1269,6 +1329,7 @@ impl Default for OplogConfig {
             oplog_processor_snapshotting: SnapshotPolicy::EveryNInvocation { count: 10 },
             plugin_max_commit_count: 3,
             plugin_max_elapsed_time: Duration::from_secs(5),
+            oplog_rate_limit_enabled: false,
         }
     }
 }
@@ -1572,6 +1633,43 @@ impl SafeDisplay for HttpClientEnabledConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HttpClientDisabledConfig {}
+
+/// Configuration for the executor-side quota enforcement service.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QuotaServiceConfig {
+    /// How often to renew quota leases with the shard manager.
+    #[serde(with = "humantime_serde")]
+    pub renewal_interval: Duration,
+    /// Maximum wait time for inline throttling before returning
+    /// `InsufficientAllocation` to the caller (which may then suspend).
+    /// Reservations whose estimated wait exceeds this threshold are not
+    /// held in the waiter queue.
+    #[serde(with = "humantime_serde")]
+    pub inline_wait_threshold: Duration,
+}
+
+impl SafeDisplay for QuotaServiceConfig {
+    fn to_safe_string(&self) -> String {
+        use std::fmt::Write;
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "renewal interval: {:?}", self.renewal_interval);
+        let _ = writeln!(
+            &mut result,
+            "inline wait threshold: {:?}",
+            self.inline_wait_threshold
+        );
+        result
+    }
+}
+
+impl Default for QuotaServiceConfig {
+    fn default() -> Self {
+        Self {
+            renewal_interval: Duration::from_secs(10),
+            inline_wait_threshold: Duration::from_mins(1),
+        }
+    }
+}
 
 pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
     ConfigLoader::new_with_examples(Path::new("config/worker-executor.toml"))

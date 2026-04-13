@@ -153,7 +153,6 @@ impl Deps {
                 total_app_count: 3.into(),
                 total_env_count: 10.into(),
                 total_component_count: 15.into(),
-                total_worker_count: 20.into(),
                 total_worker_connection_count: 25.into(),
                 total_component_storage_bytes: 1000.into(),
                 monthly_gas_limit: 2000.into(),
@@ -166,6 +165,7 @@ impl Deps {
                 monthly_http_call_limit: 5000.into(),
                 monthly_rpc_call_limit: 5000.into(),
                 max_concurrent_agents_per_executor: 1_000_000_000_000_000_000u64.into(),
+                oplog_writes_per_second: 1_000_000_000_000_000_000u64.into(),
             })
             .await
             .unwrap();

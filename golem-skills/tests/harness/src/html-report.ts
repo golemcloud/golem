@@ -1,16 +1,16 @@
-import type { StepResult } from './executor.js';
+import type { StepResult } from "./executor.js";
 
 interface ScenarioReport {
   scenario: string;
   matrix: { agent: string; language: string };
   run_id: string;
-  status: 'pass' | 'fail';
+  status: "pass" | "fail";
   durationSeconds: number;
   results: StepResult[];
   artifactPaths: string[];
 }
 
-interface Summary {
+export interface Summary {
   agent: string;
   language: string;
   os: string;
@@ -24,26 +24,33 @@ interface Summary {
   scenarios: Array<{ name: string; status: string; durationSeconds: number }>;
 }
 
-interface MergedSummary {
+export interface MergedSummary {
   overallTotal: number;
   overallPassed: number;
   overallFailed: number;
   matrix: { agents: string[]; languages: string[]; os: string[] };
-  heatMap: Array<{ agent: string; language: string; os: string; total: number; passed: number; failed: number }>;
+  heatMap: Array<{
+    agent: string;
+    language: string;
+    os: string;
+    total: number;
+    passed: number;
+    failed: number;
+  }>;
   summaries: Summary[];
 }
 
-function escapeHtml(str: string): string {
+export function escapeHtml(str: string): string {
   return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function isMergedSummary(summary: Summary | MergedSummary): summary is MergedSummary {
-  return 'heatMap' in summary;
+  return "heatMap" in summary;
 }
 
 function generateOverviewSection(summary: Summary | MergedSummary): string {
@@ -79,11 +86,12 @@ function generateOverviewSection(summary: Summary | MergedSummary): string {
 }
 
 function generateMatrixTable(summary: MergedSummary): string {
-  if (summary.heatMap.length === 0) return '';
+  if (summary.heatMap.length === 0) return "";
 
-  const rows = summary.heatMap.map(entry => {
-    const statusClass = entry.failed > 0 ? 'fail' : 'pass';
-    return `<tr class="${statusClass}">
+  const rows = summary.heatMap
+    .map((entry) => {
+      const statusClass = entry.failed > 0 ? "fail" : "pass";
+      return `<tr class="${statusClass}">
       <td>${escapeHtml(entry.agent)}</td>
       <td>${escapeHtml(entry.language)}</td>
       <td>${escapeHtml(entry.os)}</td>
@@ -91,7 +99,8 @@ function generateMatrixTable(summary: MergedSummary): string {
       <td>${entry.passed}</td>
       <td>${entry.failed}</td>
     </tr>`;
-  }).join('\n');
+    })
+    .join("\n");
 
   return `
     <div class="matrix-table">
@@ -104,26 +113,45 @@ function generateMatrixTable(summary: MergedSummary): string {
 }
 
 function generateScenarioDetails(reports: ScenarioReport[]): string {
-  if (reports.length === 0) return '';
+  if (reports.length === 0) return "";
 
-  const sections = reports.map(report => {
-    const statusIcon = report.status === 'pass' ? '&#10003;' : '&#10007;';
-    const statusClass = report.status === 'pass' ? 'pass' : 'fail';
+  const sections = reports
+    .map((report) => {
+      const statusIcon = report.status === "pass" ? "&#10003;" : "&#10007;";
+      const statusClass = report.status === "pass" ? "pass" : "fail";
 
-    const steps = report.results.map((r, i) => {
-      const stepName = escapeHtml(r.step.id ?? r.step.prompt ?? `step-${i + 1}`);
-      const sClass = r.success ? 'pass' : 'fail';
-      const errorBlock = r.error
-        ? `<pre class="error">${escapeHtml(r.error)}</pre>`
-        : '';
-      return `<div class="step ${sClass}">
+      const steps = report.results
+        .map((r, i) => {
+          const rawPrompt = r.step.tag === "prompt" ? r.step.prompt : undefined;
+          const promptStr =
+            rawPrompt == null
+              ? undefined
+              : typeof rawPrompt === "string"
+                ? rawPrompt
+                : JSON.stringify(rawPrompt);
+          const stepName = escapeHtml(r.step.id ?? promptStr ?? `step-${i + 1}`);
+          const sClass = r.success ? "pass" : "fail";
+          const errorBlock = r.error ? `<pre class="error">${escapeHtml(r.error)}</pre>` : "";
+          const classificationBlock = r.classification
+            ? `<div class="classification"><span class="badge ${r.classification.category}">${escapeHtml(r.classification.category)}</span> ${escapeHtml(r.classification.guidance)}</div>`
+            : "";
+          const attemptsBlock = r.attempts
+            ? `<div class="attempts">Attempts: ${r.attempts
+                .map(
+                  (a) =>
+                    `#${a.attemptNumber} ${a.success ? "pass" : "fail"} (${a.durationSeconds.toFixed(1)}s)`,
+                )
+                .join(", ")}</div>`
+            : "";
+          return `<div class="step ${sClass}">
         <span class="step-name">${stepName}</span>
         <span class="step-duration">${r.durationSeconds.toFixed(1)}s</span>
-        ${errorBlock}
+        ${attemptsBlock}${errorBlock}${classificationBlock}
       </div>`;
-    }).join('\n');
+        })
+        .join("\n");
 
-    return `
+      return `
     <details>
       <summary class="${statusClass}">
         <span>${statusIcon}</span>
@@ -132,7 +160,8 @@ function generateScenarioDetails(reports: ScenarioReport[]): string {
       </summary>
       <div class="scenario-body">${steps}</div>
     </details>`;
-  }).join('\n');
+    })
+    .join("\n");
 
   return `
     <div class="scenarios">
@@ -142,14 +171,18 @@ function generateScenarioDetails(reports: ScenarioReport[]): string {
 }
 
 function generateFailureSummary(reports: ScenarioReport[]): string {
-  const failures = reports.filter(r => r.status === 'fail');
-  if (failures.length === 0) return '';
+  const failures = reports.filter((r) => r.status === "fail");
+  if (failures.length === 0) return "";
 
-  const items = failures.map(r => {
-    const failedStep = r.results.find(s => !s.success);
-    const error = failedStep?.error ?? 'unknown';
-    return `<li><strong>${escapeHtml(r.scenario)}</strong>: ${escapeHtml(error)}</li>`;
-  }).join('\n');
+  const items = failures
+    .map((r) => {
+      const failedStep = r.results.find((s) => !s.success);
+      const error = failedStep?.error ?? "unknown";
+      const guidance = failedStep?.classification?.guidance;
+      const guidanceBlock = guidance ? `<br/><em>${escapeHtml(guidance)}</em>` : "";
+      return `<li><strong>${escapeHtml(r.scenario)}</strong>: ${escapeHtml(error)}${guidanceBlock}</li>`;
+    })
+    .join("\n");
 
   return `
     <div class="failure-summary">
@@ -189,15 +222,27 @@ const CSS = `
   .step-name { font-weight: 500; }
   .step-duration { font-size: 0.85rem; color: #6c757d; margin-left: auto; }
   .attempts { width: 100%; font-size: 0.8rem; color: #6c757d; }
+  .classification { width: 100%; font-size: 0.8rem; margin-top: 4px; }
+  .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-weight: 600; font-size: 0.7rem; text-transform: uppercase; margin-right: 6px; color: #fff; }
+  .badge.agent { background: #6f42c1; }
+  .badge.build { background: #fd7e14; }
+  .badge.deploy { background: #0dcaf0; }
+  .badge.assertion { background: #ffc107; color: #1a1a2e; }
+  .badge.network { background: #20c997; }
+  .badge.infra { background: #6c757d; }
+  .badge.unknown { background: #adb5bd; }
   pre.error { width: 100%; background: #2b2d42; color: #edf2f4; padding: 8px; border-radius: 4px; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; }
   .failure-summary ul { list-style: none; padding-left: 0; }
   .failure-summary li { padding: 6px 0; border-bottom: 1px solid #dee2e6; }
   .failure-summary li:last-child { border-bottom: none; }
 `;
 
-export function generateHtmlReport(summary: Summary | MergedSummary, scenarioReports: ScenarioReport[]): string {
-  const title = isMergedSummary(summary) ? 'Merged Test Report' : 'Test Report';
-  const matrixSection = isMergedSummary(summary) ? generateMatrixTable(summary) : '';
+export function generateHtmlReport(
+  summary: Summary | MergedSummary,
+  scenarioReports: ScenarioReport[],
+): string {
+  const title = isMergedSummary(summary) ? "Merged Test Report" : "Test Report";
+  const matrixSection = isMergedSummary(summary) ? generateMatrixTable(summary) : "";
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -217,5 +262,4 @@ export function generateHtmlReport(summary: Summary | MergedSummary, scenarioRep
 </html>`;
 }
 
-export { escapeHtml };
-export type { Summary, MergedSummary, ScenarioReport as HtmlScenarioReport };
+export type { ScenarioReport as HtmlScenarioReport };

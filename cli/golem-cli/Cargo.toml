@@ -35,6 +35,7 @@ golem-wasm = { workspace = true, default-features = true }
 
 # External deps
 anyhow = { workspace = true }
+applying = { workspace = true }
 ariadne = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true }
@@ -44,11 +45,12 @@ bytes = { workspace = true }
 camino = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
+comfy-table = { workspace = true }
 clap-verbosity-flag = { workspace = true }
 clap_complete = { workspace = true }
-cli-table = { workspace = true }
 colored = { workspace = true }
 crossbeam-channel = { workspace = true }
+crossterm = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
 dotenvy = { workspace = true }
@@ -58,6 +60,7 @@ futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
 gag = { workspace = true }
 heck = { workspace = true }
+http = { workspace = true }
 humansize = { workspace = true }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
@@ -76,6 +79,7 @@ quote = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }
+reqwest-retry = { workspace = true }
 rustyline = { workspace = true }
 serde = { workspace = true }
 serde_derive = { workspace = true }
@@ -105,6 +109,7 @@ tree-sitter-json = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 tree-sitter-yaml = { workspace = true }
+strip-ansi-escapes = { workspace = true }
 unicode-segmentation = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
@@ -133,7 +138,6 @@ pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true }
-strip-ansi-escapes = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]

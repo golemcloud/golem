@@ -13,14 +13,18 @@
 // limitations under the License.
 
 use crate::fuzzy::Match;
-use crate::log::{LogColorize, LogIndent, log_warn_action, logln};
+pub use crate::log::log_table;
+pub use crate::log::logln;
+pub use crate::log::terminal_width;
+use crate::log::{LogColorize, LogIndent, current_indent_width, log_warn_action};
 use crate::model::app::ComponentLayerId;
 use crate::model::format::Format;
 use crate::model::text::component::is_sensitive_env_var_name;
 use anyhow::anyhow;
-use cli_table::{Row, Title, WithTitle};
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
+pub use comfy_table::Table as ComfyTable;
+use comfy_table::{Cell, CellAlignment, ColumnConstraint, ContentArrangement};
 use golem_common::model::AgentStatus;
 use golem_common::model::component::{InitialAgentFile, InstalledPlugin};
 use golem_common::model::worker::TypedAgentConfigEntry;
@@ -34,6 +38,28 @@ use synoptic::TokOpt;
 
 pub trait TextView {
     fn log(&self);
+}
+
+pub trait TruncatableTextView: TextView {
+    fn render_truncated(&self, max_lines: usize, colorize: bool) -> String;
+}
+
+/// Truncates a pre-rendered string to `max_lines` terminal lines.
+/// If truncated, appends a notice: `... N more lines (resize terminal to see all)`.
+pub fn truncate_rendered(rendered: String, max_lines: usize) -> String {
+    let lines: Vec<&str> = rendered.lines().collect();
+    if lines.len() <= max_lines {
+        rendered
+    } else {
+        let shown = max_lines.saturating_sub(1);
+        let mut out = lines[..shown].join("\n");
+        out.push('\n');
+        out.push_str(&format!(
+            "... {} more lines (resize terminal to see all)",
+            lines.len() - shown
+        ));
+        out
+    }
 }
 
 pub enum MessageWithFieldsIndentMode {
@@ -387,28 +413,94 @@ pub fn format_typed_config(config: &[TypedAgentConfigEntry]) -> String {
         .join("\n")
 }
 
-pub fn format_table<E, R>(table: &[E]) -> String
-where
-    R: Title + 'static + for<'b> From<&'b E>,
-    for<'a> &'a R: Row,
-{
-    let rows: Vec<R> = table.iter().map(R::from).collect();
-    let rows = &rows;
-
-    format!(
-        "{}",
-        rows.with_title()
-            .display()
-            .expect("Failed to display table")
-    )
+/// Describes a single table column: its header title, whether it is pinned to content
+/// width, and whether its data rows should be right-aligned.
+pub struct Column {
+    title: String,
+    fixed: bool,
+    right_aligned: bool,
 }
 
-pub fn log_table<E, R>(table: &[E])
-where
-    R: Title + 'static + for<'b> From<&'b E>,
-    for<'a> &'a R: Row,
-{
-    logln(format_table(table));
+impl Column {
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            fixed: false,
+            right_aligned: false,
+        }
+    }
+
+    /// Pin the column to its content width — it will not expand to fill surplus space.
+    pub fn fixed(mut self) -> Self {
+        self.fixed = true;
+        self
+    }
+
+    /// Right-align the data rows of this column.
+    pub fn right(mut self) -> Self {
+        self.right_aligned = true;
+        self
+    }
+
+    /// Pin to content width and right-align — the common case for numeric/fixed columns.
+    pub fn fixed_right(mut self) -> Self {
+        self.fixed = true;
+        self.right_aligned = true;
+        self
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.title
+    }
+}
+
+impl std::fmt::Display for Column {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.title)
+    }
+}
+
+/// Creates a comfy-table pre-configured with Dynamic arrangement, terminal width, and
+/// a preset chosen from the global colorize flag. Column constraints and alignment are
+/// applied from the `headers` descriptors.
+///
+/// The terminal width is automatically reduced by the current log indent width so that
+/// tables render correctly when called inside an indented context.
+pub fn new_table(headers: Vec<Column>) -> ComfyTable {
+    use comfy_table::presets::{ASCII_FULL_CONDENSED, UTF8_FULL_CONDENSED};
+    let colorize = SHOULD_COLORIZE.should_colorize();
+    let indent_width = current_indent_width();
+    let term_width = (terminal_width() as usize).saturating_sub(indent_width) as u16;
+    let mut table = ComfyTable::new();
+    table
+        .load_preset(if colorize {
+            UTF8_FULL_CONDENSED
+        } else {
+            ASCII_FULL_CONDENSED
+        })
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_width(term_width)
+        .set_header(
+            headers
+                .iter()
+                .map(|c| Cell::new(&c.title))
+                .collect::<Vec<_>>(),
+        );
+    for (i, col) in headers.iter().enumerate() {
+        if col.fixed {
+            table
+                .column_mut(i)
+                .unwrap()
+                .set_constraint(ColumnConstraint::ContentWidth);
+        }
+        if col.right_aligned {
+            table
+                .column_mut(i)
+                .unwrap()
+                .set_cell_alignment(CellAlignment::Right);
+        }
+    }
+    table
 }
 
 pub fn log_text_view<View: TextView>(view: &View) {
@@ -432,70 +524,6 @@ pub fn log_fuzzy_match(m: &Match) {
             m.option.log_color_ok_highlight()
         ),
     );
-}
-
-pub fn format_rib_source_for_error(source: &str, error: &str) -> String {
-    const CONTEXT_SIZE: usize = 3;
-    const LINE_COUNT_PADDING: usize = 4;
-
-    let parse_error_at_line_regex =
-        Regex::new("Parse error at line: (\\d+), column: (\\d+)").unwrap();
-
-    let source_info = match parse_error_at_line_regex.captures(error) {
-        Some(captures) => match (captures[1].parse::<usize>(), captures[2].parse::<usize>()) {
-            (Ok(line), Ok(column)) => Some((line, Some(column))),
-            _ => None,
-        },
-        None => None,
-    };
-
-    match source_info {
-        Some((err_line, err_column)) => {
-            let from = err_line.saturating_sub(CONTEXT_SIZE);
-            let to = err_line.saturating_add(CONTEXT_SIZE);
-
-            source
-                .lines()
-                .enumerate()
-                .filter_map(|(idx, line)| {
-                    let line_no = idx + 1;
-                    if from <= line_no && line_no <= to {
-                        Some(if line_no == err_line {
-                            let underline = format!(
-                                " {: >LINE_COUNT_PADDING$} | {}",
-                                "",
-                                match err_column {
-                                    Some(err_column) => {
-                                        let padding = err_column - 1;
-                                        format!("{: >padding$}^", "").red()
-                                    }
-                                    None => {
-                                        "^".repeat(line.len()).red().bold()
-                                    }
-                                }
-                            );
-                            format!(
-                                "{}{: >LINE_COUNT_PADDING$} | {}\n{}",
-                                ">".red().bold(),
-                                line_no,
-                                line.red().bold(),
-                                underline
-                            )
-                        } else {
-                            format!(" {line_no: >LINE_COUNT_PADDING$} | {line}")
-                        })
-                    } else {
-                        None
-                    }
-                })
-                .join("\n")
-        }
-        None => source
-            .lines()
-            .enumerate()
-            .map(|(idx, line)| format!(" {: >LINE_COUNT_PADDING$} | {}", idx + 1, line))
-            .join("\n"),
-    }
 }
 
 pub struct DecoratedIndent {

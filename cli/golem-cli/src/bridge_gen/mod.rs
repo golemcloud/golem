@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod parameter_naming;
 pub mod rust;
 pub mod type_naming;
 pub mod typescript;

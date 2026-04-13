@@ -38,9 +38,7 @@ import { UnstructuredBinary } from '../../../newTypes/binaryInput';
 import * as util from 'node:util';
 import { getLanguageCodes, getMimeTypes } from '../../schema/helpers';
 import { Config } from '../../../agentConfig';
-import { Type } from '@golemcloud/golem-ts-types-core';
-import { getConfigValue } from 'golem:agent/host@1.5.0';
-import * as WitType from '../types/WitType.js';
+import { QuotaToken } from '../../../host/quota';
 
 export type ParameterDetail = {
   name: string;
@@ -180,7 +178,14 @@ export function deserializeDataValue(
 
             schemaBasedIndex += 1;
 
-            return WitValue.toTsValue(elementValue.val, parameterType.val);
+            {
+              const tsVal = WitValue.toTsValue(elementValue.val, parameterType.val);
+              // If the parameter is a QuotaToken, reconstruct it from the record.
+              if (parameterType.tsType.kind === 'quota-token') {
+                return QuotaToken._fromRecord(tsVal);
+              }
+              return tsVal;
+            }
         }
       });
 
@@ -285,7 +290,7 @@ function constructConfigType(typeInfoInternal: TypeInfoInternal & { tag: 'config
 // Used to serialize the return type of a method back to DataValue
 export function serializeToDataValue(tsValue: any, typeInfoInternal: TypeInfoInternal): DataValue {
   switch (typeInfoInternal.tag) {
-    case 'analysed':
+    case 'analysed': {
       if (isEmptyType(typeInfoInternal)) {
         return {
           tag: 'tuple',
@@ -293,7 +298,11 @@ export function serializeToDataValue(tsValue: any, typeInfoInternal: TypeInfoInt
         };
       }
 
-      const witValue = WitValue.fromTsValueDefault(tsValue, typeInfoInternal.val);
+      // If this is a QuotaToken, convert to its record representation first.
+      const valueToSerialize =
+        typeInfoInternal.tsType.kind === 'quota-token' ? tsValue._toRecord() : tsValue;
+
+      const witValue = WitValue.fromTsValueDefault(valueToSerialize, typeInfoInternal.val);
       const elementValue: ElementValue = {
         tag: 'component-model',
         val: witValue,
@@ -302,6 +311,7 @@ export function serializeToDataValue(tsValue: any, typeInfoInternal: TypeInfoInt
         tag: 'tuple',
         val: [elementValue],
       };
+    }
 
     case 'principal':
       throw new Error(

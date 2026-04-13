@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::StartedComponents;
+use crate::compat::{preflight_registry_db_compat, write_registry_db_compat};
 use crate::router::start_router;
+use crate::{StartedComponents, registry_db_path};
 use anyhow::Context;
 use golem_cli::fs;
 use golem_common::config::DbConfig;
@@ -59,7 +60,6 @@ use tracing::{Instrument, info};
 use uuid::uuid;
 
 const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
-const BUILTIN_PLUGIN_OWNER_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_BUILTIN_PLUGIN_OWNER_TOKEN;
 
 pub struct LaunchArgs {
     pub router_addr: String,
@@ -118,7 +118,12 @@ pub async fn launch_golem_services(
             )
         })?;
 
+    preflight_registry_db_compat(&args.data_dir)
+        .await
+        .map_err(anyhow::Error::from)?;
+
     let started_components = start_components(args, &mut join_set).await?;
+    write_registry_db_compat(&args.data_dir).await?;
     let custom_request_port = started_components.worker_service.custom_request_port;
     let mcp_port = started_components.worker_service.mcp_port;
 
@@ -214,7 +219,7 @@ fn registry_service_config(
             ..Default::default()
         },
         db: DbConfig::Sqlite(DbSqliteConfig {
-            database: fs::path_to_str(&args.data_dir.join("registry.db"))?.to_string(),
+            database: fs::path_to_str(&registry_db_path(&args.data_dir))?.to_string(),
             max_connections: 4,
             foreign_keys: true,
         }),
@@ -238,7 +243,6 @@ fn registry_service_config(
                     app_limit: u64::MAX,
                     env_limit: u64::MAX,
                     component_limit: u64::MAX,
-                    worker_limit: u64::MAX,
                     worker_connection_limit: u64::MAX,
                     storage_limit: u64::MAX,
                     monthly_gas_limit: u64::MAX,
@@ -251,6 +255,7 @@ fn registry_service_config(
                     monthly_http_call_limit: u64::MAX,
                     monthly_rpc_call_limit: u64::MAX,
                     max_concurrent_agents_per_executor: 1_000_000_000_000_000_000, // unlimited sentinel
+                    oplog_writes_per_second: 1_000_000_000_000_000_000, // unlimited sentinel
                 },
             );
             plans
@@ -262,8 +267,8 @@ fn registry_service_config(
                 PrecreatedAccount {
                     id: AccountId(uuid!("51de7d7d-f286-49aa-b79a-96022f7e2df9")),
                     name: "Initial User".to_string(),
-                    email: AccountEmail("initial@user".to_string()),
-                    token: TokenSecret::trusted(ADMIN_TOKEN.to_string()),
+                    email: AccountEmail::new("initial@user"),
+                    token: Some(TokenSecret::trusted(ADMIN_TOKEN.to_string())),
                     plan_id,
                     role: AccountRole::Admin,
                 },
@@ -273,8 +278,8 @@ fn registry_service_config(
                 PrecreatedAccount {
                     id: AccountId(uuid!("b0a654af-d67f-4d73-a824-cf75e122bfc0")),
                     name: "Builtin Plugin Owner".to_string(),
-                    email: AccountEmail("builtin-plugin-owner@golem.cloud".to_string()),
-                    token: TokenSecret::trusted(BUILTIN_PLUGIN_OWNER_TOKEN.to_string()),
+                    email: AccountEmail::new("builtin-plugin-owner@golem.cloud"),
+                    token: None,
                     plan_id,
                     role: AccountRole::BuiltinPluginOwner,
                 },
@@ -282,6 +287,9 @@ fn registry_service_config(
             accounts
         },
         builtin_plugins: BuiltinPluginsConfig::Enabled(Empty {}),
+        security_scheme: golem_registry_service::config::SecuritySchemeConfig {
+            strict_issuer_url_validation: false,
+        },
         ..Default::default()
     })
 }

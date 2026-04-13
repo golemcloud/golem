@@ -38,7 +38,8 @@ mod raw_imports {
     pub use crate::model::oplog::payload;
     pub use crate::model::oplog::raw_types::AttributeMap;
     pub use crate::model::oplog::raw_types::*;
-    pub use crate::model::{AgentInvocationPayload, AgentInvocationResult, RetryConfig};
+    pub use crate::model::retry_policy::{NamedRetryPolicy, RetryPolicyState};
+    pub use crate::model::{AgentInvocationPayload, AgentInvocationResult};
     pub use golem_wasm::wasmtime::ResourceTypeId;
 
     pub use std::collections::HashSet;
@@ -67,6 +68,7 @@ oplog_entry! {
     Create {
         hint: false
         wit_raw_type: "raw-create-parameters"
+        wit_public_type: "create-parameters"
         raw {
             agent_id: AgentId,
             component_revision: ComponentRevision,
@@ -100,6 +102,7 @@ oplog_entry! {
     HostCall {
         hint: false
         wit_raw_type: "raw-host-call-parameters"
+        wit_public_type: "host-call-parameters"
         raw {
             function_name: payload::host_functions::HostFunctionName,
             request: payload::OplogPayload<payload::HostRequest>,
@@ -117,6 +120,7 @@ oplog_entry! {
     AgentInvocationStarted {
         hint: false
         wit_raw_type: "raw-agent-invocation-started-parameters"
+        wit_public_type: "agent-invocation-started-parameters"
         raw {
             idempotency_key: IdempotencyKey,
             payload: payload::OplogPayload<AgentInvocationPayload>,
@@ -132,6 +136,7 @@ oplog_entry! {
     AgentInvocationFinished {
         hint: false
         wit_raw_type: "raw-agent-invocation-finished-parameters"
+        wit_public_type: "agent-invocation-finished-parameters"
         raw {
             result: payload::OplogPayload<AgentInvocationResult>,
             consumed_fuel: i64,
@@ -147,6 +152,7 @@ oplog_entry! {
     Suspend {
         hint: true
         wit_raw_type: "timestamp"
+        wit_public_type: "timestamp"
         raw {}
         public {}
     },
@@ -154,6 +160,7 @@ oplog_entry! {
     Error {
         hint: true
         wit_raw_type: "raw-error-parameters"
+        wit_public_type: "error-parameters"
         raw {
             error: AgentError,
             /// Points to the oplog index where the retry should start from. Normally this can be just the
@@ -164,11 +171,15 @@ oplog_entry! {
             /// Whether the error occurred inside an active atomic region that has already performed side effects.
             /// This affects retry decisions for deterministic traps.
             inside_atomic_region: bool,
+            /// Optional semantic retry state. When present, this allows exact reconstruction
+            /// of semantic retry policies without count-based replay.
+            retry_policy_state: Option<RetryPolicyState>,
         }
         public {
             error: String,
             retry_from: OplogIndex,
             inside_atomic_region: bool,
+            retry_policy_state: Option<PublicRetryPolicyState>,
         }
     },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
@@ -176,6 +187,7 @@ oplog_entry! {
     NoOp {
         hint: false
         wit_raw_type: "timestamp"
+        wit_public_type: "timestamp"
         raw {}
         public {}
     },
@@ -186,6 +198,7 @@ oplog_entry! {
     Jump {
         hint: false
         wit_raw_type: "jump-parameters"
+        wit_public_type: "jump-parameters"
         raw {
             jump: OplogRegion,
         }
@@ -198,6 +211,7 @@ oplog_entry! {
     Interrupted {
         hint: true
         wit_raw_type: "timestamp"
+        wit_public_type: "timestamp"
         raw {}
         public {}
     },
@@ -205,25 +219,16 @@ oplog_entry! {
     Exited {
         hint: true
         wit_raw_type: "timestamp"
+        wit_public_type: "timestamp"
         raw {}
         public {}
-    },
-    /// Overrides the worker's retry policy
-    ChangeRetryPolicy {
-        hint: false
-        wit_raw_type: "change-retry-policy-parameters"
-        raw {
-            new_policy: RetryConfig,
-        }
-        public {
-            new_policy: PublicRetryConfig,
-        }
     },
     /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
     /// recovery except if there is a corresponding `EndAtomicRegion` entry.
     BeginAtomicRegion {
         hint: false
         wit_raw_type: "timestamp"
+        wit_public_type: "timestamp"
         raw {}
         public {}
     },
@@ -233,6 +238,7 @@ oplog_entry! {
     EndAtomicRegion {
         hint: false
         wit_raw_type: "end-atomic-region-parameters"
+        wit_public_type: "end-atomic-region-parameters"
         raw {
             begin_index: OplogIndex,
         }
@@ -246,6 +252,7 @@ oplog_entry! {
     BeginRemoteWrite {
         hint: false
         wit_raw_type: "timestamp"
+        wit_public_type: "timestamp"
         raw {}
         public {}
     },
@@ -253,6 +260,7 @@ oplog_entry! {
     EndRemoteWrite {
         hint: false
         wit_raw_type: "end-remote-write-parameters"
+        wit_public_type: "end-remote-write-parameters"
         raw {
             begin_index: OplogIndex,
         }
@@ -264,6 +272,7 @@ oplog_entry! {
     PendingAgentInvocation {
         hint: true
         wit_raw_type: "raw-pending-agent-invocation-parameters"
+        wit_public_type: "pending-agent-invocation-parameters"
         raw {
             idempotency_key: IdempotencyKey,
             payload: payload::OplogPayload<AgentInvocationPayload>,
@@ -282,6 +291,7 @@ oplog_entry! {
     PendingUpdate {
         hint: true
         wit_raw_type: "raw-pending-update-parameters"
+        wit_public_type: "pending-update-parameters"
         raw {
             description: UpdateDescription,
         }
@@ -294,6 +304,7 @@ oplog_entry! {
     SuccessfulUpdate {
         hint: true
         wit_raw_type: "raw-successful-update-parameters"
+        wit_public_type: "successful-update-parameters"
         raw {
             target_revision: ComponentRevision,
             new_component_size: u64,
@@ -309,6 +320,7 @@ oplog_entry! {
     FailedUpdate {
         hint: true
         wit_raw_type: "failed-update-parameters"
+        wit_public_type: "failed-update-parameters"
         raw {
             target_revision: ComponentRevision,
             details: Option<String>,
@@ -322,6 +334,7 @@ oplog_entry! {
     GrowMemory {
         hint: true
         wit_raw_type: "grow-memory-parameters"
+        wit_public_type: "grow-memory-parameters"
         raw {
             delta: u64
         }
@@ -333,6 +346,7 @@ oplog_entry! {
     FilesystemStorageUsageUpdate {
         hint: true
         wit_raw_type: "filesystem-storage-usage-update-parameters"
+        wit_public_type: "filesystem-storage-usage-update-parameters"
         raw {
             delta: i64
         }
@@ -344,6 +358,7 @@ oplog_entry! {
     CreateResource {
         hint: true
         wit_raw_type: "raw-create-resource-parameters"
+        wit_public_type: "create-resource-parameters"
         raw {
             id: AgentResourceId,
             resource_type_id: ResourceTypeId,
@@ -358,6 +373,7 @@ oplog_entry! {
     DropResource {
         hint: true
         wit_raw_type: "raw-drop-resource-parameters"
+        wit_public_type: "drop-resource-parameters"
         raw {
             id: AgentResourceId,
             resource_type_id: ResourceTypeId,
@@ -372,6 +388,7 @@ oplog_entry! {
     Log {
         hint: true
         wit_raw_type: "log-parameters"
+        wit_public_type: "log-parameters"
         raw {
             level: LogLevel,
             context: String,
@@ -387,6 +404,7 @@ oplog_entry! {
     Restart {
         hint: true
         wit_raw_type: "timestamp"
+        wit_public_type: "timestamp"
         raw {}
         public {}
     },
@@ -394,6 +412,7 @@ oplog_entry! {
     ActivatePlugin {
         hint: true
         wit_raw_type: "raw-activate-plugin-parameters"
+        wit_public_type: "activate-plugin-parameters"
         raw {
             plugin_grant_id: EnvironmentPluginGrantId,
         }
@@ -405,6 +424,7 @@ oplog_entry! {
     DeactivatePlugin {
         hint: true
         wit_raw_type: "raw-deactivate-plugin-parameters"
+        wit_public_type: "deactivate-plugin-parameters"
         raw {
             plugin_grant_id: EnvironmentPluginGrantId,
         }
@@ -416,6 +436,7 @@ oplog_entry! {
     Revert {
         hint: true
         wit_raw_type: "revert-parameters"
+        wit_public_type: "revert-parameters"
         raw {
             dropped_region: OplogRegion,
         }
@@ -427,6 +448,7 @@ oplog_entry! {
     CancelPendingInvocation {
         hint: true
         wit_raw_type: "cancel-pending-invocation-parameters"
+        wit_public_type: "cancel-pending-invocation-parameters"
         raw {
             idempotency_key: IdempotencyKey,
         }
@@ -438,6 +460,7 @@ oplog_entry! {
     StartSpan {
         hint: false
         wit_raw_type: "start-span-parameters"
+        wit_public_type: "start-span-parameters"
         raw {
             span_id: SpanId,
             parent: Option<SpanId>,
@@ -446,7 +469,9 @@ oplog_entry! {
         }
         public {
             span_id: SpanId,
+            #[cfg_attr(feature = "full", wit_field(rename = "parent"))]
             parent_id: Option<SpanId>,
+            #[cfg_attr(feature = "full", wit_field(rename = "linked-context-id"))]
             linked_context: Option<SpanId>,
             attributes: Vec<PublicAttribute>,
         }
@@ -455,6 +480,7 @@ oplog_entry! {
     FinishSpan {
         hint: false
         wit_raw_type: "finish-span-parameters"
+        wit_public_type: "finish-span-parameters"
         raw {
             span_id: SpanId,
         }
@@ -466,6 +492,7 @@ oplog_entry! {
     SetSpanAttribute {
         hint: false
         wit_raw_type: "set-span-attribute-parameters"
+        wit_public_type: "set-span-attribute-parameters"
         raw {
             span_id: SpanId,
             key: String,
@@ -481,6 +508,7 @@ oplog_entry! {
     ChangePersistenceLevel {
         hint: false
         wit_raw_type: "change-persistence-level-parameters"
+        wit_public_type: "change-persistence-level-parameters"
         raw {
             persistence_level: PersistenceLevel,
         }
@@ -492,6 +520,7 @@ oplog_entry! {
     BeginRemoteTransaction {
         hint: false
         wit_raw_type: "raw-begin-remote-transaction-parameters"
+        wit_public_type: "begin-remote-transaction-parameters"
         raw {
             transaction_id: TransactionId,
             /// BeginRemoteTransaction entries need to be repeated on retries, because they may need a new
@@ -507,6 +536,7 @@ oplog_entry! {
     PreCommitRemoteTransaction {
         hint: false
         wit_raw_type: "remote-transaction-parameters"
+        wit_public_type: "remote-transaction-parameters"
         raw {
             begin_index: OplogIndex,
         }
@@ -518,6 +548,7 @@ oplog_entry! {
     PreRollbackRemoteTransaction {
         hint: false
         wit_raw_type: "remote-transaction-parameters"
+        wit_public_type: "remote-transaction-parameters"
         raw {
             begin_index: OplogIndex,
         }
@@ -529,6 +560,7 @@ oplog_entry! {
     CommittedRemoteTransaction {
         hint: false
         wit_raw_type: "remote-transaction-parameters"
+        wit_public_type: "remote-transaction-parameters"
         raw {
             begin_index: OplogIndex,
         }
@@ -540,6 +572,7 @@ oplog_entry! {
     RolledBackRemoteTransaction {
         hint: false
         wit_raw_type: "remote-transaction-parameters"
+        wit_public_type: "remote-transaction-parameters"
         raw {
             begin_index: OplogIndex,
         }
@@ -551,6 +584,7 @@ oplog_entry! {
     Snapshot {
         hint: true
         wit_raw_type: "raw-snapshot-parameters"
+        wit_public_type: "snapshot-parameters"
         raw {
             data: payload::OplogPayload<Vec<u8>>,
             mime_type: String,
@@ -563,6 +597,7 @@ oplog_entry! {
     OplogProcessorCheckpoint {
         hint: true
         wit_raw_type: "raw-oplog-processor-checkpoint-parameters"
+        wit_public_type: "oplog-processor-checkpoint-parameters"
         raw {
             plugin_grant_id: EnvironmentPluginGrantId,
             target_agent_id: AgentId,
@@ -576,6 +611,30 @@ oplog_entry! {
             confirmed_up_to: OplogIndex,
             sending_up_to: OplogIndex,
             last_batch_start: OplogIndex,
+        }
+    },
+    /// Sets or overwrites a named retry policy (persisted to oplog)
+    SetRetryPolicy {
+        hint: false
+        wit_raw_type: "set-retry-policy-parameters"
+        wit_public_type: "set-retry-policy-parameters"
+        raw {
+            policy: NamedRetryPolicy,
+        }
+        public {
+            policy: PublicNamedRetryPolicy,
+        }
+    },
+    /// Removes a named retry policy by name (persisted to oplog)
+    RemoveRetryPolicy {
+        hint: false
+        wit_raw_type: "remove-retry-policy-parameters"
+        wit_public_type: "remove-retry-policy-parameters"
+        raw {
+            name: String,
+        }
+        public {
+            name: String,
         }
     }
 }

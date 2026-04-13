@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use self::agent_secret::AgentSecretCommandHandler;
+use self::resource_definition::ResourceDefinitionCommandHandler;
+use self::retry_policy::RetryPolicyCommandHandler;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
 use crate::command::{
@@ -65,6 +67,8 @@ mod partial_match;
 mod plugin;
 mod profile;
 mod repl;
+mod resource_definition;
+mod retry_policy;
 pub(crate) mod template;
 mod worker;
 
@@ -407,6 +411,18 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .handle_command(subcommand)
                         .await
                 }
+                GolemCliSubcommand::RetryPolicy { subcommand } => {
+                    self.ctx
+                        .retry_policy_handler()
+                        .handle_command(subcommand)
+                        .await
+                }
+                GolemCliSubcommand::Resource { subcommand } => {
+                    self.ctx
+                        .resource_definition_handler()
+                        .handle_command(subcommand)
+                        .await
+                }
                 GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),
             }
         })
@@ -426,6 +442,8 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 //       if the need ever arises
 pub trait Handlers {
     fn agent_secret_handler(&self) -> AgentSecretCommandHandler;
+    fn retry_policy_handler(&self) -> RetryPolicyCommandHandler;
+    fn resource_definition_handler(&self) -> ResourceDefinitionCommandHandler;
     fn api_domain_handler(&self) -> ApiDomainCommandHandler;
     fn api_deployment_handler(&self) -> ApiDeploymentCommandHandler;
     fn api_handler(&self) -> ApiCommandHandler;
@@ -451,6 +469,14 @@ pub trait Handlers {
 impl Handlers for Arc<Context> {
     fn agent_secret_handler(&self) -> AgentSecretCommandHandler {
         AgentSecretCommandHandler::new(self.clone())
+    }
+
+    fn retry_policy_handler(&self) -> RetryPolicyCommandHandler {
+        RetryPolicyCommandHandler::new(self.clone())
+    }
+
+    fn resource_definition_handler(&self) -> ResourceDefinitionCommandHandler {
+        ResourceDefinitionCommandHandler::new(self.clone())
     }
 
     fn api_domain_handler(&self) -> ApiDomainCommandHandler {

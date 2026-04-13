@@ -35,14 +35,17 @@ use crate::app::template::{AppTemplate, AppTemplateName};
 use crate::config::AuthenticationConfig;
 use crate::config::{NamedProfile, ProfileConfig, ProfileName};
 use anyhow::{Context, anyhow};
+use clap::ValueEnum;
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, Error};
 use golem_common::model::account::AccountId;
+use golem_common::model::quota::EnforcementAction;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::ffi::OsStr;
 use std::fmt;
+use std::fmt::Display;
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
 use std::path::PathBuf;
@@ -264,7 +267,50 @@ impl From<golem_client::model::Account> for AccountDetails {
     fn from(value: golem_client::model::Account) -> Self {
         Self {
             account_id: value.id,
-            email: value.email.0,
+            email: value.email.into_inner(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum EnforcementActionArg {
+    Throttle,
+    Reject,
+    Terminate,
+}
+
+impl Display for EnforcementActionArg {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EnforcementActionArg::Throttle => write!(f, "throttle"),
+            EnforcementActionArg::Reject => write!(f, "reject"),
+            EnforcementActionArg::Terminate => write!(f, "terminate"),
+        }
+    }
+}
+
+impl FromStr for EnforcementActionArg {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "throttle" => Ok(Self::Throttle),
+            "reject" => Ok(Self::Reject),
+            "terminate" => Ok(Self::Terminate),
+            _ => Err(format!(
+                "Unknown enforcement actions: {s}. Expected one of \"throttle\", \"reject\", \"terminate\""
+            )),
+        }
+    }
+}
+
+impl From<EnforcementActionArg> for EnforcementAction {
+    fn from(value: EnforcementActionArg) -> Self {
+        match value {
+            EnforcementActionArg::Throttle => Self::Throttle,
+            EnforcementActionArg::Terminate => Self::Terminate,
+            EnforcementActionArg::Reject => Self::Reject,
         }
     }
 }

@@ -36,6 +36,11 @@ max_metadata_capacity = 16384
 max_resolved_component_capacity = 1024
 time_to_idle = "12h"
 
+[direct_invocation_auth_cache]
+cache_capacity = 1024
+cache_eviction_interval = "1m"
+cache_ttl = "5m"
+
 [engine]
 enable_fs_cache = false
 
@@ -123,6 +128,7 @@ indexed_storage_layers = 2
 max_operations_before_commit = 128
 max_operations_before_commit_ephemeral = 1024
 max_payload_size = 65536
+oplog_rate_limit_enabled = false
 plugin_max_commit_count = 3
 plugin_max_elapsed_time = "5s"
 
@@ -151,6 +157,10 @@ multiplier = 2.0
 type = "Disabled"
 
 [public_worker_api.tls.config]
+
+[quota_service]
+inline_wait_threshold = "1m"
+renewal_interval = "10s"
 
 [rdbms.pool]
 acquire_timeout = "3s"
@@ -332,6 +342,11 @@ without_time = false
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
 # 
+# [direct_invocation_auth_cache]
+# cache_capacity = 1024
+# cache_eviction_interval = "1m"
+# cache_ttl = "5m"
+# 
 # [engine]
 # enable_fs_cache = false
 # 
@@ -419,6 +434,7 @@ without_time = false
 # max_operations_before_commit = 128
 # max_operations_before_commit_ephemeral = 1024
 # max_payload_size = 65536
+# oplog_rate_limit_enabled = false
 # plugin_max_commit_count = 3
 # plugin_max_elapsed_time = "5s"
 # 
@@ -447,6 +463,10 @@ without_time = false
 # type = "Disabled"
 # 
 # [public_worker_api.tls.config]
+# 
+# [quota_service]
+# inline_wait_threshold = "1m"
+# renewal_interval = "10s"
 # 
 # [rdbms.pool]
 # acquire_timeout = "3s"
@@ -612,6 +632,11 @@ without_time = false
 # max_resolved_component_capacity = 1024
 # time_to_idle = "12h"
 # 
+# [direct_invocation_auth_cache]
+# cache_capacity = 1024
+# cache_eviction_interval = "1m"
+# cache_ttl = "5m"
+# 
 # [engine]
 # enable_fs_cache = false
 # 
@@ -685,6 +710,7 @@ without_time = false
 # max_operations_before_commit = 128
 # max_operations_before_commit_ephemeral = 1024
 # max_payload_size = 65536
+# oplog_rate_limit_enabled = false
 # plugin_max_commit_count = 3
 # plugin_max_elapsed_time = "5s"
 # 
@@ -713,6 +739,10 @@ without_time = false
 # type = "Disabled"
 # 
 # [public_worker_api.tls.config]
+# 
+# [quota_service]
+# inline_wait_threshold = "1m"
+# renewal_interval = "10s"
 # 
 # [rdbms.pool]
 # acquire_timeout = "3s"

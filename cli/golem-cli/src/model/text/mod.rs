@@ -26,6 +26,8 @@ pub mod http_api_domain;
 pub mod http_api_security;
 pub mod plugin;
 pub mod profile;
+pub mod resource_definition;
+pub mod retry_policy;
 pub mod server;
 pub mod template;
 pub mod token;

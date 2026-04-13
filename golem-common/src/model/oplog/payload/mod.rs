@@ -22,7 +22,7 @@ use crate::model::component::ComponentRevision;
 use crate::model::oplog::PayloadId;
 use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, SerializableDateTime, SerializableFileTimes,
-    SerializableSocketError,
+    SerializableSocketError, SerializableWebsocketError, SerializableWebsocketMessage,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -31,6 +31,7 @@ use crate::model::oplog::types::{
     SerializableRdbmsRequest, SerializableRpcError, SerializableScheduledInvocation,
     SerializableStreamError,
 };
+use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
 use crate::model::worker::RevertWorkerTarget;
 use crate::model::{AgentId, ComponentId, ForkResult, IdempotencyKey, OplogIndex, PromiseId};
 use crate::oplog_payload;
@@ -184,6 +185,39 @@ oplog_payload! {
         SocketsResolveName {
             name: String
         },
+        WebsocketConnect {
+            url: String,
+            headers: Option<Vec<(String, String)>>,
+        },
+        WebsocketSend {
+            message: SerializableWebsocketMessage,
+        },
+        WebsocketReceive {},
+        WebsocketReceiveWithTimeout {
+            timeout_ms: u64,
+        },
+        WebsocketClose {
+            code: Option<u16>,
+            reason: Option<String>,
+        },
+        QuotaTokenRequest {
+            resource_name: String,
+            expected_use: u64,
+        },
+        QuotaReserveRequest {
+            amount: u64,
+        },
+        QuotaCommitRequest {
+            used: u64,
+        },
+        GolemRetryPolicyByName {
+            name: String
+        },
+        GolemRetryResolvePolicy {
+            verb: String,
+            noun_uri: String,
+            properties: Vec<(String, PredicateValue)>
+        },
     }
 }
 
@@ -328,6 +362,21 @@ oplog_payload! {
         SocketsResolveName {
             result: Result<SerializableIpAddresses, SerializableSocketError>
         },
+        WebsocketConnectResponse {
+            result: Result<(), SerializableWebsocketError>,
+        },
+        WebsocketSendResponse {
+            result: Result<(), SerializableWebsocketError>,
+        },
+        WebsocketReceiveResponse {
+            result: Result<SerializableWebsocketMessage, SerializableWebsocketError>,
+        },
+        WebsocketReceiveWithTimeoutResponse {
+            result: Result<Option<SerializableWebsocketMessage>, SerializableWebsocketError>,
+        },
+        WebsocketCloseResponse {
+            result: Result<(), SerializableWebsocketError>,
+        },
         StreamCheckWrite {
             result: Result<u64, SerializableStreamError>
         },
@@ -339,6 +388,44 @@ oplog_payload! {
         },
         StreamWriteResult {
             result: Result<(), SerializableStreamError>
+        },
+        StreamWriteWithBytes {
+            result: Result<Vec<u8>, SerializableStreamError>
+        },
+        StreamWriteZeroes {
+            result: Result<u64, SerializableStreamError>
+        },
+        /// Persisted when a quota-token is constructed.
+        /// Credit value is always 0 on a fresh acquire, but the timestamp is the
+        /// starting point for credit accrual and must be restored on replay.
+        QuotaTokenAcquired {
+            /// Unix timestamp in milliseconds at which the acquire took place.
+            credit_at_ms: i64,
+        },
+        /// Persisted when reserve is called.
+        QuotaReserveResult {
+            /// The full result of the reserve call.
+            result: crate::model::quota::ReserveResult,
+            /// Credit value on the LeaseInterest after this reserve (for replay).
+            credit_after: i64,
+            /// Unix timestamp in milliseconds when credit_after was recorded.
+            credit_after_at_ms: i64,
+        },
+        /// Persisted when commit is called.
+        QuotaCommitResult {
+            /// Credit value on the LeaseInterest after this commit (for replay).
+            credit_after: i64,
+            /// Unix timestamp in milliseconds when credit_after was recorded.
+            credit_after_at_ms: i64,
+        },
+        GolemRetryPolicies {
+            policies: Vec<NamedRetryPolicy>
+        },
+        GolemRetryNamedPolicy {
+            policy: Option<NamedRetryPolicy>
+        },
+        GolemRetryResolvedPolicy {
+            policy: Option<RetryPolicy>
         }
     }
 }
@@ -410,10 +497,10 @@ pub mod host_functions {
         (HttpTypesIncomingBodyStreamSkip => "http::types::incoming_body_stream", "skip", HttpRequest, StreamSkip),
         (HttpTypesIncomingBodyStreamBlockingSkip => "http::types::incoming_body_stream", "blocking_skip", HttpRequest, StreamSkip),
         (HttpTypesOutgoingBodyStreamCheckWrite => "http::types::outgoing_body_stream", "check_write", HttpRequest, StreamCheckWrite),
-        (HttpTypesOutgoingBodyStreamWrite => "http::types::outgoing_body_stream", "write", HttpRequest, StreamWriteResult),
+        (HttpTypesOutgoingBodyStreamWrite => "http::types::outgoing_body_stream", "write", HttpRequest, StreamWriteWithBytes),
         (HttpTypesOutgoingBodyStreamFlush => "http::types::outgoing_body_stream", "flush", HttpRequest, StreamWriteResult),
         (HttpTypesOutgoingBodyStreamBlockingFlush => "http::types::outgoing_body_stream", "blocking_flush", HttpRequest, StreamWriteResult),
-        (HttpTypesOutgoingBodyStreamWriteZeroes => "http::types::outgoing_body_stream", "write_zeroes", HttpRequest, StreamWriteResult),
+        (HttpTypesOutgoingBodyStreamWriteZeroes => "http::types::outgoing_body_stream", "write_zeroes", HttpRequest, StreamWriteZeroes),
         (HttpTypesOutgoingBodyStreamSplice => "http::types::outgoing_body_stream", "splice", HttpRequest, StreamSkip),
         (HttpTypesOutgoingBodyStreamBlockingSplice => "http::types::outgoing_body_stream", "blocking_splice", HttpRequest, StreamSkip),
         (WallClockNow => "wall_clock", "now", NoInput, WallClock),
@@ -453,7 +540,18 @@ pub mod host_functions {
         (GolemApiRevertWorker => "golem::api", "revert_worker", GolemApiRevertAgent, GolemApiUnit),
         (GolemApiResolveComponentId => "golem::api", "resolve_component_id", GolemApiComponentSlug, GolemApiComponentId),
         (GolemApiResolveAgentIdStrict => "golem::api", "resolve_agent_id_strict", GolemApiComponentSlugAndAgentName, GolemApiAgentId),
-        (GolemApiFork => "golem::api", "fork", NoInput, GolemApiFork)
+        (GolemApiFork => "golem::api", "fork", NoInput, GolemApiFork),
+        (WebsocketClientConnect => "golem:websocket/client", "connect", WebsocketConnect, WebsocketConnectResponse),
+        (WebsocketClientSend => "golem:websocket/client", "send", WebsocketSend, WebsocketSendResponse),
+        (WebsocketClientReceive => "golem:websocket/client", "receive", WebsocketReceive, WebsocketReceiveResponse),
+        (WebsocketClientReceiveWithTimeout => "golem:websocket/client", "receive-with-timeout", WebsocketReceiveWithTimeout, WebsocketReceiveWithTimeoutResponse),
+        (WebsocketClientClose => "golem:websocket/client", "close", WebsocketClose, WebsocketCloseResponse),
+        (GolemQuotaTokenNew => "golem::quota::quota-token", "[constructor]quota-token", QuotaTokenRequest, QuotaTokenAcquired),
+        (GolemQuotaTokenReserve => "golem::quota::quota-token", "reserve", QuotaReserveRequest, QuotaReserveResult),
+        (GolemQuotaReservationCommit => "golem::quota::reservation", "commit", QuotaCommitRequest, QuotaCommitResult),
+        (GolemApiRetryGetRetryPolicies => "golem::api::retry", "get_retry_policies", NoInput, GolemRetryPolicies),
+        (GolemApiRetryGetRetryPolicyByName => "golem::api::retry", "get_retry_policy_by_name", GolemRetryPolicyByName, GolemRetryNamedPolicy),
+        (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy)
     }
 }
 

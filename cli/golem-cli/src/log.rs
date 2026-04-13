@@ -21,6 +21,7 @@ use colored::{ColoredString, Colorize};
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, OnceLock, RwLock};
+
 use terminal_size::terminal_size;
 use textwrap::WordSplitter;
 use tracing::debug;
@@ -30,8 +31,16 @@ static LOG_STATE_BUFFER: LazyLock<RwLock<Vec<String>>> = LazyLock::new(RwLock::d
 static TERMINAL_WIDTH: OnceLock<Option<usize>> = OnceLock::new();
 static WRAP_PADDING: usize = 2;
 
-fn terminal_width() -> Option<usize> {
+/// Returns the terminal width as `Some(width)` or `None` if not detectable.
+/// Cached via `OnceLock` — read once at startup for use in `LogState` text-wrapping.
+fn terminal_width_opt() -> Option<usize> {
     *TERMINAL_WIDTH.get_or_init(|| terminal_size().map(|(width, _)| width.0 as usize))
+}
+
+/// Returns the current terminal width in columns, or 80 if not detectable.
+/// Called fresh each time — no caching — so watch-mode adapts to terminal resizes.
+pub fn terminal_width() -> u16 {
+    terminal_size().map(|(w, _)| w.0).unwrap_or(80)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,7 +66,7 @@ impl LogState {
             indents: Vec::new(),
             stashed_indents: Vec::new(),
             calculated_indent: String::new(),
-            max_width: terminal_width().map(|w| w - WRAP_PADDING),
+            max_width: terminal_width_opt().map(|w| w - WRAP_PADDING),
             output: Output::Stdout,
         }
     }
@@ -90,7 +99,8 @@ impl LogState {
             self.calculated_indent
                 .push_str(indent.as_ref().map(|s| s.as_str()).unwrap_or("  "))
         }
-        self.max_width = terminal_width().map(|w| w - WRAP_PADDING - self.calculated_indent.len());
+        self.max_width =
+            terminal_width_opt().map(|w| w - WRAP_PADDING - self.calculated_indent.len());
     }
 
     fn set_output(&mut self, output: Output) {
@@ -274,6 +284,38 @@ pub fn log_error_action(action: &str, subject: impl AsRef<str>) {
 
 pub fn logln(message: impl AsRef<str>) {
     logln_internal(message.as_ref());
+}
+
+pub fn current_indent_width() -> usize {
+    let state = LOG_STATE.read().unwrap();
+    strip_ansi_escapes::strip_str(&state.calculated_indent)
+        .chars()
+        .count()
+}
+
+/// Prints a comfy-table correctly inside the current log indent context.
+///
+/// Unlike `logln`, which would only prepend the indent to the first line of a multi-line
+/// string, this function prepends the current indent to **every** line of the table and
+/// writes directly to the active output channel — bypassing `logln_internal`'s text-wrapping
+/// logic, which must not be applied to pre-formatted table output.
+pub fn log_table(table: impl std::fmt::Display) {
+    let state = LOG_STATE.read().unwrap();
+    let indent = &state.calculated_indent;
+    for line in table.to_string().lines() {
+        match state.output {
+            Output::Stdout => println!("{indent}{line}"),
+            Output::Stderr => eprintln!("{indent}{line}"),
+            Output::None => {}
+            Output::TracingDebug => debug!("{indent}{line}"),
+            Output::BufferedUntilErr => {
+                LOG_STATE_BUFFER
+                    .write()
+                    .unwrap()
+                    .push(format!("{indent}{line}"));
+            }
+        }
+    }
 }
 
 pub fn logln_internal(message: &str) {

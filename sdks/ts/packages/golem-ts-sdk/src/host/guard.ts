@@ -15,15 +15,12 @@
 import {
   type OplogIndex,
   type PersistenceLevel,
-  type RetryPolicy,
   getIdempotenceMode,
   getOplogPersistenceLevel,
-  getRetryPolicy,
   markBeginOperation,
   markEndOperation,
   setIdempotenceMode,
   setOplogPersistenceLevel,
-  setRetryPolicy,
 } from './hostapi';
 
 /**
@@ -91,40 +88,6 @@ export function useIdempotenceMode(mode: boolean): IdempotenceModeGuard {
  */
 export function withIdempotenceMode<R>(mode: boolean, f: () => R): R {
   const guard = useIdempotenceMode(mode);
-  return executeWithDrop([guard], f);
-}
-
-/**
- * RetryPolicyGuard is a guard type that sets the retry policy.
- * You must call drop on the guard once you are finished using it.
- */
-export class RetryPolicyGuard {
-  constructor(private original: RetryPolicy) {}
-  drop() {
-    setRetryPolicy(this.original);
-  }
-}
-
-/**
- * Sets the retry policy and returns a guard.
- * You must call drop on the guard once you are finished using it.
- * @param policy - The retry policy to set.
- * @returns A RetryPolicyGuard instance.
- */
-export function useRetryPolicy(policy: RetryPolicy): RetryPolicyGuard {
-  const original = getRetryPolicy();
-  setRetryPolicy(policy);
-  return new RetryPolicyGuard(original);
-}
-
-/**
- * Executes a function with a specific retry policy.
- * @param policy - The retry policy to set.
- * @param f - The function to execute.
- * @returns The result of the executed function.
- */
-export function withRetryPolicy<R>(policy: RetryPolicy, f: () => R): R {
-  const guard = useRetryPolicy(policy);
   return executeWithDrop([guard], f);
 }
 

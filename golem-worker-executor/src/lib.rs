@@ -30,6 +30,9 @@ test_r::enable!();
 
 use self::durable_host::{DurableWorkerCtx, DurableWorkerCtxView};
 use self::services::agent_webhooks::AgentWebhooksService;
+use self::services::direct_invocation_auth::{
+    DefaultDirectInvocationAuthService, DirectInvocationAuthService,
+};
 use self::services::environment_state::EnvironmentStateService;
 use self::services::golem_config::EnvironmentStateServiceConfig;
 use self::services::promise::LazyPromiseService;
@@ -52,6 +55,7 @@ use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::plugin::{
     ForwardingOplogService, OplogProcessorPlugin, PerExecutorOplogProcessorPlugin,
 };
+use crate::services::oplog::rate_limited::RateLimitedOplogService;
 use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
@@ -160,10 +164,16 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     fn create_quota_service(
         &self,
         shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        golem_config: &GolemConfig,
+        shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn QuotaService> {
-        Arc::new(crate::services::quota::GrpcQuotaService::new(
+        crate::services::quota::GrpcQuotaService::new(
             shard_manager_client,
-        ))
+            golem_config.grpc.port,
+            shutdown_token,
+            golem_config.quota_service.renewal_interval,
+            golem_config.quota_service.inline_wait_threshold,
+        )
     }
 
     fn create_environment_state_service(
@@ -228,6 +238,17 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
     fn create_additional_deps(&self, registry_service: Arc<dyn RegistryService>) -> Ctx::ExtraDeps;
 
+    fn create_direct_invocation_auth_service(
+        &self,
+        registry_service: Arc<dyn RegistryService>,
+        golem_config: &GolemConfig,
+    ) -> Arc<dyn DirectInvocationAuthService> {
+        Arc::new(DefaultDirectInvocationAuthService::new(
+            registry_service,
+            &golem_config.direct_invocation_auth_cache,
+        ))
+    }
+
     fn create_rdbms_service(
         &self,
         golem_config: &GolemConfig,
@@ -236,8 +257,16 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms))
     }
 
+    fn wrap_rpc(
+        &self,
+        rpc: Arc<dyn crate::services::rpc::Rpc>,
+    ) -> Arc<dyn crate::services::rpc::Rpc> {
+        rpc
+    }
+
     async fn create_services(
         &self,
+        direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
         active_workers: Arc<ActiveWorkers<Ctx>>,
         engine: Arc<Engine>,
         linker: Arc<Linker<Ctx>>,
@@ -315,6 +344,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 worker_proxy.clone(),
                 shard_service.clone(),
             )),
+            direct_invocation_auth_service,
             active_workers.clone(),
             engine.clone(),
             linker.clone(),
@@ -348,6 +378,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             additional_deps.clone(),
             leak_sentinel.clone(),
         ));
+        let rpc = self.wrap_rpc(rpc);
 
         Ok(All::new(
             active_workers,
@@ -412,6 +443,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<Ctx>> {
         let mut linker = create_linker(engine, DurableWorkerCtxView::durable_ctx_mut)?;
         crate::preview2::golem_api_1_x::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
+            &mut linker,
+            DurableWorkerCtxView::durable_ctx_mut,
+        )?;
+        crate::preview2::golem_api_1_x::retry::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
@@ -730,7 +765,8 @@ pub async fn create_worker_executor_impl<
     let shard_manager_service =
         bootstrap.create_shard_manager_service(shard_manager_client.clone());
 
-    let quota_service = bootstrap.create_quota_service(shard_manager_client);
+    let quota_service =
+        bootstrap.create_quota_service(shard_manager_client, &golem_config, shutdown_token.clone());
 
     let config = bootstrap.create_wasmtime_config(&golem_config.engine);
     let engine = Arc::new(Engine::new(&config)?);
@@ -767,13 +803,28 @@ pub async fn create_worker_executor_impl<
         worker_proxy.clone(),
     ));
 
-    let oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
+    let resource_limits = bootstrap.create_resource_limits(
+        &golem_config,
+        registry_service.clone(),
+        shutdown_token.clone(),
+    );
+
+    let forwarding_oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
         base_oplog_service,
         oplog_processor_plugin.clone(),
         component_service.clone(),
         golem_config.oplog.plugin_max_commit_count,
         golem_config.oplog.plugin_max_elapsed_time,
     ));
+
+    let oplog_service: Arc<dyn OplogService> = if golem_config.oplog.oplog_rate_limit_enabled {
+        Arc::new(RateLimitedOplogService::new(
+            forwarding_oplog_service,
+            resource_limits.clone(),
+        ))
+    } else {
+        forwarding_oplog_service
+    };
 
     let worker_service = Arc::new(DefaultWorkerService::new(
         key_value_storage.clone(),
@@ -801,13 +852,10 @@ pub async fn create_worker_executor_impl<
         shutdown_token.clone(),
     );
 
-    let resource_limits = bootstrap.create_resource_limits(
-        &golem_config,
-        registry_service.clone(),
-        shutdown_token.clone(),
-    );
-
     let additional_deps = bootstrap.create_additional_deps(registry_service.clone());
+
+    let direct_invocation_auth_service =
+        bootstrap.create_direct_invocation_auth_service(registry_service.clone(), &golem_config);
 
     let rdbms_service = bootstrap.create_rdbms_service(&golem_config, &additional_deps);
 
@@ -815,6 +863,7 @@ pub async fn create_worker_executor_impl<
 
     let all = bootstrap
         .create_services(
+            direct_invocation_auth_service,
             active_workers,
             engine,
             linker,

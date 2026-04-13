@@ -39,7 +39,6 @@ pub enum UsageTracking {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, sqlx::Type, EnumIter)]
 #[sqlx(type_name = "integer")]
 pub enum UsageType {
-    TotalWorkerCount = 0,
     TotalWorkerConnectionCount = 1,
     MonthlyGasLimit = 2,
     MonthlyComponentUploadLimitBytes = 3,
@@ -57,7 +56,6 @@ impl UsageType {
             UsageType::TotalAppCount
             | UsageType::TotalEnvCount
             | UsageType::TotalComponentCount
-            | UsageType::TotalWorkerCount
             | UsageType::TotalWorkerConnectionCount
             | UsageType::TotalComponentStorageBytes => UsageGrouping::Total,
             UsageType::MonthlyGasLimit
@@ -73,8 +71,7 @@ impl UsageType {
             UsageType::TotalEnvCount => UsageTracking::SelectTotalEnvCount,
             UsageType::TotalComponentCount => UsageTracking::SelectTotalComponentCount,
             UsageType::TotalComponentStorageBytes => UsageTracking::SelectTotalComponentSize,
-            UsageType::TotalWorkerCount
-            | UsageType::TotalWorkerConnectionCount
+            UsageType::TotalWorkerConnectionCount
             | UsageType::MonthlyGasLimit
             | UsageType::MonthlyComponentUploadLimitBytes
             | UsageType::MonthlyHttpCalls
@@ -158,6 +155,7 @@ impl AccountUsage {
             available_http_calls,
             available_rpc_calls,
             max_concurrent_agents_per_executor: self.plan.max_concurrent_agents_per_executor.get(),
+            oplog_writes_per_second: self.plan.oplog_writes_per_second.get(),
         }
     }
 }

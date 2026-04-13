@@ -248,9 +248,33 @@ fn worker_error_variant_name(e: &golem_rust::bindings::golem::api::oplog::Worker
         golem_rust::bindings::golem::api::oplog::WorkerError::InternalError(_) => {
             "InternalError".to_string()
         }
-        golem_rust::bindings::golem::api::oplog::WorkerError::ExceededTableLimit => todo!(),
-        golem_rust::bindings::golem::api::oplog::WorkerError::NodeOutOfFilesystemStorage => todo!(),
-        golem_rust::bindings::golem::api::oplog::WorkerError::AgentExceededFilesystemStorageLimit => todo!(),
+        golem_rust::bindings::golem::api::oplog::WorkerError::DeterministicTrap(_) => {
+            "DeterministicTrap".to_string()
+        }
+        golem_rust::bindings::golem::api::oplog::WorkerError::TransientError(_) => {
+            "TransientError".to_string()
+        }
+        golem_rust::bindings::golem::api::oplog::WorkerError::PermanentError(_) => {
+            "PermanentError".to_string()
+        }
+        golem_rust::bindings::golem::api::oplog::WorkerError::ExceededTableLimit => {
+            "ExceededTableLimit".to_string()
+        }
+        golem_rust::bindings::golem::api::oplog::WorkerError::ExceededHttpCallLimit => {
+            "ExceededHttpCallLimit".to_string()
+        }
+        golem_rust::bindings::golem::api::oplog::WorkerError::ExceededRpcCallLimit => {
+            "ExceededRpcCallLimit".to_string()
+        }
+        golem_rust::bindings::golem::api::oplog::WorkerError::NodeOutOfFilesystemStorage => {
+            "NodeOutOfFilesystemStorage".to_string()
+        }
+        golem_rust::bindings::golem::api::oplog::WorkerError::AgentExceededFilesystemStorageLimit => {
+            "AgentExceededFilesystemStorageLimit".to_string()
+        }
+        golem_rust::bindings::golem::api::oplog::WorkerError::AgentTerminatedByQuota(_) => {
+            "AgentTerminatedByQuota".to_string()
+        }
     }
 }
 

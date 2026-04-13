@@ -316,7 +316,7 @@ impl TryFrom<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
             account: AccountSummary {
                 id: AccountId(value.account_id),
                 name: value.account_name,
-                email: AccountEmail(value.account_email),
+                email: AccountEmail::new(value.account_email),
             },
         })
     }

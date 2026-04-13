@@ -17,6 +17,7 @@ use crate::service::component::ComponentServiceError;
 use crate::service::limit::LimitServiceError;
 use crate::service::worker::CallWorkerExecutorError;
 use golem_common::SafeDisplay;
+use golem_common::base_model::api;
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{CanonicalFilePath, ComponentId};
@@ -89,48 +90,88 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::agen
         use golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error as GrpcError;
 
         match error {
-            WorkerServiceError::ComponentNotFound(_)
-            | WorkerServiceError::AccountIdNotFound(_)
-            | WorkerServiceError::AgentNotFound(_)
-            | WorkerServiceError::FileNotFound(_)
-            | WorkerServiceError::RegistryServiceError(RegistryServiceError::NotFound(_))
-            | WorkerServiceError::Component(ComponentServiceError::ComponentNotFound)
-            | WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. }) => {
+            WorkerServiceError::ComponentNotFound(_) => Self::NotFound(ErrorBody {
+                error: error.to_safe_string(),
+                code: api::error_code::COMPONENT_NOT_FOUND.to_string(),
+            }),
+            WorkerServiceError::AccountIdNotFound(_) => Self::NotFound(ErrorBody {
+                error: error.to_safe_string(),
+                code: api::error_code::ACCOUNT_NOT_FOUND.to_string(),
+            }),
+            WorkerServiceError::AgentNotFound(_) => Self::NotFound(ErrorBody {
+                error: error.to_safe_string(),
+                code: api::error_code::AGENT_NOT_FOUND.to_string(),
+            }),
+            WorkerServiceError::FileNotFound(_) => Self::NotFound(ErrorBody {
+                error: error.to_safe_string(),
+                code: api::error_code::FILE_NOT_FOUND.to_string(),
+            }),
+            WorkerServiceError::RegistryServiceError(RegistryServiceError::NotFound(_)) => {
                 Self::NotFound(ErrorBody {
                     error: error.to_safe_string(),
+                    code: api::error_code::RESOURCE_NOT_FOUND.to_string(),
+                })
+            }
+            WorkerServiceError::Component(ComponentServiceError::ComponentNotFound) => {
+                Self::NotFound(ErrorBody {
+                    error: error.to_safe_string(),
+                    code: api::error_code::COMPONENT_NOT_FOUND.to_string(),
+                })
+            }
+            WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. }) => {
+                Self::NotFound(ErrorBody {
+                    error: error.to_safe_string(),
+                    code: api::error_code::AGENT_NOT_FOUND.to_string(),
                 })
             }
 
-            WorkerServiceError::BadFileType(_)
-            | WorkerServiceError::TypeChecker(_)
-            | WorkerServiceError::RegistryServiceError(RegistryServiceError::BadRequest(_)) => {
+            WorkerServiceError::BadFileType(_) => Self::BadRequest(ErrorsBody {
+                errors: vec![error.to_safe_string()],
+                code: api::error_code::BAD_FILE_TYPE.to_string(),
+            }),
+            WorkerServiceError::TypeChecker(_) => Self::BadRequest(ErrorsBody {
+                errors: vec![error.to_safe_string()],
+                code: api::error_code::TYPE_CHECKER_ERROR.to_string(),
+            }),
+            WorkerServiceError::RegistryServiceError(RegistryServiceError::BadRequest(_)) => {
                 Self::BadRequest(ErrorsBody {
                     errors: vec![error.to_safe_string()],
+                    code: api::error_code::VALIDATION_ERROR.to_string(),
                 })
             }
 
-            WorkerServiceError::LimitError(LimitServiceError::LimitExceeded(_))
-            | WorkerServiceError::RegistryServiceError(RegistryServiceError::LimitExceeded(_)) => {
+            WorkerServiceError::LimitError(LimitServiceError::LimitExceeded(_)) => {
                 Self::LimitExceeded(ErrorBody {
                     error: error.to_safe_string(),
+                    code: api::error_code::LIMIT_EXCEEDED.to_string(),
                 })
             }
+            WorkerServiceError::RegistryServiceError(RegistryServiceError::LimitExceeded(_)) => {
+                Self::LimitExceeded(ErrorBody {
+                    error: error.to_safe_string(),
+                    code: api::error_code::LIMIT_EXCEEDED.to_string(),
+                })
+            }
+
+            WorkerServiceError::GolemError(worker_execution_error) => {
+                Self::InternalError(worker_execution_error.into())
+            }
+
+            WorkerServiceError::AuthError(_) => Self::Unauthorized(ErrorBody {
+                error: error.to_safe_string(),
+                code: api::error_code::AUTH_UNAUTHORIZED.to_string(),
+            }),
 
             WorkerServiceError::Internal(_)
             | WorkerServiceError::RegistryServiceError(_)
             | WorkerServiceError::InternalCallError(_)
             | WorkerServiceError::LimitError(_)
-            | WorkerServiceError::AuthError(_)
             | WorkerServiceError::Component(ComponentServiceError::InternalError(_)) => {
                 Self::InternalError(WorkerExecutionError {
                     error: Some(GrpcError::Unknown(UnknownError {
                         details: error.to_safe_string(),
                     })),
                 })
-            }
-
-            WorkerServiceError::GolemError(worker_execution_error) => {
-                Self::InternalError(worker_execution_error.into())
             }
         }
     }

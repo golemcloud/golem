@@ -15,6 +15,10 @@
 use crate::durable_host::keyvalue::error::ErrorEntry;
 use crate::durable_host::keyvalue::types::{BucketEntry, IncomingValueEntry, OutgoingValueEntry};
 use crate::durable_host::{Durability, DurableWorkerCtx, HostFailureKind, InternalRetryResult};
+use crate::metrics::storage::{
+    STORAGE_TYPE_KV, record_storage_bytes_written, record_storage_objects_deleted,
+    record_storage_objects_written,
+};
 use crate::preview2::wasi::keyvalue::eventual_batch::{
     Bucket, Error, Host, IncomingValue, Key, OutgoingValue,
 };
@@ -183,6 +187,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .await?;
 
         let result = if durability.is_live() {
+            let total_bytes: u64 = key_values.iter().map(|(_, v)| v.len() as u64).sum();
+            let count = key_values.len() as u64;
             let input = HostRequestKVBucketAndKeySizePairs {
                 bucket: bucket.clone(),
                 keys: key_values
@@ -205,6 +211,22 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
+            if result.is_ok() {
+                let account_id = self.created_by().to_string();
+                let environment_id_str = environment_id.to_string();
+                record_storage_bytes_written(
+                    STORAGE_TYPE_KV,
+                    &account_id,
+                    &environment_id_str,
+                    total_bytes,
+                );
+                record_storage_objects_written(
+                    STORAGE_TYPE_KV,
+                    &account_id,
+                    &environment_id_str,
+                    count,
+                );
+            }
             durability
                 .persist(self, input, HostResponseKVUnit { result })
                 .await
@@ -241,6 +263,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if durability.is_live() {
+            let count = keys.len() as u64;
             let input = HostRequestKVBucketAndKeys {
                 bucket: bucket.clone(),
                 keys: keys.clone(),
@@ -260,6 +283,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
+            if result.is_ok() {
+                let account_id = self.created_by().to_string();
+                let environment_id_str = project_id.to_string();
+                record_storage_objects_deleted(
+                    STORAGE_TYPE_KV,
+                    &account_id,
+                    &environment_id_str,
+                    count,
+                );
+            }
             durability
                 .persist(self, input, HostResponseKVUnit { result })
                 .await

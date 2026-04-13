@@ -67,11 +67,10 @@ cargo make wit
 
 When `wasm-rquickjs-cli` is updated or WIT dependencies change, the agent template WASM must be rebuilt.
 
-**Requires cargo-component v0.21.1** (exact version required):
+**Requires `wasm32-wasip2` target:**
 
 ```shell
-cargo install cargo-component --version 0.21.1
-cargo-component --version  # Verify: must be 0.21.1
+rustup target add wasm32-wasip2
 ```
 
 Rebuild the template:
@@ -97,8 +96,10 @@ This SDK is part of the main Golem repository but is **not built by `cargo make 
 
 ```shell
 # From repository root
-cargo make cli-tests  # Tests that use SDK features
+cargo make cli-integration-tests
 ```
+
+Use `cargo make cli-integration-tests-group1` through `cargo make cli-integration-tests-group6` to isolate failures or rerun only part of the CLI integration suite.
 
 ## Testing Local SDK Changes
 

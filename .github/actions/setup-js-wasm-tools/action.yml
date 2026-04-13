@@ -1,0 +1,64 @@
+name: 'Setup JS and WASM Build Tools'
+description: 'Setup Node, pnpm, and the shared WASM component toolchain'
+inputs:
+  node-version:
+    description: 'Node.js version to install'
+    default: 'lts/*'
+  pnpm-version:
+    description: 'pnpm version to install'
+    default: 'latest'
+  registry-url:
+    description: 'Optional npm registry URL for actions/setup-node'
+    default: ''
+  install-wasi-sdk:
+    description: 'Whether to install the WASI SDK'
+    default: 'true'
+  wasi-sdk-version:
+    description: 'WASI SDK version to install'
+    default: '25'
+  wasi-sdk-path:
+    description: 'Install path for the WASI SDK'
+    default: '/opt/wasi-sdk'
+  install-wasm-rquickjs:
+    description: 'Whether to install wasm-rquickjs'
+    default: 'true'
+  wasm-rquickjs-version:
+    description: 'wasm-rquickjs tag to install'
+    required: true
+  install-cargo-component:
+    description: 'Whether to install cargo-component'
+    default: 'false'
+  cargo-component-version:
+    description: 'cargo-component version to install'
+    default: '0.21.1'
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node
+      if: inputs.registry-url == ''
+      uses: actions/setup-node@v5
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Setup Node with registry
+      if: inputs.registry-url != ''
+      uses: actions/setup-node@v5
+      with:
+        node-version: ${{ inputs.node-version }}
+        registry-url: ${{ inputs.registry-url }}
+
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v5.0.0
+      with:
+        version: ${{ inputs.pnpm-version }}
+
+    - name: Setup WASM component tools
+      uses: ./.github/actions/setup-wasm-component-tools
+      with:
+        install-wasi-sdk: ${{ inputs.install-wasi-sdk }}
+        wasi-sdk-version: ${{ inputs.wasi-sdk-version }}
+        wasi-sdk-path: ${{ inputs.wasi-sdk-path }}
+        install-wasm-rquickjs: ${{ inputs.install-wasm-rquickjs }}
+        wasm-rquickjs-version: ${{ inputs.wasm-rquickjs-version }}
+        install-cargo-component: ${{ inputs.install-cargo-component }}
+        cargo-component-version: ${{ inputs.cargo-component-version }}

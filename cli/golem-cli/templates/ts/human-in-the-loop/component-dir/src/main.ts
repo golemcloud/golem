@@ -1,2 +1,2 @@
-export { HumanAgent } from './human-agent';
-export { WorkflowAgent } from './workflow-agent';
+import './human-agent';
+import './workflow-agent';

@@ -24,6 +24,7 @@ use self::status::{
     calculate_last_known_status_for_existing_worker, update_status_with_new_entries,
 };
 use crate::durable_host::recover_stderr_logs;
+use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
@@ -35,8 +36,8 @@ use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasAgentWebhooksService, HasAll,
     HasBlobStoreService, HasComponentService, HasConfig, HasEnvironmentStateService, HasEvents,
     HasExtraDeps, HasFileLoader, HasHttpConnectionPool, HasKeyValueService, HasOplog,
-    HasOplogService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
-    HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool,
+    HasOplogService, HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits,
+    HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool,
     HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
     UsesAllDeps,
 };
@@ -50,7 +51,6 @@ use futures::channel::oneshot;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
-use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
@@ -150,7 +150,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker, but does not start it
     pub async fn get_or_create_suspended<T>(
         deps: &T,
-        account_id: AccountId,
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
@@ -167,7 +166,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .get_or_add(
                 deps,
                 owned_agent_id,
-                account_id,
                 worker_env,
                 worker_config_vars,
                 worker_agent_config,
@@ -182,7 +180,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker and makes sure it is running
     pub async fn get_or_create_running<T>(
         deps: &T,
-        account_id: AccountId,
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
@@ -197,7 +194,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     {
         let worker = Self::get_or_create_suspended(
             deps,
-            account_id,
             owned_agent_id,
             worker_env,
             worker_config_vars,
@@ -242,7 +238,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn new<T: HasAll<Ctx>>(
         deps: &T,
-        account_id: &AccountId,
         owned_agent_id: OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
@@ -261,7 +256,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             oplog,
         } = Self::get_or_create_worker_metadata(
             deps,
-            account_id,
             &owned_agent_id,
             component_revision,
             worker_env,
@@ -308,12 +302,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // is enforced from the very first agent startup for this account.
         // Registration is idempotent — subsequent calls for the same account
         // on the same executor are instant (OnceCell cache hit in ResourceLimitsGrpc).
+        let owner_account_id = initial_worker_metadata.created_by;
         let resource_entry = deps
             .resource_limits()
-            .initialize_account(*account_id)
+            .initialize_account(owner_account_id)
             .await?;
         deps.active_workers()
-            .register_account_concurrency(*account_id, resource_entry)
+            .register_account_concurrency(owner_account_id, resource_entry)
             .await;
 
         let worker = Worker {
@@ -445,7 +440,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut instance_guard = self.lock_non_stopping_worker().await;
         let stop_result = match &*instance_guard {
             WorkerInstance::Running(running) => {
-                if is_running_agent_idle(running).await {
+                if self.is_running_worker_idle(running).await {
                     let stop_result = self
                         .stop_internal_locked(
                             &mut instance_guard,
@@ -581,6 +576,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn resume_replay(&self) -> Result<(), WorkerExecutorError> {
         match &*self.lock_non_stopping_worker().await {
             WorkerInstance::Running(running) => {
+                running.resume_replay_pending.store(true, Ordering::Release);
                 running
                     .sender
                     .send(WorkerCommand::ResumeReplay)
@@ -793,20 +789,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Returns true if the worker is running, but it is not performing any invocations at the moment
-    /// (ExecutionStatus::Suspended) and has no pending invocation in its invocation queue.
+    /// (ExecutionStatus::Suspended) and has no pending work that should keep the
+    /// loaded worker resident while memory and filesystem pressure is low.
     ///
     /// These workers can be stopped to free up available worker memory.
     pub async fn is_currently_idle_but_running(&self) -> bool {
         match &*self.instance.lock().await {
-            WorkerInstance::Running(running) => {
-                let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
-                let has_invocations = !self.pending_invocations().await.is_empty();
-                debug!(
-                    "Worker {} is running, waiting_for_command: {waiting_for_command} has_invocations: {has_invocations}",
-                    self.owned_agent_id
-                );
-                waiting_for_command && !has_invocations
-            }
+            WorkerInstance::Running(running) => self.is_running_worker_idle(running).await,
             WorkerInstance::WaitingForPermit(_) => {
                 debug!(
                     "Worker {} is waiting for permit, cannot be used to free up memory",
@@ -838,6 +827,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 false
             }
         }
+    }
+
+    async fn is_running_worker_idle(&self, running: &RunningWorker) -> bool {
+        let waiting_for_command = running.waiting_for_command.load(Ordering::Acquire);
+        let has_pending_invocations = !self.pending_invocations().await.is_empty();
+        let has_queued_internal_work = !running.queue.read().await.is_empty();
+        let has_resume_replay = running.resume_replay_pending.load(Ordering::Acquire);
+        let has_interrupt = running.interrupt_signal.lock().await.is_some();
+
+        debug!(
+            "Worker {} idle check: waiting_for_command={waiting_for_command} has_pending_invocations={has_pending_invocations} has_queued_internal_work={has_queued_internal_work} has_resume_replay={has_resume_replay} has_interrupt={has_interrupt}",
+            self.owned_agent_id
+        );
+
+        waiting_for_command
+            && !has_pending_invocations
+            && !has_queued_internal_work
+            && !has_resume_replay
+            && !has_interrupt
     }
 
     /// Gets the timestamp of the last time the execution status changed
@@ -883,12 +891,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // Dropping an OwnedSemaphorePermit returns its permits to the
             // semaphore automatically — no separate add_permits needed.
             let n = permits_to_release as usize;
-            let to_drop = if permit.num_permits() >= n {
-                permit.split(n)
-            } else {
-                // Defensive: releasing more than we hold — drop all.
-                permit.split(permit.num_permits())
-            };
+            let actual_n = n.min(permit.num_permits());
+            let to_drop = permit.split(actual_n);
+            let released_bytes =
+                crate::services::active_workers::filesystem_storage_permits_to_bytes(
+                    actual_n as u32,
+                );
+            record_filesystem_pool_released(released_bytes);
             drop(to_drop); // returns permits to the semaphore
         }
     }
@@ -1388,54 +1397,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
+        let status = self.last_known_status.read().await.clone();
         let maybe_result = self.invocation_results.read().await.get(key).cloned();
         if let Some(mut result) = maybe_result {
             result.cache(&self.owned_agent_id, self).await;
-            match result {
-                InvocationResult::Cached {
-                    result: Ok(values), ..
-                } => LookupResult::Complete(Ok(values)),
-                InvocationResult::Cached {
-                    result:
-                        Err(FailedInvocationResult {
-                            trap_type: TrapType::Interrupt(InterruptKind::Interrupt(_)),
-                            ..
-                        }),
-                    ..
-                } => LookupResult::Interrupted,
-                InvocationResult::Cached {
-                    result:
-                        Err(FailedInvocationResult {
-                            trap_type: TrapType::Interrupt(_),
-                            ..
-                        }),
-                    ..
-                } => LookupResult::Pending,
-                InvocationResult::Cached {
-                    result:
-                        Err(FailedInvocationResult {
-                            trap_type: TrapType::Error { error, .. },
-                            stderr,
-                        }),
-                    ..
-                } => LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed {
-                    error,
-                    stderr,
-                })),
-                InvocationResult::Cached {
-                    result:
-                        Err(FailedInvocationResult {
-                            trap_type: TrapType::Exit,
-                            ..
-                        }),
-                    ..
-                } => LookupResult::Complete(Err(WorkerExecutorError::runtime("Process exited"))),
-                InvocationResult::Lazy { .. } => {
-                    panic!("Unexpected lazy result after InvocationResult.cache")
-                }
-            }
+            lookup_result_from_cached_result(&status, key, result)
         } else {
-            let status = self.last_known_status.read().await;
             let is_pending = status
                 .pending_invocations
                 .iter()
@@ -1729,7 +1696,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             + Sync,
     >(
         this: &T,
-        account_id: &AccountId,
         owned_agent_id: &OwnedAgentId,
         component_revision: Option<ComponentRevision>,
         worker_env: Option<Vec<(String, String)>>,
@@ -1895,6 +1861,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ..Default::default()
                 };
 
+                // Use the component's authoritative account_id and environment_id
+                // rather than the caller-provided values. During cross-account or
+                // cross-environment RPC the caller may pass its own account/environment,
+                // but the worker must belong to the component's owning account and
+                // environment for correct metric attribution and quota enforcement.
                 let initial_worker_metadata = AgentMetadata {
                     agent_id: owned_agent_id.agent_id(),
                     // TODO: these environment variables already contain the component level values,
@@ -1903,8 +1874,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     env: worker_env,
                     config_vars: worker_config_vars.unwrap_or_default(),
                     agent_config: initial_agent_config,
-                    environment_id: owned_agent_id.environment_id(),
-                    created_by: *account_id,
+                    environment_id: component.environment_id,
+                    created_by: component.account_id,
                     created_at,
                     parent,
                     last_known_status: initial_status.clone(),
@@ -2206,12 +2177,15 @@ impl WaitingWorker {
 
         let handle = tokio::task::spawn(
             async move {
-                let permit = parent.active_workers().acquire(memory_requirement).await;
                 let account_id = parent.initial_worker_metadata.created_by;
                 let concurrent_agent_permit = parent
                     .active_workers()
                     .acquire_concurrent_agent(account_id)
                     .await;
+                // Do not reserve executor memory while waiting for a per-account
+                // concurrency slot. Otherwise one account could fill the memory
+                // pool with workers that are not allowed to run yet.
+                let permit = parent.active_workers().acquire(memory_requirement).await;
                 // Pre-acquire storage permits for this restart.
                 //
                 // We need to acquire `filesystem_storage_requirement + desired_extra` total:
@@ -2300,12 +2274,24 @@ struct RunningWorker {
     /// automatically when `RunningWorker` is dropped, returning storage
     /// permits to the pool.
     filesystem_storage_permit: Option<OwnedSemaphorePermit>,
-    /// Concurrent-agent semaphore permit for this account. Held for the
-    /// lifetime of the `RunningWorker` and returned automatically via `Drop`,
-    /// freeing a slot for the next waiting agent from the same account.
-    _concurrent_agent_permit: OwnedSemaphorePermit,
     waiting_for_command: Arc<AtomicBool>,
     interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
+    /// `ResumeReplay` is signalled directly through the command channel rather
+    /// than the internal queue, so eviction must treat it as pending work.
+    resume_replay_pending: Arc<AtomicBool>,
+}
+
+impl Drop for RunningWorker {
+    fn drop(&mut self) {
+        if let Some(ref permit) = self.filesystem_storage_permit {
+            let bytes = crate::services::active_workers::filesystem_storage_permits_to_bytes(
+                permit.num_permits() as u32,
+            );
+            if bytes > 0 {
+                record_filesystem_pool_released(bytes);
+            }
+        }
+    }
 }
 
 impl RunningWorker {
@@ -2326,6 +2312,8 @@ impl RunningWorker {
         let waiting_for_command_clone = waiting_for_command.clone();
         let interrupt_signal = Arc::new(async_lock::Mutex::new(None));
         let interrupt_signal_clone = interrupt_signal.clone();
+        let resume_replay_pending = Arc::new(AtomicBool::new(false));
+        let resume_replay_pending_clone = resume_replay_pending.clone();
 
         let span = span!(
             parent: None,
@@ -2348,6 +2336,8 @@ impl RunningWorker {
                     waiting_for_command_clone,
                     interrupt_signal_clone,
                     oom_retry_count,
+                    concurrent_agent_permit,
+                    resume_replay_pending_clone,
                 )
                 .instrument(span)
                 .await;
@@ -2361,9 +2351,9 @@ impl RunningWorker {
             queue,
             permit,
             filesystem_storage_permit: None,
-            _concurrent_agent_permit: concurrent_agent_permit,
             waiting_for_command,
             interrupt_signal,
+            resume_replay_pending,
         }
     }
 
@@ -2504,6 +2494,7 @@ impl RunningWorker {
             parent.key_value_service(),
             parent.blob_store_service(),
             parent.rdbms_service(),
+            parent.quota_service(),
             parent.worker_event_service.clone(),
             parent.active_workers(),
             parent.oplog_service(),
@@ -2607,6 +2598,8 @@ impl RunningWorker {
         waiting_for_command: Arc<AtomicBool>,
         interrupt_signal: Arc<async_lock::Mutex<Option<InterruptKind>>>,
         oom_retry_count: u32,
+        concurrent_agent_permit: OwnedSemaphorePermit,
+        resume_replay_pending: Arc<AtomicBool>,
     ) {
         let mut invocation_loop = InvocationLoop {
             receiver,
@@ -2616,6 +2609,8 @@ impl RunningWorker {
             waiting_for_command,
             interrupt_signal,
             oom_retry_count,
+            concurrent_agent_permit: Some(concurrent_agent_permit),
+            resume_replay_pending,
         };
         invocation_loop.run().await;
     }
@@ -2714,6 +2709,132 @@ impl InvocationResult {
             };
 
             *self = Self::Cached { result }
+        }
+    }
+}
+
+fn lookup_result_from_cached_result(
+    status: &AgentStatusRecord,
+    key: &IdempotencyKey,
+    result: InvocationResult,
+) -> LookupResult {
+    match result {
+        InvocationResult::Cached {
+            result: Ok(values), ..
+        } => LookupResult::Complete(Ok(values)),
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    // Retry marker error entries are persisted before the invocation has
+                    // actually finished. While the same idempotency key is still current
+                    // and the worker has not entered a terminal state, report it as
+                    // pending so lookup callers can observe the eventual terminal result.
+                    trap_type: TrapType::Error { .. },
+                    ..
+                }),
+        } if status.current_idempotency_key.as_ref() == Some(key)
+            && !matches!(status.status, AgentStatus::Failed | AgentStatus::Exited) =>
+        {
+            LookupResult::Pending
+        }
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    trap_type: TrapType::Interrupt(InterruptKind::Interrupt(_)),
+                    ..
+                }),
+            ..
+        } => LookupResult::Interrupted,
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    trap_type: TrapType::Interrupt(_),
+                    ..
+                }),
+            ..
+        } => LookupResult::Pending,
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    trap_type: TrapType::Error { error, .. },
+                    stderr,
+                }),
+            ..
+        } => LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed { error, stderr })),
+        InvocationResult::Cached {
+            result:
+                Err(FailedInvocationResult {
+                    trap_type: TrapType::Exit,
+                    ..
+                }),
+            ..
+        } => LookupResult::Complete(Err(WorkerExecutorError::runtime("Process exited"))),
+        InvocationResult::Lazy { .. } => {
+            panic!("Unexpected lazy result after InvocationResult.cache")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::oplog::AgentError;
+    use test_r::test;
+
+    fn status_with_current_key(status: AgentStatus, key: &IdempotencyKey) -> AgentStatusRecord {
+        AgentStatusRecord {
+            status,
+            current_idempotency_key: Some(key.clone()),
+            ..AgentStatusRecord::default()
+        }
+    }
+
+    #[test]
+    fn lookup_keeps_retrying_error_pending() {
+        let key = IdempotencyKey::fresh();
+        let lookup = lookup_result_from_cached_result(
+            &status_with_current_key(AgentStatus::Retrying, &key),
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult {
+                    trap_type: TrapType::Error {
+                        error: AgentError::TransientError("in-function retry".to_string()),
+                        retry_from: OplogIndex::from_u64(17),
+                    },
+                    stderr: String::new(),
+                }),
+            },
+        );
+
+        assert!(matches!(lookup, LookupResult::Pending));
+    }
+
+    #[test]
+    fn lookup_reports_terminal_error_as_failure() {
+        let key = IdempotencyKey::fresh();
+        let lookup = lookup_result_from_cached_result(
+            &status_with_current_key(AgentStatus::Failed, &key),
+            &key,
+            InvocationResult::Cached {
+                result: Err(FailedInvocationResult {
+                    trap_type: TrapType::Error {
+                        error: AgentError::TransientError("in-function retry".to_string()),
+                        retry_from: OplogIndex::from_u64(17),
+                    },
+                    stderr: String::new(),
+                }),
+            },
+        );
+
+        match lookup {
+            LookupResult::Complete(Err(WorkerExecutorError::InvocationFailed {
+                error: AgentError::TransientError(details),
+                stderr,
+            })) => {
+                assert_eq!(details, "in-function retry");
+                assert!(stderr.is_empty());
+            }
+            other => panic!("expected terminal lookup failure, got {other:?}"),
         }
     }
 }
@@ -2837,10 +2958,6 @@ fn is_snapshot_capable_oplog_processor(
 enum WorkerCommand {
     Unblock,
     ResumeReplay,
-}
-
-async fn is_running_agent_idle(running: &RunningWorker) -> bool {
-    running.waiting_for_command.load(Ordering::Acquire) && running.queue.read().await.is_empty()
 }
 
 #[derive(Debug)]

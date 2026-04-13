@@ -16,6 +16,9 @@
 
 package golem
 
+import golem.host.RetryApi
+import golem.host.js.JsNamedRetryPolicy
+
 /**
  * Utility guards that mirror the ergonomics of the JS SDK's guard helpers.
  *
@@ -35,13 +38,19 @@ object Guards {
     new PersistenceLevelGuard(() => HostApi.setOplogPersistenceLevel(original))
   }
 
-  def withRetryPolicy[A](policy: HostApi.RetryPolicy)(block: => A): A =
+  def withRetryPolicy[A](policy: JsNamedRetryPolicy)(block: => A): A =
     withGuard(useRetryPolicy(policy))(block)
 
-  def useRetryPolicy(policy: HostApi.RetryPolicy): RetryPolicyGuard = {
-    val original = HostApi.getRetryPolicy()
-    HostApi.setRetryPolicy(policy)
-    new RetryPolicyGuard(() => HostApi.setRetryPolicy(original))
+  def useRetryPolicy(policy: JsNamedRetryPolicy): RetryPolicyGuard = {
+    val previous = RetryApi.getRetryPolicyByName(policy.name)
+    val name     = policy.name
+    RetryApi.setRetryPolicy(policy)
+    new RetryPolicyGuard(() =>
+      previous match {
+        case Some(original) => RetryApi.setRetryPolicy(original)
+        case None           => RetryApi.removeRetryPolicy(name)
+      }
+    )
   }
 
   def withIdempotenceMode[A](flag: Boolean)(block: => A): A =

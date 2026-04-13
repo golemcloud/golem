@@ -1,0 +1,32 @@
+name: Check Scala SDK generated files
+description: Verifies generated Scala SDK artifacts are up to date and optionally checks clean tree state.
+
+inputs:
+  verify-clean-tree:
+    description: Whether to fail if sdks/scala has any tracked or untracked changes.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Verify Scala WIT d.ts files are committed
+      shell: bash
+      run: |
+        if ! git diff --exit-code sdks/scala/wit/dts; then
+          echo "The files in sdks/scala/wit/dts differ from the committed version."
+          echo "Please run './scripts/generate-agent-guest-wasm.sh' and commit the updated files."
+          exit 1
+        fi
+
+    - name: Verify Scala SDK tree is clean
+      if: inputs.verify-clean-tree == 'true'
+      shell: bash
+      run: |
+        CHANGES="$(git status --porcelain -- sdks/scala)"
+        if [ -n "$CHANGES" ]; then
+          echo "sdks/scala has uncommitted changes after pre-publish generation."
+          echo "Publishing from a dirty tree would produce a SNAPSHOT version."
+          echo "$CHANGES"
+          exit 1
+        fi

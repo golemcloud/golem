@@ -208,6 +208,64 @@ fn ts_counter_agent() -> GeneratedPackage {
     GeneratedPackage::new(agent_type)
 }
 
+#[test_dep(tagged_as = "ts_collision_parameter_names_agent")]
+fn ts_collision_parameter_names_agent() -> GeneratedPackage {
+    let agent_type = AgentType {
+        type_name: AgentTypeName("CollisionParameterNamesAgent".to_string()),
+        description: "Constructs the agent CollisionParameterNamesAgent".to_string(),
+        source_language: "typescript".to_string(),
+        constructor: AgentConstructor {
+            name: Some("CollisionParameterNamesAgent".to_string()),
+            description: "Constructs the agent CollisionParameterNamesAgent".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+        },
+        methods: vec![AgentMethod {
+            name: "collide".to_string(),
+            description: "Method with argument names colliding with generated internals"
+                .to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![
+                    NamedElementSchema {
+                        name: "args".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: str(),
+                        }),
+                    },
+                    NamedElementSchema {
+                        name: "methodParameters".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: str(),
+                        }),
+                    },
+                    NamedElementSchema {
+                        name: "result".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: str(),
+                        }),
+                    },
+                    NamedElementSchema {
+                        name: "multimodalInput".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: str(),
+                        }),
+                    },
+                ],
+            }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            http_endpoint: vec![],
+        }],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+        http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
+        config: Vec::new(),
+    };
+
+    GeneratedPackage::new(agent_type)
+}
+
 #[test_dep(tagged_as = "ts_code_first_snippets_foo_agent")]
 fn ts_code_first_snippets_foo_agent() -> GeneratedPackage {
     GeneratedPackage::new(code_first_snippets_agent_type(
@@ -260,6 +318,12 @@ fn multi_agent_wrapper_2_types_2_compiles(
 
 #[test]
 fn counter_agent_compiles(#[tagged_as("counter_agent")] _pkg: &GeneratedPackage) {}
+
+#[test]
+fn collision_parameter_names_agent_compiles(
+    #[tagged_as("ts_collision_parameter_names_agent")] _pkg: &GeneratedPackage,
+) {
+}
 
 #[test]
 fn code_first_snippets_ts_foo_agent_compiles(

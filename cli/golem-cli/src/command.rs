@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use self::api::agent_secret::AgentSecretSubcommand;
+use self::api::resource_definition::ResourceDefinitionSubcommand;
+use self::api::retry_policy::RetryPolicySubcommand;
 use crate::app::template::AppTemplateName;
 use crate::command::api::ApiSubcommand;
 use crate::command::cloud::CloudSubcommand;
@@ -634,7 +636,7 @@ pub enum GolemCliSubcommand {
         #[clap(long)]
         output_dir: Option<PathBuf>,
     },
-    /// Start Rib REPL for a selected component
+    /// Start REPL for a selected component
     Repl {
         /// Select the language for the REPL, defaults to the component's language
         #[arg(long)]
@@ -761,6 +763,16 @@ pub enum GolemCliSubcommand {
     AgentSecret {
         #[clap(subcommand)]
         subcommand: AgentSecretSubcommand,
+    },
+    /// Manage Retry Policies
+    RetryPolicy {
+        #[clap(subcommand)]
+        subcommand: RetryPolicySubcommand,
+    },
+    /// Manage quota resource definitions
+    Resource {
+        #[clap(subcommand)]
+        subcommand: ResourceDefinitionSubcommand,
     },
     /// Generate shell completion
     Completion {
@@ -1128,6 +1140,11 @@ pub mod worker {
             /// When set to true it queries for most up-to-date status for each agent, default is false
             #[arg(long, default_value_t = false)]
             precise: bool,
+            /// Watch mode: periodically clear the screen and redisplay the agent list.
+            /// Pass without a value to use the default interval (400ms), or --refresh=MILLIS
+            /// to set a custom polling interval. Conflicts with --scan-cursor.
+            #[arg(long, default_missing_value = "400", value_name = "MILLIS", num_args = 0..=1, conflicts_with = "scan_cursor")]
+            refresh: Option<u64>,
         },
         /// Connect to an agent and live stream its standard output, error and log channels
         Stream {
@@ -1275,9 +1292,7 @@ pub mod api {
     pub mod agent_secret {
         use crate::args::parse_agent_secret_path;
         use clap::Subcommand;
-        use golem_common::model::agent_secret::{
-            AgentSecretId, AgentSecretPath, AgentSecretRevision,
-        };
+        use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath};
 
         #[derive(Debug, Subcommand)]
         pub enum AgentSecretSubcommand {
@@ -1299,22 +1314,16 @@ pub mod api {
                 /// Id of the secret to update
                 #[arg(long)]
                 id: AgentSecretId,
-                /// Current revision of the agent secret
-                #[arg(long)]
-                current_revision: AgentSecretRevision,
                 /// Value of the secret in json
                 #[arg(long)]
                 secret_value: Option<String>,
             },
 
-            /// Update Agent Secret
+            /// Delete Agent Secret
             Delete {
                 /// Id of the secret to delete
                 #[arg(long)]
                 id: AgentSecretId,
-                /// Current revision of the agent secret
-                #[arg(long)]
-                current_revision: AgentSecretRevision,
             },
 
             /// List Agent Secrets
@@ -1322,9 +1331,139 @@ pub mod api {
         }
     }
 
+    pub mod resource_definition {
+        use crate::model::EnforcementActionArg;
+        use clap::Subcommand;
+        use golem_common::model::quota::{ResourceDefinitionId, ResourceDefinitionRevision};
+
+        #[derive(Debug, Subcommand)]
+        pub enum ResourceDefinitionSubcommand {
+            /// Create a quota resource definition in the environment
+            Create {
+                /// Name of the resource (unique within the environment)
+                #[arg(long)]
+                name: String,
+                /// Resource limit as JSON: one of
+                ///   {"type":"rate","value":N,"period":"second|minute|hour|day|month|year","max":N}
+                ///   {"type":"capacity","value":N}
+                ///   {"type":"concurrency","value":N}
+                #[arg(long)]
+                limit: String,
+                /// Enforcement action when the limit is exceeded: throttle | reject | terminate
+                #[arg(long, default_value_t = EnforcementActionArg::Throttle)]
+                enforcement_action: EnforcementActionArg,
+                /// Singular unit label (e.g. "token")
+                #[arg(long, default_value = "unit")]
+                unit: String,
+                /// Plural unit label (e.g. "tokens")
+                #[arg(long, default_value = "units")]
+                units: String,
+            },
+
+            /// Update an existing quota resource definition
+            Update {
+                /// ID of the resource definition to update
+                #[arg(long)]
+                id: ResourceDefinitionId,
+                /// Current revision of the resource definition
+                #[arg(long)]
+                current_revision: ResourceDefinitionRevision,
+                /// New resource limit as JSON (optional)
+                #[arg(long)]
+                limit: Option<String>,
+                /// New enforcement action (optional): throttle | reject | terminate
+                #[arg(long)]
+                enforcement_action: Option<EnforcementActionArg>,
+                /// New singular unit label (optional)
+                #[arg(long)]
+                unit: Option<String>,
+                /// New plural unit label (optional)
+                #[arg(long)]
+                units: Option<String>,
+            },
+
+            /// Delete a quota resource definition
+            Delete {
+                /// ID of the resource definition to delete
+                #[arg(long)]
+                id: ResourceDefinitionId,
+                /// Current revision of the resource definition
+                #[arg(long)]
+                current_revision: ResourceDefinitionRevision,
+            },
+
+            /// Get a quota resource definition by ID
+            Get {
+                /// ID of the resource definition
+                #[arg(long)]
+                id: ResourceDefinitionId,
+            },
+
+            /// List quota resource definitions in the environment
+            List,
+        }
+    }
+
+    pub mod retry_policy {
+        use clap::Subcommand;
+        use golem_common::model::retry_policy::RetryPolicyId;
+
+        #[derive(Debug, Subcommand)]
+        pub enum RetryPolicySubcommand {
+            /// Create a retry policy in the environment
+            Create {
+                /// Name of the retry policy
+                #[arg(long)]
+                name: String,
+                /// Priority (higher = checked first)
+                #[arg(long)]
+                priority: u32,
+                /// Predicate as JSON string
+                #[arg(long)]
+                predicate_json: String,
+                /// Policy as JSON string
+                #[arg(long)]
+                policy_json: String,
+            },
+
+            /// List retry policies in the environment
+            List,
+
+            /// Get a retry policy by ID
+            Get {
+                /// ID of the retry policy
+                #[arg(long)]
+                id: RetryPolicyId,
+            },
+
+            /// Update a retry policy
+            Update {
+                /// ID of the retry policy to update
+                #[arg(long)]
+                id: RetryPolicyId,
+                /// New priority (optional)
+                #[arg(long)]
+                priority: Option<u32>,
+                /// New predicate as JSON string (optional)
+                #[arg(long)]
+                predicate_json: Option<String>,
+                /// New policy as JSON string (optional)
+                #[arg(long)]
+                policy_json: Option<String>,
+            },
+
+            /// Delete a retry policy
+            Delete {
+                /// ID of the retry policy to delete
+                #[arg(long)]
+                id: RetryPolicyId,
+            },
+        }
+    }
+
     pub mod security_scheme {
         use clap::Subcommand;
-        use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
+        use golem_common::model::security_scheme::{ProviderKind, SecuritySchemeName};
 
         #[derive(Debug, Subcommand)]
         pub enum ApiSecuritySchemeSubcommand {
@@ -1332,9 +1471,15 @@ pub mod api {
             Create {
                 /// Security Scheme name
                 security_scheme_name: SecuritySchemeName,
-                /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft)
+                /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft, Custom)
                 #[arg(long)]
-                provider_type: Provider,
+                provider_type: ProviderKind,
+                /// Custom provider display name (required when provider_type is custom)
+                #[arg(long, required_if_eq("provider_type", "custom"))]
+                custom_provider_name: Option<String>,
+                /// Custom provider OIDC issuer URL (required when provider_type is custom)
+                #[arg(long, required_if_eq("provider_type", "custom"))]
+                custom_issuer_url: Option<String>,
                 /// Security Scheme client ID
                 #[arg(long)]
                 client_id: String,
@@ -1351,6 +1496,39 @@ pub mod api {
 
             /// Get HTTP API Security Scheme
             Get {
+                /// Security Scheme name
+                security_scheme_name: SecuritySchemeName,
+            },
+
+            /// Update HTTP API Security Scheme
+            Update {
+                /// Security Scheme name
+                security_scheme_name: SecuritySchemeName,
+                /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft, Custom)
+                #[arg(long)]
+                provider_type: Option<ProviderKind>,
+                /// Custom provider display name (required when provider_type is custom)
+                #[arg(long, required_if_eq("provider_type", "custom"))]
+                custom_provider_name: Option<String>,
+                /// Custom provider OIDC issuer URL (required when provider_type is custom)
+                #[arg(long, required_if_eq("provider_type", "custom"))]
+                custom_issuer_url: Option<String>,
+                /// Security Scheme client ID
+                #[arg(long)]
+                client_id: Option<String>,
+                /// Security Scheme client secret
+                #[arg(long)]
+                client_secret: Option<String>,
+                /// Security Scheme Scopes (replaces existing scopes), can be defined multiple times
+                #[arg(long)]
+                scope: Option<Vec<String>>,
+                /// Security Scheme redirect URL
+                #[arg(long)]
+                redirect_url: Option<String>,
+            },
+
+            /// Delete HTTP API Security Scheme
+            Delete {
                 /// Security Scheme name
                 security_scheme_name: SecuritySchemeName,
             },

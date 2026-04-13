@@ -16,9 +16,9 @@ use super::ApiResult;
 use super::error::ApiError;
 use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
 use crate::services::token::{TokenError, TokenService};
+use golem_common::base_model::api;
 use golem_common::model::Empty;
 use golem_common::model::auth::{Token, TokenWithSecret};
-use golem_common::model::error::ErrorBody;
 use golem_common::model::login::{
     EncodedOAuth2DeviceflowSession, OAuth2DeviceflowData, OAuth2DeviceflowStart, OAuth2Provider,
     OAuth2WebflowData, OAuth2WebflowStateId,
@@ -115,10 +115,10 @@ impl LoginApi {
             .get_by_secret(&token.secret(), &AuthCtx::system())
             .await
             .map_err(|err| match err {
-                TokenError::TokenBySecretNotFound => ApiError::Unauthorized(Json(ErrorBody {
-                    error: "Token not found".to_string(),
-                    cause: None,
-                })),
+                TokenError::TokenBySecretNotFound => ApiError::unauthorized(
+                    api::error_code::AUTH_UNAUTHORIZED,
+                    "Token not found".to_string(),
+                ),
                 other => other.into(),
             })?;
 
@@ -233,15 +233,22 @@ impl LoginApi {
 
         let redirect = match redirect {
             Some(r) => {
-                let url = url::Url::parse(&r)
-                    .map_err(|_| ApiError::bad_request("Invalid redirect URL".to_string()))?;
+                let url = url::Url::parse(&r).map_err(|_| {
+                    ApiError::bad_request(
+                        api::error_code::INVALID_REDIRECT_URL,
+                        "Invalid redirect URL".to_string(),
+                    )
+                })?;
                 if url
                     .domain()
                     .is_some_and(|d| d.starts_with("localhost") || d.contains("golem.cloud"))
                 {
                     Some(url)
                 } else {
-                    return Err(ApiError::bad_request("Invalid redirect domain".to_string()));
+                    return Err(ApiError::bad_request(
+                        api::error_code::INVALID_REDIRECT_URL,
+                        "Invalid redirect domain".to_string(),
+                    ));
                 }
             }
             None => None,
@@ -349,10 +356,10 @@ impl LoginApi {
     fn get_enabled_login_system(&self) -> ApiResult<&LoginSystemEnabled> {
         match &self.login_system {
             LoginSystem::Enabled(inner) => Ok(inner),
-            LoginSystem::Disabled => Err(ApiError::Conflict(Json(ErrorBody {
-                error: "Logins are disabled by configuration".to_string(),
-                cause: None,
-            }))),
+            LoginSystem::Disabled => Err(ApiError::forbidden(
+                api::error_code::FEATURE_DISABLED,
+                "Logins are disabled by configuration".to_string(),
+            )),
         }
     }
 }

@@ -66,7 +66,6 @@ id = "adb2694f-cd9f-425d-905d-ca2888c9c5de"
 name = "Builtin Plugin Owner"
 plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
 role = "builtin-plugin-owner"
-token = "32d6072d-64e9-4a4a-b8f9-fadf68bb446b"
 
 [initial_accounts.marketing]
 email = "marketing@user"
@@ -96,13 +95,13 @@ monthly_gas_limit = 1000000000000000000
 monthly_http_call_limit = 1000000000000000000
 monthly_rpc_call_limit = 1000000000000000000
 monthly_upload_limit = 1000000000
+oplog_writes_per_second = 1000000000000000000
 per_invocation_http_call_limit = 1000000000000000000
 per_invocation_rpc_call_limit = 1000000000000000000
 plan_id = "157dc684-00eb-496d-941c-da8fd1d15c63"
 plan_name = "default"
 storage_limit = 500000000
 worker_connection_limit = 100
-worker_limit = 10000
 
 [login]
 type = "OAuth2"
@@ -116,6 +115,9 @@ redirect_uri = "http://localhost:8080/v1/login/oauth2/web/callback"
 private_key = "MC4CAQAwBQYDK2VwBCIEIMDNO+xRAwWTDqt5wN84sCHviRldQMiylmSK715b5JnW"
 public_key = "MCowBQYDK2VwAyEA9gxANNtlWPBBTm0IEgvMgCEUXw+ohwffyM9wOL4O1pg="
 webflow_state_expiry = "5m"
+
+[security_scheme]
+strict_issuer_url_validation = true
 
 [tracing]
 console = false

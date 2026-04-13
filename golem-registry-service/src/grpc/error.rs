@@ -21,6 +21,7 @@ use crate::services::environment::EnvironmentError;
 use crate::services::environment_state::EnvironmentStateError;
 use crate::services::resource_definition::ResourceDefinitionError;
 use golem_common::IntoAnyhow;
+use golem_common::base_model::api;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_service_base::model::auth::AuthorizationError;
@@ -78,6 +79,7 @@ impl From<String> for GrpcApiError {
     fn from(value: String) -> Self {
         Self::InternalError(ErrorBody {
             error: value,
+            code: api::error_code::INTERNAL_UNKNOWN.to_string(),
             cause: None,
         })
     }
@@ -93,6 +95,7 @@ impl From<AuthorizationError> for GrpcApiError {
     fn from(value: AuthorizationError) -> Self {
         Self::Unauthorized(ErrorBody {
             error: value.to_string(),
+            code: api::error_code::AUTH_UNAUTHORIZED.to_string(),
             cause: None,
         })
     }
@@ -102,6 +105,7 @@ impl From<LimitExceededError> for GrpcApiError {
     fn from(value: LimitExceededError) -> Self {
         Self::LimitExceeded(ErrorBody {
             error: value.to_string(),
+            code: api::error_code::LIMIT_EXCEEDED.to_string(),
             cause: None,
         })
     }
@@ -111,11 +115,14 @@ impl From<AuthError> for GrpcApiError {
     fn from(value: AuthError) -> Self {
         let error: String = value.to_string();
         match value {
-            AuthError::CouldNotAuthenticate => {
-                Self::CouldNotAuthenticate(ErrorBody { error, cause: None })
-            }
+            AuthError::CouldNotAuthenticate => Self::CouldNotAuthenticate(ErrorBody {
+                error,
+                code: api::error_code::AUTH_UNAUTHORIZED.to_string(),
+                cause: None,
+            }),
             _ => Self::InternalError(ErrorBody {
                 error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
             }),
         }
@@ -126,13 +133,16 @@ impl From<AccountUsageError> for GrpcApiError {
     fn from(value: AccountUsageError) -> Self {
         let error: String = value.to_string();
         match value {
-            AccountUsageError::AccountNotfound(_) => {
-                Self::NotFound(ErrorBody { error, cause: None })
-            }
+            AccountUsageError::AccountNotfound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::ACCOUNT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
             AccountUsageError::Unauthorized(inner) => inner.into(),
             AccountUsageError::LimitExceeded(inner) => inner.into(),
             _ => Self::InternalError(ErrorBody {
                 error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
             }),
         }
@@ -146,16 +156,35 @@ impl From<ComponentError> for GrpcApiError {
             ComponentError::Unauthorized(inner) => inner.into(),
             ComponentError::LimitExceeded(inner) => inner.into(),
 
-            ComponentError::ParentEnvironmentNotFound(_)
-            | ComponentError::DeploymentRevisionNotFound(_)
-            | ComponentError::ComponentNotFound(_)
-            | ComponentError::ComponentByNameNotFound(_)
-            | ComponentError::AgentTypeForNameNotFound(_) => {
-                Self::NotFound(ErrorBody { error, cause: None })
-            }
+            ComponentError::ParentEnvironmentNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::ENVIRONMENT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
+            ComponentError::AgentTypeForNameNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::AGENT_TYPE_NOT_FOUND.to_string(),
+                cause: None,
+            }),
+            ComponentError::DeploymentRevisionNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::DEPLOYMENT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
+            ComponentError::ComponentNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::COMPONENT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
+            ComponentError::ComponentByNameNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::COMPONENT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
 
             _ => Self::InternalError(ErrorBody {
                 error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
             }),
         }
@@ -169,14 +198,18 @@ impl From<ComponentResolverError> for GrpcApiError {
             ComponentResolverError::InvalidComponentReference { .. } => {
                 Self::BadRequest(ErrorsBody {
                     errors: vec![error],
+                    code: api::error_code::INVALID_COMPONENT_REFERENCE.to_string(),
                     cause: None,
                 })
             }
-            ComponentResolverError::ComponentNotFound => {
-                Self::NotFound(ErrorBody { error, cause: None })
-            }
+            ComponentResolverError::ComponentNotFound => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::COMPONENT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
             _ => Self::InternalError(ErrorBody {
                 error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
             }),
         }
@@ -187,16 +220,27 @@ impl From<DeploymentError> for GrpcApiError {
     fn from(value: DeploymentError) -> Self {
         let error: String = value.to_string();
         match value {
-            DeploymentError::ParentEnvironmentNotFound(_)
-            | DeploymentError::DeploymentNotFound(_)
-            | DeploymentError::AgentTypeNotFound(_) => {
-                Self::NotFound(ErrorBody { error, cause: None })
-            }
+            DeploymentError::ParentEnvironmentNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::ENVIRONMENT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
+            DeploymentError::DeploymentNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::DEPLOYMENT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
+            DeploymentError::AgentTypeNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::AGENT_TYPE_NOT_FOUND.to_string(),
+                cause: None,
+            }),
 
             DeploymentError::Unauthorized(inner) => inner.into(),
 
             DeploymentError::InternalError(_) => Self::InternalError(ErrorBody {
                 error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
             }),
         }
@@ -207,12 +251,19 @@ impl From<DeployedRoutesError> for GrpcApiError {
     fn from(value: DeployedRoutesError) -> Self {
         let error: String = value.to_string();
         match value {
-            DeployedRoutesError::NoActiveRoutesForDomain(_)
-            | DeployedRoutesError::DeploymentRevisionNotFound(_) => {
-                Self::NotFound(ErrorBody { error, cause: None })
-            }
+            DeployedRoutesError::NoActiveRoutesForDomain(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::DEPLOYMENT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
+            DeployedRoutesError::DeploymentRevisionNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::DEPLOYMENT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
             DeployedRoutesError::InternalError(_) => Self::InternalError(ErrorBody {
                 error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
             }),
         }
@@ -224,11 +275,14 @@ impl From<DeployedMcpError> for GrpcApiError {
         let error: String = value.to_string();
 
         match value {
-            DeployedMcpError::NoActiveMcpForDomain(_) => {
-                Self::NotFound(ErrorBody { error, cause: None })
-            }
+            DeployedMcpError::NoActiveMcpForDomain(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::DEPLOYMENT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
             DeployedMcpError::InternalError(_) => Self::InternalError(ErrorBody {
                 error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
             }),
         }
@@ -239,21 +293,40 @@ impl From<EnvironmentError> for GrpcApiError {
     fn from(value: EnvironmentError) -> Self {
         let error: String = value.to_string();
         match value {
-            EnvironmentError::EnvironmentNotFound(_)
-            | EnvironmentError::EnvironmentByNameNotFound(_)
-            | EnvironmentError::ParentApplicationNotFound(_) => {
-                Self::NotFound(ErrorBody { error, cause: None })
-            }
+            EnvironmentError::EnvironmentNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::ENVIRONMENT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
+            EnvironmentError::EnvironmentByNameNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::ENVIRONMENT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
+            EnvironmentError::ParentApplicationNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::APPLICATION_NOT_FOUND.to_string(),
+                cause: None,
+            }),
 
             EnvironmentError::Unauthorized(inner) => inner.into(),
 
             EnvironmentError::LimitExceeded(inner) => inner.into(),
 
-            EnvironmentError::InternalError(_)
-            | EnvironmentError::EnvironmentWithNameAlreadyExists
-            | EnvironmentError::ConcurrentModification => Self::InternalError(ErrorBody {
+            EnvironmentError::InternalError(_) => Self::InternalError(ErrorBody {
                 error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
+            }),
+            EnvironmentError::EnvironmentWithNameAlreadyExists => Self::AlreadyExists(ErrorBody {
+                error,
+                code: api::error_code::ENVIRONMENT_ALREADY_EXISTS.to_string(),
+                cause: None,
+            }),
+            EnvironmentError::ConcurrentModification => Self::AlreadyExists(ErrorBody {
+                error,
+                code: api::error_code::CONCURRENT_UPDATE.to_string(),
+                cause: None,
             }),
         }
     }
@@ -265,6 +338,7 @@ impl From<EnvironmentStateError> for GrpcApiError {
         match value {
             EnvironmentStateError::InternalError(_) => Self::InternalError(ErrorBody {
                 error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
             }),
         }
@@ -275,27 +349,49 @@ impl From<ResourceDefinitionError> for GrpcApiError {
     fn from(value: ResourceDefinitionError) -> Self {
         let error: String = value.to_string();
         match value {
-            ResourceDefinitionError::ResourceDefinitionByNameNotFound(_)
-            | ResourceDefinitionError::ResourceDefinitionNotFound(_)
-            | ResourceDefinitionError::ParentEnvironmentNotFound(_) => {
-                Self::NotFound(ErrorBody { error, cause: None })
+            ResourceDefinitionError::ResourceDefinitionByNameNotFound(_) => {
+                Self::NotFound(ErrorBody {
+                    error,
+                    code: api::error_code::RESOURCE_DEFINITION_NOT_FOUND.to_string(),
+                    cause: None,
+                })
             }
+            ResourceDefinitionError::ResourceDefinitionNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::RESOURCE_DEFINITION_NOT_FOUND.to_string(),
+                cause: None,
+            }),
+            ResourceDefinitionError::ParentEnvironmentNotFound(_) => Self::NotFound(ErrorBody {
+                error,
+                code: api::error_code::ENVIRONMENT_NOT_FOUND.to_string(),
+                cause: None,
+            }),
 
             ResourceDefinitionError::LimitTypeCannotBeChanged => Self::BadRequest(ErrorsBody {
                 errors: vec![error],
+                code: api::error_code::RESOURCE_LIMIT_TYPE_IMMUTABLE.to_string(),
                 cause: None,
             }),
 
             ResourceDefinitionError::ResourceDefinitionForNameAlreadyExists(_) => {
-                Self::AlreadyExists(ErrorBody { error, cause: None })
+                Self::AlreadyExists(ErrorBody {
+                    error,
+                    code: api::error_code::RESOURCE_DEFINITION_ALREADY_EXISTS.to_string(),
+                    cause: None,
+                })
             }
 
             ResourceDefinitionError::Unauthorized(inner) => inner.into(),
 
-            ResourceDefinitionError::InternalError(_)
-            | ResourceDefinitionError::ConcurrentUpdate => Self::InternalError(ErrorBody {
+            ResourceDefinitionError::InternalError(_) => Self::InternalError(ErrorBody {
                 error,
+                code: api::error_code::INTERNAL_UNKNOWN.to_string(),
                 cause: Some(value.into_anyhow()),
+            }),
+            ResourceDefinitionError::ConcurrentUpdate => Self::AlreadyExists(ErrorBody {
+                error,
+                code: api::error_code::CONCURRENT_UPDATE.to_string(),
+                cause: None,
             }),
         }
     }

@@ -71,16 +71,21 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{IdempotencyKey, OplogIndex};
 
+use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::execute;
+use crossterm::queue;
+use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::Write;
+use std::io::{Stdout, Write};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::timeout;
+use terminal_size::terminal_size;
+use tokio::time::{sleep, timeout};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -145,6 +150,7 @@ impl WorkerCommandHandler {
                     scan_cursor,
                     max_count,
                     precise,
+                    refresh,
                 } => {
                     self.cmd_list(
                         agent_type_name,
@@ -153,6 +159,7 @@ impl WorkerCommandHandler {
                         scan_cursor,
                         max_count,
                         precise,
+                        refresh,
                     )
                     .await
                 }
@@ -796,11 +803,93 @@ impl WorkerCommandHandler {
         scan_cursor: Option<ScanCursor>,
         max_count: Option<u64>,
         precise: bool,
+        refresh: Option<u64>,
     ) -> anyhow::Result<()> {
+        let (components, filters) = self
+            .resolve_list_components(agent_type_name, component_name, filters)
+            .await?;
+
+        if let Some(interval_ms) = refresh {
+            self.list_with_refresh(
+                &components,
+                &filters,
+                scan_cursor.as_ref(),
+                max_count,
+                precise,
+                interval_ms,
+            )
+            .await
+        } else {
+            let view = self
+                .list_agents(
+                    &components,
+                    &filters,
+                    scan_cursor.as_ref(),
+                    max_count,
+                    precise,
+                    false,
+                )
+                .await?;
+            self.ctx.log_handler().log_view(&view);
+            Ok(())
+        }
+    }
+
+    async fn list_with_refresh(
+        &self,
+        components: &[ComponentDto],
+        filters: &[String],
+        scan_cursor: Option<&ScanCursor>,
+        max_count: Option<u64>,
+        precise: bool,
+        interval_ms: u64,
+    ) -> anyhow::Result<()> {
+        let duration = Duration::from_millis(interval_ms);
+        let mut screen = AlternateScreenGuard::enter()?;
+        let result: anyhow::Result<()> = async {
+            loop {
+                let term_height = terminal_size()
+                    .map(|(_, h)| h.0 as usize)
+                    .unwrap_or(usize::MAX);
+
+                // Fetch first — while the previous frame is still visible
+                let output = match self
+                    .list_agents(components, filters, scan_cursor, max_count, precise, true)
+                    .await
+                {
+                    Ok(view) => self
+                        .ctx
+                        .log_handler()
+                        .render_view_truncated(&view, term_height),
+                    Err(e) => format!("Error: {e:#}"),
+                };
+
+                // Clear and write in one buffered flush — no blank-screen gap
+                queue!(screen.stdout_mut(), MoveTo(0, 0), Clear(ClearType::All))?;
+                write!(screen.stdout_mut(), "{output}")?;
+                screen.stdout_mut().flush()?;
+
+                tokio::select! {
+                    _ = sleep(duration) => {}
+                    _ = tokio::signal::ctrl_c() => { return Ok(()); }
+                }
+            }
+        }
+        .await;
+        screen.leave()?;
+        result
+    }
+
+    async fn resolve_list_components(
+        &self,
+        agent_type_name: Option<String>,
+        component_name: Option<ComponentName>,
+        filters: Vec<String>,
+    ) -> anyhow::Result<(Vec<ComponentDto>, Vec<String>)> {
         let clients = self.ctx.golem_clients().await?;
         let component_handler = self.ctx.component_handler();
 
-        let (components, filters) = match agent_type_name {
+        match agent_type_name {
             Some(agent_type_name) => {
                 let environment = self
                     .ctx
@@ -830,7 +919,7 @@ impl WorkerCommandHandler {
                     ),
                 );
 
-                (
+                Ok((
                     vec![
                         component_handler
                             .get_component_revision_by_id(
@@ -840,7 +929,7 @@ impl WorkerCommandHandler {
                             .await?,
                     ],
                     filters,
-                )
+                ))
             }
             None => {
                 let selected_components = self
@@ -883,10 +972,20 @@ impl WorkerCommandHandler {
                             Ok((components, filters))
                         },
                     )
-                    .await?
+                    .await
             }
-        };
+        }
+    }
 
+    async fn list_agents(
+        &self,
+        components: &[ComponentDto],
+        filters: &[String],
+        scan_cursor: Option<&ScanCursor>,
+        max_count: Option<u64>,
+        precise: bool,
+        stable_sort: bool,
+    ) -> anyhow::Result<AgentsMetadataResponseView> {
         if scan_cursor.is_some() && components.len() != 1 {
             log_error(format!(
                 "Cursor cannot be used with multiple components selected! ({})",
@@ -906,13 +1005,13 @@ impl WorkerCommandHandler {
 
         let mut view = AgentsMetadataResponseView::default();
 
-        for component in &components {
-            let (workers, scan_cursor) = self
+        for component in components {
+            let (workers, component_scan_cursor) = self
                 .list_component_workers(
                     &component.component_name,
                     &component.id,
-                    Some(filters.as_slice()),
-                    scan_cursor.as_ref(),
+                    Some(filters),
+                    scan_cursor,
                     max_count,
                     precise,
                 )
@@ -943,17 +1042,25 @@ impl WorkerCommandHandler {
 
                 view.with_source_language(source_language)
             }));
-            scan_cursor.into_iter().for_each(|scan_cursor| {
-                view.cursors.insert(
-                    component.component_name.to_string(),
-                    scan_cursor_to_string(&scan_cursor),
-                );
+            component_scan_cursor
+                .into_iter()
+                .for_each(|component_scan_cursor| {
+                    view.cursors.insert(
+                        component.component_name.to_string(),
+                        scan_cursor_to_string(&component_scan_cursor),
+                    );
+                });
+        }
+
+        if stable_sort {
+            view.agents.sort_by(|a, b| {
+                a.component_name
+                    .cmp(&b.component_name)
+                    .then_with(|| a.agent_name.0.cmp(&b.agent_name.0))
             });
         }
 
-        self.ctx.log_handler().log_view(&view);
-
-        Ok(())
+        Ok(view)
     }
 
     async fn cmd_interrupt(&self, agent_name: AgentIdArgs) -> anyhow::Result<()> {
@@ -2160,6 +2267,45 @@ impl WorkerCommandHandler {
         .prompt()?;
 
         Ok(result)
+    }
+}
+
+struct AlternateScreenGuard {
+    stdout: Stdout,
+    active: bool,
+}
+
+impl AlternateScreenGuard {
+    fn enter() -> anyhow::Result<Self> {
+        let mut stdout = std::io::stdout();
+        execute!(stdout, EnterAlternateScreen, Hide)?;
+
+        Ok(Self {
+            stdout,
+            active: true,
+        })
+    }
+
+    fn stdout_mut(&mut self) -> &mut Stdout {
+        &mut self.stdout
+    }
+
+    fn leave(&mut self) -> anyhow::Result<()> {
+        if self.active {
+            execute!(self.stdout, Show, LeaveAlternateScreen)?;
+            self.active = false;
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for AlternateScreenGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = execute!(self.stdout, Show, LeaveAlternateScreen);
+            self.active = false;
+        }
     }
 }
 

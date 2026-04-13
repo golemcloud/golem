@@ -666,39 +666,39 @@ other: 1
 }
 
 #[test]
-fn main_ts_reexport() {
-    let source = r#"export { a } from "./a";
-export { b } from "./b";
+fn main_ts_add_import() {
+    let source = r#"import './a';
+import './b';
 "#;
-    let updated = main_ts::add_reexport(source, r#"export { c } from "./c";"#).unwrap();
-    assert!(updated.contains(r#"export { c } from "./c";"#));
+    let updated = main_ts::add_import(source, r#"import './c';"#).unwrap();
+    assert!(updated.contains(r#"import './c';"#));
 }
 
 #[test]
-fn main_ts_merge_reexports_adds_new() {
-    let current = r#"export { a } from "./a";
-export { b } from "./b";
+fn main_ts_merge_imports_adds_new() {
+    let current = r#"import './a';
+import './b';
 "#;
-    let update = r#"export { b } from "./b";
-export { c } from "./c";
+    let update = r#"import './b';
+import './c';
 "#;
-    let merged = main_ts::merge_reexports(current, update).unwrap();
-    let expected = r#"export { a } from "./a";
-export { b } from "./b";
-export { c } from "./c";
+    let merged = main_ts::merge_imports(current, update).unwrap();
+    let expected = r#"import './a';
+import './b';
+import './c';
 "#;
     assert_eq!(merged, expected);
 }
 
 #[test]
-fn main_ts_merge_reexports_skips_existing() {
-    let current = r#"export { a } from "./a";
-export { b } from "./b";
+fn main_ts_merge_imports_skips_existing() {
+    let current = r#"import './a';
+import './b';
 "#;
-    let update = r#"export { a } from "./a";
-export { b } from "./b";
+    let update = r#"import './a';
+import './b';
 "#;
-    let merged = main_ts::merge_reexports(current, update).unwrap();
+    let merged = main_ts::merge_imports(current, update).unwrap();
     assert_eq!(merged, current);
 }
 
@@ -768,10 +768,9 @@ pub use counter_agent::*;
 
 #[test]
 fn main_ts_preserves_formatting() {
-    let source = "export  {a}  from \"./a\";\n\nexport{b}from \"./b\";\n";
-    let updated = main_ts::add_reexport(source, "export { c } from \"./c\";").unwrap();
-    let expected =
-        "export  {a}  from \"./a\";\n\nexport{b}from \"./b\";\nexport { c } from \"./c\";\n";
+    let source = "import  './a';\n\nimport'./b';\n";
+    let updated = main_ts::add_import(source, "import './c';").unwrap();
+    let expected = "import  './a';\n\nimport'./b';\nimport './c';\n";
     assert_eq!(updated, expected);
 }
 
@@ -1006,9 +1005,9 @@ other: 1
 #[test]
 fn golem_yaml_merge_keeps_schema_and_app_sections() {
     let base = r#"# Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.2/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0-dev.2/golem.schema.json
 
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
@@ -1044,9 +1043,9 @@ httpApi:
 "#;
 
     let update = r#"# Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/1.5.0-dev.2/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0-dev.1/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.5.0-dev.2/golem.schema.json
 
 # Field reference: https://learn.golem.cloud/app-manifest#field-reference
 # Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
@@ -1701,16 +1700,16 @@ proptest! {
     }
 
     #[test]
-    fn proptest_main_ts_merge_reexports_is_union_and_idempotent(
-        (current_source, update_source, expected) in arb_ts_reexport_case(),
+    fn proptest_main_ts_merge_imports_is_union_and_idempotent(
+        (current_source, update_source, expected) in arb_ts_import_case(),
     ) {
-        let merged = main_ts::merge_reexports(&current_source, &update_source).unwrap();
+        let merged = main_ts::merge_imports(&current_source, &update_source).unwrap();
         main_ts::validate(&merged).unwrap();
 
-        let merged_set = collect_trimmed_prefixed_lines(&merged, "export ");
+        let merged_set = collect_trimmed_prefixed_lines(&merged, "import ");
         prop_assert_eq!(merged_set, expected);
 
-        let merged_twice = main_ts::merge_reexports(&merged, &update_source).unwrap();
+        let merged_twice = main_ts::merge_imports(&merged, &update_source).unwrap();
         prop_assert_eq!(merged_twice, merged);
     }
 
@@ -2151,8 +2150,8 @@ fn format_feature_list(features: &[String]) -> String {
         .join(", ")
 }
 
-fn arb_ts_reexport_case() -> impl Strategy<Value = (String, String, BTreeSet<String>)> {
-    // Produces TS export statements with overlap and spacing/newline variance
+fn arb_ts_import_case() -> impl Strategy<Value = (String, String, BTreeSet<String>)> {
+    // Produces TS import statements with overlap and spacing/newline variance
     // to validate stable union + idempotence behavior.
     (
         prop::collection::vec("[a-z][a-z0-9_]{0,8}", 1..5),
@@ -2162,11 +2161,11 @@ fn arb_ts_reexport_case() -> impl Strategy<Value = (String, String, BTreeSet<Str
         .prop_map(|(current_names, update_names, extra_blank_line)| {
             let current_lines = current_names
                 .iter()
-                .map(|name| format!("export {{ {name} }} from \"./{name}\";"))
+                .map(|name| format!("import './{name}';"))
                 .collect::<Vec<_>>();
             let update_lines = update_names
                 .iter()
-                .map(|name| format!("export {{ {name} }} from \"./{name}\";"))
+                .map(|name| format!("import './{name}';"))
                 .collect::<Vec<_>>();
 
             let mut current_source = current_lines.join("\n");

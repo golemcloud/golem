@@ -49,6 +49,7 @@ serde_yaml = { workspace = true }
 
 [dev-dependencies]
 goldenfile = { workspace = true }
+sqlx = { workspace = true }
 test-r = { workspace = true }
 wac-graph = { workspace = true }
 assert2 = { workspace = true }
@@ -68,6 +69,11 @@ harness = false
 [[test]]
 name = "sharding"
 path = "tests/sharding.rs"
+harness = false
+
+[[test]]
+name = "agent-config-live-mutation"
+path = "tests/agent_config_live_mutation.rs"
 harness = false
 
 [[bin]]

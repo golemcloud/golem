@@ -86,6 +86,26 @@ pub struct EnvironmentOptions {
     pub security_overrides: bool,
 }
 
+pub struct LogOutputGuard {
+    abort_tx: Option<Sender<()>>,
+}
+
+impl LogOutputGuard {
+    fn new(abort_tx: Sender<()>) -> Self {
+        Self {
+            abort_tx: Some(abort_tx),
+        }
+    }
+}
+
+impl Drop for LogOutputGuard {
+    fn drop(&mut self) {
+        if let Some(abort_tx) = self.abort_tx.take() {
+            let _ = abort_tx.send(());
+        }
+    }
+}
+
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
 pub trait TestDsl {
@@ -490,6 +510,42 @@ pub trait TestDsl {
         Ok(())
     }
 
+    async fn log_output_scoped(&self, agent_id: &AgentId) -> anyhow::Result<LogOutputGuard> {
+        let mut stream = self.make_worker_log_event_stream(agent_id).await?;
+        let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
+
+        tokio::spawn(
+            async move {
+                loop {
+                    tokio::select! {
+                        msg = stream.message() => {
+                            match msg {
+                                Ok(Some(event)) => {
+                                    info!("Received event: {:?}", event);
+                                }
+                                Ok(None) => {
+                                    debug!("Finished receiving events");
+                                    break;
+                                }
+                                Err(err) => {
+                                    debug!("Log output stream closed: {err}");
+                                    break;
+                                }
+                            }
+                        }
+                        _ = (&mut abort_rx) => {
+                            debug!("Aborting log output stream");
+                            break;
+                        }
+                    }
+                }
+            }
+            .in_current_span(),
+        );
+
+        Ok(LogOutputGuard::new(abort_tx))
+    }
+
     async fn auto_update_worker(
         &self,
         agent_id: &AgentId,
@@ -552,7 +608,7 @@ pub trait TestDsl {
                 return Ok(metadata);
             }
 
-            last_known = Some(metadata.status.clone());
+            last_known = Some(metadata.clone());
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
 

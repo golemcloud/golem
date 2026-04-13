@@ -17,7 +17,7 @@ use crate::rust::lib_gen::{Module, ModuleDef, ModuleName};
 use crate::rust::model_gen::RefCache;
 use crate::rust::printer::*;
 use crate::rust::types::{
-    DataType, ModelType, RustPrinter, RustResult, ref_or_box_schema_type, ref_or_schema_type,
+    DataType, RustPrinter, RustResult, ref_or_box_schema_type, ref_or_schema_type,
 };
 use crate::{Error, Result};
 use convert_case::{Case, Casing};
@@ -663,10 +663,272 @@ fn trait_methods(
     Ok(res.into_iter().flatten().collect())
 }
 
-fn render_errors(method_name: &str, error_kind: &ErrorKind, errors: &MethodErrors) -> RustResult {
+#[derive(Debug, Clone)]
+enum CodeConvention {
+    Absent,
+    Required,
+}
+
+#[derive(Debug, Clone)]
+struct UnionVariant {
+    variant_name: String,
+    model_name: String,
+}
+
+#[derive(Debug, Clone)]
+enum ErrorConvention {
+    Single { code: CodeConvention },
+    Multiple { code: CodeConvention },
+    Union { variants: Vec<UnionVariant> },
+    Unknown,
+}
+
+fn infer_error_conventions(open_api: &OpenAPI) -> HashMap<String, ErrorConvention> {
+    let mut result = HashMap::new();
+
+    if let Some(components) = &open_api.components {
+        for (schema_name, schema_ref) in &components.schemas {
+            let model_name = schema_name.to_case(Case::UpperCamel);
+
+            let convention = match schema_ref {
+                ReferenceOr::Item(schema) => infer_error_convention_for_schema(open_api, schema),
+                ReferenceOr::Reference { .. } => ErrorConvention::Unknown,
+            };
+
+            result.insert(model_name, convention);
+        }
+    }
+
+    result
+}
+
+fn infer_error_convention_for_schema(open_api: &OpenAPI, schema: &Schema) -> ErrorConvention {
+    match &schema.schema_kind {
+        SchemaKind::Type(Type::Object(obj)) => {
+            let has_error = obj
+                .properties
+                .get("error")
+                .is_some_and(|schema| is_string_schema_ref(open_api, schema));
+            let has_errors = obj
+                .properties
+                .get("errors")
+                .is_some_and(|schema| is_array_of_string_schema_ref(open_api, schema));
+
+            let code = infer_code_convention(open_api, obj);
+
+            if has_error {
+                ErrorConvention::Single { code }
+            } else if has_errors {
+                ErrorConvention::Multiple { code }
+            } else {
+                ErrorConvention::Unknown
+            }
+        }
+        SchemaKind::Any(any) if !any.one_of.is_empty() => {
+            if let Some(discriminator) = &schema.schema_data.discriminator {
+                let variants = discriminator
+                    .mapping
+                    .iter()
+                    .filter_map(|(variant_name, case_reference)| {
+                        resolve_union_payload_model_name(open_api, case_reference).map(
+                            |model_name| UnionVariant {
+                                variant_name: variant_name.to_case(Case::UpperCamel),
+                                model_name,
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+                if variants.is_empty() {
+                    ErrorConvention::Unknown
+                } else {
+                    ErrorConvention::Union { variants }
+                }
+            } else {
+                ErrorConvention::Unknown
+            }
+        }
+        _ => ErrorConvention::Unknown,
+    }
+}
+
+fn resolve_union_payload_model_name(open_api: &OpenAPI, case_reference: &str) -> Option<String> {
+    let case_schema_name = case_reference.strip_prefix("#/components/schemas/")?;
+    let components = open_api.components.as_ref()?;
+    let case_schema = components.schemas.get(case_schema_name)?.as_item()?;
+
+    match &case_schema.schema_kind {
+        SchemaKind::AllOf { all_of } => all_of.iter().find_map(|schema| match schema {
+            ReferenceOr::Reference { reference } => reference
+                .strip_prefix("#/components/schemas/")
+                .map(|name| name.to_case(Case::UpperCamel)),
+            ReferenceOr::Item(_) => None,
+        }),
+        _ => None,
+    }
+}
+
+fn resolve_schema_by_reference<'a>(open_api: &'a OpenAPI, reference: &str) -> Option<&'a Schema> {
+    let schema_name = reference.strip_prefix("#/components/schemas/")?;
+    open_api
+        .components
+        .as_ref()?
+        .schemas
+        .get(schema_name)?
+        .as_item()
+}
+
+fn resolve_schema_ref<'a>(
+    open_api: &'a OpenAPI,
+    schema: &'a ReferenceOr<Box<Schema>>,
+) -> Option<&'a Schema> {
+    match schema {
+        ReferenceOr::Reference { reference } => resolve_schema_by_reference(open_api, reference),
+        ReferenceOr::Item(schema) => Some(schema),
+    }
+}
+
+fn is_string_schema(schema: &Schema) -> bool {
+    matches!(&schema.schema_kind, SchemaKind::Type(Type::String(_)))
+}
+
+fn is_string_schema_ref(open_api: &OpenAPI, schema: &ReferenceOr<Box<Schema>>) -> bool {
+    resolve_schema_ref(open_api, schema).is_some_and(is_string_schema)
+}
+
+fn is_array_of_string_schema(schema: &Schema) -> bool {
+    match &schema.schema_kind {
+        SchemaKind::Type(Type::Array(array)) => {
+            array.items.as_ref().is_some_and(|items| match items {
+                ReferenceOr::Reference { .. } => false,
+                ReferenceOr::Item(item) => is_string_schema(item),
+            })
+        }
+        _ => false,
+    }
+}
+
+fn is_array_of_string_schema_ref(open_api: &OpenAPI, schema: &ReferenceOr<Box<Schema>>) -> bool {
+    resolve_schema_ref(open_api, schema).is_some_and(is_array_of_string_schema)
+}
+
+fn infer_code_convention(
+    open_api: &OpenAPI,
+    object_type: &openapiv3::ObjectType,
+) -> CodeConvention {
+    if object_type
+        .properties
+        .get("code")
+        .is_some_and(|schema| is_string_schema_ref(open_api, schema))
+    {
+        CodeConvention::Required
+    } else {
+        CodeConvention::Absent
+    }
+}
+
+fn render_errors_expr_for_model(
+    model_name: &str,
+    body_var: &str,
+    conventions: &HashMap<String, ErrorConvention>,
+    visited: &mut HashSet<String>,
+) -> RustPrinter {
+    if !visited.insert(model_name.to_string()) {
+        return unit() + rust_name("crate", "ErrorMessages") + "::None";
+    }
+
+    let result = match conventions
+        .get(model_name)
+        .unwrap_or(&ErrorConvention::Unknown)
+    {
+        ErrorConvention::Single { .. } => {
+            unit() + rust_name("crate", "ErrorMessages") + "::One(&" + body_var + ".error)"
+        }
+        ErrorConvention::Multiple { .. } => {
+            unit() + rust_name("crate", "ErrorMessages") + "::Many(&" + body_var + ".errors)"
+        }
+        ErrorConvention::Union { variants } => {
+            let cases = variants
+                .iter()
+                .map(|variant| {
+                    let mut branch_visited = visited.clone();
+                    let expr = render_errors_expr_for_model(
+                        &variant.model_name,
+                        "inner",
+                        conventions,
+                        &mut branch_visited,
+                    );
+
+                    unit() + model_name + "::" + &variant.variant_name + "(inner) => " + expr + ","
+                })
+                .reduce(|acc, e| acc + " " + e)
+                .unwrap_or_else(|| {
+                    unit() + "_ => " + rust_name("crate", "ErrorMessages") + "::None,"
+                });
+
+            unit() + "match " + body_var + " { " + cases + " }"
+        }
+        ErrorConvention::Unknown => unit() + rust_name("crate", "ErrorMessages") + "::None",
+    };
+
+    visited.remove(model_name);
+    result
+}
+
+fn render_code_expr_for_model(
+    model_name: &str,
+    body_var: &str,
+    conventions: &HashMap<String, ErrorConvention>,
+    visited: &mut HashSet<String>,
+) -> RustPrinter {
+    if !visited.insert(model_name.to_string()) {
+        return unit() + "None";
+    }
+
+    let result = match conventions
+        .get(model_name)
+        .unwrap_or(&ErrorConvention::Unknown)
+    {
+        ErrorConvention::Single { code } | ErrorConvention::Multiple { code } => match code {
+            CodeConvention::Absent => unit() + "None",
+            CodeConvention::Required => unit() + "Some(" + body_var + ".code.as_str())",
+        },
+        ErrorConvention::Union { variants } => {
+            let cases = variants
+                .iter()
+                .map(|variant| {
+                    let mut branch_visited = visited.clone();
+                    let expr = render_code_expr_for_model(
+                        &variant.model_name,
+                        "inner",
+                        conventions,
+                        &mut branch_visited,
+                    );
+
+                    unit() + model_name + "::" + &variant.variant_name + "(inner) => " + expr + ","
+                })
+                .reduce(|acc, e| acc + " " + e)
+                .unwrap_or_else(|| unit() + "_ => None,");
+
+            unit() + "match " + body_var + " { " + cases + " }"
+        }
+        ErrorConvention::Unknown => unit() + "None",
+    };
+
+    visited.remove(model_name);
+    result
+}
+
+fn render_errors(
+    method_name: &str,
+    error_kind: &ErrorKind,
+    errors: &MethodErrors,
+    service_name: &str,
+    conventions: &HashMap<String, ErrorConvention>,
+) -> RustResult {
     let name = error_name(method_name, error_kind);
 
-    let code_cases = errors
+    let variant_cases = errors
         .codes
         .iter()
         .map(|(code, model)| {
@@ -675,29 +937,104 @@ fn render_errors(method_name: &str, error_kind: &ErrorKind, errors: &MethodError
         .reduce(|acc, e| acc + e)
         .unwrap_or_else(unit);
 
-    let display_cases = errors
+    let status_cases = errors
         .codes
-        .iter()
-        .map(|(code, model)| {
+        .keys()
+        .map(|code| {
             line(
                 unit()
                     + name.clone()
                     + "::Error"
                     + code.to_string()
-                    + "(body) => write!(f, \"{}\", "
-                    + render_error_body_to_string(model)
-                    + "),",
+                    + "(_) => "
+                    + code.to_string()
+                    + ",",
             )
         })
         .reduce(|acc, e| acc + e)
         .unwrap_or_else(unit);
+
+    let errors_cases = errors
+        .codes
+        .iter()
+        .map(|(code, model)| {
+            let body_binding = render_errors_case_binding(model, conventions);
+
+            line(
+                unit()
+                    + name.clone()
+                    + "::Error"
+                    + code.to_string()
+                    + "("
+                    + body_binding
+                    + ") => "
+                    + render_error_body_to_errors(model, conventions)
+                    + ",",
+            )
+        })
+        .reduce(|acc, e| acc + e)
+        .unwrap_or_else(unit);
+
+    let code_cases = errors
+        .codes
+        .iter()
+        .map(|(code, model)| {
+            let body_binding = render_code_case_binding(model, conventions);
+
+            line(
+                unit()
+                    + name.clone()
+                    + "::Error"
+                    + code.to_string()
+                    + "("
+                    + body_binding
+                    + ") => "
+                    + render_error_body_to_code(model, conventions)
+                    + ",",
+            )
+        })
+        .reduce(|acc, e| acc + e)
+        .unwrap_or_else(unit);
+
+    let display_cases = errors
+        .codes
+        .keys()
+        .map(|code| {
+            line(
+                unit()
+                    + name.clone()
+                    + "::Error"
+                    + code.to_string()
+                    + "(body) => write!(f, \"{}\", format!(\"{body:?}\")),",
+            )
+        })
+        .reduce(|acc, e| acc + e)
+        .unwrap_or_else(unit);
+
+    let status_code_impl = if errors.codes.is_empty() {
+        line(unit() + "match *self {}")
+    } else {
+        line(unit() + "match self {") + indented(status_cases) + line("}")
+    };
+
+    let errors_impl = if errors.codes.is_empty() {
+        line(unit() + "match *self {}")
+    } else {
+        line(unit() + "match self {") + indented(errors_cases) + line("}")
+    };
+
+    let code_impl = if errors.codes.is_empty() {
+        line(unit() + "match *self {}")
+    } else {
+        line(unit() + "match self {") + indented(code_cases) + line("}")
+    };
 
     #[rustfmt::skip]
     let res = unit() +
         line(unit() + "#[derive(Debug)]") +
         line(unit() + "pub enum " + name.clone() + " {") +
         indented(
-            code_cases
+            variant_cases
         ) +
         line(unit() + "}") +
         line(unit() + "impl std::fmt::Display for " + name.clone() + " {") +
@@ -708,34 +1045,149 @@ fn render_errors(method_name: &str, error_kind: &ErrorKind, errors: &MethodError
                          line(unit() + "match self {") +
                          indented(display_cases) +
                          line(unit() + "}")
-                       } else { line(unit() + indented(unit() + "write!(f, \"" + name + "\")")) }
+                       } else { line(unit() + indented(unit() + "write!(f, \"" + name.clone() + "\")")) }
                 ) +
                 line("}")
         ) +
-        line("}");
+        line("}") +
+        line(unit() + "impl " + rust_name("crate", "ErrorInfo") + " for " + name.clone() + " {") +
+        indented(
+            line(unit() + "fn service_name() -> &'static str {") +
+                indented(
+                    line(unit() + "\"" + service_name.to_string() + "\"")
+                ) +
+            line("}") +
+            line(unit() + "fn status_code(&self) -> u16 {") +
+                indented(
+                    status_code_impl
+                ) +
+            line("}") +
+            line(unit() + "fn errors(&self) -> " + rust_name("crate", "ErrorMessages") + "<'_> {") +
+                indented(
+                    errors_impl
+                ) +
+            line("}") +
+            line(unit() + "fn code(&self) -> Option<&str> {") +
+                indented(
+                    code_impl
+                ) +
+            line("}")
+        ) +
+        line("}") +
+        unit();
 
     Ok(res)
 }
 
-fn render_error_body_to_string(typ: &DataType) -> RustPrinter {
+fn render_error_body_to_errors(
+    typ: &DataType,
+    conventions: &HashMap<String, ErrorConvention>,
+) -> RustPrinter {
     match typ {
-        DataType::Model(ModelType { name }) if name == "ErrorBody" => unit() + r#"&body.error"#,
-        DataType::Model(ModelType { name }) if name == "ErrorsBody" => {
-            unit() + r#"body.errors.clone().join(", ")"#
+        DataType::Model(model) => {
+            render_errors_expr_for_model(&model.name, "body", conventions, &mut HashSet::new())
         }
-        DataType::Model(ModelType { name }) if name == "WorkerServiceErrorsBody" => {
-            unit()
-                + "match &body { WorkerServiceErrorsBody::Messages("
-                + rust_name("crate::model", "ErrorsBody")
-                + " { errors }) => { errors.join(\", \") }, WorkerServiceErrorsBody::Validation("
-                + rust_name("crate::model", "ErrorsBody")
-                + " { errors }) => { errors.join(\", \") }}"
-        }
-        DataType::Model(ModelType { name }) if name == "GolemErrorBody" => {
-            unit() + r#"format!("{}", body.golem_error)"#
-        }
-        _ => unit() + r#"format!("{body:?}")"#,
+        _ => unit() + rust_name("crate", "ErrorMessages") + "::None",
     }
+}
+
+fn render_error_body_to_code(
+    typ: &DataType,
+    conventions: &HashMap<String, ErrorConvention>,
+) -> RustPrinter {
+    match typ {
+        DataType::Model(model) => {
+            render_code_expr_for_model(&model.name, "body", conventions, &mut HashSet::new())
+        }
+        _ => unit() + "None",
+    }
+}
+
+fn render_code_case_binding(
+    typ: &DataType,
+    conventions: &HashMap<String, ErrorConvention>,
+) -> &'static str {
+    match typ {
+        DataType::Model(model)
+            if code_needs_body_for_model(&model.name, conventions, &mut HashSet::new()) =>
+        {
+            "body"
+        }
+        _ => "_",
+    }
+}
+
+fn render_errors_case_binding(
+    typ: &DataType,
+    conventions: &HashMap<String, ErrorConvention>,
+) -> &'static str {
+    match typ {
+        DataType::Model(model)
+            if errors_needs_body_for_model(&model.name, conventions, &mut HashSet::new()) =>
+        {
+            "body"
+        }
+        _ => "_",
+    }
+}
+
+fn errors_needs_body_for_model(
+    model_name: &str,
+    conventions: &HashMap<String, ErrorConvention>,
+    visited: &mut HashSet<String>,
+) -> bool {
+    if !visited.insert(model_name.to_string()) {
+        return false;
+    }
+
+    let result = match conventions
+        .get(model_name)
+        .unwrap_or(&ErrorConvention::Unknown)
+    {
+        ErrorConvention::Single { .. } | ErrorConvention::Multiple { .. } => true,
+        ErrorConvention::Unknown => false,
+        ErrorConvention::Union { variants } => variants.iter().any(|variant| {
+            errors_needs_body_for_model(&variant.model_name, conventions, &mut visited.clone())
+        }),
+    };
+
+    visited.remove(model_name);
+    result
+}
+
+fn code_needs_body_for_model(
+    model_name: &str,
+    conventions: &HashMap<String, ErrorConvention>,
+    visited: &mut HashSet<String>,
+) -> bool {
+    if !visited.insert(model_name.to_string()) {
+        return false;
+    }
+
+    let result = match conventions
+        .get(model_name)
+        .unwrap_or(&ErrorConvention::Unknown)
+    {
+        ErrorConvention::Single {
+            code: CodeConvention::Required,
+        }
+        | ErrorConvention::Multiple {
+            code: CodeConvention::Required,
+        } => true,
+        ErrorConvention::Single {
+            code: CodeConvention::Absent,
+        }
+        | ErrorConvention::Multiple {
+            code: CodeConvention::Absent,
+        }
+        | ErrorConvention::Unknown => false,
+        ErrorConvention::Union { variants } => variants.iter().any(|variant| {
+            code_needs_body_for_model(&variant.model_name, conventions, &mut visited.clone())
+        }),
+    };
+
+    visited.remove(model_name);
+    result
 }
 
 fn async_annotation() -> RustPrinter {
@@ -1206,9 +1658,13 @@ pub fn client_gen(
             .collect()
     };
 
+    let error_conventions = infer_error_conventions(open_api);
+
     let rendered_errors: Result<Vec<_>> = all_errors
         .iter()
-        .map(|(method_name, errors)| render_errors(method_name, &error_kind, errors))
+        .map(|(method_name, errors)| {
+            render_errors(method_name, &error_kind, errors, &name, &error_conventions)
+        })
         .collect();
 
     let rendered_errors = rendered_errors?

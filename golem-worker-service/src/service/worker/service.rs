@@ -47,6 +47,14 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 
+fn required_environment_action_for_invocation_mode(mode: i32) -> EnvironmentAction {
+    if mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32 {
+        EnvironmentAction::ViewWorker
+    } else {
+        EnvironmentAction::UpdateWorker
+    }
+}
+
 pub struct WorkerService {
     component_service: Arc<dyn ComponentService>,
     auth_service: Arc<dyn AuthService>,
@@ -141,14 +149,6 @@ impl WorkerService {
             )
             .await?;
 
-        self.limit_service
-            .update_worker_limit(
-                environment_auth_details.account_id_owning_environment,
-                agent_id,
-                true,
-            )
-            .await?;
-
         Ok(component.revision)
     }
 
@@ -203,8 +203,7 @@ impl WorkerService {
             .get_latest_by_id(agent_id.component_id)
             .await?;
 
-        let environment_auth_details = self
-            .auth_service
+        self.auth_service
             .authorize_environment_actions(
                 component.environment_id,
                 EnvironmentAction::DeleteWorker,
@@ -214,14 +213,6 @@ impl WorkerService {
 
         self.worker_client
             .delete(agent_id, component.environment_id, auth_ctx)
-            .await?;
-
-        self.limit_service
-            .update_worker_limit(
-                environment_auth_details.account_id_owning_environment,
-                agent_id,
-                false,
-            )
             .await?;
 
         Ok(())
@@ -733,7 +724,7 @@ impl WorkerService {
             .auth_service
             .authorize_environment_actions(
                 environment_id,
-                EnvironmentAction::UpdateWorker,
+                required_environment_action_for_invocation_mode(mode),
                 &auth_ctx,
             )
             .await?;
@@ -1009,5 +1000,32 @@ impl WorkerService {
                 component_revision: output.component_revision,
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::required_environment_action_for_invocation_mode;
+    use golem_service_base::model::auth::EnvironmentAction;
+    use test_r::test;
+
+    #[test]
+    fn lookup_invocation_requires_view_worker_permission() {
+        assert_eq!(
+            required_environment_action_for_invocation_mode(
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
+            ),
+            EnvironmentAction::ViewWorker,
+        );
+    }
+
+    #[test]
+    fn non_lookup_invocation_requires_update_worker_permission() {
+        assert_eq!(
+            required_environment_action_for_invocation_mode(
+                golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            ),
+            EnvironmentAction::UpdateWorker,
+        );
     }
 }

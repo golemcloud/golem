@@ -965,7 +965,6 @@ pub async fn test_account_usage(deps: &Deps) {
             UsageType::TotalAppCount => 3,
             UsageType::TotalEnvCount => 10,
             UsageType::TotalComponentCount => 15,
-            UsageType::TotalWorkerCount => 20,
             UsageType::TotalWorkerConnectionCount => 25,
             UsageType::TotalComponentStorageBytes => 1000,
             UsageType::MonthlyGasLimit => 2000,
@@ -1249,6 +1248,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         created_agent_secrets: vec![],
         updated_agent_secrets: vec![],
         created_resource_definitions: vec![],
+        created_retry_policies: vec![],
         user_account_id: owner_account_id,
     };
 

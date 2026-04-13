@@ -113,6 +113,18 @@ impl From<SystemTime> for SerializableDateTime {
     }
 }
 
+impl From<SerializableDateTime> for DateTime<Utc> {
+    fn from(value: SerializableDateTime) -> Self {
+        Self::from(SystemTime::from(value))
+    }
+}
+
+impl From<DateTime<Utc>> for SerializableDateTime {
+    fn from(value: DateTime<Utc>) -> Self {
+        SystemTime::from(value).into()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
 pub struct SerializableFileTimes {
@@ -1080,6 +1092,26 @@ impl From<Method> for SerializableHttpMethod {
     }
 }
 
+impl TryFrom<&SerializableHttpMethod> for http::Method {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &SerializableHttpMethod) -> Result<Self, Self::Error> {
+        match value {
+            SerializableHttpMethod::Get => Ok(http::Method::GET),
+            SerializableHttpMethod::Post => Ok(http::Method::POST),
+            SerializableHttpMethod::Put => Ok(http::Method::PUT),
+            SerializableHttpMethod::Delete => Ok(http::Method::DELETE),
+            SerializableHttpMethod::Head => Ok(http::Method::HEAD),
+            SerializableHttpMethod::Connect => Ok(http::Method::CONNECT),
+            SerializableHttpMethod::Options => Ok(http::Method::OPTIONS),
+            SerializableHttpMethod::Trace => Ok(http::Method::TRACE),
+            SerializableHttpMethod::Patch => Ok(http::Method::PATCH),
+            SerializableHttpMethod::Other(m) => http::Method::from_bytes(m.as_bytes())
+                .map_err(|e| anyhow::anyhow!("invalid HTTP method '{m}': {e}")),
+        }
+    }
+}
+
 impl Display for SerializableHttpMethod {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1121,10 +1153,10 @@ impl From<AgentMetadata> for AgentMetadataForGuests {
             component_revision: value.last_known_status.component_revision,
             retry_count: value
                 .last_known_status
-                .current_retry_count
+                .current_retry_state
                 .iter()
                 .max_by_key(|(idx, _)| **idx)
-                .map(|(_, value)| *value)
+                .map(|(_, state)| state.retry_count())
                 .unwrap_or_default() as u64,
             environment_id: value.environment_id,
         }
@@ -1280,6 +1312,31 @@ pub enum SerializableRpcError {
     Denied { details: String },
     NotFound { details: String },
     RemoteInternalError { details: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub struct SerializableWebsocketCloseInfo {
+    pub code: u16,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub enum SerializableWebsocketMessage {
+    Text(String),
+    Binary(Vec<u8>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
+#[desert(evolution())]
+pub enum SerializableWebsocketError {
+    ConnectionFailure(String),
+    SendFailure(String),
+    ReceiveFailure(String),
+    ProtocolError(String),
+    Closed(Option<SerializableWebsocketCloseInfo>),
+    Other(String),
 }
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
@@ -2073,4 +2130,26 @@ pub struct SerializableDbColumn {
 pub struct SerializableDbResult {
     pub columns: Vec<SerializableDbColumn>,
     pub rows: Vec<Vec<SerializableDbValue>>,
+}
+
+#[cfg(test)]
+mod serializable_http_method_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn test_serializable_method_to_http() {
+        assert_eq!(
+            http::Method::try_from(&SerializableHttpMethod::Get).unwrap(),
+            http::Method::GET
+        );
+        assert_eq!(
+            http::Method::try_from(&SerializableHttpMethod::Post).unwrap(),
+            http::Method::POST
+        );
+        assert_eq!(
+            http::Method::try_from(&SerializableHttpMethod::Other("PURGE".to_string())).unwrap(),
+            http::Method::from_bytes(b"PURGE").unwrap()
+        );
+    }
 }

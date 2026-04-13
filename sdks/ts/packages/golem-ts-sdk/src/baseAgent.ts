@@ -13,11 +13,11 @@
 // limitations under the License.
 
 import { AgentType, Principal } from 'golem:agent/common@1.5.0';
-import { AgentId } from './agentId';
+import { ParsedAgentId } from './agentId';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentClassName } from './agentClassName';
 import { Datetime } from 'wasi:clocks/wall-clock@0.2.3';
-import { Uuid } from 'golem:agent/host@1.5.0';
+import { Uuid } from './uuid';
 import { getAgentId } from './internal/registry/agentId';
 import { Config, Secret } from './agentConfig';
 import {
@@ -62,7 +62,7 @@ export class BaseAgent {
    *
    * @throws Will throw if accessed before the agent is initialized.
    */
-  getId(): AgentId {
+  getId(): ParsedAgentId {
     const agentId = getAgentId();
 
     if (!agentId) {

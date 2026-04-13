@@ -13,17 +13,18 @@
 // limitations under the License.
 
 use crate::grpc::client::{GrpcClient, GrpcClientConfig};
-use crate::model::quota_lease::QuotaLease;
+use crate::model::quota_lease::{PendingReservation, QuotaLease};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_api_grpc::proto::golem::shardmanager::v1::{
-    AcquireQuotaLeaseRequest, GetRoutingTableRequest, RegisterRequest, ReleaseQuotaLeaseRequest,
-    RenewQuotaLeaseRequest, acquire_quota_lease_response, get_routing_table_response,
-    register_response, release_quota_lease_response, renew_quota_lease_response,
+    AcquireQuotaLeaseRequest, BatchRenewQuotaLeasesRequest, GetRoutingTableRequest,
+    RegisterRequest, ReleaseQuotaLeaseRequest, RenewQuotaLeaseRequest,
+    acquire_quota_lease_response, get_routing_table_response, register_response,
+    release_quota_lease_response, renew_quota_lease_response, renew_quota_lease_result,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::resource_definition::{ResourceDefinitionId, ResourceName};
+use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::model::{RetryConfig, RoutingTable};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::with_retries;
@@ -62,7 +63,16 @@ pub trait ShardManager: Send + Sync {
         port: u16,
         epoch: u64,
         unused: u64,
+        pending_reservations: Vec<PendingReservation>,
     ) -> Result<QuotaLease, QuotaError>;
+
+    /// Renew multiple leases in one round-trip.  Results are in the same
+    /// order as the input entries; each entry is independent.
+    async fn batch_renew_quota_leases(
+        &self,
+        port: u16,
+        renewals: Vec<BatchRenewalEntry>,
+    ) -> Result<Vec<Result<QuotaLease, QuotaError>>, ShardManagerError>;
 
     /// Releases a lease, returning any unused allocation.
     async fn release_quota_lease(
@@ -72,6 +82,15 @@ pub trait ShardManager: Send + Sync {
         epoch: u64,
         unused: u64,
     ) -> Result<(), QuotaError>;
+}
+
+/// One entry in a batch renewal request.
+#[derive(Debug, Clone)]
+pub struct BatchRenewalEntry {
+    pub resource_definition_id: ResourceDefinitionId,
+    pub epoch: u64,
+    pub unused: u64,
+    pub pending_reservations: Vec<PendingReservation>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -236,6 +255,7 @@ impl ShardManager for GrpcShardManager {
         port: u16,
         epoch: u64,
         unused: u64,
+        pending_reservations: Vec<PendingReservation>,
     ) -> Result<QuotaLease, QuotaError> {
         let response = self
             .client
@@ -245,6 +265,11 @@ impl ShardManager for GrpcShardManager {
                     port: port as i32,
                     epoch,
                     unused,
+                    pending_reservations: pending_reservations
+                        .iter()
+                        .cloned()
+                        .map(Into::into)
+                        .collect(),
                 };
                 Box::pin(client.renew_quota_lease(request))
             })
@@ -259,6 +284,49 @@ impl ShardManager for GrpcShardManager {
             }
             Some(renew_quota_lease_response::Result::Error(error)) => Err(error.into()),
         }
+    }
+
+    async fn batch_renew_quota_leases(
+        &self,
+        port: u16,
+        renewals: Vec<BatchRenewalEntry>,
+    ) -> Result<Vec<Result<QuotaLease, QuotaError>>, ShardManagerError> {
+        let grpc_renewals: Vec<RenewQuotaLeaseRequest> = renewals
+            .into_iter()
+            .map(|e| RenewQuotaLeaseRequest {
+                resource_definition_id: Some(e.resource_definition_id.into()),
+                port: port as i32,
+                epoch: e.epoch,
+                unused: e.unused,
+                pending_reservations: e.pending_reservations.into_iter().map(Into::into).collect(),
+            })
+            .collect();
+
+        let response = self
+            .client
+            .call("batch_renew_quota_leases", move |client| {
+                Box::pin(
+                    client.batch_renew_quota_leases(BatchRenewQuotaLeasesRequest {
+                        renewals: grpc_renewals.clone(),
+                    }),
+                )
+            })
+            .await?
+            .into_inner();
+
+        Ok(response
+            .results
+            .into_iter()
+            .map(|r| match r.result {
+                None => Err(QuotaError::empty_response()),
+                Some(renew_quota_lease_result::Result::Success(s)) => s
+                    .lease
+                    .ok_or_else(QuotaError::empty_response)?
+                    .try_into()
+                    .map_err(QuotaError::ConversionError),
+                Some(renew_quota_lease_result::Result::Error(e)) => Err(e.into()),
+            })
+            .collect())
     }
 
     async fn release_quota_lease(

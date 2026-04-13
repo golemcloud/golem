@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::ComponentError;
+use crate::metrics::storage::record_component_uploaded;
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use crate::services::account_usage::AccountUsageService;
@@ -149,9 +150,15 @@ impl ComponentWriteService {
         };
 
         let component_id = ComponentId::new();
+        let wasm_bytes = wasm.len() as u64;
         let (wasm_hash, wasm_object_store_key) = self
             .upload_and_hash_component_wasm(environment_id, wasm.clone())
             .await?;
+        record_component_uploaded(
+            &auth.account_id().to_string(),
+            &environment_id.to_string(),
+            wasm_bytes,
+        );
 
         // Batch-resolve all plugin grants referenced across all agent types in one pass,
         // so the same grant is only fetched once even if shared by multiple agent types.
@@ -307,12 +314,19 @@ impl ComponentWriteService {
                 .ensure_updated_component_within_limits(
                     environment.owner_account_id,
                     u64::try_from(new_wasm.len()).unwrap(),
+                    component.component_size,
                 )
                 .await?;
 
+            let new_wasm_bytes = new_wasm.len() as u64;
             let (wasm_hash, wasm_object_store_key) = self
                 .upload_and_hash_component_wasm(environment_id, new_wasm.clone())
                 .await?;
+            record_component_uploaded(
+                &auth.account_id().to_string(),
+                &environment_id.to_string(),
+                new_wasm_bytes,
+            );
 
             component.wasm_hash = wasm_hash;
             component.object_store_key = wasm_object_store_key;

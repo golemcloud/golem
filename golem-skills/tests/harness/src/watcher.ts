@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as log from "./log.js";
 
 export interface WatcherEvent {
   path: string;
@@ -12,13 +13,14 @@ export class SkillWatcher {
   private children: ChildProcess[] = [];
   private activatedSkills: Set<string> = new Set();
   private activatedEvents: WatcherEvent[] = [];
-  private skillsDir: string;
+  private rootDir: string;
   private extraDirs: string[] = [];
-  private atimeBaselines: Map<string, { skillName: string; atimeMs: number }> =
-    new Map();
+  private atimeBaselines: Map<string, { skillName: string; atimeMs: number }> = new Map();
+  private warnedMissingTool = false;
+  private suppressEvents = false;
 
-  constructor(skillsDir: string) {
-    this.skillsDir = path.resolve(skillsDir);
+  constructor(rootDir: string) {
+    this.rootDir = path.resolve(rootDir);
   }
 
   addWatchDir(dir: string): void {
@@ -26,23 +28,25 @@ export class SkillWatcher {
   }
 
   async start(): Promise<void> {
-    const dirs = [this.skillsDir, ...this.extraDirs];
+    const dirs = [this.rootDir, ...this.extraDirs];
     const platform = process.platform;
 
     for (const dir of dirs) {
       const child = this.spawnWatcher(platform, dir);
       if (!child) continue;
       this.children.push(child);
+      let stdoutBuffer = "";
 
       child.stdout?.on("data", (data) => {
-        const output = data.toString();
-        const paths =
-          platform === "darwin" ? output.split("\0") : output.split("\n");
+        stdoutBuffer += data.toString();
+        const delimiter = platform === "darwin" ? "\0" : "\n";
+        const paths = stdoutBuffer.split(delimiter);
+        stdoutBuffer = paths.pop() ?? "";
 
         for (const p of paths) {
           if (!p) continue;
           const skillName = this.pathToSkillName(p.trim());
-          if (skillName) {
+          if (skillName && !this.suppressEvents) {
             this.activatedSkills.add(skillName);
             this.activatedEvents.push({
               path: p.trim(),
@@ -54,31 +58,29 @@ export class SkillWatcher {
       });
 
       child.on("error", (err) => {
-        console.error(`SkillWatcher error: ${err.message}`);
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          if (!this.warnedMissingTool) {
+            this.warnedMissingTool = true;
+            const tool = platform === "darwin" ? "fswatch" : "inotifywait";
+            log.warn(
+              `SkillWatcher: "${tool}" not found; falling back to atime-based detection. ` +
+                `Install ${tool} for real-time skill activation tracking.`,
+            );
+          }
+        } else {
+          log.error(`SkillWatcher error: ${err.message}`);
+        }
       });
     }
   }
 
-  private spawnWatcher(
-    platform: NodeJS.Platform,
-    dir: string,
-  ): ChildProcess | null {
+  private spawnWatcher(platform: NodeJS.Platform, dir: string): ChildProcess | null {
     if (platform === "linux") {
-      return spawn("inotifywait", [
-        "-m",
-        "-r",
-        "-e",
-        "access",
-        "--format",
-        "%w%f",
-        dir,
-      ]);
+      return spawn("inotifywait", ["-m", "-r", "-e", "access", "--format", "%w%f", dir]);
     } else if (platform === "darwin") {
-      return spawn("fswatch", ["-0", "-a", "-L", dir]);
+      return null;
     }
-    console.warn(
-      `SkillWatcher: Unsupported platform ${platform}, activation tracking disabled.`,
-    );
+    log.warn(`SkillWatcher: Unsupported platform ${platform}, activation tracking disabled.`);
     return null;
   }
 
@@ -102,10 +104,15 @@ export class SkillWatcher {
    * Call this before the agent step runs. Returns a baseline token.
    */
   async snapshotAtimes(): Promise<void> {
-    this.atimeBaselines.clear();
-    const dirs = [this.skillsDir, ...this.extraDirs];
-    for (const dir of dirs) {
-      await this.collectSkillAtimes(dir);
+    this.suppressEvents = true;
+    try {
+      this.atimeBaselines.clear();
+      const dirs = [this.rootDir, ...this.extraDirs];
+      for (const dir of dirs) {
+        await this.collectSkillAtimes(dir);
+      }
+    } finally {
+      this.suppressEvents = false;
     }
   }
 
@@ -113,9 +120,7 @@ export class SkillWatcher {
    * Compare current atimes against the snapshot.
    * Returns skill names whose SKILL.md files had atime updated since the snapshot.
    */
-  async getSkillsWithChangedAtime(): Promise<
-    { skillName: string; path: string }[]
-  > {
+  async getSkillsWithChangedAtime(): Promise<{ skillName: string; path: string }[]> {
     const changed: { skillName: string; path: string }[] = [];
     for (const [filePath, baseline] of this.atimeBaselines) {
       try {
@@ -140,31 +145,51 @@ export class SkillWatcher {
   }
 
   pathToSkillName(filePath: string): string | null {
-    if (!filePath.endsWith("SKILL.md")) return null;
-    // Extract the parent directory name
-    const dirName = path.dirname(filePath);
-    return path.basename(dirName);
+    const normalizedPath = filePath.replace(/\\/g, "/");
+    if (!normalizedPath.endsWith("/SKILL.md") && normalizedPath !== "SKILL.md") {
+      return null;
+    }
+
+    if (!normalizedPath.includes("/.agents/skills/")) {
+      return null;
+    }
+
+    const segments = normalizedPath.split("/").filter((segment) => segment.length > 0);
+    if (segments.length < 2) {
+      return null;
+    }
+
+    return segments[segments.length - 2];
   }
 
   private async collectSkillAtimes(dir: string): Promise<void> {
     try {
       const entries = await fs.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const skillFile = path.join(dir, entry.name, "SKILL.md");
-        try {
-          const stat = await fs.stat(skillFile);
-          // On macOS APFS, atime only updates when atime <= mtime (relatime).
-          // Reset atime to before mtime so the next read triggers an update.
-          const oldAtime = new Date(stat.mtimeMs - 1000);
-          await fs.utimes(skillFile, oldAtime, stat.mtime);
-          this.atimeBaselines.set(skillFile, {
-            skillName: entry.name,
-            atimeMs: stat.mtimeMs - 1000,
-          });
-        } catch {
-          // No SKILL.md in this directory
+        const entryPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await this.collectSkillAtimes(entryPath);
+          continue;
         }
+
+        if (entry.name !== "SKILL.md") {
+          continue;
+        }
+
+        const skillName = this.pathToSkillName(entryPath);
+        if (!skillName) {
+          continue;
+        }
+
+        const stat = await fs.stat(entryPath);
+        // On macOS APFS, atime only updates when atime <= mtime (relatime).
+        // Reset atime to before mtime so the next read triggers an update.
+        const oldAtime = new Date(stat.mtimeMs - 1000);
+        await fs.utimes(entryPath, oldAtime, stat.mtime);
+        this.atimeBaselines.set(entryPath, {
+          skillName,
+          atimeMs: stat.mtimeMs - 1000,
+        });
       }
     } catch {
       // Directory doesn't exist yet

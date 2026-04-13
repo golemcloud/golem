@@ -1,5 +1,5 @@
 use crate::Tracing;
-use crate::app::{InteractiveSession, TestContext, check_component_metadata, cmd, flag, pattern};
+use crate::app::{TestContext, check_component_metadata, cmd, flag, pattern};
 
 use golem_cli::fs;
 use golem_cli::model::GuestLanguage;
@@ -270,6 +270,35 @@ async fn app_new_language_hints(_tracing: &Tracing) {
 }
 
 #[test]
+async fn app_new_unpacks_embedded_bootstrap_skills(_tracing: &Tracing) {
+    for (app_name, language) in [
+        ("test-app-embedded-skills-ts", "ts"),
+        ("test-app-embedded-skills-rust", "rust"),
+        ("test-app-embedded-skills-scala", "scala"),
+    ] {
+        let mut ctx = TestContext::new();
+        let outputs = ctx
+            .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, language])
+            .await;
+        assert!(outputs.success_or_dump(), "language={language}");
+
+        ctx.cd(app_name);
+
+        assert!(
+            ctx.cwd_path_join(".agents/skills/golem-new-project/SKILL.md")
+                .exists(),
+            "missing embedded bootstrap skill for {language}",
+        );
+
+        let claude_link = ctx.cwd_path_join(".claude");
+        assert!(
+            claude_link.is_symlink(),
+            "missing .claude symlink for {language}",
+        );
+    }
+}
+
+#[test]
 async fn completion(_tracing: &Tracing) {
     let ctx = TestContext::new();
 
@@ -289,8 +318,6 @@ async fn completion(_tracing: &Tracing) {
     assert!(outputs.success(), "zsh");
 }
 
-// TODO: very flaky currently, should wait properly for async repl prompts
-#[ignore]
 #[test]
 async fn ts_repl_interactive(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
@@ -358,9 +385,17 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
-    ctx.cli_interactive([cmd::REPL, flag::LANGUAGE, "ts", flag::YES], move |repl| {
-        let agent_type_info_regex = indoc! {
-            r#"(?sx)
+    ctx.cli_interactive_repl_test(
+        [
+            cmd::REPL,
+            flag::LANGUAGE,
+            "ts",
+            flag::YES,
+            "--disable-stream",
+        ],
+        move |session| {
+            let agent_type_info_regex = indoc! {
+                r#"(?sx)
             Available\s+agent\s+client\s+types:
             .*
             (
@@ -383,10 +418,10 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
                 \)
             )
             .*"#
-        };
+            };
 
-        let methods_regex = indoc! {
-            r#"(?sx)
+            let methods_regex = indoc! {
+                r#"(?sx)
             (
                 sampleMethod:\s*\(\)\s*=>\s*number
                 .*
@@ -396,86 +431,106 @@ async fn ts_repl_interactive(_tracing: &Tracing) {
                 .*
                 sampleMethod:\s*\(\)\s*=>\s*number
             )"#
-        };
+            };
 
-        repl.set_expect_timeout(Some(Duration::from_secs(30)));
-        repl.expect_str("golem-ts-repl[test-app-repl-interactive][local]>")?;
-        repl.send_line_and_expect_regex(".agent-type-info", agent_type_info_regex)?;
-        repl.expect_regex(methods_regex)?;
+            session.set_expect_timeout(Some(Duration::from_secs(300)));
+            session.expect_str("golem-ts-repl[test-app-repl-interactive][local]>")?;
+            session.send_line_and_expect_regex(".agent-type-info", agent_type_info_regex)?;
+            session.expect_regex(methods_regex)?;
 
-        repl.set_expect_timeout(Some(Duration::from_secs(2)));
+            session.set_expect_timeout(Some(Duration::from_secs(10)));
 
-        // Hints on "enter"
-        {
-            repl.send_line_and_expect_str("Counter", "CounterAgent")?;
-            repl.send_line_and_expect_regex("CounterAgent.", "get .* getPhantom ")?;
-            repl.send_line_and_expect_str(
-                "CounterAgent.get",
-                "(method) CounterAgent.get(name: string): Promise<CounterAgent>",
-            )?;
-            repl.send_line_and_expect_str("CounterAgent.get(", "\"?\"")?;
-            repl.send_line_and_expect_str(
-                "CounterAgent.get(\"xyz\")",
-                "awaiting Promise<CounterAgent>",
-            )?;
-            repl.send_line_and_expect_str("(await CounterAgent.get(\"xyz\")).", "increment")?;
-            repl.send_line_and_expect_str("CounterAgent.get(\"xyz\").then(c => c.", "increment")?;
-            repl.send_line_and_expect_str("Sample", "SampleAgent")?;
-            repl.send_line_and_expect_regex(
-                "(await SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
-                "sampleMethod.*\\[local\\]>",
-            )?;
-            repl.send_line_and_expect_regex(
-                "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(c => c.",
-                "sampleMethod.*\\[local\\]>",
-            )?;
-        }
+            // Hints on "enter"
+            {
+                session.send_line_wait_eval_expect_str("Counter", "CounterAgent")?;
+                session.send_line_wait_eval_expect_regex("CounterAgent.", "get .* getPhantom ")?;
+                session.send_line_wait_eval_expect_regex(
+                    "CounterAgent.get",
+                    "\\(method\\) CounterAgent\\.get\\(name: string\\): Promise<.*CounterAgent>",
+                )?;
+                session.send_line_wait_eval_expect_str("CounterAgent.get(", "\"?\"")?;
+                session.send_line_wait_eval_expect_regex(
+                    "CounterAgent.get(\"xyz\")",
+                    "awaiting Promise<.*CounterAgent>",
+                )?;
 
-        // Hints on "tab"
-        {
-            fn kill_line(repl: &mut dyn InteractiveSession) -> anyhow::Result<()> {
-                repl.send("\u{15}")
+                session.send_line_wait_eval_expect_str(
+                    "(await CounterAgent.get(\"xyz\")).",
+                    "increment",
+                )?;
+
+                session.send_line_wait_eval_expect_str(
+                    "CounterAgent.get(\"xyz\").then(c => c.",
+                    "increment",
+                )?;
+
+                session.send_line_wait_eval_expect_str("Sample", "SampleAgent")?;
+
+                session.send_line_wait_eval_expect_regex(
+                    "(await SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
+                    "sampleMethod",
+                )?;
+
+                session.send_line_wait_eval_expect_regex(
+                    "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(c => c.",
+                    "sampleMethod",
+                )?;
             }
 
-            repl.send_tab_complete_expect_str("Counter", "Agent")?;
-            kill_line(repl)?;
+            // Hints on "tab"
+            {
+                session.send_tab_wait_completion_expect_str("Counter", "Agent")?;
+                session.kill_line()?;
 
-            repl.send_tab_list_expect_regex("CounterAgent.", "get .* getPhantom ")?;
-            kill_line(repl)?;
+                session.send_tab_list_wait_completion_expect_regex(
+                    "CounterAgent.",
+                    "get .* getPhantom ",
+                )?;
+                session.kill_line()?;
 
-            repl.send_tab_complete_expect_str("CounterAgent.g", "et")?;
-            kill_line(repl)?;
+                session.send_tab_wait_completion_expect_str("CounterAgent.g", "et")?;
+                session.kill_line()?;
 
-            repl.send_tab_list_expect_regex("CounterAgent.get", "get .* getPhantom")?;
-            kill_line(repl)?;
+                session.send_tab_list_wait_completion_expect_regex(
+                    "CounterAgent.get",
+                    "get .* getPhantom",
+                )?;
+                session.kill_line()?;
 
-            repl.send_tab_complete_expect_str("CounterAgent.get(", "\"?\"")?;
-            kill_line(repl)?;
+                session.send_tab_wait_completion_expect_str("CounterAgent.get(", "\"?\"")?;
+                session.kill_line()?;
 
-            repl.send_tab_list_expect_regex("(await CounterAgent.get(\"xyz\")).", "increment")?;
-            kill_line(repl)?;
+                session.send_tab_list_wait_completion_expect_regex(
+                    "(await CounterAgent.get(\"xyz\")).",
+                    "increment",
+                )?;
+                session.kill_line()?;
 
-            repl.send_tab_list_expect_regex("CounterAgent.get(\"xyz\").then(x => x.", "increment")?;
-            kill_line(repl)?;
+                session.send_tab_list_wait_completion_expect_regex(
+                    "CounterAgent.get(\"xyz\").then(x => x.",
+                    "increment",
+                )?;
+                session.kill_line()?;
 
-            repl.send_tab_complete_expect_str("Sample", "Agent")?;
-            kill_line(repl)?;
+                session.send_tab_wait_completion_expect_str("Sample", "Agent")?;
+                session.kill_line()?;
 
-            repl.send_tab_list_expect_regex(
-                "(await SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
-                "sampleMethod",
-            )?;
-            kill_line(repl)?;
+                session.send_tab_list_wait_completion_expect_regex(
+                    "(await SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" })).",
+                    "sampleMethod",
+                )?;
+                session.kill_line()?;
 
-            repl.send_tab_list_expect_regex(
-                "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(x => x.",
-                "sampleMethod",
-            )?;
-            kill_line(repl)?;
-        }
+                session.send_tab_list_wait_completion_expect_regex(
+                    "SampleAgent.get(\"xyz\", \"eu\", \"fast\", { a: 1, b: \"x\" }).then(x => x.",
+                    "sampleMethod",
+                )?;
+                session.kill_line()?;
+            }
 
-        Ok(())
-    })
+            Ok(())
+        },
+    )
     .await;
 }
 

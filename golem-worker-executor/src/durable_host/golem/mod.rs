@@ -14,4 +14,5 @@
 
 pub mod agent;
 pub mod invocation_context_api;
+pub mod retry_api;
 pub mod v1x;

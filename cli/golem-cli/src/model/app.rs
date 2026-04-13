@@ -31,9 +31,10 @@ use crate::validation::{ValidatedResult, ValidationBuilder};
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
-use golem_common::model::deployment::DeploymentAgentSecretDefault;
+use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::quota::ResourceDefinitionCreation;
 use golem_common::model::validate_lower_kebab_case_identifier;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
@@ -347,6 +348,9 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
     agent_secrets_defaults:
         BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
+    retry_policy_defaults: BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
+    resource_definition_defaults:
+        BTreeMap<EnvironmentName, Vec<WithSource<ResourceDefinitionCreation>>>,
     bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
@@ -640,6 +644,29 @@ impl Application {
             }
         }
         result
+    }
+
+    pub fn deployment_retry_policy_defaults(
+        &self,
+        environment: &EnvironmentName,
+    ) -> Vec<DeploymentRetryPolicyDefault> {
+        let mut result = Vec::new();
+        if let Some(env_defaults) = self.retry_policy_defaults.get(environment) {
+            for default in env_defaults {
+                result.push(default.value.clone())
+            }
+        }
+        result
+    }
+
+    pub fn resource_definition_defaults(
+        &self,
+        environment: &EnvironmentName,
+    ) -> Vec<ResourceDefinitionCreation> {
+        self.resource_definition_defaults
+            .get(environment)
+            .map(|v| v.iter().map(|ws| ws.value.clone()).collect())
+            .unwrap_or_default()
     }
 
     pub fn bridge_sdks(&self) -> &app_raw::BridgeSdks {
@@ -2018,6 +2045,7 @@ impl PluginInstallation {
 }
 
 mod app_builder {
+    use super::ResourceDefinitionCreation;
     use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
@@ -2039,7 +2067,9 @@ mod app_builder {
     use golem_common::model::agent_secret::AgentSecretPath;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
-    use golem_common::model::deployment::DeploymentAgentSecretDefault;
+    use golem_common::model::deployment::{
+        DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault,
+    };
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::{
@@ -2168,6 +2198,12 @@ mod app_builder {
         agent_secret_defaults:
             BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
 
+        retry_policy_defaults:
+            BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
+
+        resource_definition_defaults:
+            BTreeMap<EnvironmentName, Vec<WithSource<ResourceDefinitionCreation>>>,
+
         all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
     }
@@ -2236,6 +2272,8 @@ mod app_builder {
                 http_api_deployments: builder.http_api_deployments,
                 mcp_deployments: builder.mcp_deployments,
                 agent_secrets_defaults: builder.agent_secret_defaults,
+                retry_policy_defaults: builder.retry_policy_defaults,
+                resource_definition_defaults: builder.resource_definition_defaults,
                 bridge_sdks: builder.bridge_sdks,
             })
         }
@@ -2446,6 +2484,36 @@ mod app_builder {
                                     DeploymentAgentSecretDefault { path: AgentSecretPath(environment_agent_secret.path), secret_value: environment_agent_secret.value }
                                 )
                             )
+                        }
+                    }
+
+                    for (environment, env_retry_policy_defaults) in app.application.retry_policy_defaults {
+                        let entry = self.retry_policy_defaults
+                            .entry(environment.clone())
+                            .or_default();
+
+                        for rpd in env_retry_policy_defaults {
+                            entry.push(
+                                WithSource::new(
+                                    app.source.to_path_buf(),
+                                    DeploymentRetryPolicyDefault {
+                                        name: rpd.name,
+                                        priority: rpd.priority,
+                                        predicate: rpd.predicate.into(),
+                                        policy: rpd.policy.into(),
+                                    }
+                                )
+                            )
+                        }
+                    }
+
+                    for (environment, resource_defs) in app.application.resource_defaults {
+                        let entry = self.resource_definition_defaults
+                            .entry(environment.clone())
+                            .or_default();
+
+                        for resource_def in resource_defs {
+                            entry.push(WithSource::new(app.source.to_path_buf(), resource_def));
                         }
                     }
 

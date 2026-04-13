@@ -51,7 +51,6 @@ pub trait DebugService: Send + Sync {
     async fn playback(
         &self,
         owned_agent_id: &OwnedAgentId,
-        account_id: AccountId,
         target_index: OplogIndex,
         overrides: Option<Vec<PlaybackOverride>>,
         ensure_invocation_boundary: bool,
@@ -60,7 +59,6 @@ pub trait DebugService: Send + Sync {
     async fn rewind(
         &self,
         owned_agent_id: &OwnedAgentId,
-        account_id: AccountId,
         target_index: OplogIndex,
         ensure_invocation_boundary: bool,
     ) -> Result<RewindResult, DebugServiceError>;
@@ -178,7 +176,6 @@ impl DebugServiceDefault {
     async fn connect_worker(
         &self,
         agent_id: AgentId,
-        account_id: AccountId,
         enironment_id: EnvironmentId,
     ) -> Result<(AgentMetadata, WorkerEventReceiver), DebugServiceError> {
         let owned_agent_id = OwnedAgentId::new(enironment_id, &agent_id);
@@ -215,7 +212,6 @@ impl DebugServiceDefault {
 
         let worker = Worker::get_or_create_suspended(
             &self.all,
-            account_id,
             &owned_agent_id,
             None,
             None,
@@ -335,11 +331,7 @@ impl DebugService for DebugServiceDefault {
 
         // This simply migrates the worker to the debug mode, but it doesn't start the worker
         let (worker_metadata, worker_event_receiver) = self
-            .connect_worker(
-                agent_id.clone(),
-                component.account_id,
-                component.environment_id,
-            )
+            .connect_worker(agent_id.clone(), component.environment_id)
             .await?;
 
         self.debug_session
@@ -370,7 +362,6 @@ impl DebugService for DebugServiceDefault {
     async fn playback(
         &self,
         owned_agent_id: &OwnedAgentId,
-        account_id: AccountId,
         target_index: OplogIndex,
         playback_overrides: Option<Vec<PlaybackOverride>>,
         ensure_invocation_boundary: bool,
@@ -405,7 +396,6 @@ impl DebugService for DebugServiceDefault {
         // allowing replaying to (potentially) stop at this index
         let worker = Worker::get_or_create_suspended(
             &self.all,
-            account_id,
             owned_agent_id,
             None,
             None,
@@ -492,7 +482,6 @@ impl DebugService for DebugServiceDefault {
     async fn rewind(
         &self,
         owned_agent_id: &OwnedAgentId,
-        account_id: AccountId,
         target_index: OplogIndex,
         ensure_invocation_boundary: bool,
     ) -> Result<RewindResult, DebugServiceError> {
@@ -525,7 +514,6 @@ impl DebugService for DebugServiceDefault {
 
         let worker = Worker::get_or_create_suspended(
             &self.all,
-            account_id,
             owned_agent_id,
             None,
             None,

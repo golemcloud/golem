@@ -18,6 +18,7 @@ pub mod component;
 pub mod environment;
 pub mod plugin_registration;
 pub mod quota_lease;
+pub mod retry_policy;
 
 use derive_more::Display;
 use desert_rust::BinaryCodec;
@@ -150,6 +151,7 @@ pub struct ResourceLimits {
     pub available_http_calls: u64,
     pub available_rpc_calls: u64,
     pub max_concurrent_agents_per_executor: u64,
+    pub oplog_writes_per_second: u64,
 }
 
 const UNLIMITED_CONCURRENT_AGENTS_PER_EXECUTOR: u64 = 1_000_000_000_000_000_000;
@@ -164,6 +166,18 @@ fn normalize_concurrent_agents_limit(limit: u64) -> u64 {
     }
 }
 
+/// Normalise the oplog write rate from the proto wire value.
+/// proto3 scalar default is 0 — treat as unlimited (10^18 sentinel).
+fn normalize_oplog_writes_per_second(rate: u64) -> u64 {
+    if rate == 0 {
+        UNLIMITED_OPLOG_WRITES_PER_SECOND
+    } else {
+        rate
+    }
+}
+
+const UNLIMITED_OPLOG_WRITES_PER_SECOND: u64 = 1_000_000_000_000_000_000;
+
 impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimits {
     fn from(value: ResourceLimits) -> Self {
         Self {
@@ -176,6 +190,7 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
             available_http_calls: value.available_http_calls,
             available_rpc_calls: value.available_rpc_calls,
             max_concurrent_agents_per_executor: value.max_concurrent_agents_per_executor,
+            oplog_writes_per_second: value.oplog_writes_per_second,
         }
     }
 }
@@ -193,6 +208,11 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
             available_rpc_calls: value.available_rpc_calls,
             max_concurrent_agents_per_executor: normalize_concurrent_agents_limit(
                 value.max_concurrent_agents_per_executor,
+            ),
+            // proto3 default (0) means unlimited — normalise to the 10^18
+            // sentinel used throughout the codebase.
+            oplog_writes_per_second: normalize_oplog_writes_per_second(
+                value.oplog_writes_per_second,
             ),
         }
     }
@@ -491,6 +511,7 @@ mod tests {
             available_http_calls: 0,
             available_rpc_calls: 0,
             max_concurrent_agents_per_executor: 0,
+            oplog_writes_per_second: 0,
         };
 
         let converted: super::ResourceLimits = proto.into();
@@ -499,6 +520,7 @@ mod tests {
             converted.max_concurrent_agents_per_executor,
             1_000_000_000_000_000_000
         );
+        assert_eq!(converted.oplog_writes_per_second, 1_000_000_000_000_000_000);
     }
 
     #[test]
@@ -513,10 +535,12 @@ mod tests {
             available_http_calls: 0,
             available_rpc_calls: 0,
             max_concurrent_agents_per_executor: 7,
+            oplog_writes_per_second: 500,
         };
 
         let converted: super::ResourceLimits = proto.into();
 
         assert_eq!(converted.max_concurrent_agents_per_executor, 7);
+        assert_eq!(converted.oplog_writes_per_second, 500);
     }
 }

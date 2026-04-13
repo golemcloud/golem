@@ -235,7 +235,7 @@ object Guest {
         val r = resolved.asInstanceOf[Resolved]
         r.defn.snapshotHandlers match {
           case Some(handlers) =>
-            val bytes                   = fromUint8Array(snapshot.data)
+            val bytes                   = fromUint8Array(snapshot.payload)
             val (principal, agentState) =
               if (snapshot.mimeType == "application/json") {
                 Json.parse(bytes) match {

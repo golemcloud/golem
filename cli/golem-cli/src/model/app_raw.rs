@@ -24,6 +24,7 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::quota::ResourceDefinitionCreation;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -121,6 +122,10 @@ pub struct Application {
     pub bridge: Option<BridgeSdks>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub secret_defaults: IndexMap<EnvironmentName, Vec<EnvironmentAgentSecret>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub retry_policy_defaults: IndexMap<EnvironmentName, Vec<EnvironmentRetryPolicyDefault>>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub resource_defaults: IndexMap<EnvironmentName, Vec<ResourceDefinitionCreation>>,
 }
 
 #[derive(Debug)]
@@ -293,6 +298,15 @@ pub struct AgentPreset {
 pub struct EnvironmentAgentSecret {
     pub path: Vec<String>,
     pub value: serde_json::Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EnvironmentRetryPolicyDefault {
+    pub name: String,
+    pub priority: u32,
+    pub predicate: golem_common::model::retry_policy::Predicate,
+    pub policy: golem_common::model::retry_policy::RetryPolicy,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

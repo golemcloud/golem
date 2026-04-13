@@ -27,7 +27,8 @@ mod bench {
     use golem_rust::agentic::{
         AgentTypeName, EnrichedAgentMethod, EnrichedElementSchema, ExtendedAgentConstructor,
         ExtendedAgentType, ExtendedDataSchema, get_constructor_parameter_type,
-        get_enriched_agent_type_by_name, get_method_parameter_type, register_agent_type,
+        get_enriched_agent_type_by_name, get_method_parameter_type,
+        get_method_parameter_types_by_index, register_agent_type,
     };
     use golem_rust::golem_agentic::golem::agent::common::{AgentMode, ElementSchema, Snapshotting};
     use golem_wasm::golem_core_1_5_x::types::{NamedWitTypeNode, WitType, WitTypeNode};
@@ -98,6 +99,7 @@ mod bench {
             http_mount: None,
             snapshotting: Snapshotting::Disabled,
             config: vec![],
+            sorted_method_indices: vec![],
         };
 
         register_agent_type(AgentTypeName(name.to_string()), agent_type);
@@ -179,6 +181,31 @@ mod bench {
             || {
                 for i in 0..PARAMS {
                     black_box(get_constructor_parameter_type(&agent_type_name, i));
+                }
+            },
+        );
+
+        // --- get_method_parameter_types_by_index (batch, O(1) indexed lookup) ---
+        println!("\n--- get_method_parameter_types_by_index (batch by sorted method index) ---");
+
+        bench_loop(
+            "batch all params by sorted method index",
+            ITERATIONS,
+            || {
+                black_box(get_method_parameter_types_by_index(&agent_type_name, 5));
+            },
+        );
+
+        bench_loop(
+            &format!(
+                "batch + index into vec for {} params (new hot path)",
+                PARAMS
+            ),
+            ITERATIONS,
+            || {
+                let schemas = get_method_parameter_types_by_index(&agent_type_name, 5).unwrap();
+                for i in 0..PARAMS {
+                    black_box(schemas.get(i));
                 }
             },
         );

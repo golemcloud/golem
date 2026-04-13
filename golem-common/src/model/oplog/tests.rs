@@ -19,14 +19,14 @@ use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
-    CancelPendingInvocationParams, ChangePersistenceLevelParams, ChangeRetryPolicyParams,
-    CommittedRemoteTransactionParams, CreateParams, CreateResourceParams, DeactivatePluginParams,
-    DropResourceParams, EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams,
-    FailedUpdateParams, FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams,
-    JumpParams, LogParams, NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
-    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RestartParams,
-    RevertParams, RolledBackRemoteTransactionParams, SetSpanAttributeParams, SnapshotParams,
-    StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    CancelPendingInvocationParams, ChangePersistenceLevelParams, CommittedRemoteTransactionParams,
+    CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
+    EndAtomicRegionParams, EndRemoteWriteParams, ErrorParams, ExitedParams, FailedUpdateParams,
+    FinishSpanParams, GrowMemoryParams, HostCallParams, InterruptedParams, JumpParams, LogParams,
+    NoOpParams, PendingAgentInvocationParams, PendingUpdateParams,
+    PreCommitRemoteTransactionParams, PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams,
+    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
+    SetSpanAttributeParams, SnapshotParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
@@ -34,8 +34,8 @@ use crate::model::oplog::{
     MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, PersistenceLevel,
     PluginInstallationDescription, PublicAgentInvocation, PublicAgentInvocationResult,
     PublicAttribute, PublicAttributeValue, PublicDurableFunctionType, PublicLocalSpanData,
-    PublicOplogEntry, PublicRetryConfig, PublicSnapshotData, PublicSpanData,
-    PublicUpdateDescription, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
+    PublicOplogEntry, PublicSnapshotData, PublicSpanData, PublicUpdateDescription, RawSnapshotData,
+    SnapshotBasedUpdateParameters, StringAttributeValue,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::worker::TypedAgentConfigEntry;
@@ -284,6 +284,7 @@ fn error_serialization_poem_serde_equivalence() {
         error: "test".to_string(),
         retry_from: OplogIndex::INITIAL,
         inside_atomic_region: false,
+        retry_policy_state: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -328,23 +329,6 @@ fn interrupted_serialization_poem_serde_equivalence() {
 fn exited_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::Exited(ExitedParams {
         timestamp: Timestamp::now_utc().rounded(),
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
-fn change_retry_policy_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::ChangeRetryPolicy(ChangeRetryPolicyParams {
-        timestamp: Timestamp::now_utc().rounded(),
-        new_policy: PublicRetryConfig {
-            max_attempts: 10,
-            min_delay: std::time::Duration::from_secs(1),
-            max_delay: std::time::Duration::from_secs(10),
-            multiplier: 2.0,
-            max_jitter_factor: Some(0.1),
-        },
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -871,6 +855,46 @@ fn snapshot_multipart_serialization_poem_serde_equivalence() {
 }
 
 #[test]
+fn set_retry_policy_serialization_poem_serde_equivalence() {
+    use crate::model::oplog::PublicNamedRetryPolicy;
+    use crate::model::retry_policy::{NamedRetryPolicy, Predicate, PredicateValue, RetryPolicy};
+
+    let named_policy = NamedRetryPolicy {
+        name: "http-transient".to_string(),
+        priority: 10,
+        predicate: Predicate::PropEq {
+            property: "error-type".to_string(),
+            value: PredicateValue::Text("transient".to_string()),
+        },
+        policy: RetryPolicy::CountBox {
+            max_retries: 3,
+            inner: Box::new(RetryPolicy::Exponential {
+                base_delay: std::time::Duration::from_secs(1),
+                factor: 2.0,
+            }),
+        },
+    };
+    let entry = PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        policy: PublicNamedRetryPolicy::from(named_policy),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn remove_retry_policy_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::RemoveRetryPolicy(RemoveRetryPolicyParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        name: "http-transient".to_string(),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
 fn oplog_entry_type_matches_wit() {
     use crate::model::oplog::OplogEntry;
     use golem_wasm::IntoValue;
@@ -894,5 +918,31 @@ fn oplog_entry_type_matches_wit() {
     assert_eq!(
         rust_type, wit_type,
         "OplogEntry::get_type() does not match the WIT oplog-entry definition"
+    );
+}
+
+#[test]
+fn public_oplog_entry_type_matches_wit() {
+    use golem_wasm::IntoValue;
+    use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, TypeName, TypeOwner};
+    use std::path::PathBuf;
+
+    let wit_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("wit");
+    let mut resolver =
+        AnalysedTypeResolve::from_wit_directory(&wit_dir).expect("Failed to parse WIT");
+
+    let wit_type = resolver
+        .analysed_type(&TypeName {
+            package: Some("golem:api@1.5.0".to_string()),
+            owner: TypeOwner::Interface("oplog".to_string()),
+            name: Some("public-oplog-entry".to_string()),
+        })
+        .expect("Failed to find public-oplog-entry type in WIT");
+
+    let rust_type = PublicOplogEntry::get_type();
+
+    assert_eq!(
+        rust_type, wit_type,
+        "PublicOplogEntry::get_type() does not match the WIT public-oplog-entry definition"
     );
 }

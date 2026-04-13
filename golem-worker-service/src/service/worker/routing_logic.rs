@@ -112,7 +112,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AgentId {
             .await
             .map_err(CallWorkerExecutorErrorWithContext::failed_to_get_routing_table)?;
 
-        tracing::debug!("Routing agent call for {self} using routing table: {routing_table:?}");
+        tracing::debug!("Routing agent call for {self}");
 
         match routing_table.lookup(self) {
             None => Ok((None, None)),
@@ -463,7 +463,9 @@ impl IsRetriableError for CallWorkerExecutorError {
     fn is_retriable(&self) -> bool {
         match self {
             CallWorkerExecutorError::FailedToGetRoutingTable(error) => error.is_retriable(),
-            CallWorkerExecutorError::FailedToConnectToPod(status) => status.is_retriable(),
+            CallWorkerExecutorError::FailedToConnectToPod(status) => {
+                status.is_retriable() || status.code() == tonic::Code::Cancelled
+            }
         }
     }
 

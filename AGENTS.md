@@ -22,7 +22,7 @@ cargo build -p <crate>    # Build specific crate
 
 Always run `cargo make build` before starting work to ensure all dependencies are compiled.
 
-**Note:** The SDKs in `sdks/` are not part of the main build flow. Load the `sdk-development` skill when working on SDKs.
+**Note:** The SDKs in `sdks/` are not part of the main build flow. Load `sdk-development` when working on the Rust or TypeScript SDKs, and `golem-scala-development` when working on the Scala SDK.
 
 ## Testing
 
@@ -37,9 +37,11 @@ Worker executor tests, integration tests, and CLI integration tests may depend o
 | Core logic, utilities | `cargo make unit-tests` |
 | Worker executor functionality | `cargo make worker-executor-tests` |
 | Service integration | `cargo make integration-tests` |
-| CLI changes | `cargo make cli-tests` |
+| CLI changes | `cargo make cli-integration-tests` |
 
 For specific tests: `cargo test -p <crate> -- <test_name> --report-time`
+
+For CLI integration test reruns or isolation, use `cargo make cli-integration-tests-group1` through `cargo make cli-integration-tests-group6`.
 
 **Whenever tests are modified, always run the affected tests to verify they still pass before considering the task complete.**
 
@@ -71,6 +73,7 @@ Load these skills for guided workflows on complex tasks:
 | `golem-scala-base-image` | WIT folder structure and regenerating `agent_guest.wasm` for the Scala SDK |
 | `golem-scala-code-generation` | Writing Scala code generators for the Scala SDK |
 | `investigating-executor-performance` | Investigating worker-executor performance with OTLP tracing and Jaeger |
+| `golem-skill-harness` | Developing, testing, and running Golem skill tests with the skill test harness |
 | `pre-pr-checklist` | Final checks before submitting a pull request |
 
 ## Before Submitting a PR
@@ -104,7 +107,7 @@ All crate dependencies must have their versions specified in the root workspace 
 - `golem-wasm/` - WASM utilities
 - `golem-rib/` - Rib language implementation
 - `cli/` - CLI tools (golem-cli, golem)
-- `sdks/` - Language-specific SDKs (Rust, TypeScript) - **not part of main build flow, see SDK-specific AGENTS.md**
+- `sdks/` - Language-specific SDKs (Rust, TypeScript, Scala) - **not part of main build flow, see SDK-specific AGENTS.md**
 - `golem-skills/` - Skill definitions and skill testing harness
 - `integration-tests/` - Integration test suite
 - `test-components/` - Test WASM components
