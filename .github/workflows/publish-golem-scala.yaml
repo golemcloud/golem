@@ -7,6 +7,9 @@ on:
 
 env:
   JDK_JAVA_OPTIONS: -XX:+PrintCommandLineFlags
+  WASM_RQUICKJS_VERSION: v0.2.1
+  WASI_SDK_VERSION: 25
+  WASI_SDK_PATH: /opt/wasi-sdk
 
 jobs:
   publish:
@@ -28,6 +31,28 @@ jobs:
 
       - name: Cache scala dependencies
         uses: coursier/cache-action@v8
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          rust-targets: wasm32-wasip1 wasm32-wasip2
+
+      - name: Install cargo-make
+        run: cargo install --force cargo-make
+
+      - name: Setup WASM component tools
+        uses: ./.github/actions/setup-wasm-component-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+
+      - name: Sync WIT dependencies
+        run: cargo make wit
+
+      - name: Build agent_guest.wasm
+        working-directory: sdks/scala
+        run: ./scripts/generate-agent-guest-wasm.sh
 
       - name: Publish to Maven Central
         working-directory: sdks/scala
