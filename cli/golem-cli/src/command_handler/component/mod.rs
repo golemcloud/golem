@@ -1154,7 +1154,7 @@ impl ComponentCommandHandler {
                     current_revision: component.revision,
                     agent_types,
                     agent_type_provision_config_updates: component_stager
-                        .agent_type_provision_config_updates(),
+                        .agent_type_provision_config_updates(&changed_files),
                 },
                 wasm,
                 changed_files.open_archive().await?,
