@@ -544,11 +544,7 @@ fn scheduler() -> Arc<ConcurrentAgentsScheduler> {
     Arc::new(ConcurrentAgentsScheduler::new())
 }
 
-async fn wait_for_queue_len(
-    sched: &ConcurrentAgentsScheduler,
-    acc: &AccountId,
-    expected: usize,
-) {
+async fn wait_for_queue_len(sched: &ConcurrentAgentsScheduler, acc: &AccountId, expected: usize) {
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
             if sched.queue_len(acc).await == Some(expected) {
