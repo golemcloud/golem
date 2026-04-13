@@ -111,11 +111,8 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
     type Output = Response;
 
     async fn call(&self, req: Request) -> Result<Self::Output> {
-        let host = req
-            .headers()
-            .get("host")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+        tracing::debug!(headers = ?req.headers(), uri = %req.uri(), "MCP bearer auth middleware");
+        let host = resolve_effective_host(req.headers());
 
         let security_scheme = if let Some(host) = &host {
             let domain = Domain(host.clone());
@@ -138,7 +135,7 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
                 Some(header) if header.starts_with("Bearer ") => header[7..].to_string(),
                 _ => {
                     tracing::warn!("MCP request missing or invalid Authorization header");
-                    return Ok(unauthorized_response(host.as_deref()));
+                    return Ok(unauthorized_response(host.as_deref(), &scheme));
                 }
             };
 
@@ -157,7 +154,7 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
 
             if let Err(err) = result {
                 tracing::warn!("MCP Bearer token validation failed: {err}");
-                return Ok(unauthorized_response(host.as_deref()));
+                return Ok(unauthorized_response(host.as_deref(), &scheme));
             }
         }
 
@@ -165,9 +162,10 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
     }
 }
 
-fn unauthorized_response(host: Option<&str>) -> Response {
+fn unauthorized_response(host: Option<&str>, scheme: &SecuritySchemeDetails) -> Response {
+    let proto = scheme.redirect_url.url().scheme();
     let resource_metadata_url = if let Some(host) = host {
-        format!("http://{host}/.well-known/oauth-protected-resource")
+        format!("{proto}://{host}/.well-known/oauth-protected-resource")
     } else {
         "/.well-known/oauth-protected-resource".to_string()
     };
@@ -188,9 +186,43 @@ fn unauthorized_response(host: Option<&str>) -> Response {
         )
 }
 
-fn resolve_base_url(scheme: &SecuritySchemeDetails) -> String {
-    let redirect_base = scheme.redirect_url.url();
-    format!("{}://{}", redirect_base.scheme(), redirect_base.authority())
+/// Resolves the effective host from the request, respecting reverse proxies.
+/// Priority: `X-Forwarded-Host` → `Host` header.
+pub fn resolve_effective_host(headers: &http::HeaderMap) -> Option<String> {
+    // 1. X-Forwarded-Host (de facto standard set by reverse proxies)
+    //    May be comma-separated; take the first (client-side) value.
+    if let Some(host) = headers
+        .get("x-forwarded-host")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Some(host.to_owned());
+    }
+
+    // 2. Host header (required in HTTP/1.1, always present in HTTP/2)
+    headers
+        .get(http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_owned())
+}
+
+/// Builds the externally-visible origin for the resource from the request's
+/// effective host combined with the scheme from the redirect URL configuration
+/// (or `X-Forwarded-Proto` when set by a trusted proxy).
+fn resolve_resource_origin(req: &Request, scheme: &SecuritySchemeDetails) -> String {
+    let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
+
+    let proto = req
+        .headers()
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .filter(|p| *p == "http" || *p == "https")
+        .unwrap_or_else(|| scheme.redirect_url.url().scheme());
+
+    format!("{proto}://{host}")
 }
 
 /// Validates that the security scheme's `redirect_url` ends with the expected
@@ -216,13 +248,10 @@ pub async fn authorization_server_metadata(
     req: &Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
 ) -> Response {
-    let host = req
-        .headers()
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost");
+    tracing::debug!(headers = ?req.headers(), uri = %req.uri(), "authorization_server_metadata");
+    let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
 
-    let domain = Domain(host.to_string());
+    let domain = Domain(host.clone());
 
     let security_scheme = match mcp_capability_lookup.get(&domain).await {
         Ok(compiled_mcp) => compiled_mcp.security_scheme,
@@ -232,7 +261,7 @@ pub async fn authorization_server_metadata(
     match security_scheme {
         Some(scheme) => {
             let scopes: Vec<String> = scheme.scopes.iter().map(|s| (**s).clone()).collect();
-            let base = resolve_base_url(&scheme);
+            let base = resolve_resource_origin(req, &scheme);
 
             let metadata = serde_json::json!({
                 "issuer": &base,
@@ -263,13 +292,10 @@ pub async fn protected_resource_metadata(
     req: &Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
 ) -> Response {
-    let host = req
-        .headers()
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost");
+    tracing::debug!(headers = ?req.headers(), uri = %req.uri(), "protected_resource_metadata");
+    let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
 
-    let domain = Domain(host.to_string());
+    let domain = Domain(host.clone());
 
     let security_scheme = match mcp_capability_lookup.get(&domain).await {
         Ok(compiled_mcp) => compiled_mcp.security_scheme,
@@ -279,11 +305,11 @@ pub async fn protected_resource_metadata(
     match security_scheme {
         Some(scheme) => {
             let scopes: Vec<String> = scheme.scopes.iter().map(|s| (**s).clone()).collect();
-            let base = resolve_base_url(&scheme);
+            let resource_base = resolve_resource_origin(req, &scheme);
 
             let metadata = serde_json::json!({
-                "resource": format!("{base}/mcp"),
-                "authorization_servers": [&base],
+                "resource": format!("{resource_base}/mcp"),
+                "authorization_servers": [&resource_base],
                 "scopes_supported": scopes,
             });
 
@@ -308,12 +334,8 @@ pub async fn oauth_register(
     mut req: Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
 ) -> Response {
-    let host = req
-        .headers()
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost")
-        .to_string();
+    tracing::debug!(headers = ?req.headers(), uri = %req.uri(), "oauth_register");
+    let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
 
     let domain = Domain(host);
 
@@ -365,13 +387,10 @@ pub async fn oauth_authorize(
     identity_provider: &dyn IdentityProvider,
     session_store: &dyn SessionStore,
 ) -> Response {
-    let host = req
-        .headers()
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost");
+    tracing::debug!(headers = ?req.headers(), uri = %req.uri(), "oauth_authorize");
+    let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
 
-    let domain = Domain(host.to_string());
+    let domain = Domain(host.clone());
 
     let security_scheme = match mcp_capability_lookup.get(&domain).await {
         Ok(compiled_mcp) => compiled_mcp.security_scheme,
@@ -491,13 +510,10 @@ pub async fn oauth_callback(
     identity_provider: &dyn IdentityProvider,
     session_store: &dyn SessionStore,
 ) -> Response {
-    let host = req
-        .headers()
-        .get("host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost");
+    tracing::debug!(headers = ?req.headers(), uri = %req.uri(), "oauth_callback");
+    let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
 
-    let domain = Domain(host.to_string());
+    let domain = Domain(host.clone());
 
     let query = req.uri().query().unwrap_or("");
     let params: Vec<(String, String)> = url::form_urlencoded::parse(query.as_bytes())
