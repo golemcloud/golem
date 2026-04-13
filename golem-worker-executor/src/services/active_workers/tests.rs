@@ -211,6 +211,19 @@ async fn concurrent_agents_acquire_succeeds_when_capacity_available() {
 }
 
 #[test]
+async fn concurrent_agents_acquire_panics_for_unregistered_account() {
+    let sem = concurrent_agents_semaphore();
+    let acc = account();
+
+    let err = match tokio::spawn(async move { sem.acquire(acc, || async { false }).await }).await {
+        Ok(_) => panic!("acquire should panic for unregistered account"),
+        Err(err) => err,
+    };
+
+    assert!(err.is_panic());
+}
+
+#[test]
 async fn concurrent_agents_try_acquire_now_returns_none_when_at_limit() {
     let sem = concurrent_agents_semaphore();
     let acc = account();
@@ -529,6 +542,19 @@ fn agent(name: &str) -> AgentId {
 
 fn scheduler() -> Arc<ConcurrentAgentsScheduler> {
     Arc::new(ConcurrentAgentsScheduler::new())
+}
+
+#[test]
+async fn scheduler_acquire_panics_for_unregistered_account() {
+    let sched = scheduler();
+    let acc = account();
+
+    let err = match tokio::spawn(async move { sched.acquire(acc, agent("A")).await }).await {
+        Ok(_) => panic!("scheduler acquire should panic for unregistered account"),
+        Err(err) => err,
+    };
+
+    assert!(err.is_panic());
 }
 
 #[test]

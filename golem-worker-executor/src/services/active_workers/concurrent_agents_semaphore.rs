@@ -133,21 +133,15 @@ impl ConcurrentAgentsSemaphore {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = bool>,
     {
-        let semaphore = match self
+        let semaphore = self
             .accounts
             .read_async(&account_id, |_, e| e.semaphore.clone())
             .await
-        {
-            Some(s) => s,
-            None => {
-                // Account not registered — this should not happen in production
-                // surface the bug loudly rather than silently bypassing the limit.
-                debug!(
-                    "ConcurrentAgentsSemaphore: acquire called for unregistered account {account_id}"
-                );
-                Arc::new(Semaphore::new(0))
-            }
-        };
+            .unwrap_or_else(|| {
+                panic!(
+                    "ConcurrentAgentsSemaphore::acquire called for unregistered account {account_id}"
+                )
+            });
 
         // Sync the semaphore pool size with the current plan limit (up or down).
         self.sync_semaphore_limit(&account_id, &semaphore).await;

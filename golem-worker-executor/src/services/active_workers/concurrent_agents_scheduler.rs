@@ -150,7 +150,7 @@ impl ConcurrentAgentsScheduler {
         account_id: AccountId,
         agent_id: AgentId,
     ) -> ConcurrentAgentPermit {
-        let account = self.get_or_create_account(&account_id).await;
+        let account = self.get_registered_account(&account_id).await;
         let limit = account.resource_entry.max_concurrent_agents_per_executor();
 
         // Unlimited accounts bypass the queue entirely.
@@ -263,38 +263,15 @@ impl ConcurrentAgentsScheduler {
         }
     }
 
-    async fn get_or_create_account(&self, account_id: &AccountId) -> Arc<AccountScheduler> {
-        // Fast path: account already registered.
-        if let Some(account) = self.accounts.read_async(account_id, |_, v| v.clone()).await {
-            return account;
-        }
-
-        // Slow path: create with unlimited defaults for unregistered accounts.
-        // This should not happen in production (register_account is called
-        // from Worker::new before any acquire), but handle gracefully.
-        let raw_semaphore = Arc::new(tokio::sync::Semaphore::new(0));
-        let resource_entry = Arc::new(AtomicResourceEntry::new(
-            u64::MAX,
-            usize::MAX,
-            usize::MAX,
-            u64::MAX,
-            AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
-        ));
+    async fn get_registered_account(&self, account_id: &AccountId) -> Arc<AccountScheduler> {
         self.accounts
-            .entry_async(*account_id)
+            .read_async(account_id, |_, v| v.clone())
             .await
-            .or_insert_with(|| {
-                Arc::new(AccountScheduler {
-                    resource_entry,
-                    raw_semaphore,
-                    state: std::sync::Mutex::new(AccountSchedulerState {
-                        running_count: 0,
-                        ready_queue: VecDeque::new(),
-                    }),
-                })
+            .unwrap_or_else(|| {
+                panic!(
+                    "ConcurrentAgentsScheduler::acquire called for unregistered account {account_id}"
+                )
             })
-            .get()
-            .clone()
     }
 
     #[cfg(test)]
