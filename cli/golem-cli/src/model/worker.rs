@@ -175,9 +175,7 @@ impl AgentMetadata {
             created_by: value.created_by,
             environment_id: value.environment_id,
             env: value.env,
-            // TODO: atl: rename server-side field to `wasi_config`.
             wasi_config: value.config_vars,
-            // TODO: atl: rename server-side field to `config`.
             config: value.agent_config.into_iter().map(Into::into).collect(),
             status: value.status,
             component_revision: value.component_revision,

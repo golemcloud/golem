@@ -23,6 +23,8 @@ use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::model::AgentStatus;
 use golem_common::model::component::{InitialAgentFile, InstalledPlugin};
+use golem_common::model::worker::TypedAgentConfigEntry;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use itertools::Itertools;
 use regex::Regex;
 use serde::Serialize;
@@ -360,6 +362,27 @@ pub fn format_env(show_sensitive: bool, env: &BTreeMap<String, String>) -> Strin
             } else {
                 format!("{}={}", k, v.log_color_highlight())
             }
+        })
+        .join("\n")
+}
+
+pub fn format_wasi_config(vars: &BTreeMap<String, String>) -> String {
+    vars.iter()
+        .map(|(k, v)| format!("{}={}", k, v.log_color_highlight()))
+        .join("\n")
+}
+
+pub fn format_typed_config(config: &[TypedAgentConfigEntry]) -> String {
+    config
+        .iter()
+        .map(|entry| {
+            let key = entry.path.join(".");
+            let value = entry
+                .value
+                .to_json_value()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|_| "<invalid>".to_string());
+            format!("{}={}", key.log_color_highlight(), value)
         })
         .join("\n")
 }

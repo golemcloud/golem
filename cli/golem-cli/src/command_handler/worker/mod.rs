@@ -1277,9 +1277,7 @@ impl WorkerCommandHandler {
                 &golem_client::model::AgentCreationRequest {
                     name: agent_name,
                     env,
-                    // TODO: atl: rename server-side field to `wasi_config`.
                     config_vars: wasi_config,
-                    // TODO: atl: rename server-side field to `config`.
                     agent_config: config,
                 },
             )
