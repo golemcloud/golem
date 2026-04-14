@@ -233,17 +233,17 @@ impl AppTemplateRepo {
         for entry in dir.entries() {
             if let Some(sub_dir) = entry.as_dir() {
                 Self::collect_skill_files(sub_dir, template_root, result)?;
-            } else if let Some(file) = entry.as_file() {
-                if fs::file_name_to_str(file.path())? == "SKILL.md" {
-                    let relative_path = fs::strip_prefix_or_err(file.path(), template_root)?;
-                    let contents = file
-                        .contents_utf8()
-                        .ok_or_else(|| {
-                            anyhow!("Skill file is not valid UTF-8: {}", file.path().display())
-                        })?
-                        .to_string();
-                    result.push((relative_path.to_path_buf(), contents));
-                }
+            } else if let Some(file) = entry.as_file()
+                && fs::file_name_to_str(file.path())? == "SKILL.md"
+            {
+                let relative_path = fs::strip_prefix_or_err(file.path(), template_root)?;
+                let contents = file
+                    .contents_utf8()
+                    .ok_or_else(|| {
+                        anyhow!("Skill file is not valid UTF-8: {}", file.path().display())
+                    })?
+                    .to_string();
+                result.push((relative_path.to_path_buf(), contents));
             }
         }
         Ok(())
