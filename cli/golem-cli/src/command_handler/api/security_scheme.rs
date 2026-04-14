@@ -190,7 +190,7 @@ impl ApiSecuritySchemeCommandHandler {
         // TODO: atomic: missing client method to get by name
         let Some(result) = clients
             .api_security
-            .get_environment_security_schemes(&environment.environment_id.0)
+            .list_environment_security_schemes(&environment.environment_id.0)
             .await
             .map_service_error()?
             .values
@@ -282,7 +282,7 @@ impl ApiSecuritySchemeCommandHandler {
 
         let results = clients
             .api_security
-            .get_environment_security_schemes(&environment.environment_id.0)
+            .list_environment_security_schemes(&environment.environment_id.0)
             .await
             .map_service_error()?
             .values;

@@ -98,17 +98,17 @@ impl McpDeploymentsApi {
     #[oai(
         path = "/envs/:environment_id/mcp-deployments/:domain",
         method = "get",
-        operation_id = "get_mcp_deployment_in_environment",
+        operation_id = "get_environment_mcp_deployment",
         tag = ApiTags::Environment
     )]
-    async fn get_mcp_deployment_in_environment(
+    async fn get_environment_mcp_deployment(
         &self,
         environment_id: Path<EnvironmentId>,
         domain: Path<Domain>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<McpDeployment>> {
         let record = recorded_http_api_request!(
-            "get_mcp_deployment_in_environment",
+            "get_environment_mcp_deployment",
             environment_id = environment_id.0.to_string(),
             domain = domain.0.to_string(),
         );
@@ -116,14 +116,14 @@ impl McpDeploymentsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_mcp_deployment_in_environment_internal(environment_id.0, domain.0, auth)
+            .get_environment_mcp_deployment_internal(environment_id.0, domain.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_mcp_deployment_in_environment_internal(
+    async fn get_environment_mcp_deployment_internal(
         &self,
         environment_id: EnvironmentId,
         domain: Domain,
@@ -141,30 +141,30 @@ impl McpDeploymentsApi {
     #[oai(
         path = "/envs/:environment_id/mcp-deployments",
         method = "get",
-        operation_id = "list_mcp_deployments_in_environment",
+        operation_id = "list_environment_mcp_deployments",
         tag = ApiTags::Environment
     )]
-    async fn list_mcp_deployments_in_environment(
+    async fn list_environment_mcp_deployments(
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<McpDeployment>>> {
         let record = recorded_http_api_request!(
-            "list_mcp_deployments_in_environment",
+            "list_environment_mcp_deployments",
             environment_id = environment_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .list_mcp_deployments_in_environment_internal(environment_id.0, auth)
+            .list_environment_mcp_deployments_internal(environment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn list_mcp_deployments_in_environment_internal(
+    async fn list_environment_mcp_deployments_internal(
         &self,
         environment_id: EnvironmentId,
         auth: AuthCtx,
@@ -342,11 +342,11 @@ impl McpDeploymentsApi {
     #[oai(
         path = "/envs/:environment_id/deployments/:deployment_revision/mcp-deployments/:domain",
         method = "get",
-        operation_id = "get_mcp_deployment_in_deployment",
+        operation_id = "get_deployment_mcp_deployment",
         tag = ApiTags::Environment,
         tag = ApiTags::Deployment,
     )]
-    async fn get_mcp_deployment_in_deployment(
+    async fn get_deployment_mcp_deployment(
         &self,
         environment_id: Path<EnvironmentId>,
         deployment_revision: Path<DeploymentRevision>,
@@ -354,7 +354,7 @@ impl McpDeploymentsApi {
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<McpDeployment>> {
         let record = recorded_http_api_request!(
-            "get_mcp_deployment_in_deployment",
+            "get_deployment_mcp_deployment",
             environment_id = environment_id.0.to_string(),
             deployment_revision = deployment_revision.0.to_string(),
             domain = domain.0.to_string(),
@@ -363,7 +363,7 @@ impl McpDeploymentsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_mcp_deployment_in_deployment_internal(
+            .get_deployment_mcp_deployment_internal(
                 environment_id.0,
                 deployment_revision.0,
                 domain.0,
@@ -375,7 +375,7 @@ impl McpDeploymentsApi {
         record.result(response)
     }
 
-    async fn get_mcp_deployment_in_deployment_internal(
+    async fn get_deployment_mcp_deployment_internal(
         &self,
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
@@ -394,18 +394,18 @@ impl McpDeploymentsApi {
     #[oai(
         path = "/envs/:environment_id/deployments/:deployment_revision/mcp-deployments",
         method = "get",
-        operation_id = "list_mcp_deployments_in_deployment",
+        operation_id = "list_deployment_mcp_deployments",
         tag = ApiTags::Environment,
         tag = ApiTags::Deployment,
     )]
-    async fn list_mcp_deployments_in_deployment(
+    async fn list_deployment_mcp_deployments(
         &self,
         environment_id: Path<EnvironmentId>,
         deployment_revision: Path<DeploymentRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<McpDeployment>>> {
         let record = recorded_http_api_request!(
-            "list_mcp_deployments_in_deployment",
+            "list_deployment_mcp_deployments",
             environment_id = environment_id.0.to_string(),
             deployment_revision = deployment_revision.0.to_string(),
         );
@@ -413,18 +413,14 @@ impl McpDeploymentsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .list_mcp_deployments_in_deployment_internal(
-                environment_id.0,
-                deployment_revision.0,
-                auth,
-            )
+            .list_deployment_mcp_deployments_internal(environment_id.0, deployment_revision.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn list_mcp_deployments_in_deployment_internal(
+    async fn list_deployment_mcp_deployments_internal(
         &self,
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,

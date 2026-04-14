@@ -22,7 +22,9 @@ use crate::log::LogColorize;
 use anyhow::{Context, anyhow, bail};
 use colored::Colorize;
 use golem_client::Security;
-use golem_client::api::{LoginClient, LoginClientLive, LoginPollOauth2WebflowError};
+use golem_client::api::{
+    LoginClient, LoginClientLive, LoginPollOauth2WebflowError, MeClient, MeClientLive,
+};
 use golem_client::model::{OAuth2Provider, OAuth2WebflowData, Token, TokenWithSecret};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
@@ -161,7 +163,7 @@ impl Auth {
         let mut context = self.login_client.context.clone();
         context.security_token = Security::Bearer(token_secret.secret().to_string());
 
-        let client = LoginClientLive { context };
+        let client = MeClientLive { context };
 
         client.current_login_token().await.map_service_error()
     }

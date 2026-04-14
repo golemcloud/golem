@@ -115,34 +115,34 @@ impl ComponentsApi {
         Ok(Json(component))
     }
 
-    /// Get all components in the environment
+    /// List all components in the environment
     #[oai(
         path = "/envs/:environment_id/components",
         method = "get",
-        operation_id = "get_environment_components",
+        operation_id = "list_environment_components",
         tag = ApiTags::Environment
     )]
-    async fn get_environment_components(
+    async fn list_environment_components(
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<ComponentDto>>> {
         let record = recorded_http_api_request!(
-            "get_environment_components",
+            "list_environment_components",
             environment_id = environment_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_environment_components_internal(environment_id.0, auth)
+            .list_environment_components_internal(environment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_environment_components_internal(
+    async fn list_environment_components_internal(
         &self,
         environment_id: EnvironmentId,
         auth: AuthCtx,
@@ -202,22 +202,22 @@ impl ComponentsApi {
         Ok(Json(component))
     }
 
-    /// Get all components in a specific deployment
+    /// List all components in a specific deployment
     #[oai(
         path = "/envs/:environment_id/deployments/:deployment_revision/components",
         method = "get",
-        operation_id = "get_deployment_components",
+        operation_id = "list_deployment_components",
         tag = ApiTags::Environment,
         tag = ApiTags::Deployment
     )]
-    async fn get_deployment_components(
+    async fn list_deployment_components(
         &self,
         environment_id: Path<EnvironmentId>,
         deployment_revision: Path<DeploymentRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<ComponentDto>>> {
         let record = recorded_http_api_request!(
-            "get_deployment_components",
+            "list_deployment_components",
             environment_id = environment_id.0.to_string(),
             deployment_revision = deployment_revision.0.to_string(),
         );
@@ -225,14 +225,14 @@ impl ComponentsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_deployment_components_internal(environment_id.0, deployment_revision.0, auth)
+            .list_deployment_components_internal(environment_id.0, deployment_revision.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_deployment_components_internal(
+    async fn list_deployment_components_internal(
         &self,
         environment_id: EnvironmentId,
         deployment_revision: DeploymentRevision,
@@ -393,14 +393,14 @@ impl ComponentsApi {
         method = "get",
         operation_id = "get_component_wasm"
     )]
-    async fn get_component_wasm(
+    async fn get_component_revision_wasm(
         &self,
         component_id: Path<ComponentId>,
         revision: Path<ComponentRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Binary<Body>> {
         let record = recorded_http_api_request!(
-            "get_component_wasm",
+            "get_component_revision_wasm",
             component_id = component_id.0.to_string(),
             revision = revision.0.to_string()
         );
@@ -408,14 +408,14 @@ impl ComponentsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_component_wasm_internal(component_id.0, revision.0, auth)
+            .get_component_revision_wasm_internal(component_id.0, revision.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_component_wasm_internal(
+    async fn get_component_revision_wasm_internal(
         &self,
         component_id: ComponentId,
         revision: ComponentRevision,
@@ -488,7 +488,7 @@ impl ComponentsApi {
         Ok(Json(component))
     }
 
-    /// Update the component
+    /// Delete the component
     #[oai(
         path = "/components/:component_id",
         method = "delete",

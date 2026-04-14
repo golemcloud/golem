@@ -25,6 +25,7 @@ pub mod error;
 pub mod http_api_deployments;
 pub mod login;
 pub mod mcp_deployments;
+pub mod me;
 pub mod plugin_registrations;
 pub mod reports;
 pub mod resource_definitions;
@@ -32,7 +33,6 @@ pub mod retry_policies;
 pub mod security_schemes;
 pub mod tokens;
 
-use self::account_tokens::AccountTokensApi;
 use self::accounts::AccountsApi;
 use self::agent_secrets::AgentSecretsApi;
 use self::applications::ApplicationsApi;
@@ -45,6 +45,7 @@ use self::error::ApiError;
 use self::http_api_deployments::HttpApiDeploymentsApi;
 use self::login::LoginApi;
 use self::mcp_deployments::McpDeploymentsApi;
+use self::me::MeApi;
 use self::plugin_registrations::PluginRegistrationsApi;
 use self::reports::ReportsApi;
 use self::resource_definitions::ResourceDefinitionsApi;
@@ -57,7 +58,7 @@ use poem_openapi::OpenApiService;
 
 pub type Apis = (
     HealthcheckApi,
-    (AccountTokensApi, AccountsApi),
+    AccountsApi,
     AgentSecretsApi,
     ApplicationsApi,
     ComponentsApi,
@@ -68,8 +69,8 @@ pub type Apis = (
         EnvironmentSharesApi,
     ),
     HttpApiDeploymentsApi,
+    (LoginApi, MeApi),
     McpDeploymentsApi,
-    LoginApi,
     PluginRegistrationsApi,
     ReportsApi,
     ResourceDefinitionsApi,
@@ -82,17 +83,11 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
     OpenApiService::new(
         (
             HealthcheckApi,
-            (
-                AccountTokensApi::new(
-                    services.token_service.clone(),
-                    services.auth_service.clone(),
-                ),
-                AccountsApi::new(
-                    services.account_service.clone(),
-                    services.plan_service.clone(),
-                    services.auth_service.clone(),
-                    services.plugin_registration_service.clone(),
-                ),
+            AccountsApi::new(
+                services.account_service.clone(),
+                services.plan_service.clone(),
+                services.token_service.clone(),
+                services.auth_service.clone(),
             ),
             AgentSecretsApi::new(
                 services.agent_secret_service.clone(),
@@ -131,13 +126,17 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.http_api_deployment_service.clone(),
                 services.auth_service.clone(),
             ),
+            (
+                LoginApi::new(services.login_system.clone()),
+                MeApi::new(
+                    services.token_service.clone(),
+                    services.environment_service.clone(),
+                    services.auth_service.clone(),
+                ),
+            ),
             McpDeploymentsApi::new(
                 services.mcp_deployment_service.clone(),
                 services.auth_service.clone(),
-            ),
-            LoginApi::new(
-                services.login_system.clone(),
-                services.token_service.clone(),
             ),
             PluginRegistrationsApi::new(
                 services.plugin_registration_service.clone(),
