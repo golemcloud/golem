@@ -137,7 +137,7 @@ final class AgentDefinition[Instance](
     methodsByName
       .get(methodName)
       .map(_.invoke(instance, payload, principal))
-      .getOrElse(js.Promise.reject(s"Unknown method: $methodName"))
+      .getOrElse(js.Promise.reject(JsAgentError.invalidMethod(s"Unknown method: $methodName")))
   }
 
   /**
