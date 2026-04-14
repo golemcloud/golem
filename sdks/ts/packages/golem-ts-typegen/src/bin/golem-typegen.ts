@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { Project } from 'ts-morph';
 import pc from 'picocolors';
 import logSymbols from 'log-symbols';
@@ -26,10 +26,8 @@ program
     'Exclude methods that override parent class methods',
     true,
   )
-  .option(
-    '--golem-ts-sdk-import <value>',
-    'Statement to use for importing the golem-ts-sdk',
-    '@golemcloud/golem-ts-sdk',
+  .addOption(
+    new Option('--golem-ts-sdk-import <value>').default('@golemcloud/golem-ts-sdk').hideHelp(),
   )
   .action(
     (
