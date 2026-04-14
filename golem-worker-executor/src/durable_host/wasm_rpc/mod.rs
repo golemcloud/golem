@@ -1101,29 +1101,25 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let future_rep = this.rep();
 
         let child_reps = {
-            let entry = self.table().get_mut(&this)?;
-            std::mem::take(&mut entry.child_pollables)
+            let entry = self.table().get(&this)?;
+            entry.child_pollables.clone()
         };
 
         warn!(
             future_rep,
             child_reps = ?child_reps,
-            "Dropping future invoke result and force-deleting child pollables"
+            "Dropping future invoke result without force-deleting child pollables"
         );
 
-        for rep in child_reps {
-            let child: Resource<golem_wasm::DynPollable> = Resource::new_own(rep);
-            if let Err(err) = self.table().delete(child) {
-                warn!(
-                    future_rep,
-                    child_rep = rep,
-                    error = %err,
-                    "Force-delete of child pollable failed"
-                );
-            }
+        if let Err(err) = self.table().delete(this) {
+            warn!(
+                future_rep,
+                child_reps = ?child_reps,
+                error = %err,
+                "Future invoke result delete failed while leaving child pollables intact"
+            );
         }
 
-        let _ = self.table().delete(this)?;
         Ok(())
     }
 }
