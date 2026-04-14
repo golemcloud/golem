@@ -279,7 +279,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .try_into()?,
                 component_revision: create.component_revision.try_into()?,
                 env: create.env.into_iter().collect(),
-                wasi_config: create.wasi_config.into_iter().collect(),
+                config_vars: create.wasi_config.into_iter().collect(),
                 local_agent_config: create
                     .config
                     .into_iter()
@@ -735,7 +735,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         agent_id: Some(create.agent_id.into()),
                         component_revision: create.component_revision.into(),
                         env: create.env.into_iter().collect(),
-                        wasi_config: create.wasi_config.into_iter().collect(),
+                        wasi_config: create.config_vars.into_iter().collect(),
                         config: create
                             .local_agent_config
                             .into_iter()

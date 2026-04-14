@@ -145,7 +145,7 @@ impl WorkerService for DefaultWorkerService {
                     component_size,
                     initial_total_linear_memory_size,
                     initial_active_plugins,
-                    wasi_config,
+                    config_vars: wasi_config,
                     local_agent_config,
                     original_phantom_id,
                 },

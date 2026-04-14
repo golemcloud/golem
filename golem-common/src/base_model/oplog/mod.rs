@@ -79,7 +79,7 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
-            wasi_config: BTreeMap<String, String>,
+            config_vars: BTreeMap<String, String>,
             local_agent_config: Vec<UntypedAgentConfigEntry>,
             original_phantom_id: Option<Uuid>
         }
@@ -93,7 +93,7 @@ oplog_entry! {
             component_size: u64,
             initial_total_linear_memory_size: u64,
             initial_active_plugins: BTreeSet<PluginInstallationDescription>,
-            wasi_config: BTreeMap<String, String>,
+            config_vars: BTreeMap<String, String>,
             local_agent_config: Vec<TypedAgentConfigEntry>,
             original_phantom_id: Option<Uuid>
         }

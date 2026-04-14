@@ -54,7 +54,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
-                wasi_config,
+                                         config_vars: wasi_config,
                 local_agent_config,
                 original_phantom_id,
             }) => Self::Create(oplog::CreateParameters {
@@ -818,7 +818,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     .into_iter()
                     .map(|v| golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId(uuid::Uuid::from_u64_pair(v.uuid.high_bits, v.uuid.low_bits)))
                     .collect(),
-                wasi_config: params.config_vars.into_iter().collect(),
+                config_vars: params.config_vars.into_iter().collect(),
                 // FIXME: agent-config
                 local_agent_config: Vec::new(),
                 original_phantom_id: params
