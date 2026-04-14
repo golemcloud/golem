@@ -153,7 +153,7 @@ export interface CreateAgentRequest {
   agentTypeName: AgentTypeName;
   parameters: DataValue;
   phantomId?: PhantomId;
-  agentConfig?: WorkerAgentConfigEntry[];
+  config?: WorkerAgentConfigEntry[];
 }
 
 export interface AgentId {
