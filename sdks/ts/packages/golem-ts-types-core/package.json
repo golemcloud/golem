@@ -6,7 +6,6 @@
     "access": "public"
   },
   "files": [
-    "types",
     "dist"
   ],
   "main": "dist/index.mjs",

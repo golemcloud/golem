@@ -218,26 +218,13 @@ importers:
         version: 3.2.4(@types/node@24.3.1)(terser@5.46.1)
 
   packages/golem-ts-typegen:
-    dependencies:
-      '@golemcloud/golem-ts-types-core':
-        specifier: workspace:*
-        version: link:../golem-ts-types-core
-      commander:
-        specifier: ^14.0.0
-        version: 14.0.0
-      log-symbols:
-        specifier: ^7.0.1
-        version: 7.0.1
-      picocolors:
-        specifier: ^1.1.1
-        version: 1.1.1
-      ts-morph:
-        specifier: ^26.0.0
-        version: 26.0.0
     devDependencies:
       '@eslint/js':
         specifier: ^9.33.0
         version: 9.35.0
+      '@golemcloud/golem-ts-types-core':
+        specifier: workspace:*
+        version: link:../golem-ts-types-core
       '@rollup/plugin-commonjs':
         specifier: ^28.0.6
         version: 28.0.6(rollup@4.50.0)
@@ -253,12 +240,21 @@ importers:
       '@typescript-eslint/parser':
         specifier: ^8.39.0
         version: 8.42.0(eslint@9.35.0)(typescript@5.9.2)
+      commander:
+        specifier: ^14.0.0
+        version: 14.0.0
       eslint:
         specifier: ^9.33.0
         version: 9.35.0
       fast-check:
         specifier: ^4.2.0
         version: 4.3.0
+      log-symbols:
+        specifier: ^7.0.1
+        version: 7.0.1
+      picocolors:
+        specifier: ^1.1.1
+        version: 1.1.1
       prettier:
         specifier: ^3.6.2
         version: 3.6.2
@@ -274,6 +270,9 @@ importers:
       rollup-plugin-typescript2:
         specifier: ^0.36.0
         version: 0.36.0(rollup@4.50.0)(typescript@5.9.2)
+      ts-morph:
+        specifier: ^26.0.0
+        version: 26.0.0
       typescript:
         specifier: ^5.8.3
         version: 5.9.2
