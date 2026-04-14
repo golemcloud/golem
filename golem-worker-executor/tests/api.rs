@@ -1011,7 +1011,7 @@ async fn component_env_variables(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("FOO".to_string(), "bar".to_string())])
+        .with_env("Environment", vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
 
@@ -1070,7 +1070,7 @@ async fn component_env_variables_update(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("FOO".to_string(), "bar".to_string())])
+        .with_env("Environment", vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
 
@@ -1091,6 +1091,7 @@ async fn component_env_variables_update(
     let updated_component = executor
         .update_component_with_env(
             &component.id,
+            "Environment",
             "golem_it_host_api_tests_release",
             &[("BAR".to_string(), "baz".to_string())],
         )
@@ -1137,7 +1138,7 @@ async fn component_env_and_worker_env_priority(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("FOO".to_string(), "bar".to_string())])
+        .with_env("Environment", vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
 
@@ -3647,8 +3648,8 @@ async fn worker_created_by_reflects_component_owner_not_caller(
             component_owner_account_id: Some(component_owner_account_id.into()),
             environment_id: Some(component.environment_id.into()),
             env: Default::default(),
-            config_vars: Default::default(),
-            agent_config: Vec::new(),
+            wasi_config: Default::default(),
+            config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),
             principal: None,
@@ -3740,8 +3741,8 @@ async fn worker_environment_reflects_component_not_caller(
             component_owner_account_id: Some(caller_account_id.into()),
             environment_id: Some(caller_environment_id.into()),
             env: Default::default(),
-            config_vars: Default::default(),
-            agent_config: Vec::new(),
+            wasi_config: Default::default(),
+            config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),
             principal: None,
@@ -3877,8 +3878,8 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
             component_owner_account_id: Some(component_owner_account_id.into()),
             environment_id: Some(component.environment_id.into()),
             env: Default::default(),
-            config_vars: Default::default(),
-            agent_config: Vec::new(),
+            wasi_config: Default::default(),
+            config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),
             principal: None,

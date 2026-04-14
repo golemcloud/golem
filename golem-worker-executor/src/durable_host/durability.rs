@@ -141,11 +141,11 @@ pub trait InFunctionRetryHost {
 }
 
 pub(crate) fn collect_named_retry_policies(
-    agent_config: &HashMap<Vec<String>, golem_wasm::ValueAndType>,
+    config: &HashMap<Vec<String>, golem_wasm::ValueAndType>,
 ) -> Vec<NamedRetryPolicy> {
     let mut policies = Vec::new();
 
-    for value_and_type in agent_config.values() {
+    for value_and_type in config.values() {
         if let Ok(mut parsed) = Vec::<NamedRetryPolicy>::from_value(value_and_type.value.clone()) {
             policies.append(&mut parsed);
             continue;

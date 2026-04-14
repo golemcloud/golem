@@ -139,7 +139,7 @@ pub struct S3BlobStorageConfig {
     pub custom_data_bucket: String,
     pub oplog_payload_bucket: String,
     pub compressed_oplog_buckets: Vec<String>,
-    pub initial_component_files_bucket: String,
+    pub initial_agent_files_bucket: String,
     pub components_bucket: String,
 }
 
@@ -183,8 +183,8 @@ impl SafeDisplay for S3BlobStorageConfig {
         );
         let _ = writeln!(
             &mut result,
-            "initial component files bucket: {}",
-            self.initial_component_files_bucket
+            "initial agent files bucket: {}",
+            self.initial_agent_files_bucket
         );
         let _ = writeln!(&mut result, "components bucket: {}", self.components_bucket);
 
@@ -205,7 +205,7 @@ impl Default for S3BlobStorageConfig {
             aws_credentials: None,
             aws_path_style: None,
             compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
-            initial_component_files_bucket: "golem-initial-component-files".to_string(),
+            initial_agent_files_bucket: "golem-initial-agent-files".to_string(),
             components_bucket: "component-store".to_string(),
         }
     }

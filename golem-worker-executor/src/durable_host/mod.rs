@@ -92,8 +92,7 @@ use golem_common::model::TransactionId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{
-    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
-    InitialComponentFile,
+    AgentFilePermissions, CanonicalFilePath, ComponentId, ComponentRevision, InitialAgentFile,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
@@ -105,7 +104,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
-use golem_common::model::worker::ParsedWorkerAgentConfigEntry;
+use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
     AgentMetadata, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, RetryContext,
@@ -164,6 +163,7 @@ impl Drop for WorkerDir {
     }
 }
 
+use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{Instrument, Level, debug, info, span, warn};
 use try_match::try_match;
@@ -277,11 +277,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
             .await?;
 
+        let agent_type_provision_configs = agent_id.as_ref().and_then(|agent_id| {
+            component_metadata
+                .metadata
+                .agent_type_provision_configs()
+                .get(&agent_id.agent_type)
+                .cloned()
+        });
+
         let files = prepare_filesystem(
             &file_loader,
             owned_agent_id.environment_id,
             worker_dir.path(),
-            &component_metadata.files,
+            agent_type_provision_configs
+                .as_ref()
+                .map(|c| c.files.as_slice())
+                .unwrap_or_default(),
         )
         .await?;
 
@@ -296,10 +307,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // Read-write files are copied per-worker (each worker gets its own
         // private inode and data blocks), so they must be charged individually.
         if let Some(worker) = invocation_queue.upgrade() {
-            let rw_bytes: u64 = component_metadata
-                .files
+            let rw_bytes: u64 = agent_type_provision_configs
+                .as_ref()
+                .map(|c| c.files.as_slice())
+                .unwrap_or_default()
                 .iter()
-                .filter(|f| f.permissions == ComponentFilePermissions::ReadWrite)
+                .filter(|f| f.permissions == AgentFilePermissions::ReadWrite)
                 .map(|f| f.size)
                 .sum();
             if rw_bytes > 0 {
@@ -310,16 +323,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         }
 
-        let config_vars = effective_config_vars(
-            worker_config.initial_config_vars.clone(),
-            component_metadata.config_vars.clone(),
+        let wasi_config = effective_config_vars(
+            worker_config.initial_wasi_config.clone(),
+            agent_type_provision_configs
+                .as_ref()
+                .map(|c| c.wasi_config.clone())
+                .unwrap_or_default(),
         );
 
-        let agent_config = if let Some(agent_id) = &agent_id {
+        let agent_config = if agent_id.is_some() {
             effective_agent_config(
                 worker_config.initial_agent_config.clone(),
-                component_metadata.agent_config.clone(),
-                &agent_id.agent_type,
+                agent_type_provision_configs
+                    .as_ref()
+                    .map(|c| c.config.clone())
+                    .unwrap_or_default(),
             )
         } else {
             HashMap::new()
@@ -383,8 +401,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 TRwLock::new(files),
                 file_loader,
                 worker_config.created_by,
-                worker_config.initial_config_vars,
-                config_vars,
+                worker_config.initial_wasi_config,
+                wasi_config,
                 worker_config.initial_agent_config,
                 agent_config,
                 shard_service,
@@ -502,6 +520,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn component_metadata(&self) -> &Component {
         &self.state.component_metadata
+    }
+
+    pub fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig> {
+        self.state.agent_id.as_ref().and_then(|agent_id| {
+            self.component_metadata()
+                .metadata
+                .agent_type_provision_config(&agent_id.agent_type)
+        })
     }
 
     pub fn is_exit(error: &anyhow::Error) -> Option<i32> {
@@ -1557,6 +1583,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         } else {
                             let component_metadata =
                                 store.as_context().data().component_metadata().clone();
+                            let agent_type_provision_config = store
+                                .as_context()
+                                .data()
+                                .agent_type_provision_config()
+                                .cloned();
 
                             store
                                 .as_context_mut()
@@ -1565,9 +1596,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     target_revision,
                                     component_metadata.component_size,
                                     HashSet::from_iter(
-                                        component_metadata.installed_plugins.into_iter().map(
-                                            |installation| installation.environment_plugin_grant_id,
-                                        ),
+                                        agent_type_provision_config
+                                            .into_iter()
+                                            .flat_map(|c| c.plugins)
+                                            .map(|installation| {
+                                                installation.environment_plugin_grant_id
+                                            }),
                                     ),
                                 )
                                 .await;
@@ -1849,11 +1883,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             self.on_worker_update_succeeded(
                                 target_revision,
                                 component_metadata.component_size,
-                                HashSet::from_iter(
-                                    component_metadata.installed_plugins.into_iter().map(
-                                        |installation| installation.environment_plugin_grant_id,
-                                    ),
-                                ),
+                                HashSet::from_iter({
+                                    self.agent_type_provision_config()
+                                        .map(|c| c.plugins.as_slice())
+                                        .unwrap_or_default()
+                                        .iter()
+                                        .map(|installation| {
+                                            installation.environment_plugin_grant_id
+                                        })
+                                }),
                             )
                             .await;
 
@@ -1894,22 +1932,36 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .get_metadata(self.owned_agent_id.component_id(), Some(new_revision))
             .await?;
 
+        let new_agent_type_provision_configs = self.parsed_agent_id().and_then(|aid| {
+            new_metadata
+                .metadata
+                .agent_type_provision_configs()
+                .get(&aid.agent_type)
+                .cloned()
+        });
+
         let mut current_files = self.state.files.write().await;
         update_filesystem(
             &mut current_files,
             &self.state.file_loader,
             self.owned_agent_id.environment_id,
             self.worker_dir.path(),
-            &new_metadata.files,
+            new_agent_type_provision_configs
+                .as_ref()
+                .map(|c| c.files.as_slice())
+                .unwrap_or_default(),
         )
         .await?;
 
         let mut read_only_paths = self.state.read_only_paths.write().unwrap();
         *read_only_paths = compute_read_only_paths(&current_files);
 
-        self.state.config_vars = effective_config_vars(
+        self.state.wasi_config = effective_config_vars(
             self.state.initial_config_vars.clone(),
-            new_metadata.config_vars.clone(),
+            new_agent_type_provision_configs
+                .as_ref()
+                .map(|c| c.wasi_config.clone())
+                .unwrap_or_default(),
         );
 
         if let Some(agent_id) = self.parsed_agent_id() {
@@ -1925,8 +1977,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             let updated_agent_config = effective_agent_config(
                 self.state.initial_agent_config.clone(),
-                new_metadata.agent_config.clone(),
-                &agent_id.agent_type,
+                new_agent_type_provision_configs
+                    .as_ref()
+                    .map(|c| c.config.clone())
+                    .unwrap_or_default(),
             );
 
             validate_agent_config(&updated_agent_config, &agent_type)?;
@@ -2976,7 +3030,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
     async fn get_file_system_node(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         let root = self.worker_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
@@ -3005,9 +3059,9 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
             let is_readonly_by_us = self.state.read_only_paths.read().unwrap().contains(&target);
 
             let permissions = if is_readonly_by_host || is_readonly_by_us {
-                ComponentFilePermissions::ReadOnly
+                AgentFilePermissions::ReadOnly
             } else {
-                ComponentFilePermissions::ReadWrite
+                AgentFilePermissions::ReadWrite
             };
 
             let last_modified = metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH);
@@ -3061,9 +3115,9 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
                     .contains(&entry.path());
 
                 let permissions = if is_readonly_by_host || is_readonly_by_us {
-                    ComponentFilePermissions::ReadOnly
+                    AgentFilePermissions::ReadOnly
                 } else {
-                    ComponentFilePermissions::ReadWrite
+                    AgentFilePermissions::ReadWrite
                 };
 
                 result.push(ComponentFileSystemNode {
@@ -3087,7 +3141,7 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
 
     async fn read_file(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
         let root = self.worker_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
@@ -3520,10 +3574,10 @@ struct PrivateDurableWorkerState {
     /// The initial config vars that the worker was configured with
     initial_config_vars: BTreeMap<String, String>,
     /// The current config vars of the worker, taking into account component version, etc.
-    config_vars: BTreeMap<String, String>,
+    wasi_config: BTreeMap<String, String>,
 
     // The initial local agent config that the worker was configured with
-    initial_agent_config: Vec<ParsedWorkerAgentConfigEntry>,
+    initial_agent_config: Vec<TypedAgentConfigEntry>,
     /// The current local agent config of the worker, taking the component revision into account
     agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
 
@@ -3614,8 +3668,8 @@ impl PrivateDurableWorkerState {
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
         initial_config_vars: BTreeMap<String, String>,
-        config_vars: BTreeMap<String, String>,
-        initial_agent_config: Vec<ParsedWorkerAgentConfigEntry>,
+        wasi_config: BTreeMap<String, String>,
+        initial_agent_config: Vec<TypedAgentConfigEntry>,
         agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
@@ -3662,7 +3716,7 @@ impl PrivateDurableWorkerState {
             agent_types_service,
             environment_state_service,
             agent_webhooks_service,
-            config,
+            agent_config,
             owned_agent_id,
             current_idempotency_key: None,
             rpc,
@@ -3692,9 +3746,9 @@ impl PrivateDurableWorkerState {
             file_loader,
             created_by,
             initial_config_vars,
-            config_vars,
+            wasi_config,
             initial_agent_config,
-            agent_config,
+            config,
             cached_agent_config_retry_policies: None,
             runtime_retry_policy_mutations: std::collections::BTreeMap::new(),
             rpc_pollable_to_parent: HashMap::new(),
@@ -4202,7 +4256,7 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'_, Ctx> {
 /// Rw files are directly copied to the target location.
 enum IFSWorkerFile {
     Ro {
-        file: InitialComponentFile,
+        file: InitialAgentFile,
         _token: FileUseToken,
     },
     Rw,
@@ -4212,7 +4266,7 @@ async fn prepare_filesystem(
     file_loader: &Arc<FileLoader>,
     environment_id: EnvironmentId,
     root: &Path,
-    files: &[InitialComponentFile],
+    files: &[InitialAgentFile],
 ) -> Result<HashMap<PathBuf, IFSWorkerFile>, WorkerExecutorError> {
     let futures = files.iter().map(|file| {
         let path = root.join(PathBuf::from(file.path.to_rel_string()));
@@ -4221,7 +4275,7 @@ async fn prepare_filesystem(
         let file_loader = file_loader.clone();
         async move {
             match permissions {
-                ComponentFilePermissions::ReadOnly => {
+                AgentFilePermissions::ReadOnly => {
                     debug!("Loading read-only file {}", path.display());
                     let token = file_loader
                         .get_read_only_to(environment_id, file.content_hash, &path, file.size)
@@ -4234,7 +4288,7 @@ async fn prepare_filesystem(
                         },
                     ))
                 }
-                ComponentFilePermissions::ReadWrite => {
+                AgentFilePermissions::ReadWrite => {
                     debug!("Loading read-write file {}", path.display());
                     file_loader
                         .get_read_write_to(environment_id, file.content_hash, &path)
@@ -4252,7 +4306,7 @@ async fn update_filesystem(
     file_loader: &Arc<FileLoader>,
     environment_id: EnvironmentId,
     root: &Path,
-    files: &[InitialComponentFile],
+    files: &[InitialAgentFile],
 ) -> Result<(), WorkerExecutorError> {
     enum UpdateFileSystemResult {
         NoChanges,
@@ -4297,7 +4351,7 @@ async fn update_filesystem(
 
         async move {
             match (permissions, existing) {
-                (ComponentFilePermissions::ReadOnly, None) => {
+                (AgentFilePermissions::ReadOnly, None) => {
                     debug!("Loading read-only file {}", path.display());
 
                     let exists = tokio::fs::try_exists(&path).map_err(|e| WorkerExecutorError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
@@ -4318,7 +4372,7 @@ async fn update_filesystem(
 
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                 }
-                (ComponentFilePermissions::ReadOnly, Some(IFSWorkerFile::Ro { file: existing_file, .. })) => {
+                (AgentFilePermissions::ReadOnly, Some(IFSWorkerFile::Ro { file: existing_file, .. })) => {
                     if existing_file.content_hash == file.content_hash {
                         Ok(UpdateFileSystemResult::NoChanges)
                     } else {
@@ -4335,13 +4389,13 @@ async fn update_filesystem(
                         Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                     }
                 }
-                (ComponentFilePermissions::ReadOnly, Some(IFSWorkerFile::Rw)) => {
+                (AgentFilePermissions::ReadOnly, Some(IFSWorkerFile::Rw)) => {
                     Err(WorkerExecutorError::FileSystemError {
                         path: file.path.to_rel_string(),
                         reason: "Tried updating rw file to ro during update".to_string(),
                     })
                 }
-                (ComponentFilePermissions::ReadWrite, None) => {
+                (AgentFilePermissions::ReadWrite, None) => {
                     debug!("Loading rw file {}", path.display());
 
                     let exists = tokio::fs::try_exists(&path).map_err(|e| WorkerExecutorError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
@@ -4372,7 +4426,7 @@ async fn update_filesystem(
                         .await?;
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }
-                (ComponentFilePermissions::ReadWrite, Some(IFSWorkerFile::Ro { .. })) => {
+                (AgentFilePermissions::ReadWrite, Some(IFSWorkerFile::Ro { .. })) => {
                     debug!("Updating ro file to rw {}", path.display());
                     tokio::fs::remove_file(&path).await.map_err(|e|
                         WorkerExecutorError::FileSystemError {
@@ -4385,7 +4439,7 @@ async fn update_filesystem(
                         .await?;
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }
-                (ComponentFilePermissions::ReadWrite, Some(IFSWorkerFile::Rw)) => {
+                (AgentFilePermissions::ReadWrite, Some(IFSWorkerFile::Rw)) => {
                     debug!("Updating rw file {}", path.display());
                     Ok(UpdateFileSystemResult::NoChanges)
                 }

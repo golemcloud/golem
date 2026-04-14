@@ -14,7 +14,6 @@
 
 use crate::model::component::ComponentView;
 use crate::model::text::fmt::*;
-
 use serde::{Deserialize, Serialize};
 
 impl TextView for Vec<ComponentView> {
@@ -50,22 +49,42 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
         .fmt_field("Environment ID", &view.environment_id, format_id)
         .fmt_field("Component size", &view.component_size, format_binary_size)
         .fmt_field("Created at", &view.created_at, |d| d.to_string())
-        .fmt_field_optional("Environment", &view.env, !&view.env.is_empty(), |env| {
-            format_env(view.show_sensitive, env)
-        })
-        .fmt_field("Exports", &view.exports, |e| format_exports(e.as_slice()))
-        .fmt_field_optional(
-            "Initial file system",
-            view.files.as_slice(),
-            !view.files.is_empty(),
-            format_files,
-        )
-        .fmt_field_optional(
-            "Plugins",
-            view.plugins.as_slice(),
-            !view.plugins.is_empty(),
-            format_plugins,
-        );
+        .fmt_field("Exports", &view.exports, |e| format_exports(e.as_slice()));
+
+    for (agent_type_name, provision_config) in &view.agent_type_provision_configs {
+        let prefix = format!("[{}] ", agent_type_name.0);
+        fields
+            .fmt_field_optional(
+                &format!("{}Environment", prefix),
+                &provision_config.env,
+                !provision_config.env.is_empty(),
+                |env| format_env(view.show_sensitive, env),
+            )
+            .fmt_field_optional(
+                &format!("{}WASI config", prefix),
+                &provision_config.wasi_config,
+                !provision_config.wasi_config.is_empty(),
+                format_wasi_config,
+            )
+            .fmt_field_optional(
+                &format!("{}Agent config", prefix),
+                provision_config.config.as_slice(),
+                !provision_config.config.is_empty(),
+                format_typed_config,
+            )
+            .fmt_field_optional(
+                &format!("{}Initial file system", prefix),
+                provision_config.files.as_slice(),
+                !provision_config.files.is_empty(),
+                format_files,
+            )
+            .fmt_field_optional(
+                &format!("{}Plugins", prefix),
+                provision_config.plugins.as_slice(),
+                !provision_config.plugins.is_empty(),
+                format_plugins,
+            );
+    }
 
     fields.build()
 }

@@ -22,9 +22,11 @@ use conditional_trait_gen::trait_gen;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
-use golem_service_base::repo::ResultExt;
 use golem_service_base::repo::SqlDateTime;
+use golem_service_base::repo::{BindingsStack, ResultExt};
+use indoc::formatdoc;
 use indoc::indoc;
+use tap::Pipe;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
@@ -50,6 +52,12 @@ pub trait EnvironmentPluginGrantRepo: Send + Sync {
     async fn list_by_environment(
         &self,
         environment_id: Uuid,
+    ) -> Result<Vec<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>;
+
+    async fn get_by_ids(
+        &self,
+        environment_plugin_grant_ids: &[Uuid],
+        include_deleted: bool,
     ) -> Result<Vec<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError>;
 }
 
@@ -117,6 +125,18 @@ impl<Repo: EnvironmentPluginGrantRepo> EnvironmentPluginGrantRepo
         let span = Self::span_environment(environment_id);
         self.repo
             .list_by_environment(environment_id)
+            .instrument(span)
+            .await
+    }
+
+    async fn get_by_ids(
+        &self,
+        environment_plugin_grant_ids: &[Uuid],
+        include_deleted: bool,
+    ) -> Result<Vec<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError> {
+        let span = info_span!(SPAN_NAME);
+        self.repo
+            .get_by_ids(environment_plugin_grant_ids, include_deleted)
             .instrument(span)
             .await
     }
@@ -333,6 +353,91 @@ impl EnvironmentPluginGrantRepo for DbEnvironmentPluginGrantRepo<PostgresPool> {
                 .bind(environment_id),
             )
             .await?;
+
+        Ok(result)
+    }
+
+    async fn get_by_ids(
+        &self,
+        environment_plugin_grant_ids: &[Uuid],
+        include_deleted: bool,
+    ) -> Result<Vec<EnvironmentPluginGrantWithDetailsRecord>, EnvironmentPluginGrantRepoError> {
+        if environment_plugin_grant_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // $1 = include_deleted; IDs are bound starting at $2
+        let mut binding_stack = BindingsStack::new(2);
+        let in_clause = environment_plugin_grant_ids
+            .iter()
+            .map(|id| {
+                let i = binding_stack.push(*id);
+                format!("${i}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let query = formatdoc! { r#"
+            SELECT
+                epg.environment_plugin_grant_id,
+                epg.environment_id,
+                epg.created_at,
+                epg.created_by,
+                epg.deleted_at,
+                epg.deleted_by,
+
+                p.plugin_id,
+                p.account_id AS plugin_account_id,
+                pa.email AS plugin_account_email,
+                par.name AS plugin_account_name,
+                p.name AS plugin_name,
+                p.version AS plugin_version,
+                p.description AS plugin_description,
+                p.icon AS plugin_icon,
+                p.homepage AS plugin_homepage,
+                p.plugin_type AS plugin_plugin_type,
+                p.provided_wit_package AS plugin_provided_wit_package,
+                p.json_schema AS plugin_json_schema,
+                p.validate_url AS plugin_validate_url,
+                p.transform_url AS plugin_transform_url,
+
+                p.component_id AS plugin_component_id,
+                p.component_revision_id AS plugin_component_revision_id,
+
+                p.wasm_content_hash AS plugin_wasm_content_hash,
+
+                p.created_at AS plugin_created_at,
+                p.created_by AS plugin_created_by,
+                p.deleted_at AS plugin_deleted_at,
+                p.deleted_by AS plugin_deleted_by
+            FROM environment_plugin_grants epg
+            INNER JOIN plugins p
+                ON p.plugin_id = epg.plugin_id
+            INNER JOIN accounts pa
+                ON pa.account_id = p.account_id
+            INNER JOIN account_revisions par
+                ON par.account_id = pa.account_id
+                AND par.revision_id = pa.current_revision_id
+            WHERE
+                epg.environment_plugin_grant_id IN ({in_clause})
+                AND (
+                    $1
+                    OR (
+                        epg.deleted_at IS NULL
+                        AND p.deleted_at IS NULL
+                        AND pa.deleted_at IS NULL
+                    )
+                )
+        "# };
+
+        let query_as = {
+            let binding_stack = binding_stack;
+            sqlx::query_as(&query)
+                .bind(include_deleted)
+                .pipe(|q| binding_stack.apply(q))
+        };
+
+        let result = self.with_ro("get_by_ids").fetch_all_as(query_as).await?;
 
         Ok(result)
     }

@@ -143,3 +143,36 @@ impl<L: Layer, T: Serialize + Clone> Property<L> for VecProperty<L, T> {
         })
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::{VecMergeMode, VecProperty};
+    use crate::model::cascade::property::Property;
+    use crate::model::cascade::property::test_support::TestLayer;
+    use test_r::test;
+
+    #[test]
+    fn compact_trace_removes_empty_append_and_prepend() {
+        let mut prop: VecProperty<TestLayer, i32> = vec![].into();
+        let id = "layer-a".to_string();
+
+        prop.apply_layer(&id, None, (VecMergeMode::Append, vec![]));
+        prop.apply_layer(&id, None, (VecMergeMode::Prepend, vec![]));
+        prop.apply_layer(&id, None, (VecMergeMode::Replace, vec![]));
+
+        assert_eq!(prop.trace().len(), 3);
+        prop.compact_trace();
+        assert_eq!(prop.trace().len(), 1);
+    }
+
+    #[test]
+    fn prepend_then_append_keeps_expected_order() {
+        let mut prop: VecProperty<TestLayer, i32> = vec![2].into();
+        let id = "layer-a".to_string();
+
+        prop.apply_layer(&id, None, (VecMergeMode::Prepend, vec![1]));
+        prop.apply_layer(&id, None, (VecMergeMode::Append, vec![3]));
+
+        assert_eq!(prop.value(), &vec![1, 2, 3]);
+    }
+}

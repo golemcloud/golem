@@ -1,6 +1,6 @@
 // Copyright 2024-2026 Golem Cloud
 //
-// Licensed under the Golem Source License v1.1 (the "License");
+// Licensed under the Golem Source Available License v1.1 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
@@ -20,8 +20,7 @@ use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::PluginPriority;
-use golem_common::model::component::{ComponentFileContentHash, ComponentFilePath};
+use golem_common::model::component::{ArchiveFilePath, PluginPriority};
 use golem_common::model::component::{ComponentId, ComponentName};
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::deployment::DeploymentRevision;
@@ -41,10 +40,12 @@ pub enum ComponentError {
     ComponentProcessingError(#[from] ComponentProcessingError),
     #[error("Malformed component archive: {message}")]
     MalformedComponentArchive { message: String },
-    #[error("Provided component file not found: {path} (key: {key})")]
-    InitialComponentFileNotFound {
-        path: ComponentFilePath,
-        key: ComponentFileContentHash,
+    #[error(
+        "Agent file with archive path '{archive_path}' not found in the uploaded archive (agent type: {agent_type})"
+    )]
+    AgentFileNotFoundInArchive {
+        agent_type: AgentTypeName,
+        archive_path: ArchiveFilePath,
     },
     #[error("Invalid file path: {0}")]
     InvalidFilePath(String),
@@ -80,6 +81,10 @@ pub enum ComponentError {
     ConflictingEnvironmentPluginGrantId(EnvironmentPluginGrantId),
     #[error("agent type for name {0} not found in environment")]
     AgentTypeForNameNotFound(String),
+    #[error(
+        "Agent type '{0}' is referenced in provision config but not declared in the component's agent types"
+    )]
+    UndeclaredAgentTypeInProvisionConfig(AgentTypeName),
     #[error("Config for agent {agent} at key {rendered_key} is not declared", rendered_key = key.join("."))]
     AgentConfigNotDeclared {
         agent: AgentTypeName,
@@ -125,7 +130,7 @@ impl SafeDisplay for ComponentError {
             Self::ComponentVersionAlreadyExists(_) => self.to_string(),
             Self::ComponentProcessingError(inner) => inner.to_safe_string(),
             Self::MalformedComponentArchive { .. } => self.to_string(),
-            Self::InitialComponentFileNotFound { .. } => self.to_string(),
+            Self::AgentFileNotFoundInArchive { .. } => self.to_string(),
             Self::InvalidFilePath(_) => self.to_string(),
             Self::InvalidComponentName { .. } => self.to_string(),
             Self::LimitExceeded(inner) => inner.to_safe_string(),
@@ -141,6 +146,7 @@ impl SafeDisplay for ComponentError {
             Self::ComponentNotFound(_) => self.to_string(),
             Self::ComponentByNameNotFound(_) => self.to_string(),
             Self::AgentTypeForNameNotFound(_) => self.to_string(),
+            Self::UndeclaredAgentTypeInProvisionConfig(_) => self.to_string(),
             Self::AgentConfigNotDeclared { .. } => self.to_string(),
             Self::AgentConfigTypeMismatch { .. } => self.to_string(),
             Self::AgentConfigProvidedSecretWhereOnlyLocalAllowed { .. } => self.to_string(),

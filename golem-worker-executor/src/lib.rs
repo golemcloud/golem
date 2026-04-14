@@ -99,7 +99,7 @@ use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
@@ -645,7 +645,7 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let initial_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+    let initial_files_service = Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
 
     let registry_service = Arc::new(GrpcRegistryService::new(&golem_config.registry_service));
 

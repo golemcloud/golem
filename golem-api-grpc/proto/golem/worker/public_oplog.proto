@@ -89,8 +89,8 @@ message CreateParameters {
   AgentId agent_id = 2;
   uint64 component_revision = 3;
   map<string, string> env = 5;
-  map<string, string> config_vars = 6;
-  repeated ParsedAgentConfigEntry agent_config = 7;
+  map<string, string> wasi_config = 6;
+  repeated TypedAgentConfigEntry config = 7;
   golem.common.AccountId created_by = 8;
   optional AgentId parent = 9;
   uint64 component_size = 10;

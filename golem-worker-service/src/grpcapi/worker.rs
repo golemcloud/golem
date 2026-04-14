@@ -29,8 +29,8 @@ use golem_api_grpc::proto::golem::worker::v1::{
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::proto_agent_id_string;
@@ -295,20 +295,20 @@ impl WorkerGrpcApi {
             agent_id: request.name,
         };
 
-        let agent_config = request
-            .agent_config
+        let config = request
+            .config
             .into_iter()
-            .map(WorkerAgentConfigEntry::try_from)
+            .map(AgentConfigEntryDto::try_from)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| bad_request_error(format!("failed converting agent_config: {e}")))?;
+            .map_err(|e| bad_request_error(format!("failed converting config: {e}")))?;
 
         let latest_component_revision = self
             .worker_service
             .create(
                 &agent_id,
                 request.env,
-                request.config_vars.into_iter().collect(),
-                agent_config,
+                request.wasi_config.into_iter().collect(),
+                config,
                 request.ignore_already_existing,
                 auth,
                 request.context,

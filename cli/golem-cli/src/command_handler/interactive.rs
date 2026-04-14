@@ -23,6 +23,7 @@ use crate::model::worker::RawAgentId;
 use anyhow::bail;
 use colored::Colorize;
 use golem_client::model::Account;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::domain_registration::Domain;
@@ -32,6 +33,7 @@ use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
 use inquire::{Confirm, CustomType, InquireError, MultiSelect, Select, Text};
 use itertools::Itertools;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::path::{Component, Path, PathBuf};
@@ -152,6 +154,39 @@ impl InteractiveHandler {
                 "Redeploying will {} then recreate {} agents(s), do you want to continue?",
                 "delete".log_color_warn(),
                 number_of_agents.to_string().log_color_highlight()
+            ),
+            None,
+        )
+    }
+
+    pub fn confirm_ignore_unused_agent_config(
+        &self,
+        grouped: &BTreeMap<AgentTypeName, Vec<String>>,
+    ) -> anyhow::Result<bool> {
+        let rendered = grouped
+            .iter()
+            .map(|(agent_type_name, keys)| {
+                format!(
+                    "{}:\n{}",
+                    agent_type_name.0.log_color_highlight(),
+                    keys.iter()
+                        .map(|key| format!(" - {}", key.log_color_warn()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        self.confirm(
+            true,
+            format!(
+                concat!(
+                    "The following agent config keys do not match any declared (non-secret) config path and will be ignored:\n\n",
+                    "{}\n\n",
+                    "Do you want to continue?"
+                ),
+                rendered
             ),
             None,
         )

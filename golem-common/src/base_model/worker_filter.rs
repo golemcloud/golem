@@ -176,7 +176,7 @@ impl Display for AgentConfigVarsFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "config_vars.{} {} {}",
+            "wasi_config.{} {} {}",
             self.name, self.comparator, self.value
         )
     }
@@ -289,7 +289,7 @@ pub enum AgentFilter {
     And(AgentAndFilter),
     Or(AgentOrFilter),
     Not(AgentNotFilter),
-    ConfigVars(AgentConfigVarsFilter),
+    WasiConfig(AgentConfigVarsFilter),
 }
 
 impl AgentFilter {
@@ -335,12 +335,12 @@ impl AgentFilter {
         AgentFilter::Env(AgentEnvFilter::new(name, comparator, value))
     }
 
-    pub fn new_config_vars(
+    pub fn new_wasi_config(
         name: String,
         comparator: StringFilterComparator,
         value: String,
     ) -> Self {
-        AgentFilter::ConfigVars(AgentConfigVarsFilter::new(name, comparator, value))
+        AgentFilter::WasiConfig(AgentConfigVarsFilter::new(name, comparator, value))
     }
 
     pub fn new_revision(comparator: FilterComparator, value: ComponentRevision) -> Self {
@@ -382,7 +382,7 @@ impl Display for AgentFilter {
             AgentFilter::Env(filter) => {
                 write!(f, "{filter}")
             }
-            AgentFilter::ConfigVars(filter) => {
+            AgentFilter::WasiConfig(filter) => {
                 write!(f, "{filter}")
             }
             AgentFilter::Not(filter) => {

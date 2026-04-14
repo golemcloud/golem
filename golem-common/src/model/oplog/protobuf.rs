@@ -45,7 +45,7 @@ use crate::model::oplog::public_oplog_entry::{
 use crate::model::oplog::{AgentTerminatedByQuotaError, PersistenceLevel};
 use crate::model::quota::ResourceName;
 use crate::model::regions::OplogRegion;
-use crate::model::worker::ParsedWorkerAgentConfigEntry;
+use crate::model::worker::TypedAgentConfigEntry;
 use golem_api_grpc::proto::golem::worker::oplog_entry::Entry;
 use golem_api_grpc::proto::golem::worker::{
     AttributeValue, ExternalParentSpan, InvocationSpan, LocalInvocationSpan, invocation_span,
@@ -279,11 +279,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .try_into()?,
                 component_revision: create.component_revision.try_into()?,
                 env: create.env.into_iter().collect(),
-                config_vars: create.config_vars.into_iter().collect(),
+                config_vars: create.wasi_config.into_iter().collect(),
                 local_agent_config: create
-                    .agent_config
+                    .config
                     .into_iter()
-                    .map(ParsedWorkerAgentConfigEntry::try_from)
+                    .map(TypedAgentConfigEntry::try_from)
                     .collect::<Result<Vec<_>, _>>()?,
                 environment_id: create
                     .environment_id
@@ -735,8 +735,8 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         agent_id: Some(create.agent_id.into()),
                         component_revision: create.component_revision.into(),
                         env: create.env.into_iter().collect(),
-                        config_vars: create.config_vars.into_iter().collect(),
-                        agent_config: create
+                        wasi_config: create.config_vars.into_iter().collect(),
+                        config: create
                             .local_agent_config
                             .into_iter()
                             .map(Into::into)

@@ -14,8 +14,12 @@
 
 use crate::base_model::agent::AgentType;
 use crate::base_model::base64::Base64;
+use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
+use crate::base_model::worker::TypedAgentConfigEntry;
+use crate::model::agent::AgentTypeName;
 use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize, Serializer};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -100,6 +104,10 @@ impl Debug for ComponentMetadata {
             .field("root_package_name", &self.data.root_package_name)
             .field("root_package_version", &self.data.root_package_version)
             .field("agent_types", &self.data.agent_types)
+            .field(
+                "agent_type_provision_configs",
+                &self.data.agent_type_provision_configs,
+            )
             .finish()
     }
 }
@@ -109,8 +117,6 @@ impl PartialEq for ComponentMetadata {
         self.data == other.data
     }
 }
-
-impl Eq for ComponentMetadata {}
 
 impl Serialize for ComponentMetadata {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -135,7 +141,7 @@ impl<'de> Deserialize<'de> for ComponentMetadata {
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::Object)
@@ -150,10 +156,47 @@ pub struct ComponentMetadataInnerData {
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
     #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
     pub binary_wit: Base64,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
 
     #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
     pub agent_types: Vec<AgentType>,
+
+    /// Per-agent-type provisioning configuration: env, wasi_config, config, plugins, files.
+    /// Kept separate from agent type declarations so AgentType stays a pure declaration type.
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+}
+
+/// Per-agent-type provisioning configuration stored alongside AgentType declarations
+/// in ComponentMetadata. Holds runtime setup data separate from agent type declarations.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+#[allow(clippy::derive_partial_eq_without_eq)]
+pub struct AgentTypeProvisionConfig {
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub wasi_config: BTreeMap<String, String>,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub config: Vec<TypedAgentConfigEntry>,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub plugins: Vec<InstalledPlugin>,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub files: Vec<InitialAgentFile>,
 }

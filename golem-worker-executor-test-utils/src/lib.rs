@@ -33,7 +33,7 @@ use golem_common::model::agent::{AgentMode, ParsedAgentId, UntypedDataValue};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::component::{ComponentFilePath, ComponentId};
+use golem_common::model::component::{CanonicalFilePath, ComponentId};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
@@ -43,7 +43,7 @@ use golem_common::model::oplog::{
     types::ObjectMetadata,
 };
 use golem_common::model::plan::PlanId;
-use golem_common::model::worker::{AgentMetadataDto, WorkerAgentConfigEntry};
+use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
     IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, TransactionId,
@@ -59,7 +59,7 @@ use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
     DefaultCompiledComponentService,
 };
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_test_framework::components::redis::Redis;
@@ -195,7 +195,7 @@ pub struct WorkerExecutorTestDependencies {
     pub redis: Arc<dyn Redis>,
     pub redis_monitor: Arc<dyn RedisMonitor>,
     pub component_writer: Arc<FileSystemComponentWriter>,
-    pub initial_component_files_service: Arc<InitialComponentFilesService>,
+    pub initial_agent_files_service: Arc<InitialAgentFilesService>,
     pub component_directory: PathBuf,
     pub component_temp_directory: Arc<TempDir>,
     pub component_service_directory: PathBuf,
@@ -236,8 +236,8 @@ impl WorkerExecutorTestDependencies {
                 .unwrap(),
         );
 
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let initial_agent_files_service =
+            Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
 
         let component_directory = Path::new("../test-components").to_path_buf();
 
@@ -250,7 +250,7 @@ impl WorkerExecutorTestDependencies {
             component_directory,
             component_service_directory,
             component_writer,
-            initial_component_files_service,
+            initial_agent_files_service,
             component_temp_directory: Arc::new(TempDir::new().unwrap()),
             data_dir: Arc::new(data_dir),
         }
@@ -1056,6 +1056,12 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.parsed_agent_id()
     }
 
+    fn agent_type_provision_config(
+        &self,
+    ) -> Option<&golem_common::base_model::component_metadata::AgentTypeProvisionConfig> {
+        self.durable_ctx.agent_type_provision_config()
+    }
+
     fn agent_mode(&self) -> AgentMode {
         self.durable_ctx.agent_mode()
     }
@@ -1140,14 +1146,14 @@ impl ResourceLimiterAsync for TestWorkerCtx {
 impl FileSystemReading for TestWorkerCtx {
     async fn get_file_system_node(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.get_file_system_node(path).await
     }
 
     async fn read_file(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
         self.durable_ctx.read_file(path).await
     }
@@ -1159,12 +1165,12 @@ impl HostWasmRpc for TestWorkerCtx {
         agent_type_name: String,
         constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
         phantom_id: Option<golem_wasm::Uuid>,
-        agent_config: Vec<
+        config: Vec<
             golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx
-            .new(agent_type_name, constructor, phantom_id, agent_config)
+            .new(agent_type_name, constructor, phantom_id, config)
             .await
     }
 
@@ -2631,7 +2637,7 @@ impl Rpc for FailingRpc {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
@@ -2641,7 +2647,7 @@ impl Rpc for FailingRpc {
                 self_env,
                 self_config,
                 self_stack,
-                agent_config,
+                config,
             )
             .await
     }

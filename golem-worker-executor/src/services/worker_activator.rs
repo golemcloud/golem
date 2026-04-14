@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use golem_common::base_model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::worker::WorkerAgentConfigEntry;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, OwnedAgentId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
@@ -39,7 +39,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        worker_agent_config: Vec<WorkerAgentConfigEntry>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
@@ -52,7 +52,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        worker_agent_config: Vec<WorkerAgentConfigEntry>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
@@ -102,7 +102,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        worker_agent_config: Vec<WorkerAgentConfigEntry>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
@@ -140,7 +140,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        worker_agent_config: Vec<WorkerAgentConfigEntry>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
@@ -224,7 +224,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        worker_agent_config: Vec<WorkerAgentConfigEntry>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,
@@ -249,7 +249,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        worker_agent_config: Vec<WorkerAgentConfigEntry>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context: &InvocationContextStack,

@@ -196,7 +196,7 @@ impl RustBridgeGenerator {
                 .collect();
             config_encode_stmts.push(quote! {
                 if let Some(value) = #param_name {
-                    agent_config.push(golem_client::model::WorkerAgentConfigEntry {
+                    agent_config.push(golem_client::model::AgentConfigEntryDto {
                         path: vec![#(#path_segments),*],
                         value: serde_json::to_value(value).unwrap(),
                     });
@@ -315,7 +315,7 @@ impl RustBridgeGenerator {
                 async fn __create(
                     constructor_parameters: golem_client::model::UntypedJsonDataValue,
                     phantom_id: Option<uuid::Uuid>,
-                    agent_config: Vec<golem_client::model::WorkerAgentConfigEntry>,
+                    agent_config: Vec<golem_client::model::AgentConfigEntryDto>,
                 ) -> Result<Self, golem_client::bridge::ClientError> {
                     let config = CONFIG.get().expect("Configuration has not been set");
 
@@ -336,7 +336,7 @@ impl RustBridgeGenerator {
                             agent_type_name: #agent_type_name_lit.to_string(),
                             parameters: constructor_parameters.clone(),
                             phantom_id,
-                            agent_config: Some(agent_config),
+                            config: Some(agent_config),
                         },
                     ).await?;
 

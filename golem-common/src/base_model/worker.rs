@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::base_model::component::{ComponentFilePermissions, ComponentRevision};
+use crate::base_model::component::{AgentFilePermissions, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use crate::base_model::json::NormalizedJsonValue;
 use crate::base_model::oplog::AgentResourceId;
 use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp};
@@ -25,7 +26,7 @@ use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 declare_enums! {
-    pub enum FlatComponentFileSystemNodeKind {
+    pub enum AgentFileSystemNodeKind {
         Directory,
         File,
     }
@@ -57,21 +58,21 @@ declare_unions! {
     wit(name = "raw-local-agent-config-entry", owner = "golem:api@1.5.0/oplog")
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct UntypedWorkerAgentConfigEntry {
+pub struct UntypedAgentConfigEntry {
     pub path: Vec<String>,
     pub value: golem_wasm::Value,
 }
 
 declare_structs! {
-    pub struct WorkerAgentConfigEntry {
+    pub struct AgentConfigEntryDto {
         pub path: Vec<String>,
-        pub value: serde_json::Value
+        pub value: NormalizedJsonValue
     }
 
     #[cfg_attr(feature = "full", derive(IntoValue, FromValue, desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", wit(name = "local-agent-config-entry", owner = "golem:api@1.5.0/oplog"))]
     #[cfg_attr(feature = "full", desert(evolution()))]
-    pub struct ParsedWorkerAgentConfigEntry {
+    pub struct TypedAgentConfigEntry {
         pub path: Vec<String>,
         pub value: golem_wasm::ValueAndType
     }
@@ -80,9 +81,9 @@ declare_structs! {
         pub name: String,
         pub env: HashMap<String, String>,
         #[cfg_attr(feature = "full", oai(default))]
-        pub config_vars: BTreeMap<String, String>,
+        pub wasi_config: BTreeMap<String, String>,
         #[cfg_attr(feature = "full", oai(default))]
-        pub agent_config: Vec<WorkerAgentConfigEntry>
+        pub config: Vec<AgentConfigEntryDto>
     }
 
     pub struct PendingUpdate {
@@ -111,8 +112,8 @@ declare_structs! {
         pub environment_id: EnvironmentId,
         pub created_by: AccountId,
         pub env: HashMap<String, String>,
-        pub config_vars: BTreeMap<String, String>,
-        pub agent_config: Vec<ParsedWorkerAgentConfigEntry>,
+        pub wasi_config: BTreeMap<String, String>,
+        pub config: Vec<TypedAgentConfigEntry>,
         pub status: AgentStatus,
         pub component_revision: ComponentRevision,
         pub retry_count: u32,
@@ -146,13 +147,12 @@ declare_structs! {
         pub number_of_invocations: u64,
     }
 
-    // TODO: Rename to AgentFileSystemNode
-    pub struct FlatComponentFileSystemNode {
+    pub struct AgentFileSystemNode {
         pub name: String,
         pub last_modified: u64,
-        pub kind: FlatComponentFileSystemNodeKind,
-        pub permissions: Option<ComponentFilePermissions>, // only for files
-        pub size: Option<u64>,                             // only for files
+        pub kind: AgentFileSystemNodeKind,
+        pub permissions: Option<AgentFilePermissions>, // only for files
+        pub size: Option<u64>,                         // only for files
     }
 }
 
@@ -163,8 +163,8 @@ declare_enums! {
     }
 }
 
-impl From<ParsedWorkerAgentConfigEntry> for UntypedWorkerAgentConfigEntry {
-    fn from(value: ParsedWorkerAgentConfigEntry) -> Self {
+impl From<TypedAgentConfigEntry> for UntypedAgentConfigEntry {
+    fn from(value: TypedAgentConfigEntry) -> Self {
         Self {
             path: value.path,
             value: value.value.value,
@@ -172,14 +172,15 @@ impl From<ParsedWorkerAgentConfigEntry> for UntypedWorkerAgentConfigEntry {
     }
 }
 
-impl From<ParsedWorkerAgentConfigEntry> for WorkerAgentConfigEntry {
-    fn from(value: ParsedWorkerAgentConfigEntry) -> Self {
+impl From<TypedAgentConfigEntry> for AgentConfigEntryDto {
+    fn from(value: TypedAgentConfigEntry) -> Self {
         Self {
             path: value.path,
             value: value
                 .value
                 .to_json_value()
-                .expect("ValueAndType in ParsedWorkerAgentConfigEntry  must be valid JSON"),
+                .expect("ValueAndType in TypedAgentConfigEntry must be valid JSON")
+                .into(),
         }
     }
 }

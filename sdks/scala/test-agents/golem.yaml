@@ -26,23 +26,21 @@ components:
     componentWasm: .golem/agents/scala_examples.preinitialized.wasm
     outputWasm: .golem/agents/scala_examples.wasm
 
-    agents:
-      ConfigAgent:
-        config:
-        - path: ["appName"]
-          value: "ManifestApp"
-        - path: ["db", "host"]
-          value: "manifest-db.example.com"
-        - path: ["db", "port"]
-          value: 5432
+agents:
+  ConfigAgent:
+    config:
+      appName: "ManifestApp"
+      db:
+        host: "manifest-db.example.com"
+        port: 5432
 
 httpApi:
   deployments:
     local:
     - domain: localhost:9006
       agents:
-        WeatherAgent: {}
-        InventoryAgent: {}
-        CatalogAgent: {}
-        WebhookDemo: {}
-        FetchAgent: {}
+        WeatherAgent: { }
+        InventoryAgent: { }
+        CatalogAgent: { }
+        WebhookDemo: { }
+        FetchAgent: { }

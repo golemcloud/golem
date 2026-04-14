@@ -12,9 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use super::parsed_function_name::{
+    ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
+};
 use crate::SafeDisplay;
+use crate::base_model::component::InitialAgentFile;
+pub use crate::base_model::component_metadata::*;
+use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::{AgentType, AgentTypeName};
 use crate::model::base64::Base64;
+use crate::model::component::InstalledPlugin;
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
 use golem_wasm::analysis::{
@@ -22,15 +29,10 @@ use golem_wasm::analysis::{
     AnalysedType, TypeHandle,
 };
 use golem_wasm::metadata::Producers as WasmAstProducers;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
 use wasmtime::component::__internal::wasmtime_environ::wasmparser;
-
-pub use super::parsed_function_name::{
-    ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer,
-};
-pub use crate::base_model::component_metadata::*;
 
 /// Describes an exported function that can be invoked on a worker
 #[derive(Debug, Clone)]
@@ -43,10 +45,11 @@ impl ComponentMetadata {
     pub fn analyse_component(
         data: &[u8],
         agent_types: Vec<AgentType>,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     ) -> Result<Self, ComponentProcessingError> {
         let raw = RawComponentMetadata::analyse_component(data)?;
         Ok(Self {
-            data: Arc::new(raw.into_metadata(agent_types)),
+            data: Arc::new(raw.into_metadata(agent_types, agent_type_provision_configs)),
             cache: Arc::default(),
         })
     }
@@ -57,6 +60,7 @@ impl ComponentMetadata {
         root_package_name: Option<String>,
         root_package_version: Option<String>,
         agent_types: Vec<AgentType>,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     ) -> Self {
         Self {
             data: Arc::new(ComponentMetadataInnerData {
@@ -67,6 +71,30 @@ impl ComponentMetadata {
                 root_package_name,
                 root_package_version,
                 agent_types,
+                agent_type_provision_configs,
+            }),
+            cache: Arc::default(),
+        }
+    }
+
+    /// Returns a new `ComponentMetadata` with the provision configs replaced.
+    /// All other analysed fields (exports, memories, agent types, etc.) are preserved.
+    /// Use this when provision configs are updated independently of the WASM binary.
+    pub fn with_provision_configs(
+        &self,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+    ) -> Self {
+        let data = self.data.as_ref();
+        Self {
+            data: Arc::new(ComponentMetadataInnerData {
+                exports: data.exports.clone(),
+                producers: data.producers.clone(),
+                memories: data.memories.clone(),
+                binary_wit: data.binary_wit.clone(),
+                root_package_name: data.root_package_name.clone(),
+                root_package_version: data.root_package_version.clone(),
+                agent_types: data.agent_types.clone(),
+                agent_type_provision_configs,
             }),
             cache: Arc::default(),
         }
@@ -94,6 +122,47 @@ impl ComponentMetadata {
 
     pub fn agent_types(&self) -> &[AgentType] {
         &self.data.agent_types
+    }
+
+    pub fn agent_type_provision_configs(
+        &self,
+    ) -> &BTreeMap<AgentTypeName, AgentTypeProvisionConfig> {
+        &self.data.agent_type_provision_configs
+    }
+
+    pub fn agent_type_provision_config(
+        &self,
+        name: &AgentTypeName,
+    ) -> Option<&AgentTypeProvisionConfig> {
+        self.data.agent_type_provision_configs.get(name)
+    }
+
+    pub fn agent_type_env(&self, name: &AgentTypeName) -> Option<&BTreeMap<String, String>> {
+        self.agent_type_provision_config(name)
+            .map(|config| &config.env)
+    }
+
+    pub fn agent_type_config(&self, name: &AgentTypeName) -> Option<&[TypedAgentConfigEntry]> {
+        self.agent_type_provision_config(name)
+            .map(|config| config.config.as_slice())
+    }
+
+    pub fn agent_type_wasi_config(
+        &self,
+        name: &AgentTypeName,
+    ) -> Option<&BTreeMap<String, String>> {
+        self.agent_type_provision_config(name)
+            .map(|config| &config.wasi_config)
+    }
+
+    pub fn agent_type_files(&self, name: &AgentTypeName) -> Option<&[InitialAgentFile]> {
+        self.agent_type_provision_config(name)
+            .map(|config| config.files.as_slice())
+    }
+
+    pub fn agent_type_plugins(&self, name: &AgentTypeName) -> Option<&[InstalledPlugin]> {
+        self.agent_type_provision_config(name)
+            .map(|config| config.plugins.as_slice())
     }
 
     pub fn is_agent(&self) -> bool {
@@ -578,7 +647,11 @@ impl RawComponentMetadata {
         })
     }
 
-    pub fn into_metadata(self, agent_types: Vec<AgentType>) -> ComponentMetadataInnerData {
+    pub fn into_metadata(
+        self,
+        agent_types: Vec<AgentType>,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
+    ) -> ComponentMetadataInnerData {
         let producers = self
             .producers
             .into_iter()
@@ -597,6 +670,7 @@ impl RawComponentMetadata {
             root_package_name: self.root_package_name,
             root_package_version: self.root_package_version,
             agent_types,
+            agent_type_provision_configs,
         }
     }
 }
@@ -793,6 +867,8 @@ fn drop_from_constructor_or_method(fun: &AnalysedFunction) -> AnalysedFunction {
 }
 
 mod protobuf {
+    use crate::base_model::component_metadata::AgentTypeProvisionConfig;
+    use crate::model::agent::AgentTypeName;
     use crate::model::base64::Base64;
     use crate::model::component_metadata::{
         ComponentMetadata, ComponentMetadataInnerData, LinearMemory, ProducerField, Producers,
@@ -916,6 +992,14 @@ mod protobuf {
                     .into_iter()
                     .map(|at| at.try_into())
                     .collect::<Result<_, _>>()?,
+                agent_type_provision_configs: value
+                    .agent_type_provision_configs
+                    .into_iter()
+                    .map(|(k, v)| {
+                        AgentTypeProvisionConfig::try_from(v)
+                            .map(|config| (AgentTypeName(k), config))
+                    })
+                    .collect::<Result<_, _>>()?,
             })
         }
     }
@@ -950,6 +1034,89 @@ mod protobuf {
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,
                 agent_types: value.agent_types.into_iter().map(|at| at.into()).collect(),
+                agent_type_provision_configs: value
+                    .agent_type_provision_configs
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            k.0,
+                            golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig::from(
+                                v,
+                            ),
+                        )
+                    })
+                    .collect(),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig>
+        for AgentTypeProvisionConfig
+    {
+        type Error = String;
+
+        fn try_from(
+            proto: golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig,
+        ) -> Result<Self, Self::Error> {
+            use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
+            use crate::base_model::worker::TypedAgentConfigEntry;
+
+            let config = proto
+                .config_values
+                .into_iter()
+                .map(TypedAgentConfigEntry::try_from)
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let plugins = proto
+                .plugins
+                .into_iter()
+                .map(InstalledPlugin::try_from)
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let files = proto
+                .files
+                .into_iter()
+                .map(InitialAgentFile::try_from)
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(AgentTypeProvisionConfig {
+                env: proto.env.into_iter().collect(),
+                wasi_config: proto.wasi_config.into_iter().collect(),
+                config,
+                plugins,
+                files,
+            })
+        }
+    }
+
+    impl From<AgentTypeProvisionConfig>
+        for golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig
+    {
+        fn from(config: AgentTypeProvisionConfig) -> Self {
+            use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
+
+            Self {
+                env: config.env.into_iter().collect(),
+                wasi_config: config.wasi_config.into_iter().collect(),
+                config_values: config
+                    .config
+                    .into_iter()
+                    .map(golem_api_grpc::proto::golem::worker::TypedAgentConfigEntry::from)
+                    .collect(),
+                plugins: config
+                    .plugins
+                    .into_iter()
+                    .map(|p: InstalledPlugin| {
+                        golem_api_grpc::proto::golem::component::PluginInstallation::from(p)
+                    })
+                    .collect(),
+                files: config
+                    .files
+                    .into_iter()
+                    .map(|f: InitialAgentFile| {
+                        golem_api_grpc::proto::golem::component::InitialAgentFile::from(f)
+                    })
+                    .collect(),
             }
         }
     }

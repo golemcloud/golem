@@ -66,7 +66,7 @@ use golem_common::model::component_metadata::ParsedFunctionSite;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{
-    RevertLastInvocations, RevertToOplogIndex, UpdateRecord, WorkerAgentConfigEntry,
+    AgentConfigEntryDto, RevertLastInvocations, RevertToOplogIndex, UpdateRecord,
 };
 use golem_common::model::{IdempotencyKey, OplogIndex};
 
@@ -106,12 +106,9 @@ impl WorkerCommandHandler {
                 AgentSubcommand::New {
                     agent_id: agent_name,
                     env,
-                    config_vars,
-                    agent_config,
-                } => {
-                    self.cmd_new(agent_name, env, config_vars, agent_config)
-                        .await
-                }
+                    wasi_config,
+                    config,
+                } => self.cmd_new(agent_name, env, wasi_config, config).await,
                 AgentSubcommand::Invoke {
                     agent_id: agent_name,
                     function_name,
@@ -243,8 +240,8 @@ impl WorkerCommandHandler {
         &self,
         agent_name: AgentIdArgs,
         env: Vec<(String, String)>,
-        config_vars: Vec<(String, String)>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        wasi_config: Vec<(String, String)>,
+        config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
@@ -277,8 +274,8 @@ impl WorkerCommandHandler {
             component.id.0,
             agent_name.0.clone(),
             env.into_iter().collect(),
-            BTreeMap::from_iter(config_vars),
-            agent_config,
+            BTreeMap::from_iter(wasi_config),
+            config,
         )
         .await?;
 
@@ -1371,8 +1368,8 @@ impl WorkerCommandHandler {
         component_id: Uuid,
         agent_name: String,
         env: HashMap<String, String>,
-        config_vars: BTreeMap<String, String>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        wasi_config: BTreeMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
 
@@ -1383,8 +1380,8 @@ impl WorkerCommandHandler {
                 &golem_client::model::AgentCreationRequest {
                     name: agent_name,
                     env,
-                    config_vars,
-                    agent_config,
+                    wasi_config,
+                    config,
                 },
             )
             .await
@@ -1769,8 +1766,8 @@ impl WorkerCommandHandler {
             worker_metadata.agent_id.component_id.0,
             worker_metadata.agent_id.agent_id,
             worker_metadata.env,
-            worker_metadata.config_vars,
-            worker_metadata.agent_config,
+            worker_metadata.wasi_config,
+            worker_metadata.config,
         )
         .await?;
         log_action("Recreated", "agent");
