@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod aws_config;
-pub mod aws_load_balancer;
-pub mod aws_provisioner;
-pub mod provisioner;
+mod config;
+mod errors;
 
-use self::provisioner::DomainProvisioner;
+pub use config::{
+    AvailableDomainsConfig, DomainRegistrationConfig, RestrictedAvailableDomainsConfig,
+};
+pub use errors::DomainRegistrationError;
+
 use super::environment::{EnvironmentError, EnvironmentService};
 use crate::repo::domain_registration::DomainRegistrationRepo;
 use crate::repo::model::audit::ImmutableAuditFields;
@@ -31,69 +33,30 @@ use golem_common::model::domain_registration::{
     Domain, DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
 };
 use golem_common::model::environment::{Environment, EnvironmentId};
-use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::EnvironmentAction;
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
-use std::fmt::Debug;
+use regex::Regex;
 use std::sync::Arc;
-
-#[derive(Debug, thiserror::Error)]
-pub enum DomainRegistrationError {
-    #[error("Domain {0} cannot be provisioned")]
-    DomainCannotBeProvisioned(Domain),
-    #[error("Registration for id {0} not found")]
-    DomainRegistrationNotFound(DomainRegistrationId),
-    #[error("Registration for domain {0} not found in the environment")]
-    DomainRegistrationByDomainNotFound(Domain),
-    #[error("Parent environment {0} not found")]
-    ParentEnvironmentNotFound(EnvironmentId),
-    #[error("Domain is already registered: {0}")]
-    DomainAlreadyExists(Domain),
-    #[error(transparent)]
-    Unauthorized(#[from] AuthorizationError),
-    #[error(transparent)]
-    InternalError(#[from] anyhow::Error),
-}
-
-impl SafeDisplay for DomainRegistrationError {
-    fn to_safe_string(&self) -> String {
-        match self {
-            Self::DomainCannotBeProvisioned(_) => self.to_string(),
-            Self::DomainRegistrationNotFound(_) => self.to_string(),
-            Self::DomainRegistrationByDomainNotFound(_) => self.to_string(),
-            Self::ParentEnvironmentNotFound(_) => self.to_string(),
-            Self::DomainAlreadyExists(_) => self.to_string(),
-            Self::Unauthorized(_) => self.to_string(),
-            Self::InternalError(_) => "Internal error".to_string(),
-        }
-    }
-}
-
-error_forwarding!(
-    DomainRegistrationError,
-    EnvironmentError,
-    DomainRegistrationRepoError
-);
 
 pub struct DomainRegistrationService {
     domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
     environment_service: Arc<EnvironmentService>,
-    domain_provisioner: Arc<dyn DomainProvisioner>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    config: DomainRegistrationConfig,
 }
 
 impl DomainRegistrationService {
     pub fn new(
         domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
         environment_service: Arc<EnvironmentService>,
-        domain_provisioner: Arc<dyn DomainProvisioner>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+        config: DomainRegistrationConfig,
     ) -> Self {
         Self {
             domain_registration_repo,
             environment_service,
-            domain_provisioner,
             registry_change_notifier,
+            config,
         }
     }
 
@@ -120,10 +83,7 @@ impl DomainRegistrationService {
             EnvironmentAction::CreateEnvironmentPluginGrant,
         )?;
 
-        if !self
-            .domain_provisioner
-            .domain_available_to_provision(&data.domain)
-        {
+        if !domain_available_to_provision(&data.domain, &self.config.available_domains) {
             return Err(DomainRegistrationError::DomainCannotBeProvisioned(
                 data.domain,
             ));
@@ -154,11 +114,6 @@ impl DomainRegistrationService {
 
         let created: DomainRegistration = created_record.into();
 
-        // TODO: this needs to be durable in some way / we need a cron job that ensures all domains actually reflect our db state;
-        self.domain_provisioner
-            .provision_domain(&created.domain)
-            .await?;
-
         Ok(created)
     }
 
@@ -187,11 +142,6 @@ impl DomainRegistrationService {
             .signal_new_events_available(&self.registry_change_notifier);
 
         let deleted: DomainRegistration = deleted_record.into();
-
-        // TODO: this needs to be durable in some way / we need a cron job that ensures all domains actually reflect our db state;
-        self.domain_provisioner
-            .remove_domain(&deleted.domain)
-            .await?;
 
         Ok(deleted)
     }
@@ -300,5 +250,171 @@ impl DomainRegistrationService {
         .map_err(|_| DomainRegistrationError::DomainRegistrationNotFound(domain_registration_id))?;
 
         Ok((domain_registration, environment))
+    }
+}
+
+fn domain_available_to_provision(domain: &Domain, config: &AvailableDomainsConfig) -> bool {
+    match config {
+        AvailableDomainsConfig::Unrestricted(_) => true,
+        AvailableDomainsConfig::Restricted(RestrictedAvailableDomainsConfig {
+            golem_apps_domain,
+            allow_arbitary_subdomains: false,
+        }) => {
+            let escaped = regex::escape(golem_apps_domain);
+            let regex = Regex::new(&format!("^[^\\.]+\\.{escaped}$")).unwrap();
+            regex.is_match(&domain.0)
+        }
+        AvailableDomainsConfig::Restricted(RestrictedAvailableDomainsConfig {
+            golem_apps_domain,
+            allow_arbitary_subdomains: true,
+        }) => {
+            let escaped = regex::escape(golem_apps_domain);
+            let regex = Regex::new(&format!("^([^\\.]+\\.)+{escaped}$")).unwrap();
+            regex.is_match(&domain.0)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use golem_common::model::Empty;
+    use golem_common::model::domain_registration::Domain;
+
+    use super::{
+        AvailableDomainsConfig, RestrictedAvailableDomainsConfig, domain_available_to_provision,
+    };
+
+    fn domain(s: &str) -> Domain {
+        Domain(s.to_string())
+    }
+
+    fn unrestricted() -> AvailableDomainsConfig {
+        AvailableDomainsConfig::Unrestricted(Empty {})
+    }
+
+    fn restricted(base: &str, allow_arbitrary: bool) -> AvailableDomainsConfig {
+        AvailableDomainsConfig::Restricted(RestrictedAvailableDomainsConfig {
+            golem_apps_domain: base.to_string(),
+            allow_arbitary_subdomains: allow_arbitrary,
+        })
+    }
+
+    #[test]
+    fn unrestricted_allows_any_domain() {
+        let config = unrestricted();
+        assert!(domain_available_to_provision(
+            &domain("anything.example.com"),
+            &config
+        ));
+        assert!(domain_available_to_provision(
+            &domain("foo.bar.baz"),
+            &config
+        ));
+        assert!(domain_available_to_provision(&domain("x"), &config));
+    }
+
+    #[test]
+    fn restricted_no_arbitrary_allows_single_subdomain() {
+        let config = restricted("apps.golem.cloud", false);
+        assert!(domain_available_to_provision(
+            &domain("myapp.apps.golem.cloud"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn restricted_no_arbitrary_rejects_bare_base_domain() {
+        let config = restricted("apps.golem.cloud", false);
+        assert!(!domain_available_to_provision(
+            &domain("apps.golem.cloud"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn restricted_no_arbitrary_rejects_deep_subdomain() {
+        let config = restricted("apps.golem.cloud", false);
+        assert!(!domain_available_to_provision(
+            &domain("a.b.apps.golem.cloud"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn restricted_no_arbitrary_rejects_different_base() {
+        let config = restricted("apps.golem.cloud", false);
+        assert!(!domain_available_to_provision(
+            &domain("myapp.other.com"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn restricted_no_arbitrary_rejects_subdomain_with_dot_in_label() {
+        let config = restricted("apps.golem.cloud", false);
+        assert!(!domain_available_to_provision(
+            &domain(".apps.golem.cloud"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn restricted_no_arbitrary_escapes_regex_special_chars_in_base() {
+        let config = restricted("apps.golem.cloud", false);
+        assert!(!domain_available_to_provision(
+            &domain("myapp.appsXgolemYcloud"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn restricted_arbitrary_allows_single_subdomain() {
+        let config = restricted("apps.golem.cloud", true);
+        assert!(domain_available_to_provision(
+            &domain("myapp.apps.golem.cloud"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn restricted_arbitrary_allows_deep_subdomain() {
+        let config = restricted("apps.golem.cloud", true);
+        assert!(domain_available_to_provision(
+            &domain("a.b.apps.golem.cloud"),
+            &config
+        ));
+        assert!(domain_available_to_provision(
+            &domain("x.y.z.apps.golem.cloud"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn restricted_arbitrary_rejects_bare_base_domain() {
+        let config = restricted("apps.golem.cloud", true);
+        assert!(!domain_available_to_provision(
+            &domain("apps.golem.cloud"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn restricted_arbitrary_rejects_different_base() {
+        let config = restricted("apps.golem.cloud", true);
+        assert!(!domain_available_to_provision(
+            &domain("myapp.other.com"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn restricted_arbitrary_escapes_regex_special_chars_in_base() {
+        let config = restricted("apps.golem.cloud", true);
+        assert!(!domain_available_to_provision(
+            &domain("myapp.appsXgolemYcloud"),
+            &config
+        ));
     }
 }

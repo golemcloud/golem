@@ -4266,6 +4266,7 @@ dependencies = [
  "prometheus",
  "prost 0.14.3",
  "rayon",
+ "regex",
  "reqwest 0.13.2",
  "rustls 0.23.37",
  "sanitize-filename",
