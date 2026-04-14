@@ -19,7 +19,11 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-schedule-future-call-ts` | Scheduling a future agent invocation |
 | `golem-atomic-block-ts` | Atomic blocks, persistence control, and idempotency |
 | `golem-add-transactions-ts` | Saga-pattern transactions with compensation |
-| `golem-add-http-endpoint-ts` | Exposing an agent over HTTP with mount paths, endpoints, and request/response mapping |
+| `golem-add-http-endpoint-ts` | Exposing an agent over HTTP with mount paths and endpoint decorators |
+| `golem-http-params-ts` | Mapping path, query, header, and body parameters for HTTP endpoints |
+| `golem-add-http-auth-ts` | Enabling authentication and receiving Principal on HTTP endpoints |
+| `golem-add-cors-ts` | Configuring CORS allowed origins for HTTP endpoints |
+| `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
 
 # Golem Application Development Guide (TypeScript)
 
