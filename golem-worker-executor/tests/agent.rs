@@ -23,7 +23,7 @@ use golem_worker_executor_test_utils::{
 };
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap};
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, non_flaky, test};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -71,6 +71,7 @@ async fn agent_self_rpc_is_not_allowed(
 }
 
 #[test]
+#[non_flaky(20)]
 #[tracing::instrument]
 async fn agent_await_parallel_rpc_calls(
     last_unique_id: &LastUniqueId,
