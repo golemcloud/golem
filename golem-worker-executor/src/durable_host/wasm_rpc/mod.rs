@@ -676,7 +676,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let parent_rep = this.rep();
         let pollable = wasmtime_wasi::dynamic_subscribe(self.table(), this, None)?;
         let child_rep = pollable.rep();
-        warn!(parent_rep, child_rep, "Subscribed future invoke result pollable");
+        warn!(
+            parent_rep,
+            child_rep, "Subscribed future invoke result pollable"
+        );
         let parent: Resource<FutureInvokeResult> = Resource::new_borrow(parent_rep);
         let entry = self.table().get_mut(&parent)?;
         entry.child_pollables.push(child_rep);
