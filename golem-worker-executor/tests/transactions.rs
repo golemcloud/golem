@@ -854,7 +854,12 @@ async fn golem_rust_persist_nothing_async(
         .await?;
 
     let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "persist_nothing_async", data_value!())
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "persist_nothing_async",
+            data_value!(),
+        )
         .await;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
@@ -908,7 +913,12 @@ async fn golem_rust_checkpoint_async(
     let (rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     let result = executor
-        .invoke_and_await_agent(&component, &agent_id, "checkpoint_test_async", data_value!())
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "checkpoint_test_async",
+            data_value!(),
+        )
         .await?
         .into_return_value()
         .ok_or_else(|| anyhow!("expected return value"))?;

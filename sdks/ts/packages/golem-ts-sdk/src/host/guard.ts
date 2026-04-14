@@ -126,7 +126,7 @@ export function atomically<T>(f: () => T): T {
 }
 
 function isPromiseLike(value: unknown): value is Promise<unknown> {
-  return value != null && typeof (value as any).then === 'function';
+  return value !== null && value !== undefined && typeof (value as any).then === 'function';
 }
 
 /**

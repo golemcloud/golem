@@ -16,7 +16,7 @@ import { type OplogIndex, getOplogIndex, setOplogIndex } from './hostapi';
 import { Result } from './result';
 
 function isPromiseLike(value: unknown): value is Promise<unknown> {
-  return value != null && typeof (value as any).then === 'function';
+  return value !== null && value !== undefined && typeof (value as any).then === 'function';
 }
 
 /**

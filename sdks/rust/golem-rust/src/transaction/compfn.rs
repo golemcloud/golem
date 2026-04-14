@@ -26,8 +26,11 @@ pub trait TupleOrUnit<T> {
 
 #[allow(async_fn_in_trait)]
 pub trait CompensationFunction<In, Out, Err> {
-    async fn call(self, result: impl TupleOrUnit<Out>, input: impl TupleOrUnit<In>)
-        -> Result<(), Err>;
+    async fn call(
+        self,
+        result: impl TupleOrUnit<Out>,
+        input: impl TupleOrUnit<In>,
+    ) -> Result<(), Err>;
 }
 
 impl<F, Err> CompensationFunction<(), (), (Err,)> for F

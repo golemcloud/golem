@@ -83,29 +83,6 @@ impl FromValueAndType for wasip2::io::error::Error {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::roundtrip_test;
-    use proptest::strategy::Strategy;
-    use test_r::test;
-
-    roundtrip_test!(
-        prop_roundtrip_level,
-        Level,
-        (0u32..=5).prop_map(|i| {
-            match i {
-                0 => Level::Trace,
-                1 => Level::Debug,
-                2 => Level::Info,
-                3 => Level::Warn,
-                4 => Level::Error,
-                _ => Level::Critical,
-            }
-        })
-    );
-}
-
 impl IntoValue for Datetime {
     fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
         let builder = builder.record();
@@ -146,4 +123,27 @@ impl FromValueAndType for Datetime {
             nanoseconds,
         })
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::roundtrip_test;
+    use proptest::strategy::Strategy;
+    use test_r::test;
+
+    roundtrip_test!(
+        prop_roundtrip_level,
+        Level,
+        (0u32..=5).prop_map(|i| {
+            match i {
+                0 => Level::Trace,
+                1 => Level::Debug,
+                2 => Level::Info,
+                3 => Level::Warn,
+                4 => Level::Error,
+                _ => Level::Critical,
+            }
+        })
+    );
 }

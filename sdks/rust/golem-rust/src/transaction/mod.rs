@@ -402,7 +402,8 @@ impl<Err: Debug + Clone + 'static> Transaction<Err> for InfallibleTransaction {
         Ok(infallible_transaction(|tx| -> LocalBoxFuture<'_, Out> {
             let fut = f(tx);
             Box::pin(async { fut.await.unwrap() })
-        }).await)
+        })
+        .await)
     }
 }
 
@@ -447,14 +448,16 @@ mod tests {
             },
         );
 
-        let result = fallible_transaction(|tx| boxed(async move {
-            println!("First we execute op1");
-            tx.execute(op1, "hello".to_string()).await?;
-            println!("Then execute op2");
-            tx.execute(op2, ()).await?;
-            println!("Finally compute a result");
-            Ok(11)
-        }))
+        let result = fallible_transaction(|tx| {
+            boxed(async move {
+                println!("First we execute op1");
+                tx.execute(op1, "hello".to_string()).await?;
+                println!("Then execute op2");
+                tx.execute(op2, ()).await?;
+                println!("Finally compute a result");
+                Ok(11)
+            })
+        })
         .await;
 
         println!("{log:?}");
@@ -496,14 +499,16 @@ mod tests {
             },
         );
 
-        let result = infallible_transaction(|tx| boxed(async move {
-            println!("First we execute op1");
-            tx.execute(op1, "hello".to_string()).await;
-            println!("Then execute op2");
-            tx.execute(op2, ()).await;
-            println!("Finally compute a result");
-            11
-        }))
+        let result = infallible_transaction(|tx| {
+            boxed(async move {
+                println!("First we execute op1");
+                tx.execute(op1, "hello".to_string()).await;
+                println!("Then execute op2");
+                tx.execute(op2, ()).await;
+                println!("Finally compute a result");
+                11
+            })
+        })
         .await;
 
         println!("{log:?}");
@@ -570,15 +575,17 @@ mod macro_tests {
     #[test]
     #[ignore]
     async fn tx_test_1() {
-        let result = fallible_transaction(|tx| boxed(async move {
-            println!("Executing the annotated function as an operation directly");
-            tx.test_operation(1, 0.1).await?;
-            tx.test_operation_2(1, 0.1).await?;
-            tx.test_operation_3("test".to_string()).await?;
-            tx.test_operation_4(1).await?;
+        let result = fallible_transaction(|tx| {
+            boxed(async move {
+                println!("Executing the annotated function as an operation directly");
+                tx.test_operation(1, 0.1).await?;
+                tx.test_operation_2(1, 0.1).await?;
+                tx.test_operation_3("test".to_string()).await?;
+                tx.test_operation_4(1).await?;
 
-            Ok(11)
-        }))
+                Ok(11)
+            })
+        })
         .await;
 
         println!("{result:?}");
@@ -588,11 +595,13 @@ mod macro_tests {
     #[test]
     #[ignore]
     async fn tx_test_2() {
-        let result = infallible_transaction(|tx| boxed(async move {
-            println!("Executing the annotated function as an operation directly");
-            let _ = tx.test_operation(1, 0.1).await;
-            11
-        }))
+        let result = infallible_transaction(|tx| {
+            boxed(async move {
+                println!("Executing the annotated function as an operation directly");
+                let _ = tx.test_operation(1, 0.1).await;
+                11
+            })
+        })
         .await;
 
         println!("{result:?}");
