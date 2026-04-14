@@ -63,7 +63,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{Instrument, error};
+use tracing::{Instrument, error, warn};
 use wasmtime::component::Resource;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
@@ -676,6 +676,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let parent_rep = this.rep();
         let pollable = wasmtime_wasi::dynamic_subscribe(self.table(), this, None)?;
         let child_rep = pollable.rep();
+        warn!(parent_rep, child_rep, "Subscribed future invoke result pollable");
         let parent: Resource<FutureInvokeResult> = Resource::new_borrow(parent_rep);
         let entry = self.table().get_mut(&parent)?;
         entry.child_pollables.push(child_rep);
@@ -1078,16 +1079,28 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
     async fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         self.observe_function_call("golem::rpc::future-invoke-result", "drop");
+        let future_rep = this.rep();
 
         let child_reps = {
             let entry = self.table().get_mut(&this)?;
             std::mem::take(&mut entry.child_pollables)
         };
 
+        warn!(
+            future_rep,
+            child_reps = ?child_reps,
+            "Dropping future invoke result and force-deleting child pollables"
+        );
+
         for rep in child_reps {
             let child: Resource<golem_wasm::DynPollable> = Resource::new_own(rep);
             if let Err(err) = self.table().delete(child) {
-                tracing::debug!(rep, err=%err, "Child pollable already dropped by guest");
+                warn!(
+                    future_rep,
+                    child_rep = rep,
+                    error = %err,
+                    "Force-delete of child pollable failed"
+                );
             }
         }
 

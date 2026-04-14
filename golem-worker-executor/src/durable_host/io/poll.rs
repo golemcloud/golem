@@ -25,7 +25,7 @@ use golem_common::model::oplog::{
     HostResponsePollResult,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
-use tracing::debug;
+use tracing::{debug, warn};
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView as _;
 use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
@@ -67,6 +67,8 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<Pollable>) -> wasmtime::Result<()> {
         self.observe_function_call("io::poll:pollable", "drop");
+        let pollable_rep = rep.rep();
+        warn!(pollable_rep, "Dropping wasi pollable resource");
         let mut view = self.as_wasi_view();
         HostPollable::drop(&mut view.io_data(), rep)
     }
@@ -74,6 +76,8 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> wasmtime::Result<Vec<u32>> {
+        let pollable_reps: Vec<u32> = in_.iter().map(Resource::rep).collect();
+
         // check if all pollables are promise backed. In this case we can suspend immediately
         // This check only needs to be done in live mode, as we will never even persist the oplog entry for polling
         // if we suspended in the last pass. Doing it this way also prevents us from initializing the promises until we are actually in live mode.
@@ -113,6 +117,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .create_await_interrupt_signal();
 
             let count = in_.len();
+            warn!(count, pollable_reps = ?pollable_reps, "Calling wasi io::poll::poll");
 
             let result = {
                 let mut view = self.as_wasi_view();
@@ -124,11 +129,19 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 match either_result {
                     Either::Left((result, _)) => result,
                     Either::Right((interrupt_kind, _)) => {
-                        tracing::info!("Interrupted while waiting for poll result");
+                        warn!(
+                            pollable_reps = ?pollable_reps,
+                            interrupt_kind = ?interrupt_kind,
+                            "Interrupted while waiting for poll result"
+                        );
                         return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
                     }
                 }
             };
+
+            if let Err(err) = &result {
+                warn!(pollable_reps = ?pollable_reps, error = %err, "wasi io::poll::poll failed");
+            }
 
             match is_suspend_for_sleep(&result) {
                 Some(duration) => Err(duration),
