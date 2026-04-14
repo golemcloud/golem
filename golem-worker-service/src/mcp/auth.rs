@@ -111,7 +111,6 @@ impl<E: Endpoint> Endpoint for McpBearerAuthEndpoint<E> {
     type Output = Response;
 
     async fn call(&self, req: Request) -> Result<Self::Output> {
-        tracing::debug!(headers = ?req.headers(), uri = %req.uri(), "MCP bearer auth middleware");
         let host = resolve_effective_host(req.headers());
 
         let security_scheme = if let Some(host) = &host {
@@ -248,7 +247,6 @@ pub async fn authorization_server_metadata(
     req: &Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
 ) -> Response {
-    tracing::debug!(headers = ?req.headers(), uri = %req.uri(), "authorization_server_metadata");
     let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
 
     let domain = Domain(host.clone());
@@ -292,7 +290,6 @@ pub async fn protected_resource_metadata(
     req: &Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
 ) -> Response {
-    tracing::debug!(headers = ?req.headers(), uri = %req.uri(), "protected_resource_metadata");
     let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
 
     let domain = Domain(host.clone());
@@ -334,7 +331,6 @@ pub async fn oauth_register(
     mut req: Request,
     mcp_capability_lookup: &dyn McpCapabilityLookup,
 ) -> Response {
-    tracing::debug!(headers = ?req.headers(), uri = %req.uri(), "oauth_register");
     let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
 
     let domain = Domain(host);
@@ -387,7 +383,6 @@ pub async fn oauth_authorize(
     identity_provider: &dyn IdentityProvider,
     session_store: &dyn SessionStore,
 ) -> Response {
-    tracing::debug!(headers = ?req.headers(), uri = %req.uri(), "oauth_authorize");
     let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
 
     let domain = Domain(host.clone());
@@ -510,7 +505,6 @@ pub async fn oauth_callback(
     identity_provider: &dyn IdentityProvider,
     session_store: &dyn SessionStore,
 ) -> Response {
-    tracing::debug!(headers = ?req.headers(), uri = %req.uri(), "oauth_callback");
     let host = resolve_effective_host(req.headers()).unwrap_or_else(|| "localhost".to_owned());
 
     let domain = Domain(host.clone());
