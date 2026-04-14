@@ -25,8 +25,7 @@ use golem_common::model::oplog::{
     HostResponsePollResult,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
-use std::collections::BTreeMap;
-use tracing::{debug, warn};
+use tracing::debug;
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView as _;
 use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
@@ -68,34 +67,48 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<Pollable>) -> wasmtime::Result<()> {
         self.observe_function_call("io::poll:pollable", "drop");
-        let pollable_rep = rep.rep();
-        warn!(pollable_rep, "Dropping wasi pollable resource");
-        let mut view = self.as_wasi_view();
-        HostPollable::drop(&mut view.io_data(), rep)
+        let child_rep = rep.rep();
+
+        // Check if this pollable is a child of a FutureInvokeResult
+        let parent_rep = self.state.rpc_pollable_to_parent.get(&child_rep).copied();
+
+        {
+            let mut view = self.as_wasi_view();
+            HostPollable::drop(&mut view.io_data(), rep)?;
+        }
+
+        // If this child belonged to a FutureInvokeResult whose drop was deferred,
+        // finalize the parent deletion now that this child is gone.
+        if let Some(parent_rep) = parent_rep {
+            self.state.rpc_pollable_to_parent.remove(&child_rep);
+            let parent: Resource<golem_wasm::FutureInvokeResultEntry> =
+                Resource::new_borrow(parent_rep);
+            let should_delete = if let Ok(entry) = self.table().get_mut(&parent) {
+                entry.child_pollables.retain(|r| *r != child_rep);
+                entry.drop_pending && entry.child_pollables.is_empty()
+            } else {
+                false
+            };
+
+            if should_delete {
+                let parent_owned: Resource<golem_wasm::FutureInvokeResultEntry> =
+                    Resource::new_own(parent_rep);
+                if let Err(err) = self.table().delete(parent_owned) {
+                    debug!(
+                        parent_rep,
+                        error = %err,
+                        "Deferred future invoke result delete failed"
+                    );
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> wasmtime::Result<Vec<u32>> {
-        let pollable_reps: Vec<u32> = in_.iter().map(Resource::rep).collect();
-        let duplicate_pollable_reps = {
-            let mut counts = BTreeMap::new();
-            for pollable_rep in &pollable_reps {
-                *counts.entry(*pollable_rep).or_insert(0usize) += 1;
-            }
-            counts
-                .into_iter()
-                .filter(|(_, count)| *count > 1)
-                .collect::<Vec<_>>()
-        };
-        if !duplicate_pollable_reps.is_empty() {
-            warn!(
-                pollable_reps = ?pollable_reps,
-                duplicate_pollable_reps = ?duplicate_pollable_reps,
-                "Polling duplicate wasi pollable reps"
-            );
-        }
-
         // check if all pollables are promise backed. In this case we can suspend immediately
         // This check only needs to be done in live mode, as we will never even persist the oplog entry for polling
         // if we suspended in the last pass. Doing it this way also prevents us from initializing the promises until we are actually in live mode.
@@ -135,7 +148,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .create_await_interrupt_signal();
 
             let count = in_.len();
-            warn!(count, pollable_reps = ?pollable_reps, "Calling wasi io::poll::poll");
 
             let result = {
                 let mut view = self.as_wasi_view();
@@ -147,19 +159,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 match either_result {
                     Either::Left((result, _)) => result,
                     Either::Right((interrupt_kind, _)) => {
-                        warn!(
-                            pollable_reps = ?pollable_reps,
-                            interrupt_kind = ?interrupt_kind,
-                            "Interrupted while waiting for poll result"
-                        );
                         return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
                     }
                 }
             };
-
-            if let Err(err) = &result {
-                warn!(pollable_reps = ?pollable_reps, error = %err, "wasi io::poll::poll failed");
-            }
 
             match is_suspend_for_sleep(&result) {
                 Some(duration) => Err(duration),

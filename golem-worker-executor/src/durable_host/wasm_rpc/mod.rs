@@ -63,8 +63,8 @@ use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{Instrument, error, warn};
-use wasmtime::component::Resource;
+use tracing::{Instrument, error};
+use wasmtime::component::{Resource, ResourceTableError};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
 use golem_common::model::worker::WorkerAgentConfigEntry;
@@ -521,6 +521,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     begin_index,
                 }),
                 child_pollables: Vec::new(),
+                drop_pending: false,
             })?;
             Ok(fut)
         } else {
@@ -538,6 +539,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     begin_index,
                 }),
                 child_pollables: Vec::new(),
+                drop_pending: false,
             })?;
             Ok(fut)
         };
@@ -676,13 +678,12 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let parent_rep = this.rep();
         let pollable = wasmtime_wasi::dynamic_subscribe(self.table(), this, None)?;
         let child_rep = pollable.rep();
-        warn!(
-            parent_rep,
-            child_rep, "Subscribed future invoke result pollable"
-        );
         let parent: Resource<FutureInvokeResult> = Resource::new_borrow(parent_rep);
         let entry = self.table().get_mut(&parent)?;
         entry.child_pollables.push(child_rep);
+        self.state
+            .rpc_pollable_to_parent
+            .insert(child_rep, parent_rep);
         Ok(pollable)
     }
 
@@ -695,22 +696,6 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         >,
     > {
         self.observe_function_call("golem::rpc::future-invoke-result", "get");
-        let future_rep = this.rep();
-        let (state, child_pollables) = {
-            let entry = self.table().get(&this)?;
-            let state = entry
-                .payload
-                .as_any()
-                .downcast_ref::<FutureInvokeResultState>()
-                .unwrap();
-            (format!("{state:?}"), entry.child_pollables.clone())
-        };
-        warn!(
-            future_rep,
-            state,
-            child_pollables = ?child_pollables,
-            "Getting future invoke result"
-        );
         let rpc = self.rpc();
 
         let span_id = {
@@ -1100,24 +1085,17 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::rpc::future-invoke-result", "drop");
         let future_rep = this.rep();
 
-        let child_reps = {
-            let entry = self.table().get(&this)?;
-            entry.child_pollables.clone()
-        };
-
-        warn!(
-            future_rep,
-            child_reps = ?child_reps,
-            "Dropping future invoke result without force-deleting child pollables"
-        );
-
-        if let Err(err) = self.table().delete(this) {
-            warn!(
-                future_rep,
-                child_reps = ?child_reps,
-                error = %err,
-                "Future invoke result delete failed while leaving child pollables intact"
-            );
+        match self.table().delete(this) {
+            Ok(entry) => {
+                for child_rep in &entry.child_pollables {
+                    self.state.rpc_pollable_to_parent.remove(child_rep);
+                }
+            }
+            Err(ResourceTableError::HasChildren) => {
+                let parent: Resource<FutureInvokeResult> = Resource::new_borrow(future_rep);
+                self.table().get_mut(&parent)?.drop_pending = true;
+            }
+            Err(err) => return Err(err.into()),
         }
 
         Ok(())
