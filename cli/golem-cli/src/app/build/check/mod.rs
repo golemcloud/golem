@@ -15,6 +15,7 @@
 mod agents;
 mod requirements;
 mod rust;
+mod skills;
 mod ts;
 
 use crate::app::build::check::requirements::{
@@ -137,6 +138,9 @@ pub fn plan_dependency_fixes(ctx: &BuildContext<'_>) -> anyhow::Result<Dependenc
     if let Some(step) = agents::plan_agents_md_fix_step(ctx, &selected_languages)? {
         plan.steps.push(step);
     }
+
+    plan.steps
+        .extend(skills::plan_skill_fix_steps(ctx, &selected_languages)?);
 
     Ok(plan)
 }
