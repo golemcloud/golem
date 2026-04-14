@@ -47,10 +47,10 @@ max_connections = 10
 cleanup_interval = "1h"
 retention = "1day"
 
-[domain_provisioner]
-type = "NoOp"
+[domain_registration.available_domains]
+type = "Unrestricted"
 
-[domain_provisioner.config]
+[domain_registration.available_domains.config]
 
 [grpc]
 port = 9090
