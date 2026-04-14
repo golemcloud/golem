@@ -100,7 +100,7 @@ const RetrySchema = z.object({
 const HttpSchema = z.object({
   url: z.string(),
   method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]).default("GET"),
-  body: z.string().optional(),
+  body: langConditional(z.string()).optional(),
   headers: z.record(z.string()).optional(),
 });
 
@@ -292,7 +292,7 @@ type CreateProjectSpec = { name: string; presets?: LangConditional<string[]> };
 type HttpSpec = {
   url: string;
   method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
-  body?: string;
+  body?: LangConditional<string>;
   headers?: Record<string, string>;
 };
 type GetAgentTypeSpec = { name: string };
@@ -611,7 +611,7 @@ export class ScenarioExecutor {
           http: {
             ...step.http,
             url: substituteVariables(step.http.url, variables),
-            body: sub(step.http.body),
+            body: subLangStrOpt(step.http.body),
             headers: step.http.headers
               ? Object.fromEntries(
                   Object.entries(step.http.headers).map(([k, v]) => [
@@ -691,6 +691,16 @@ export class ScenarioExecutor {
           ...step.trigger,
           method: resolveByLanguage(step.trigger.method, lang)!,
           args: resolveByLanguage(step.trigger.args, lang),
+        },
+      } as StepSpec;
+    }
+    if (step.tag === "http") {
+      return {
+        ...resolved,
+        tag: "http",
+        http: {
+          ...step.http,
+          body: resolveByLanguage(step.http.body, lang),
         },
       } as StepSpec;
     }
@@ -1527,7 +1537,7 @@ export class ScenarioExecutor {
     try {
       const response = await fetch(http.url, {
         method: http.method ?? "GET",
-        body: http.body,
+        body: http.body as string | undefined,
         headers: http.headers,
         signal: controller.signal,
       });
