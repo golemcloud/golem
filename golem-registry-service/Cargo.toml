@@ -67,9 +67,6 @@ prost = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
-aws-sdk-acm = { workspace = true }
-aws-sdk-elasticloadbalancingv2 = { workspace = true }
-aws-sdk-route53 = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }
 sanitize-filename = { workspace = true }
 serde = { workspace = true }
