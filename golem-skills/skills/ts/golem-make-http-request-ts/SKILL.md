@@ -137,6 +137,37 @@ class WeatherAgent extends BaseAgent {
 }
 ```
 
+## Calling Golem Agent HTTP Endpoints
+
+When making HTTP requests to other Golem agent endpoints (or your own), the request body must match the **Golem HTTP body mapping convention**: non-binary body parameters are always deserialized from a **JSON object** where each top-level field corresponds to a method parameter name. This is true even when the endpoint has a single body parameter.
+
+For example, given this endpoint definition:
+
+```typescript
+@endpoint({ post: '/record' })
+async record(body: string): Promise<void> { ... }
+```
+
+The correct HTTP request must send a JSON object with a `body` field — **not** a raw text string:
+
+```typescript
+// ✅ CORRECT — JSON object with field name matching the parameter
+await fetch('http://my-app.localhost:9006/recorder/main/record', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ body: 'a' }),
+});
+
+// ❌ WRONG — raw text body does NOT match Golem's JSON body mapping
+await fetch('http://my-app.localhost:9006/recorder/main/record', {
+  method: 'POST',
+  headers: { 'Content-Type': 'text/plain' },
+  body: 'a',
+});
+```
+
+> **Rule of thumb:** If the target endpoint is a Golem agent, always send `application/json` with parameter names as JSON keys. Load the `golem-http-params-ts` skill for the full body mapping rules.
+
 ## Key Constraints
 
 - Use `fetch()` as the primary HTTP client — it is the standard and recommended API

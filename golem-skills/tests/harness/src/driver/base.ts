@@ -59,6 +59,20 @@ export interface AgentDriver {
   teardown(): Promise<void>;
   /** Update the working directory used for subsequent agent invocations. */
   setWorkingDirectory(dir: string): void;
+
+  /**
+   * Return skills activated since the last call to `resetActivatedSkills()`.
+   * Drivers that can detect skill activations natively (e.g. via tool-use
+   * events) should override this. When `undefined` is returned the executor
+   * falls back to the filesystem-based `SkillWatcher`.
+   */
+  getActivatedSkills(): string[] | undefined;
+
+  /**
+   * Clear the driver's internal list of activated skills.
+   * Called before each step that requires skill tracking.
+   */
+  resetActivatedSkills(): void;
 }
 
 export const DEFAULT_IDLE_TIMEOUT_SECONDS = 300;
@@ -212,6 +226,14 @@ export abstract class BaseAgentDriver implements AgentDriver {
       await fs.mkdir(path.dirname(destDir), { recursive: true });
       await fs.cp(sourceDir, destDir, { recursive: true });
     }
+  }
+
+  getActivatedSkills(): string[] | undefined {
+    return undefined;
+  }
+
+  resetActivatedSkills(): void {
+    // No-op by default; drivers that track skills natively override this.
   }
 
   abstract sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult>;

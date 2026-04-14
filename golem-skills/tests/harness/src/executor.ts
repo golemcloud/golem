@@ -898,15 +898,20 @@ export class ScenarioExecutor {
       this.options.globalTimeoutSeconds ??
       DEFAULT_STEP_TIMEOUT_SECONDS;
     const shouldTrackSkills = this.needsSkillTracking(step);
+    const driverTracksSkills = shouldTrackSkills && this.driver.getActivatedSkills() !== undefined;
     let stepBaseline = 0;
     if (shouldTrackSkills) {
-      if (!this.watcherStarted) {
-        await this.watcher.start();
-        this.watcherStarted = true;
+      if (driverTracksSkills) {
+        this.driver.resetActivatedSkills();
+      } else {
+        if (!this.watcherStarted) {
+          await this.watcher.start();
+          this.watcherStarted = true;
+        }
+        await this.watcher.snapshotAtimes();
+        await new Promise((resolve) => setTimeout(resolve, WATCHER_SNAPSHOT_SETTLE_MS));
+        stepBaseline = this.watcher.markBaseline();
       }
-      await this.watcher.snapshotAtimes();
-      await new Promise((resolve) => setTimeout(resolve, WATCHER_SNAPSHOT_SETTLE_MS));
-      stepBaseline = this.watcher.markBaseline();
     }
     const stepLabel = step.id ?? "(unnamed)";
     log.stepStart(stepLabel, stepTimeoutSeconds);
@@ -1009,7 +1014,7 @@ export class ScenarioExecutor {
 
     // Verify skills activation
     const activatedSkills = shouldTrackSkills
-      ? await this.verifySkillActivation(stepLabel, step, stepBaseline, fail)
+      ? await this.verifySkillActivation(stepLabel, step, stepBaseline, driverTracksSkills, fail)
       : [];
 
     // Build/deploy/expectedFiles verification
@@ -1359,19 +1364,33 @@ export class ScenarioExecutor {
     stepLabel: string,
     step: StepSpec,
     baseline: ReturnType<SkillWatcher["markBaseline"]>,
+    driverTracksSkills: boolean,
     fail: (msg: string) => void,
   ): Promise<string[]> {
-    const watcherEvents = this.watcher.getActivatedEventsSince(baseline);
-    const atimeResults = await this.watcher.getSkillsWithChangedAtime();
-    for (const evt of watcherEvents) {
-      log.stepSkillDetected(stepLabel, "fswatch", evt.skillName, evt.path);
+    let activatedSkills: string[];
+
+    if (driverTracksSkills) {
+      activatedSkills = this.driver.getActivatedSkills() ?? [];
+      for (const name of activatedSkills) {
+        log.stepSkillDetected(stepLabel, "driver", name, "");
+      }
+    } else {
+      const watcherEvents = this.watcher.getActivatedEventsSince(baseline);
+      const atimeResults = await this.watcher.getSkillsWithChangedAtime();
+      for (const evt of watcherEvents) {
+        log.stepSkillDetected(stepLabel, "fswatch", evt.skillName, evt.path);
+      }
+      for (const res of atimeResults) {
+        log.stepSkillDetected(stepLabel, "atime", res.skillName, res.path);
+      }
+      activatedSkills = Array.from(
+        new Set([
+          ...watcherEvents.map((e) => e.skillName),
+          ...atimeResults.map((r) => r.skillName),
+        ]),
+      );
     }
-    for (const res of atimeResults) {
-      log.stepSkillDetected(stepLabel, "atime", res.skillName, res.path);
-    }
-    const activatedSkills = Array.from(
-      new Set([...watcherEvents.map((e) => e.skillName), ...atimeResults.map((r) => r.skillName)]),
-    );
+
     log.stepActivatedSkills(stepLabel, activatedSkills);
     const error = this.assertSkillActivation(stepLabel, step, activatedSkills);
     if (error) fail(error);

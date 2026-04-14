@@ -464,7 +464,7 @@ export function stepPrompt(
 
 export function stepSkillDetected(
   label: string,
-  method: "fswatch" | "atime",
+  method: "fswatch" | "atime" | "driver",
   skillName: string,
   path: string,
 ): void {

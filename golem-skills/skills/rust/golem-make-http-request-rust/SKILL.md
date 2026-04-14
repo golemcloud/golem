@@ -14,14 +14,14 @@ Golem Rust agents use the `wstd` crate for outgoing HTTP requests. `wstd` provid
 ## Imports
 
 ```rust
-use wstd::http::{Client, Request, HeaderValue};
-use wstd::io::{empty, AsyncRead};
+use wstd::http::{Client, Request, Body, HeaderValue};
 ```
 
 For JSON support (enabled by default via the `json` feature):
 ```rust
-use wstd::http::request::JsonRequest; // for .json() on request builder
 use serde::{Serialize, Deserialize};
+// Body::from_json(&T) for serializing request bodies
+// response.body_mut().json::<T>() for deserializing response bodies
 ```
 
 ## GET Request
@@ -29,21 +29,19 @@ use serde::{Serialize, Deserialize};
 ```rust
 let request = Request::get("https://api.example.com/data")
     .header("Accept", HeaderValue::from_static("application/json"))
-    .body(empty())?;
+    .body(Body::empty())?;
 
 let mut response = Client::new().send(request).await?;
 
-let body_bytes = response.body_mut().bytes().await?;
-let body_str = String::from_utf8_lossy(&body_bytes);
+let body_bytes = response.body_mut().contents().await?;
+let body_str = String::from_utf8_lossy(body_bytes);
 ```
 
-> **Important:** GET requests require an explicit empty body — use `wstd::io::empty()`.
+> **Important:** GET requests require an explicit empty body — use `Body::empty()` or `Body::from(())`.
 
 ## GET with JSON Response
 
 ```rust
-use wstd::http::request::JsonRequest;
-
 #[derive(Deserialize)]
 struct ApiResponse {
     id: u64,
@@ -51,7 +49,7 @@ struct ApiResponse {
 }
 
 let request = Request::get("https://api.example.com/users/1")
-    .body(empty())?;
+    .body(Body::empty())?;
 
 let mut response = Client::new().send(request).await?;
 let user: ApiResponse = response.body_mut().json::<ApiResponse>().await?;
@@ -60,8 +58,6 @@ let user: ApiResponse = response.body_mut().json::<ApiResponse>().await?;
 ## POST with JSON Body
 
 ```rust
-use wstd::http::request::JsonRequest;
-
 #[derive(Serialize)]
 struct CreateUser {
     name: String,
@@ -73,9 +69,11 @@ let payload = CreateUser {
     email: "alice@example.com".to_string(),
 };
 
-// .json() serializes the payload and sets Content-Type automatically
+// Body::from_json serializes the payload to JSON bytes.
+// You must also set the Content-Type header manually.
 let request = Request::post("https://api.example.com/users")
-    .json(&payload)?;
+    .header("Content-Type", "application/json")
+    .body(Body::from_json(&payload).expect("Failed to serialize"))?;
 
 let mut response = Client::new().send(request).await?;
 ```
@@ -83,16 +81,14 @@ let mut response = Client::new().send(request).await?;
 ## POST with Raw Body
 
 ```rust
-use wstd::http::IntoBody;
-
 let request = Request::post("https://api.example.com/submit")
     .header("Content-Type", "application/json")
-    .body(r#"{"key": "value"}"#.into_body())?;
+    .body(Body::from(r#"{"key": "value"}"#))?;
 
 let mut response = Client::new().send(request).await?;
 ```
 
-`IntoBody` converts from `&str`, `String`, `Vec<u8>`, and `&[u8]`.
+`Body::from` converts from `&str`, `String`, `Vec<u8>`, `&[u8]`, and `()` (empty body).
 
 ## Setting Headers
 
@@ -101,7 +97,7 @@ let request = Request::get("https://api.example.com/secure")
     .header("Authorization", HeaderValue::from_static("Bearer my-token"))
     .header("Accept", "application/json")          // &str works directly
     .header("X-Custom", HeaderValue::from_str("dynamic-value")?) // fallible for runtime values
-    .body(empty())?;
+    .body(Body::empty())?;
 ```
 
 ## Reading the Response
@@ -118,9 +114,9 @@ if let Some(ct) = response.headers().get("Content-Type") {
 }
 
 // Body — choose one:
-let bytes: Vec<u8> = response.body_mut().bytes().await?;
+let bytes = response.body_mut().contents().await?;          // &[u8]
 // or
-let text = String::from_utf8(response.body_mut().bytes().await?)?;
+let text = response.body_mut().str_contents().await?;       // &str
 // or (with json feature)
 let parsed: MyStruct = response.body_mut().json::<MyStruct>().await?;
 ```
@@ -128,7 +124,7 @@ let parsed: MyStruct = response.body_mut().json::<MyStruct>().await?;
 ## Error Handling
 
 ```rust
-let request = Request::get(url).body(empty())?;
+let request = Request::get(url).body(Body::empty())?;
 
 match Client::new().send(request).await {
     Ok(mut response) => {
@@ -137,7 +133,7 @@ match Client::new().send(request).await {
             Ok(data)
         } else {
             let error_body = String::from_utf8_lossy(
-                &response.body_mut().bytes().await?
+                response.body_mut().contents().await?
             ).to_string();
             Err(format!("API error {}: {}", response.status(), error_body))
         }
@@ -165,9 +161,7 @@ let response = client.send(request).await?;
 ```rust
 use golem_rust::{agent_definition, agent_implementation, endpoint, Schema};
 use serde::Deserialize;
-use wstd::http::{Client, HeaderValue, Request};
-use wstd::http::request::JsonRequest;
-use wstd::io::empty;
+use wstd::http::{Client, Body, HeaderValue, Request};
 
 #[derive(Clone, Schema, Deserialize)]
 pub struct WeatherReport {
@@ -201,7 +195,7 @@ impl WeatherAgent for WeatherAgentImpl {
 
         let request = Request::get(&url)
             .header("Accept", HeaderValue::from_static("application/json"))
-            .body(empty())
+            .body(Body::empty())
             .expect("Failed to build request");
 
         let mut response = Client::new()
@@ -281,12 +275,54 @@ let response = client.post(url).multipart(form).send().await?;
 
 Both crates use the same underlying WASI HTTP interface and work correctly with Golem's durable execution.
 
+## Calling Golem Agent HTTP Endpoints
+
+When making HTTP requests to other Golem agent endpoints (or your own), the request body must match the **Golem HTTP body mapping convention**: non-binary body parameters are always deserialized from a **JSON object** where each top-level field corresponds to a method parameter name. This is true even when the endpoint has a single body parameter.
+
+For example, given this endpoint definition:
+
+```rust
+#[endpoint(post = "/record")]
+fn record(&mut self, body: String);
+```
+
+The correct HTTP request must send a JSON object with a `body` field — **not** a raw text string:
+
+```rust
+// ✅ CORRECT — use Body::from_json with a struct whose fields match parameter names
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct RecordRequest {
+    body: String,
+}
+
+let request = Request::post("http://my-app.localhost:9006/recorder/main/record")
+    .header("Content-Type", "application/json")
+    .body(Body::from_json(&RecordRequest { body: "a".to_string() }).unwrap())?;
+Client::new().send(request).await?;
+
+// ✅ ALSO CORRECT — inline JSON via raw body string
+let request = Request::post("http://my-app.localhost:9006/recorder/main/record")
+    .header("Content-Type", "application/json")
+    .body(Body::from(r#"{"body": "a"}"#))?;
+Client::new().send(request).await?;
+
+// ❌ WRONG — raw text body does NOT match Golem's JSON body mapping
+let request = Request::post("http://my-app.localhost:9006/recorder/main/record")
+    .header("Content-Type", "text/plain")
+    .body(Body::from("a"))?;
+```
+
+> **Rule of thumb:** If the target endpoint is a Golem agent, always send `application/json` with parameter names as JSON keys. Load the `golem-http-params-rust` skill for the full body mapping rules.
+
 ## Key Constraints
 
-- Use `wstd::http` (async) or `golem-wasi-http` (sync, reqwest-like) — both target the WASI HTTP interface
+- Use `wstd::http` (async) or `golem-wasi-http` (reqwest-like; sync by default, async with the `async` feature) — both target the WASI HTTP interface
 - **`reqwest`, `ureq`, `hyper` (client), `surf`, and similar crates will NOT work** — they depend on native networking stacks (tokio, OpenSSL) unavailable in WebAssembly
 - Third-party crates that internally use one of these clients (e.g., many SDK crates) will also fail to compile or run
 - Any crate that targets the WASI HTTP interface (`wasi:http/outgoing-handler`) will work
-- When using `wstd::http`: GET requests require an explicit `body(empty())` call
-- When using `wstd::http`: import `wstd::http::request::JsonRequest` to use the `.json()` builder method
+- When using `wstd::http`: GET requests require an explicit `body(Body::empty())` call
+- When using `wstd::http`: use `Body::from_json(&data)` to serialize a struct as a JSON request body, and set the `Content-Type: application/json` header manually
+- When using `wstd::http`: use `response.body_mut().json::<T>()` to deserialize a JSON response body
 - `wstd` is included by default in Golem Rust project templates; `golem-wasi-http` must be added manually

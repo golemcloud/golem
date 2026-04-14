@@ -31,6 +31,12 @@ class StubDriver implements AgentDriver {
   setWorkingDirectory(_dir: string): void {
     /* no-op */
   }
+  getActivatedSkills(): string[] | undefined {
+    return undefined;
+  }
+  resetActivatedSkills(): void {
+    /* no-op */
+  }
 }
 
 function createExecutor(
