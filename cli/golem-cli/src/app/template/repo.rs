@@ -23,7 +23,7 @@ use crate::model::GuestLanguage;
 use anyhow::{Context, anyhow, bail};
 use include_dir::{Dir, include_dir};
 use std::collections::{BTreeMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 pub static TEMPLATES_DIR: Dir<'static> = include_dir!("$OUT_DIR/templates");
@@ -205,6 +205,48 @@ impl AppTemplateRepo {
         }
 
         Ok(templates)
+    }
+
+    pub fn common_template_skill_files(
+        &self,
+        language: GuestLanguage,
+    ) -> anyhow::Result<Vec<(PathBuf, String)>> {
+        let Some(common_template) = self.common_template(language)?.as_ref() else {
+            return Ok(Vec::new());
+        };
+
+        let skills_path = common_template.0.template_path.join(".agents/skills");
+        let Some(skills_dir) = TEMPLATES_DIR.get_dir(&skills_path) else {
+            return Ok(Vec::new());
+        };
+
+        let mut result = Vec::new();
+        Self::collect_skill_files(skills_dir, &common_template.0.template_path, &mut result)?;
+        Ok(result)
+    }
+
+    fn collect_skill_files(
+        dir: &Dir,
+        template_root: &Path,
+        result: &mut Vec<(PathBuf, String)>,
+    ) -> anyhow::Result<()> {
+        for entry in dir.entries() {
+            if let Some(sub_dir) = entry.as_dir() {
+                Self::collect_skill_files(sub_dir, template_root, result)?;
+            } else if let Some(file) = entry.as_file()
+                && fs::file_name_to_str(file.path())? == "SKILL.md"
+            {
+                let relative_path = fs::strip_prefix_or_err(file.path(), template_root)?;
+                let contents = file
+                    .contents_utf8()
+                    .ok_or_else(|| {
+                        anyhow!("Skill file is not valid UTF-8: {}", file.path().display())
+                    })?
+                    .to_string();
+                result.push((relative_path.to_path_buf(), contents));
+            }
+        }
+        Ok(())
     }
 
     fn template_file_contents(
