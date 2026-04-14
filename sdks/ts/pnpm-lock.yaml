@@ -44,12 +44,6 @@ importers:
       '@eslint/js':
         specifier: ^9.33.0
         version: 9.35.0
-      '@rollup/plugin-commonjs':
-        specifier: ^28.0.6
-        version: 28.0.6(rollup@4.50.0)
-      '@rollup/plugin-node-resolve':
-        specifier: ^16.0.1
-        version: 16.0.1(rollup@4.50.0)
       '@typescript-eslint/eslint-plugin':
         specifier: ^8.39.0
         version: 8.42.0(@typescript-eslint/parser@8.42.0(eslint@9.35.0)(typescript@5.9.2))(eslint@9.35.0)(typescript@5.9.2)
@@ -59,9 +53,6 @@ importers:
       eslint:
         specifier: ^9.33.0
         version: 9.35.0
-      prettier:
-        specifier: ^3.6.2
-        version: 3.6.2
       rollup:
         specifier: ^4.46.2
         version: 4.50.0
@@ -96,12 +87,6 @@ importers:
       '@eslint/js':
         specifier: ^9.33.0
         version: 9.35.0
-      '@rollup/plugin-commonjs':
-        specifier: ^28.0.6
-        version: 28.0.6(rollup@4.50.0)
-      '@rollup/plugin-node-resolve':
-        specifier: ^16.0.1
-        version: 16.0.1(rollup@4.50.0)
       '@types/node':
         specifier: ^24.1.0
         version: 24.3.1
@@ -120,9 +105,6 @@ importers:
       fast-check:
         specifier: ^4.2.0
         version: 4.3.0
-      prettier:
-        specifier: ^3.6.2
-        version: 3.6.2
       reflect-metadata:
         specifier: ^0.1.14
         version: 0.1.14
@@ -255,9 +237,6 @@ importers:
       picocolors:
         specifier: ^1.1.1
         version: 1.1.1
-      prettier:
-        specifier: ^3.6.2
-        version: 3.6.2
       reflect-metadata:
         specifier: ^0.1.14
         version: 0.1.14
@@ -288,12 +267,6 @@ importers:
       '@eslint/js':
         specifier: ^9.33.0
         version: 9.35.0
-      '@rollup/plugin-commonjs':
-        specifier: ^28.0.6
-        version: 28.0.6(rollup@4.50.0)
-      '@rollup/plugin-node-resolve':
-        specifier: ^16.0.1
-        version: 16.0.1(rollup@4.50.0)
       '@typescript-eslint/eslint-plugin':
         specifier: ^8.39.0
         version: 8.42.0(@typescript-eslint/parser@8.42.0(eslint@9.35.0)(typescript@5.9.2))(eslint@9.35.0)(typescript@5.9.2)
@@ -306,9 +279,6 @@ importers:
       fast-check:
         specifier: ^4.2.0
         version: 4.3.0
-      prettier:
-        specifier: ^3.6.2
-        version: 3.6.2
       reflect-metadata:
         specifier: ^0.1.14
         version: 0.1.14
