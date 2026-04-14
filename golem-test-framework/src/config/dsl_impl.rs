@@ -368,8 +368,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &golem_client::model::AgentCreationRequest {
                     name: id.to_string(),
                     env,
-                    wasi_config: wasi_config,
-                    config: config,
+                    wasi_config,
+                    config,
                 },
             )
             .await;
