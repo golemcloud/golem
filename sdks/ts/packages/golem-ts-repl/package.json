@@ -3,8 +3,7 @@
   "type": "module",
   "version": "0.0.0",
   "publishConfig": {
-    "access": "public",
-    "tag": "test"
+    "access": "public"
   },
   "files": [
     "types",

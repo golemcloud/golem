@@ -95,7 +95,7 @@ function getTypeFromTsMorphInternal(
       recursive: true,
     };
   }
-  visitedTypes.add(tsMorphType);
+  visitedTypes.add(type);
 
   if (isExactly(type, wellKnownTypes.object)) {
     const name = rawName ?? aliasName ?? type.getText();
