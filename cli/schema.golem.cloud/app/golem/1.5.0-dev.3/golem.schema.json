@@ -1,10 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
-  "$id": "https://schema.golem.cloud/app/golem/1.5.0-dev.2/golem.schema.json",
+  "$id": "https://schema.golem.cloud/app/golem/1.5.0-dev.3/golem.schema.json",
   "title": "Golem Application Manifest",
   "description": "Golem Application Manifest.",
   "type": "object",
+  "additionalProperties": false,
   "properties": {
+    "manifestVersion": {
+      "type": "string",
+      "description": "Manifest schema version"
+    },
     "app": {
       "type": "string",
       "description": "Application name"
@@ -16,15 +21,11 @@
         "type": "string"
       }
     },
-    "tempDir": {
-      "type": "string",
-      "description": "Temporary directory used for generating and building WIT and WASM artifacts. Default location is golem-temp."
-    },
     "componentTemplates": {
       "type": "object",
       "description": "Component templates by template names",
       "additionalProperties": {
-        "$ref": "#/definitions/component"
+        "$ref": "#/definitions/componentTemplate"
       }
     },
     "components": {
@@ -34,11 +35,11 @@
         "$ref": "#/definitions/component"
       }
     },
-    "clean": {
-      "type": "array",
-      "description": "User defined extra paths used in the clean command.",
-      "items": {
-        "type": "string"
+    "agents": {
+      "type": "object",
+      "description": "Agents by agent type names",
+      "additionalProperties": {
+        "$ref": "#/definitions/agent"
       }
     },
     "customCommands": {
@@ -51,155 +52,36 @@
         }
       }
     },
-    "httpApi": {
-      "type": "object",
-      "description": "HTTP API definitions and deployments",
-      "properties": {
-        "definitions": {
-          "type": "object",
-          "description": "HTTP API definitions by name",
-          "additionalProperties": {
-            "$ref": "#/definitions/httpApiDefinition"
-          }
-        },
-        "deployments": {
-          "type": "object",
-          "description": "HTTP API deployments by environments",
-          "additionalProperties": {
-            "type": "array",
-            "items": {
-              "$ref": "#/definitions/httpApiDeployment"
-            }
-          }
-        }
+    "clean": {
+      "type": "array",
+      "description": "User defined extra paths used in the clean command.",
+      "items": {
+        "type": "string"
       }
+    },
+    "httpApi": {
+      "$ref": "#/definitions/httpApi"
+    },
+    "mcp": {
+      "$ref": "#/definitions/mcp"
     },
     "environments": {
       "type": "object",
       "description": "Application environments",
       "additionalProperties": {
-        "properties": {
-          "default": {
-            "const": true,
-            "description": "Use as default environment, only one can be selected, if missing, the first environment is used as default"
-          },
-          "account": {
-            "type": "string",
-            "description": "Optional account that owns the application environment. When not specified then th current user will be used."
-          },
-          "server": {
-            "description": "Server for the environment, can be either  the built-in local or cloud servers, or a custom one. When not specified then the local server is used.",
-            "oneOf": [
-              {
-                "const": "local"
-              },
-              {
-                "const": "cloud"
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "url": {
-                    "type": "string",
-                    "description": "Custom URL for golem services"
-                  },
-                  "workerUrl": {
-                    "type": "string",
-                    "description": "Custom URL for golem worker service"
-                  },
-                  "allowInsecure": {
-                    "type": "boolean",
-                    "description": "Allow insecure connections to the server, defaults to false"
-                  },
-                  "auth": {
-                    "oneOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "oauth2": {
-                            "const": true
-                          }
-                        },
-                        "required": [
-                          "oauth2"
-                        ]
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "staticToken": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "staticToken"
-                        ]
-                      }
-                    ]
-                  }
-                },
-                "required": [
-                  "url",
-                  "auth"
-                ]
-              }
-            ]
-          },
-          "componentPresets": {
-            "oneOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              }
-            ]
-          },
-          "cli": {
-            "type": "object",
-            "properties": {
-              "format": {
-                "enum": [
-                  "text",
-                  "json",
-                  "yaml",
-                  "pretty",
-                  "pretty-json",
-                  "pretty-yaml"
-                ],
-                "description": "Default output format"
-              },
-              "autoConfirm": {
-                "const": true,
-                "description": "Enables auto-confirm (yes) flag by default"
-              },
-              "redeployAgents": {
-                "const": true,
-                "description": "Enables redeploy-agents flag by default"
-              },
-              "reset": {
-                "const": true,
-                "description": "Enables reset flag by default"
-              }
-            }
-          },
-          "deployment": {
-            "type": "object",
-            "properties": {
-              "compatibilityCheck": {
-                "type": "boolean"
-              },
-              "versionCheck": {
-                "type": "boolean"
-              },
-              "securityOverrides": {
-                "type": "boolean"
-              }
-            }
-          }
+        "$ref": "#/definitions/environment"
+      }
+    },
+    "bridge": {
+      "$ref": "#/definitions/bridgeSdks"
+    },
+    "secretDefaults": {
+      "type": "object",
+      "description": "Secret defaults by environment name.",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/environmentAgentSecret"
         }
       }
     },
@@ -213,47 +95,79 @@
         }
       }
     },
-    "bridge": {
-      "description": "Bridge SDK generator configuration",
+    "resourceDefaults": {
       "type": "object",
-      "properties": {
-        "ts": {
-          "description": "TypeScript SDK configuration",
-          "$ref": "#/definitions/bridgeSdkLanguageTargets"
-        },
-        "rust": {
-          "description": "Rust SDK configuration",
-          "$ref": "#/definitions/bridgeSdkLanguageTargets"
+      "description": "Quota resource defaults by environment name.",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/resourceDefinitionCreation"
         }
       }
     }
   },
   "definitions": {
-    "component": {
-      "description": "Component definition",
+    "lenientTokenList": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "templates": {
+      "description": "List of parent templates",
+      "type": "object",
+      "properties": {
+        "templates": {
+          "$ref": "#/definitions/lenientTokenList"
+        }
+      }
+    },
+    "componentTemplate": {
+      "description": "Component template definition",
       "allOf": [
         {
           "$ref": "#/definitions/templates"
         },
         {
-          "$ref": "#/definitions/componentProperties"
+          "$ref": "#/definitions/componentLayerProperties"
         },
         {
           "$ref": "#/definitions/componentPresets"
         }
       ]
     },
-    "componentProperties": {
+    "component": {
+      "description": "Component definition",
+      "allOf": [
+        {
+          "$ref": "#/definitions/componentTemplate"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "dir": {
+              "type": "string",
+              "description": "Base directory for resolving component paths"
+            }
+          }
+        }
+      ]
+    },
+    "componentLayerProperties": {
       "type": "object",
+      "allOf": [
+        {
+          "$ref": "#/definitions/agentLayerProperties"
+        }
+      ],
       "properties": {
-        "sourceWit": {
-          "type": "string",
-          "description": "Source WIT directory for the user defined component WIT source(s)."
-        },
-        "generatedWit": {
-          "type": "string",
-          "description": "Generated WIT directory created by the golem tooling, which handles exported interface extraction and includes resolved package and stub dependencies."
-        },
         "componentWasm": {
           "type": "string",
           "description": "File path for the built WASM component."
@@ -288,44 +202,6 @@
           "items": {
             "type": "string"
           }
-        },
-        "componentType": {
-          "enum": [
-            "durable",
-            "ephemeral",
-            "library"
-          ],
-          "description": "Optional component type, defaults to durable."
-        },
-        "filesMergeMode": {
-          "$ref": "#/definitions/vecMergeMode"
-        },
-        "files": {
-          "type": "array",
-          "description": "Initial component files system",
-          "items": {
-            "$ref": "#/definitions/initialComponentFile"
-          }
-        },
-        "pluginsMergeMode": {
-          "$ref": "#/definitions/vecMergeMode"
-        },
-        "plugins": {
-          "type": "array",
-          "description": "Installed plugins for the component",
-          "items": {
-            "$ref": "#/definitions/pluginInstallation"
-          }
-        },
-        "envMergeMode": {
-          "$ref": "#/definitions/mapMergeMode"
-        },
-        "env": {
-          "type": "object",
-          "description": "Environment variables for the component.",
-          "additionalProperties": {
-            "type": "string"
-          }
         }
       }
     },
@@ -335,124 +211,356 @@
       "properties": {
         "presets": {
           "type": "object",
-          "description": "Component definition presets",
           "additionalProperties": {
-            "allOf": [
-              {
-                "type": "object",
-                "additionalProperties": {
-                  "default:": {
-                    "const": true
-                  }
-                }
-              },
-              {
-                "$ref": "#/definitions/componentProperties"
-              }
-            ]
+            "$ref": "#/definitions/componentPreset"
           }
         }
       }
     },
-    "templates": {
-      "description": "List of parent component templates",
+    "componentPreset": {
       "type": "object",
+      "allOf": [
+        {
+          "$ref": "#/definitions/componentLayerProperties"
+        }
+      ],
       "properties": {
-        "templates": {
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ]
+        "default": {
+          "const": true
         }
       }
     },
-    "generateQuickJsCrateCommand": {
-      "type": "object",
-      "description": "Generate QuickJS Crate",
-      "properties": {
-        "generateQuickJsCrate": {
-          "type": "string",
-          "description": "QuickJS Crate path"
+    "agent": {
+      "description": "Agent definition",
+      "allOf": [
+        {
+          "$ref": "#/definitions/templates"
         },
-        "wit": {
-          "type": "string",
-          "description": "WIT directory"
+        {
+          "$ref": "#/definitions/agentLayerProperties"
         },
-        "jsModules": {
+        {
           "type": "object",
-          "description": "JS module paths and modes",
+          "properties": {
+            "presets": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/agentPreset"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "agentPreset": {
+      "type": "object",
+      "allOf": [
+        {
+          "$ref": "#/definitions/agentLayerProperties"
+        }
+      ],
+      "properties": {
+        "default": {
+          "const": true
+        }
+      }
+    },
+    "agentLayerProperties": {
+      "type": "object",
+      "properties": {
+        "config": {},
+        "envMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables for the agent.",
           "additionalProperties": {
             "type": "string"
           }
         },
-        "world": {
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
           "type": "object",
-          "description": "Optional WIT world"
+          "description": "WASI configuration variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "pluginsMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "plugins": {
+          "type": "array",
+          "description": "Installed plugins for the agent",
+          "items": {
+            "$ref": "#/definitions/pluginInstallation"
+          }
+        },
+        "filesMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "files": {
+          "type": "array",
+          "description": "Initial component file system",
+          "items": {
+            "$ref": "#/definitions/initialComponentFile"
+          }
         }
+      }
+    },
+    "environmentAgentSecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "value": {}
       },
       "required": [
-        "generateQuickJsCrate",
-        "wit",
-        "jsModules"
+        "path",
+        "value"
       ]
     },
-    "generateQuickJsdtsCommand": {
+    "httpApi": {
       "type": "object",
-      "description": "Generate QuickJS DTS",
+      "additionalProperties": false,
+      "description": "HTTP API deployments",
       "properties": {
-        "generateQuickJsdts": {
-          "type": "string",
-          "description": "QuickJS d.ts path"
-        },
-        "wit": {
-          "type": "string",
-          "description": "WIT directory"
-        },
-        "world": {
+        "deployments": {
           "type": "object",
-          "description": "Optional WIT world"
+          "description": "HTTP API deployments by environments",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/httpApiDeployment"
+            }
+          }
+        }
+      }
+    },
+    "httpApiDeployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "HTTP API deployment",
+      "properties": {
+        "domain": {
+          "type": "string",
+          "description": "Domain"
+        },
+        "webhookUrl": {
+          "type": "string",
+          "description": "Webhook URL"
+        },
+        "agents": {
+          "type": "object",
+          "description": "HTTP API deployment options by agent type name",
+          "additionalProperties": {
+            "$ref": "#/definitions/httpApiDeploymentAgentOptions"
+          }
         }
       },
       "required": [
-        "generateQuickJsdts",
-        "wit",
-        "jsModules"
+        "domain"
       ]
     },
-    "injectToPrebuiltQuickjsCommand": {
+    "httpApiDeploymentAgentOptions": {
       "type": "object",
-      "description": "Inject to prebuilt QuickJS",
+      "additionalProperties": false,
       "properties": {
-        "injectToPrebuiltQuickjs": {
-          "type": "string",
-          "description": "Path to the prebuilt QuickJS WASM file that loads a JS module through a get-script import"
+        "securityScheme": {
+          "type": "string"
         },
-        "module": {
-          "type": "string",
-          "description": "Path to the JS module"
+        "testSessionHeaderName": {
+          "type": "string"
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "MCP deployments",
+      "properties": {
+        "deployments": {
+          "type": "object",
+          "description": "MCP deployments by environments",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/mcpDeployment"
+            }
+          }
+        }
+      }
+    },
+    "mcpDeployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "domain": {
+          "type": "string"
         },
-        "moduleWasm": {
-          "type": "string",
-          "description": "Path to the intermediate WASM containing the JS module"
-        },
-        "into": {
-          "type": "string",
-          "description": "Path to the output WASM component containing the injected JS module"
+        "agents": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/mcpDeploymentAgentOptions"
+          }
         }
       },
       "required": [
-        "injectToPrebuiltQuickjs",
-        "module",
-        "moduleWasm",
-        "into"
+        "domain"
       ]
+    },
+    "mcpDeploymentAgentOptions": {
+      "type": "object",
+      "properties": {
+        "securityScheme": {
+          "type": "string"
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "const": true,
+          "description": "Use as default environment, only one can be selected, if missing, the first environment is used as default"
+        },
+        "account": {
+          "type": "string",
+          "description": "Optional account that owns the application environment."
+        },
+        "server": {
+          "$ref": "#/definitions/server"
+        },
+        "componentPresets": {
+          "$ref": "#/definitions/lenientTokenList"
+        },
+        "cli": {
+          "$ref": "#/definitions/cliOptions"
+        },
+        "deployment": {
+          "$ref": "#/definitions/deploymentOptions"
+        }
+      }
+    },
+    "server": {
+      "description": "Server for the environment, can be either the built-in local/cloud servers, or a custom one.",
+      "oneOf": [
+        {
+          "const": "local"
+        },
+        {
+          "const": "cloud"
+        },
+        {
+          "$ref": "#/definitions/customServer"
+        }
+      ]
+    },
+    "customServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Custom URL for golem services"
+        },
+        "workerUrl": {
+          "type": "string",
+          "description": "Custom URL for golem worker service"
+        },
+        "allowInsecure": {
+          "type": "boolean",
+          "description": "Allow insecure connections to the server"
+        },
+        "auth": {
+          "$ref": "#/definitions/customServerAuth"
+        }
+      },
+      "required": [
+        "url",
+        "auth"
+      ]
+    },
+    "customServerAuth": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "oauth2": {
+              "const": true
+            }
+          },
+          "required": [
+            "oauth2"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "staticToken": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "staticToken"
+          ]
+        }
+      ]
+    },
+    "cliOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "enum": [
+            "text",
+            "json",
+            "yaml",
+            "pretty",
+            "pretty-json",
+            "pretty-yaml"
+          ],
+          "description": "Default output format"
+        },
+        "autoConfirm": {
+          "const": true,
+          "description": "Enables auto-confirm (yes) flag by default"
+        },
+        "redeployAgents": {
+          "const": true,
+          "description": "Enables redeploy-agents flag by default"
+        },
+        "reset": {
+          "const": true,
+          "description": "Enables reset flag by default"
+        }
+      }
+    },
+    "deploymentOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "compatibilityCheck": {
+          "type": "boolean"
+        },
+        "versionCheck": {
+          "type": "boolean"
+        },
+        "securityOverrides": {
+          "type": "boolean"
+        }
+      }
     },
     "buildCommand": {
       "oneOf": [
@@ -467,11 +575,15 @@
         },
         {
           "$ref": "#/definitions/injectToPrebuiltQuickjsCommand"
+        },
+        {
+          "$ref": "#/definitions/preinitializeJsCommand"
         }
       ]
     },
     "externalCommand": {
       "type": "object",
+      "additionalProperties": false,
       "description": "External command with optional inputs and outputs with up-to-date checks",
       "properties": {
         "command": {
@@ -480,7 +592,14 @@
         },
         "dir": {
           "type": "string",
-          "description": "Working directory for the command, defaults to the directory of golem.yaml in which the component is defined."
+          "description": "Working directory for the command"
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables for the command",
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "rmdirs": {
           "type": "array",
@@ -491,7 +610,7 @@
         },
         "mkdirs": {
           "type": "array",
-          "description": "List of directories that should be created before running the command, runs after rmdirs",
+          "description": "List of directories that should be created before running the command, runs after rmdirs.",
           "items": {
             "type": "string"
           }
@@ -505,7 +624,7 @@
         },
         "targets": {
           "type": "array",
-          "description": "Output (paths and globs) for the external command",
+          "description": "Outputs (paths and globs) for the external command",
           "items": {
             "type": "string"
           }
@@ -513,25 +632,113 @@
       },
       "required": [
         "command"
-      ],
-      "if": {
-        "required": [
-          "sources"
-        ]
+      ]
+    },
+    "generateQuickJsCrateCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Generate QuickJS crate",
+      "properties": {
+        "generateQuickjsCrate": {
+          "type": "string",
+          "description": "QuickJS crate path"
+        },
+        "wit": {
+          "type": "string",
+          "description": "WIT directory"
+        },
+        "jsModules": {
+          "type": "object",
+          "description": "JS module paths and modes",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "world": {
+          "type": "string",
+          "description": "Optional WIT world"
+        }
       },
-      "then": {
-        "required": [
-          "targets"
-        ]
-      }
+      "required": [
+        "generateQuickjsCrate",
+        "wit",
+        "jsModules"
+      ]
+    },
+    "generateQuickJsdtsCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Generate QuickJS d.ts",
+      "properties": {
+        "generateQuickjsDts": {
+          "type": "string",
+          "description": "QuickJS d.ts path"
+        },
+        "wit": {
+          "type": "string",
+          "description": "WIT directory"
+        },
+        "world": {
+          "type": "string",
+          "description": "Optional WIT world"
+        }
+      },
+      "required": [
+        "generateQuickjsDts",
+        "wit"
+      ]
+    },
+    "injectToPrebuiltQuickjsCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Inject JS to prebuilt QuickJS",
+      "properties": {
+        "injectToPrebuiltQuickjs": {
+          "type": "string",
+          "description": "Path to the prebuilt QuickJS WASM file that loads a JS module through a get-script import"
+        },
+        "module": {
+          "type": "string",
+          "description": "Path to the JS module"
+        },
+        "into": {
+          "type": "string",
+          "description": "Path to the output WASM component containing the injected JS module"
+        }
+      },
+      "required": [
+        "injectToPrebuiltQuickjs",
+        "module",
+        "into"
+      ]
+    },
+    "preinitializeJsCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Preinitialize JS runtime",
+      "properties": {
+        "preinitializeJs": {
+          "type": "string",
+          "description": "Path to the input WASM component to pre-initialize"
+        },
+        "into": {
+          "type": "string",
+          "description": "Path to the pre-initialized output WASM component"
+        }
+      },
+      "required": [
+        "preinitializeJs",
+        "into"
+      ]
     },
     "initialComponentFile": {
       "type": "object",
+      "additionalProperties": false,
       "description": "File entry for the initial component file system.",
       "properties": {
         "sourcePath": {
           "type": "string",
-          "description": "Source path for the component file: either a local file or an URL."
+          "description": "Source path for the component file: either a local file or a URL."
         },
         "targetPath": {
           "type": "string",
@@ -552,6 +759,7 @@
     },
     "pluginInstallation": {
       "type": "object",
+      "additionalProperties": false,
       "description": "Represents an installed plugin",
       "properties": {
         "account": {
@@ -579,116 +787,35 @@
         "version"
       ]
     },
-    "httpApiDefinition": {
+    "bridgeSdks": {
+      "description": "Bridge SDK generator configuration",
       "type": "object",
-      "description": "HTTP API Definition",
+      "additionalProperties": false,
       "properties": {
-        "version": {
-          "type": "string",
-          "description": "Version for the HTTP API definition"
+        "ts": {
+          "description": "TypeScript SDK configuration",
+          "$ref": "#/definitions/bridgeSdkLanguageTargets"
         },
-        "project": {
-          "type": "string",
-          "description": "Optional owner project of the HTTP API definition"
-        },
-        "routes": {
-          "type": "array",
-          "description": "Routes of the HTTP API definition",
-          "items": {
-            "$ref": "#/definitions/httpApiDefinitionRoute"
-          }
+        "rust": {
+          "description": "Rust SDK configuration",
+          "$ref": "#/definitions/bridgeSdkLanguageTargets"
         }
-      },
-      "required": [
-        "version"
-      ]
+      }
     },
-    "httpApiDefinitionRoute": {
+    "bridgeSdkLanguageTargets": {
+      "description": "Bridge SDK language targets",
       "type": "object",
-      "description": "HTTP API Definition Route",
+      "additionalProperties": false,
       "properties": {
-        "method": {
-          "description": "HTTP method for the route",
-          "enum": [
-            "GET",
-            "CONNECT",
-            "POST",
-            "DELETE",
-            "PUT",
-            "PATCH",
-            "OPTIONS",
-            "TRACE",
-            "HEAD"
-          ]
+        "agents": {
+          "description": "List of agent type names, component names or \"*\" for including all agents",
+          "$ref": "#/definitions/lenientTokenList"
         },
-        "path": {
-          "description": "HTTP path pattern for the route",
+        "outputDir": {
+          "description": "Custom output directory for the generated SDK",
           "type": "string"
-        },
-        "security": {
-          "description": "Optional ID of the required HTTP API security",
-          "type": "string"
-        },
-        "binding": {
-          "description": "HTTP API Route Binding",
-          "properties": {
-            "type": {
-              "description": "Binding type, default to simple worker binding",
-              "enum": [
-                "default",
-                "cors-preflight",
-                "file-server",
-                "http-handler"
-              ]
-            },
-            "componentName": {
-              "type": "string",
-              "description": "Component to be used in the binding"
-            },
-            "agent": {
-              "type": "string",
-              "description": "Rib script for calculating the agent to be used"
-            },
-            "idempotencyKey": {
-              "type": "string",
-              "description": "Rib script for calculating the idempotency key"
-            },
-            "invocationContext": {
-              "type": "string",
-              "description": "Rib script for calculating the invocation context"
-            },
-            "response": {
-              "type": "string",
-              "description": "Rib script for creating the response"
-            }
-          }
         }
-      },
-      "required": [
-        "method",
-        "path",
-        "binding"
-      ]
-    },
-    "httpApiDeployment": {
-      "type": "object",
-      "description": "HTTP API Deployment",
-      "properties": {
-        "domain": {
-          "type": "string",
-          "description": "Domain"
-        },
-        "definitions": {
-          "type": "array",
-          "description": "HTTP API definitions to be used in the deployment",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "domain"
-      ]
+      }
     },
     "vecMergeMode": {
       "enum": [
@@ -726,110 +853,748 @@
           "description": "Retry policy tree defining the retry strategy"
         }
       },
-      "required": ["name", "priority", "predicate", "policy"],
+      "required": [
+        "name",
+        "priority",
+        "predicate",
+        "policy"
+      ],
       "additionalProperties": false
     },
     "predicateValue": {
       "description": "A typed value for property comparisons. Exactly one key: text, integer, or boolean.",
       "oneOf": [
-        { "type": "object", "properties": { "text": { "type": "string" } }, "required": ["text"], "additionalProperties": false },
-        { "type": "object", "properties": { "integer": { "type": "integer" } }, "required": ["integer"], "additionalProperties": false },
-        { "type": "object", "properties": { "boolean": { "type": "boolean" } }, "required": ["boolean"], "additionalProperties": false }
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "integer": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "integer"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "boolean": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "boolean"
+          ],
+          "additionalProperties": false
+        }
       ]
     },
     "propertyComparison": {
       "type": "object",
       "description": "A property name and a value to compare against",
       "properties": {
-        "property": { "type": "string" },
-        "value": { "$ref": "#/definitions/predicateValue" }
+        "property": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/definitions/predicateValue"
+        }
       },
-      "required": ["property", "value"],
+      "required": [
+        "property",
+        "value"
+      ],
       "additionalProperties": false
     },
     "propertySetCheck": {
       "type": "object",
       "description": "A property name and a set of values to check membership",
       "properties": {
-        "property": { "type": "string" },
-        "values": { "type": "array", "items": { "$ref": "#/definitions/predicateValue" } }
+        "property": {
+          "type": "string"
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/predicateValue"
+          }
+        }
       },
-      "required": ["property", "values"],
+      "required": [
+        "property",
+        "values"
+      ],
       "additionalProperties": false
     },
     "retryPredicate": {
       "description": "A composable predicate tree for matching retry contexts. Unit variants (true, false) are bare strings; compound variants are single-key objects.",
       "oneOf": [
-        { "type": "string", "enum": ["true", "false"] },
-        { "type": "object", "properties": { "propEq": { "$ref": "#/definitions/propertyComparison" } }, "required": ["propEq"], "additionalProperties": false },
-        { "type": "object", "properties": { "propNeq": { "$ref": "#/definitions/propertyComparison" } }, "required": ["propNeq"], "additionalProperties": false },
-        { "type": "object", "properties": { "propGt": { "$ref": "#/definitions/propertyComparison" } }, "required": ["propGt"], "additionalProperties": false },
-        { "type": "object", "properties": { "propGte": { "$ref": "#/definitions/propertyComparison" } }, "required": ["propGte"], "additionalProperties": false },
-        { "type": "object", "properties": { "propLt": { "$ref": "#/definitions/propertyComparison" } }, "required": ["propLt"], "additionalProperties": false },
-        { "type": "object", "properties": { "propLte": { "$ref": "#/definitions/propertyComparison" } }, "required": ["propLte"], "additionalProperties": false },
-        { "type": "object", "properties": { "propExists": { "type": "string" } }, "required": ["propExists"], "additionalProperties": false },
-        { "type": "object", "properties": { "propIn": { "$ref": "#/definitions/propertySetCheck" } }, "required": ["propIn"], "additionalProperties": false },
-        { "type": "object", "properties": { "propMatches": { "type": "object", "properties": { "property": { "type": "string" }, "pattern": { "type": "string" } }, "required": ["property", "pattern"], "additionalProperties": false } }, "required": ["propMatches"], "additionalProperties": false },
-        { "type": "object", "properties": { "propStartsWith": { "type": "object", "properties": { "property": { "type": "string" }, "prefix": { "type": "string" } }, "required": ["property", "prefix"], "additionalProperties": false } }, "required": ["propStartsWith"], "additionalProperties": false },
-        { "type": "object", "properties": { "propContains": { "type": "object", "properties": { "property": { "type": "string" }, "substring": { "type": "string" } }, "required": ["property", "substring"], "additionalProperties": false } }, "required": ["propContains"], "additionalProperties": false },
-        { "type": "object", "properties": { "and": { "type": "array", "items": { "$ref": "#/definitions/retryPredicate" }, "minItems": 2, "maxItems": 2 } }, "required": ["and"], "additionalProperties": false },
-        { "type": "object", "properties": { "or": { "type": "array", "items": { "$ref": "#/definitions/retryPredicate" }, "minItems": 2, "maxItems": 2 } }, "required": ["or"], "additionalProperties": false },
-        { "type": "object", "properties": { "not": { "$ref": "#/definitions/retryPredicate" } }, "required": ["not"], "additionalProperties": false }
+        {
+          "type": "string",
+          "enum": [
+            "true",
+            "false"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "propEq": {
+              "$ref": "#/definitions/propertyComparison"
+            }
+          },
+          "required": [
+            "propEq"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "propNeq": {
+              "$ref": "#/definitions/propertyComparison"
+            }
+          },
+          "required": [
+            "propNeq"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "propGt": {
+              "$ref": "#/definitions/propertyComparison"
+            }
+          },
+          "required": [
+            "propGt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "propGte": {
+              "$ref": "#/definitions/propertyComparison"
+            }
+          },
+          "required": [
+            "propGte"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "propLt": {
+              "$ref": "#/definitions/propertyComparison"
+            }
+          },
+          "required": [
+            "propLt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "propLte": {
+              "$ref": "#/definitions/propertyComparison"
+            }
+          },
+          "required": [
+            "propLte"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "propExists": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "propExists"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "propIn": {
+              "$ref": "#/definitions/propertySetCheck"
+            }
+          },
+          "required": [
+            "propIn"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "propMatches": {
+              "type": "object",
+              "properties": {
+                "property": {
+                  "type": "string"
+                },
+                "pattern": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "property",
+                "pattern"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "propMatches"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "propStartsWith": {
+              "type": "object",
+              "properties": {
+                "property": {
+                  "type": "string"
+                },
+                "prefix": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "property",
+                "prefix"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "propStartsWith"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "propContains": {
+              "type": "object",
+              "properties": {
+                "property": {
+                  "type": "string"
+                },
+                "substring": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "property",
+                "substring"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "propContains"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "and": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/retryPredicate"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "required": [
+            "and"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "or": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/retryPredicate"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "required": [
+            "or"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "not": {
+              "$ref": "#/definitions/retryPredicate"
+            }
+          },
+          "required": [
+            "not"
+          ],
+          "additionalProperties": false
+        }
       ]
     },
     "duration": {
       "type": "object",
       "description": "A duration with seconds and nanoseconds",
       "properties": {
-        "secs": { "type": "integer", "minimum": 0 },
-        "nanos": { "type": "integer", "minimum": 0, "maximum": 999999999 }
+        "secs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "nanos": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999999999
+        }
       },
-      "required": ["secs", "nanos"],
+      "required": [
+        "secs",
+        "nanos"
+      ],
       "additionalProperties": false
     },
     "retryPolicy": {
       "description": "A composable retry policy tree. Unit variants (immediate, never) are bare strings; compound variants are single-key objects.",
       "oneOf": [
-        { "type": "string", "enum": ["immediate", "never"] },
-        { "type": "object", "properties": { "periodic": { "$ref": "#/definitions/duration" } }, "required": ["periodic"], "additionalProperties": false },
-        { "type": "object", "properties": { "exponential": { "type": "object", "properties": { "baseDelay": { "$ref": "#/definitions/duration" }, "factor": { "type": "number" } }, "required": ["baseDelay", "factor"], "additionalProperties": false } }, "required": ["exponential"], "additionalProperties": false },
-        { "type": "object", "properties": { "fibonacci": { "type": "object", "properties": { "first": { "$ref": "#/definitions/duration" }, "second": { "$ref": "#/definitions/duration" } }, "required": ["first", "second"], "additionalProperties": false } }, "required": ["fibonacci"], "additionalProperties": false },
-        { "type": "object", "properties": { "countBox": { "type": "object", "properties": { "maxRetries": { "type": "integer", "minimum": 0 }, "inner": { "$ref": "#/definitions/retryPolicy" } }, "required": ["maxRetries", "inner"], "additionalProperties": false } }, "required": ["countBox"], "additionalProperties": false },
-        { "type": "object", "properties": { "timeBox": { "type": "object", "properties": { "limit": { "$ref": "#/definitions/duration" }, "inner": { "$ref": "#/definitions/retryPolicy" } }, "required": ["limit", "inner"], "additionalProperties": false } }, "required": ["timeBox"], "additionalProperties": false },
-        { "type": "object", "properties": { "clamp": { "type": "object", "properties": { "minDelay": { "$ref": "#/definitions/duration" }, "maxDelay": { "$ref": "#/definitions/duration" }, "inner": { "$ref": "#/definitions/retryPolicy" } }, "required": ["minDelay", "maxDelay", "inner"], "additionalProperties": false } }, "required": ["clamp"], "additionalProperties": false },
-        { "type": "object", "properties": { "addDelay": { "type": "object", "properties": { "delay": { "$ref": "#/definitions/duration" }, "inner": { "$ref": "#/definitions/retryPolicy" } }, "required": ["delay", "inner"], "additionalProperties": false } }, "required": ["addDelay"], "additionalProperties": false },
-        { "type": "object", "properties": { "jitter": { "type": "object", "properties": { "factor": { "type": "number" }, "inner": { "$ref": "#/definitions/retryPolicy" } }, "required": ["factor", "inner"], "additionalProperties": false } }, "required": ["jitter"], "additionalProperties": false },
-        { "type": "object", "properties": { "filteredOn": { "type": "object", "properties": { "predicate": { "$ref": "#/definitions/retryPredicate" }, "inner": { "$ref": "#/definitions/retryPolicy" } }, "required": ["predicate", "inner"], "additionalProperties": false } }, "required": ["filteredOn"], "additionalProperties": false },
-        { "type": "object", "properties": { "andThen": { "type": "array", "items": { "$ref": "#/definitions/retryPolicy" }, "minItems": 2, "maxItems": 2 } }, "required": ["andThen"], "additionalProperties": false },
-        { "type": "object", "properties": { "union": { "type": "array", "items": { "$ref": "#/definitions/retryPolicy" }, "minItems": 2, "maxItems": 2 } }, "required": ["union"], "additionalProperties": false },
-        { "type": "object", "properties": { "intersect": { "type": "array", "items": { "$ref": "#/definitions/retryPolicy" }, "minItems": 2, "maxItems": 2 } }, "required": ["intersect"], "additionalProperties": false }
-      ]
-    },
-    "bridgeSdkLanguageTargets": {
-      "description": "Bridge SDK language targets",
-      "type": "object",
-      "properties": {
-        "agents": {
-          "description": "List of agent type names, component names or \"*\" for including all agents",
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
+        {
+          "type": "string",
+          "enum": [
+            "immediate",
+            "never"
           ]
         },
-        "outputDir": {
-          "description": "Custom output directory for the generated SDK",
+        {
+          "type": "object",
+          "properties": {
+            "periodic": {
+              "$ref": "#/definitions/duration"
+            }
+          },
+          "required": [
+            "periodic"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "exponential": {
+              "type": "object",
+              "properties": {
+                "baseDelay": {
+                  "$ref": "#/definitions/duration"
+                },
+                "factor": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "baseDelay",
+                "factor"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "exponential"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "fibonacci": {
+              "type": "object",
+              "properties": {
+                "first": {
+                  "$ref": "#/definitions/duration"
+                },
+                "second": {
+                  "$ref": "#/definitions/duration"
+                }
+              },
+              "required": [
+                "first",
+                "second"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fibonacci"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "countBox": {
+              "type": "object",
+              "properties": {
+                "maxRetries": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "inner": {
+                  "$ref": "#/definitions/retryPolicy"
+                }
+              },
+              "required": [
+                "maxRetries",
+                "inner"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "countBox"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "timeBox": {
+              "type": "object",
+              "properties": {
+                "limit": {
+                  "$ref": "#/definitions/duration"
+                },
+                "inner": {
+                  "$ref": "#/definitions/retryPolicy"
+                }
+              },
+              "required": [
+                "limit",
+                "inner"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "timeBox"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "clamp": {
+              "type": "object",
+              "properties": {
+                "minDelay": {
+                  "$ref": "#/definitions/duration"
+                },
+                "maxDelay": {
+                  "$ref": "#/definitions/duration"
+                },
+                "inner": {
+                  "$ref": "#/definitions/retryPolicy"
+                }
+              },
+              "required": [
+                "minDelay",
+                "maxDelay",
+                "inner"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "clamp"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "addDelay": {
+              "type": "object",
+              "properties": {
+                "delay": {
+                  "$ref": "#/definitions/duration"
+                },
+                "inner": {
+                  "$ref": "#/definitions/retryPolicy"
+                }
+              },
+              "required": [
+                "delay",
+                "inner"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "addDelay"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jitter": {
+              "type": "object",
+              "properties": {
+                "factor": {
+                  "type": "number"
+                },
+                "inner": {
+                  "$ref": "#/definitions/retryPolicy"
+                }
+              },
+              "required": [
+                "factor",
+                "inner"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "jitter"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "filteredOn": {
+              "type": "object",
+              "properties": {
+                "predicate": {
+                  "$ref": "#/definitions/retryPredicate"
+                },
+                "inner": {
+                  "$ref": "#/definitions/retryPolicy"
+                }
+              },
+              "required": [
+                "predicate",
+                "inner"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "filteredOn"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "andThen": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/retryPolicy"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "required": [
+            "andThen"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "union": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/retryPolicy"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "required": [
+            "union"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "intersect": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/retryPolicy"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "required": [
+            "intersect"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "resourceDefinitionCreation": {
+      "type": "object",
+      "description": "Quota resource definition to create during deployment",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
           "type": "string"
+        },
+        "limit": {
+          "$ref": "#/definitions/resourceLimit"
+        },
+        "enforcementAction": {
+          "$ref": "#/definitions/enforcementAction"
+        },
+        "unit": {
+          "type": "string",
+          "description": "Single unit of measurement (e.g., token, request)"
+        },
+        "units": {
+          "type": "string",
+          "description": "Multiple units of measurement (e.g., tokens, requests)"
         }
       },
       "required": [
-        "agents"
+        "name",
+        "limit",
+        "enforcementAction",
+        "unit",
+        "units"
+      ]
+    },
+    "resourceLimit": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/resourceRateLimit"
+        },
+        {
+          "$ref": "#/definitions/resourceCapacityLimit"
+        },
+        {
+          "$ref": "#/definitions/resourceConcurrencyLimit"
+        }
+      ]
+    },
+    "resourceRateLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "Rate"
+          ]
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "period": {
+          "$ref": "#/definitions/timePeriod"
+        },
+        "max": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "type",
+        "value",
+        "period",
+        "max"
+      ]
+    },
+    "resourceCapacityLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "Capacity"
+          ]
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ]
+    },
+    "resourceConcurrencyLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "Concurrency"
+          ]
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ]
+    },
+    "enforcementAction": {
+      "type": "string",
+      "enum": [
+        "reject",
+        "throttle",
+        "terminate"
+      ]
+    },
+    "timePeriod": {
+      "type": "string",
+      "enum": [
+        "second",
+        "minute",
+        "hour",
+        "day",
+        "month",
+        "year"
       ]
     }
   }
