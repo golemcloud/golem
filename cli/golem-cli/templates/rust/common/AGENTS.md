@@ -19,6 +19,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-schedule-future-call-rust` | Scheduling a future agent invocation |
 | `golem-atomic-block-rust` | Atomic blocks, persistence control, and idempotency |
 | `golem-add-transactions-rust` | Saga-pattern transactions with compensation |
+| `golem-add-http-endpoint-rust` | Exposing an agent over HTTP with mount paths, endpoints, and request/response mapping |
 
 # Golem Application Development Guide (Rust)
 

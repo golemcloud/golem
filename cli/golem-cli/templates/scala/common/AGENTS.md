@@ -19,6 +19,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-schedule-future-call-scala` | Scheduling a future agent invocation |
 | `golem-atomic-block-scala` | Atomic blocks, persistence control, and oplog management |
 | `golem-add-transactions-scala` | Saga-pattern transactions with compensation |
+| `golem-add-http-endpoint-scala` | Exposing an agent over HTTP with mount paths, endpoints, and request/response mapping |
 
 # Golem Application Development Guide (Scala)
 
