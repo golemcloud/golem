@@ -65,6 +65,7 @@ export type Type =
       optional: boolean;
       properties: ConfigProperty[];
     }
+  | { kind: 'quota-token'; name?: string; owner?: string; optional: boolean }
   | {
       kind: 'unresolved-type';
       name?: string;

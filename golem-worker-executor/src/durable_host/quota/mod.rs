@@ -16,18 +16,21 @@ pub mod types;
 
 use crate::durable_host::quota::types::{LeaseInterestHandle, QuotaTokenEntry, ReservationEntry};
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
-use crate::preview2::golem::quota::host::{
+use crate::preview2::golem::quota::types::{
     FailedReservation, Host, HostQuotaToken, HostReservation,
 };
+use crate::preview2::golem_quota::types::QuotaTokenRecord;
 use crate::services::quota::LeaseInterest;
 use crate::workerctx::WorkerCtx;
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::payload::{
     HostRequestQuotaCommitRequest, HostRequestQuotaReserveRequest, HostRequestQuotaTokenRequest,
     HostResponseQuotaCommitResult, HostResponseQuotaReserveResult, HostResponseQuotaTokenAcquired,
 };
+use golem_common::model::oplog::types::SerializableDateTime;
 use golem_common::model::quota::ReserveResult;
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{ScheduledAction, Timestamp};
@@ -353,6 +356,35 @@ impl<Ctx: WorkerCtx> HostQuotaToken for DurableWorkerCtx<Ctx> {
         }
 
         Ok(())
+    }
+
+    async fn to_record(
+        &mut self,
+        rep: Resource<QuotaTokenEntry>,
+    ) -> anyhow::Result<QuotaTokenRecord> {
+        let entry = self.table().get(&rep)?;
+        Ok(QuotaTokenRecord {
+            environment_id: entry.environment_id().into(),
+            resource_name: entry.resource_name().clone().0,
+            expected_use: entry.expected_use(),
+            last_credit: entry.last_credit(),
+            last_credit_at: SerializableDateTime::from(*entry.last_credit_at()).into(),
+        })
+    }
+
+    async fn from_record(
+        &mut self,
+        serialized: QuotaTokenRecord,
+    ) -> anyhow::Result<Resource<QuotaTokenEntry>> {
+        let token_entry = QuotaTokenEntry::pending(
+            EnvironmentId(serialized.environment_id.uuid.into()),
+            ResourceName(serialized.resource_name),
+            serialized.expected_use,
+            serialized.last_credit,
+            SerializableDateTime::from(serialized.last_credit_at).into(),
+        );
+        let resource = self.table().push(token_entry)?;
+        Ok(resource)
     }
 
     async fn drop(&mut self, rep: Resource<QuotaTokenEntry>) -> anyhow::Result<()> {

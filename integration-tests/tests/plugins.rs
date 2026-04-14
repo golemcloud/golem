@@ -124,7 +124,10 @@ async fn start_callback_server() -> (String, Arc<Mutex<Vec<BatchCallback>>>, Joi
     let received_batches: Arc<Mutex<Vec<BatchCallback>>> = Arc::new(Mutex::new(Vec::new()));
     let received_clone = received_batches.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    // Keep the listener address family aligned with the callback URL. Using
+    // `localhost` against an IPv4-only listener flakes in CI when the client
+    // resolves it to IPv6.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
 
     let http_server = tokio::spawn(async move {
@@ -145,7 +148,7 @@ async fn start_callback_server() -> (String, Arc<Mutex<Vec<BatchCallback>>>, Joi
         axum::serve(listener, route).await.unwrap();
     });
 
-    let callback_url = format!("http://localhost:{host_http_port}/callback");
+    let callback_url = format!("http://127.0.0.1:{host_http_port}/callback");
     (callback_url, received_batches, http_server)
 }
 
@@ -163,7 +166,7 @@ async fn start_callback_server_gated() -> (
     let enabled = Arc::new(AtomicBool::new(false));
     let enabled_clone = enabled.clone();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
 
     let http_server = tokio::spawn(async move {
@@ -189,7 +192,7 @@ async fn start_callback_server_gated() -> (
         axum::serve(listener, route).await.unwrap();
     });
 
-    let callback_url = format!("http://localhost:{host_http_port}/callback");
+    let callback_url = format!("http://127.0.0.1:{host_http_port}/callback");
     (callback_url, received_batches, enabled, http_server)
 }
 
@@ -439,8 +442,19 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     )
     .await?;
 
+    // Phase 1: wait for the worker oplog to show all 4 completed invocations
+    // (1 agent-initialization + 3 add calls).
+    wait_for_oplog_completions(
+        &user,
+        &worker_id,
+        4,
+        Duration::from_secs(120),
+        &received_batches,
+    )
+    .await;
+
     // E1: Wait for callbacks and verify function names + unique oplog indices
-    let batches = wait_for_invocations(&received_batches, 4, Duration::from_secs(60)).await;
+    let batches = wait_for_invocations(&received_batches, 4, Duration::from_secs(120)).await;
     assert_function_names(&batches, &["agent-initialization", "add", "add", "add"]);
     assert_unique_oplog_indices(&batches);
 

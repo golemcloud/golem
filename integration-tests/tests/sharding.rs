@@ -456,16 +456,42 @@ mod tests {
 
             info!("Workers invoked");
             let mut pending_count = agent_ids.len();
-            while let Some(result) = tasks.join_next().await {
-                let (_component_id, agent_id, result) = result.unwrap();
-                match result {
-                    Ok(_) => {
-                        pending_count -= 1;
-                        info!("Worker invoke success: {agent_id}, pending: {pending_count}",);
+            let mut completed_agents: Vec<String> = Vec::new();
+            loop {
+                match tokio::time::timeout(Duration::from_secs(180), tasks.join_next()).await {
+                    Ok(Some(result)) => {
+                        let (_component_id, agent_id, result) = result.unwrap();
+                        match result {
+                            Ok(_) => {
+                                pending_count -= 1;
+                                completed_agents.push(agent_id.to_string());
+                                info!(
+                                    "Worker invoke success: {agent_id}, pending: {pending_count}",
+                                );
+                            }
+                            Err(err) => {
+                                error!("Worker invoke error: {agent_id}, {err:?}");
+                                panic!("Worker invoke error: {agent_id}, {err:?}");
+                            }
+                        }
                     }
-                    Err(err) => {
-                        error!("Worker invoke error: {agent_id}, {err:?}");
-                        panic!("Worker invoke error: {agent_id}, {err:?}");
+                    Ok(None) => break,
+                    Err(_) => {
+                        let all_agents: Vec<String> =
+                            agent_ids.iter().map(|a| a.to_string()).collect();
+                        let pending: Vec<&String> = all_agents
+                            .iter()
+                            .filter(|a| !completed_agents.contains(a))
+                            .collect();
+                        tasks.abort_all();
+                        panic!(
+                            "Timed out waiting for worker invocations. Still pending ({pending_count}): {}",
+                            pending
+                                .iter()
+                                .map(|a| a.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
                     }
                 }
             }
@@ -892,7 +918,10 @@ mod tests {
         let received: Arc<Mutex<Vec<BatchCallback>>> = Arc::new(Mutex::new(Vec::new()));
         let received_clone = received.clone();
 
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+        // Keep the listener address family aligned with the callback URL. Using
+        // `localhost` against an IPv4-only listener flakes in CI when the client
+        // resolves it to IPv6.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
         let handle = tokio::spawn(async move {
@@ -913,7 +942,7 @@ mod tests {
         });
 
         (
-            format!("http://localhost:{port}/callback"),
+            format!("http://127.0.0.1:{port}/callback"),
             received,
             handle,
         )
@@ -1188,6 +1217,8 @@ mod tests {
             .unwrap();
         }
 
+        wait_for_oplog_completions(&user, &worker_id, 3, Duration::from_secs(120), &received).await;
+
         // Stop all executors immediately — before flush timer fires
         deps.stop_all_worker_executors().await;
         deps.start_all_worker_executors().await;
@@ -1212,7 +1243,8 @@ mod tests {
             .unwrap();
         }
 
-        let batches = wait_for_invocations(&received, 5, Duration::from_secs(60)).await;
+        wait_for_oplog_completions(&user, &worker_id, 5, Duration::from_secs(120), &received).await;
+        let batches = wait_for_invocations(&received, 5, Duration::from_secs(120)).await;
         let fn_names = extract_function_names(&batches);
         // Exactly-once: exactly 1 init + 4 adds, no duplicates across shard move.
         // Current bug: no checkpoint, in-flight batch may be re-delivered.

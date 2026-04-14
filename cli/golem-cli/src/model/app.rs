@@ -34,6 +34,7 @@ use golem_common::model::component::{
 use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
+use golem_common::model::quota::ResourceDefinitionCreation;
 use golem_common::model::validate_lower_kebab_case_identifier;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
@@ -339,6 +340,8 @@ pub struct Application {
     agent_secrets_defaults:
         BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
     retry_policy_defaults: BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
+    resource_definition_defaults:
+        BTreeMap<EnvironmentName, Vec<WithSource<ResourceDefinitionCreation>>>,
     bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
@@ -487,6 +490,16 @@ impl Application {
             }
         }
         result
+    }
+
+    pub fn resource_definition_defaults(
+        &self,
+        environment: &EnvironmentName,
+    ) -> Vec<ResourceDefinitionCreation> {
+        self.resource_definition_defaults
+            .get(environment)
+            .map(|v| v.iter().map(|ws| ws.value.clone()).collect())
+            .unwrap_or_default()
     }
 
     pub fn bridge_sdks(&self) -> &app_raw::BridgeSdks {
@@ -1492,6 +1505,7 @@ impl PluginInstallation {
 }
 
 mod app_builder {
+    use super::ResourceDefinitionCreation;
     use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
@@ -1640,6 +1654,9 @@ mod app_builder {
         retry_policy_defaults:
             BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
 
+        resource_definition_defaults:
+            BTreeMap<EnvironmentName, Vec<WithSource<ResourceDefinitionCreation>>>,
+
         all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
     }
@@ -1704,6 +1721,7 @@ mod app_builder {
                 mcp_deployments: builder.mcp_deployments,
                 agent_secrets_defaults: builder.agent_secret_defaults,
                 retry_policy_defaults: builder.retry_policy_defaults,
+                resource_definition_defaults: builder.resource_definition_defaults,
                 bridge_sdks: builder.bridge_sdks,
             })
         }
@@ -1922,6 +1940,16 @@ mod app_builder {
                                     }
                                 )
                             )
+                        }
+                    }
+
+                    for (environment, resource_defs) in app.application.resource_defaults {
+                        let entry = self.resource_definition_defaults
+                            .entry(environment.clone())
+                            .or_default();
+
+                        for resource_def in resource_defs {
+                            entry.push(WithSource::new(app.source.to_path_buf(), resource_def));
                         }
                     }
 

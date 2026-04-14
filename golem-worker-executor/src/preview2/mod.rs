@@ -61,8 +61,8 @@ wasmtime::component::bindgen!({
         "golem:rdbms/postgres.lazy-db-column-type": super::durable_host::rdbms::postgres::LazyDbColumnTypeEntry,
         "golem:rdbms/postgres.lazy-db-value": super::durable_host::rdbms::postgres::LazyDbValueEntry,
         "golem:websocket/client.websocket-connection": super::durable_host::websocket::client::WebSocketConnectionEntry,
-        "golem:quota/host.quota-token": super::durable_host::quota::types::QuotaTokenEntry,
-        "golem:quota/host.reservation": super::durable_host::quota::types::ReservationEntry,
+        "golem:quota/types.quota-token": super::durable_host::quota::types::QuotaTokenEntry,
+        "golem:quota/types.reservation": super::durable_host::quota::types::ReservationEntry,
     },
 });
 

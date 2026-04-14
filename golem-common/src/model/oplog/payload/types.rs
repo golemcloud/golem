@@ -113,6 +113,18 @@ impl From<SystemTime> for SerializableDateTime {
     }
 }
 
+impl From<SerializableDateTime> for DateTime<Utc> {
+    fn from(value: SerializableDateTime) -> Self {
+        Self::from(SystemTime::from(value))
+    }
+}
+
+impl From<DateTime<Utc>> for SerializableDateTime {
+    fn from(value: DateTime<Utc>) -> Self {
+        SystemTime::from(value).into()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec, IntoValue, FromValue)]
 #[desert(evolution())]
 pub struct SerializableFileTimes {

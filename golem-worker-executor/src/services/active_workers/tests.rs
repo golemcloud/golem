@@ -1,10 +1,13 @@
+use super::concurrent_agents_scheduler::ConcurrentAgentsScheduler;
 use super::concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
 use super::fs_semaphore::*;
 use crate::services::resource_limits::AtomicResourceEntry;
+use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentId;
 use std::sync::Arc;
 use std::time::Duration;
-use test_r::test;
+use test_r::{non_flaky, test, timeout};
 use tokio::sync::Barrier;
 use uuid::Uuid;
 
@@ -205,6 +208,19 @@ async fn concurrent_agents_acquire_succeeds_when_capacity_available() {
     let permit = sem.acquire(acc, || async { false }).await;
     drop(permit);
     assert_eq!(sem.available_permits(&acc).await, Some(3));
+}
+
+#[test]
+async fn concurrent_agents_acquire_panics_for_unregistered_account() {
+    let sem = concurrent_agents_semaphore();
+    let acc = account();
+
+    let err = match tokio::spawn(async move { sem.acquire(acc, || async { false }).await }).await {
+        Ok(_) => panic!("acquire should panic for unregistered account"),
+        Err(err) => err,
+    };
+
+    assert!(err.is_panic());
 }
 
 #[test]
@@ -511,4 +527,205 @@ async fn concurrent_agents_plan_upgrade_does_not_over_add_under_parallel_acquire
         "upgraded capacity is 999 new slots (one already running), but got {}",
         acquired.len()
     );
+}
+
+// ---------------------------------------------------------------------------
+// ConcurrentAgentsScheduler — fairness tests
+// ---------------------------------------------------------------------------
+
+fn agent(name: &str) -> AgentId {
+    AgentId {
+        component_id: ComponentId::new(),
+        agent_id: name.to_string(),
+    }
+}
+
+fn scheduler() -> Arc<ConcurrentAgentsScheduler> {
+    Arc::new(ConcurrentAgentsScheduler::new())
+}
+
+async fn wait_for_queue_len(sched: &ConcurrentAgentsScheduler, acc: &AccountId, expected: usize) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if sched.queue_len(acc).await == Some(expected) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("timed out waiting for scheduler queue length");
+}
+
+#[test]
+async fn scheduler_acquire_panics_for_unregistered_account() {
+    let sched = scheduler();
+    let acc = account();
+
+    let err = match tokio::spawn(async move { sched.acquire(acc, agent("A")).await }).await {
+        Ok(_) => panic!("scheduler acquire should panic for unregistered account"),
+        Err(err) => err,
+    };
+
+    assert!(err.is_panic());
+}
+
+#[test]
+#[timeout("5s")]
+#[non_flaky(10)]
+async fn scheduler_fifo_admission() {
+    let sched = scheduler();
+    let acc = account();
+    sched
+        .register_account(acc, resource_entry_with_agent_limit(2))
+        .await;
+
+    // A and B acquire first — should succeed immediately.
+    let a = sched.acquire(acc, agent("A")).await;
+    let b = sched.acquire(acc, agent("B")).await;
+    assert_eq!(sched.running_count(&acc).await, Some(2));
+    assert_eq!(sched.queue_len(&acc).await, Some(0));
+
+    // C queues first, then D queues behind it.
+    let sched2 = sched.clone();
+    let acc2 = acc;
+    let c_handle = tokio::spawn(async move { sched2.acquire(acc2, agent("C")).await });
+    wait_for_queue_len(&sched, &acc, 1).await;
+
+    let sched3 = sched.clone();
+    let d_handle = tokio::spawn(async move { sched3.acquire(acc, agent("D")).await });
+    wait_for_queue_len(&sched, &acc, 2).await;
+
+    // Drop A => C should get slot.
+    drop(a);
+    let c = c_handle.await.unwrap();
+    assert_eq!(sched.running_count(&acc).await, Some(2));
+
+    // Drop B => D should get slot.
+    drop(b);
+    let d = d_handle.await.unwrap();
+    assert_eq!(sched.running_count(&acc).await, Some(2));
+    assert_eq!(sched.queue_len(&acc).await, Some(0));
+
+    drop(c);
+    drop(d);
+}
+
+#[test]
+async fn scheduler_back_of_queue_reentry() {
+    let sched = scheduler();
+    let acc = account();
+    sched
+        .register_account(acc, resource_entry_with_agent_limit(1))
+        .await;
+
+    // A acquires the single slot.
+    let a = sched.acquire(acc, agent("A")).await;
+    assert_eq!(sched.running_count(&acc).await, Some(1));
+
+    // B queues first, then C queues behind it.
+    let sched2 = sched.clone();
+    let b_handle = tokio::spawn(async move { sched2.acquire(acc, agent("B")).await });
+    wait_for_queue_len(&sched, &acc, 1).await;
+
+    let sched3 = sched.clone();
+    let c_handle = tokio::spawn(async move { sched3.acquire(acc, agent("C")).await });
+    wait_for_queue_len(&sched, &acc, 2).await;
+
+    // A finishes and re-requests. It should go to the back of the queue.
+    drop(a);
+
+    // B should get the slot first (it was queued before A's re-request).
+    let b = b_handle.await.unwrap();
+    assert_eq!(sched.running_count(&acc).await, Some(1));
+
+    // Now A re-requests — it should go to the back of the queue behind C.
+    let sched4 = sched.clone();
+    let a2_handle = tokio::spawn(async move { sched4.acquire(acc, agent("A")).await });
+    wait_for_queue_len(&sched, &acc, 2).await;
+
+    // Drop B => C should get next, not A.
+    drop(b);
+    let c = c_handle.await.unwrap();
+    assert_eq!(sched.running_count(&acc).await, Some(1));
+
+    // Drop C => finally A gets the slot.
+    drop(c);
+    let _a2 = a2_handle.await.unwrap();
+    assert_eq!(sched.running_count(&acc).await, Some(1));
+    assert_eq!(sched.queue_len(&acc).await, Some(0));
+}
+
+#[test]
+async fn scheduler_cancelled_waiter_is_skipped() {
+    let sched = scheduler();
+    let acc = account();
+    sched
+        .register_account(acc, resource_entry_with_agent_limit(1))
+        .await;
+
+    let a = sched.acquire(acc, agent("A")).await;
+
+    // B queues then is cancelled.
+    let sched2 = sched.clone();
+    let b_handle = tokio::spawn(async move { sched2.acquire(acc, agent("B")).await });
+    wait_for_queue_len(&sched, &acc, 1).await;
+
+    // C also queues.
+    let sched3 = sched.clone();
+    let c_handle = tokio::spawn(async move { sched3.acquire(acc, agent("C")).await });
+    wait_for_queue_len(&sched, &acc, 2).await;
+
+    // Cancel B.
+    b_handle.abort();
+    let err = match b_handle.await {
+        Ok(_) => panic!("cancelled waiter should not complete successfully"),
+        Err(err) => err,
+    };
+    assert!(err.is_cancelled());
+
+    // Drop A => scheduler should skip cancelled B and grant C.
+    drop(a);
+    let _c = c_handle.await.unwrap();
+    assert_eq!(sched.running_count(&acc).await, Some(1));
+}
+
+#[test]
+async fn scheduler_unlimited_bypasses_queue() {
+    let sched = scheduler();
+    let acc = account();
+    sched
+        .register_account(acc, unlimited_resource_entry())
+        .await;
+
+    // Many concurrent acquires — all should succeed immediately.
+    let mut permits = Vec::new();
+    for i in 0..20 {
+        let p = sched.acquire(acc, agent(&format!("W{i}"))).await;
+        permits.push(p);
+    }
+    // Unlimited accounts bypass the queue — no queueing should happen.
+    assert_eq!(sched.queue_len(&acc).await, Some(0));
+    drop(permits);
+}
+
+#[test]
+async fn scheduler_accounts_are_independent() {
+    let sched = scheduler();
+    let acc1 = account();
+    let acc2 = account();
+    sched
+        .register_account(acc1, resource_entry_with_agent_limit(1))
+        .await;
+    sched
+        .register_account(acc2, resource_entry_with_agent_limit(1))
+        .await;
+
+    // Both accounts can have one running agent simultaneously.
+    let a1 = sched.acquire(acc1, agent("A1")).await;
+    let a2 = sched.acquire(acc2, agent("A2")).await;
+    assert_eq!(sched.running_count(&acc1).await, Some(1));
+    assert_eq!(sched.running_count(&acc2).await, Some(1));
+    drop(a1);
+    drop(a2);
 }

@@ -220,12 +220,27 @@ impl Rebalance {
     }
 
     pub fn remove_shards(&mut self, shard_ids: &HashSet<ShardId>) {
-        for assigned_shard_ids in &mut self.assignments.assignments.values_mut() {
+        for assigned_shard_ids in self.assignments.assignments.values_mut() {
             assigned_shard_ids.retain(|shard_id| !shard_ids.contains(shard_id));
         }
-        for unassigned_shard_ids in &mut self.unassignments.unassignments.values_mut() {
+        self.assignments
+            .assignments
+            .retain(|_, shards| !shards.is_empty());
+        for unassigned_shard_ids in self.unassignments.unassignments.values_mut() {
             unassigned_shard_ids.retain(|shard_id| !shard_ids.contains(shard_id));
         }
+        self.unassignments
+            .unassignments
+            .retain(|_, shards| !shards.is_empty());
+    }
+
+    pub fn remove_assignment_shards(&mut self, shard_ids: &HashSet<ShardId>) {
+        for assigned_shard_ids in self.assignments.assignments.values_mut() {
+            assigned_shard_ids.retain(|shard_id| !shard_ids.contains(shard_id));
+        }
+        self.assignments
+            .assignments
+            .retain(|_, shards| !shards.is_empty());
     }
 
     pub fn add_assignments(&mut self, pod: &Pod, mut shard_ids: BTreeSet<ShardId>) {

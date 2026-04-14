@@ -23,21 +23,11 @@ use crate::{declare_enums, declare_structs, declare_unions};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm_derive::{FromValue, IntoValue};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt::{Display, Formatter};
 
 declare_enums! {
     pub enum FlatComponentFileSystemNodeKind {
         Directory,
         File,
-    }
-}
-
-impl Display for FlatComponentFileSystemNodeKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FlatComponentFileSystemNodeKind::Directory => write!(f, "directory"),
-            FlatComponentFileSystemNodeKind::File => write!(f, "file"),
-        }
     }
 }
 

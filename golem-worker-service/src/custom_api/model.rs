@@ -117,9 +117,22 @@ pub struct RouteExecutionResult {
 
 pub enum ResponseBody {
     NoBody,
-    ComponentModelJsonBody { body: golem_wasm::ValueAndType },
-    UnstructuredBinaryBody { body: BinarySource },
-    OpenApiSchema { spec: Arc<HttpApiOpenApiSpec> },
+    ComponentModelJsonBody {
+        body: golem_wasm::ValueAndType,
+    },
+    UnstructuredBinaryBody {
+        body: BinarySource,
+    },
+    OpenApiSchema {
+        spec: Arc<HttpApiOpenApiSpec>,
+        format: OpenApiSpecFormat,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum OpenApiSpecFormat {
+    Json,
+    Yaml,
 }
 
 impl fmt::Debug for ResponseBody {
@@ -131,9 +144,10 @@ impl fmt::Debug for ResponseBody {
                 .field("body", body)
                 .finish(),
             ResponseBody::UnstructuredBinaryBody { .. } => f.write_str("UnstructuredBinaryBody"),
-            ResponseBody::OpenApiSchema { spec } => f
+            ResponseBody::OpenApiSchema { spec, format } => f
                 .debug_struct("OpenApiSchema")
                 .field("spec", &spec.0)
+                .field("format", format)
                 .finish(),
         }
     }

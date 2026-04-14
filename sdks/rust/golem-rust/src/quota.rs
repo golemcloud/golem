@@ -27,7 +27,12 @@
 //! });
 //! ```
 
-use crate::bindings::golem::quota::host;
+use crate::bindings::golem::api::host::EnvironmentId;
+use crate::bindings::golem::quota::types;
+use crate::value_and_type::type_builder::TypeNodeBuilder;
+use crate::value_and_type::wasi::Datetime;
+use crate::value_and_type::{FromValueAndType, IntoValue};
+use golem_wasm::{NodeBuilder, WitValueExtractor};
 use std::time::Duration;
 
 /// Error returned when a reservation cannot be granted because the resource's
@@ -41,8 +46,8 @@ pub struct FailedReservation {
     pub estimated_wait: Option<Duration>,
 }
 
-impl From<host::FailedReservation> for FailedReservation {
-    fn from(raw: host::FailedReservation) -> Self {
+impl From<types::FailedReservation> for FailedReservation {
+    fn from(raw: types::FailedReservation) -> Self {
         Self {
             estimated_wait: raw.estimated_wait_nanos.map(Duration::from_nanos),
         }
@@ -63,10 +68,10 @@ impl std::error::Error for FailedReservation {}
 /// A short-lived capability representing a pending resource consumption.
 ///
 /// Dropping a `Reservation` without calling [`commit`][Reservation::commit] is
-/// equivalent to committing zero usage — unused capacity is returned to the pool.
+/// equivalent to committing with the full reserved amount
 #[must_use]
 pub struct Reservation {
-    raw: host::Reservation,
+    raw: types::Reservation,
 }
 
 impl Reservation {
@@ -76,7 +81,7 @@ impl Reservation {
     /// - If `used` > reserved — the excess is deducted from the token's
     ///   remaining allocation as "debt".
     pub fn commit(self, used: u64) {
-        host::Reservation::commit(self.raw, used);
+        types::Reservation::commit(self.raw, used);
     }
 }
 
@@ -97,7 +102,7 @@ impl Reservation {
 /// }
 /// ```
 pub struct QuotaToken {
-    raw: host::QuotaToken,
+    raw: types::QuotaToken,
 }
 
 impl QuotaToken {
@@ -108,7 +113,7 @@ impl QuotaToken {
     ///   credit rate and max-credit for fair scheduling.
     pub fn new(resource_name: &str, expected_use: u64) -> Self {
         Self {
-            raw: host::QuotaToken::new(resource_name, expected_use),
+            raw: types::QuotaToken::new(resource_name, expected_use),
         }
     }
 
@@ -153,12 +158,22 @@ impl QuotaToken {
     pub fn merge(&mut self, other: QuotaToken) {
         self.raw.merge(other.raw);
     }
+
+    fn to_record(&self) -> types::QuotaTokenRecord {
+        self.raw.to_record()
+    }
+
+    fn from_record(record: &types::QuotaTokenRecord) -> QuotaToken {
+        QuotaToken {
+            raw: types::QuotaToken::from_record(record),
+        }
+    }
 }
 
 /// Reserve `amount` units, run `f`, then commit the actual usage returned by `f`.
 ///
 /// `f` receives a shared reference to the [`Reservation`] (for inspection) and
-/// must return `(used, value)`.  If `f` panics, zero usage is committed.
+/// must return `(used, value)`.
 ///
 /// Returns `Err(FailedReservation)` if the reservation could not be granted.
 ///
@@ -175,9 +190,73 @@ where
     F: FnOnce(&Reservation) -> (u64, T),
 {
     let reservation = token.reserve(amount)?;
-    // Use a raw pointer so we can call commit(used) via the owned value after f runs,
-    // while still passing a reference into f.  Safe because f's borrow ends before commit.
     let (used, value) = f(&reservation);
     reservation.commit(used);
     Ok(value)
+}
+
+impl IntoValue for QuotaToken {
+    fn add_to_builder<T: NodeBuilder>(self, builder: T) -> T::Result {
+        let record = self.to_record();
+        let builder = builder.record();
+        let builder = record.environment_id.add_to_builder(builder.item());
+        let builder = record.resource_name.add_to_builder(builder.item());
+        let builder = record.expected_use.add_to_builder(builder.item());
+        let builder = record.last_credit.add_to_builder(builder.item());
+        let builder = record.last_credit_at.add_to_builder(builder.item());
+        builder.finish()
+    }
+
+    fn add_to_type_builder<T: TypeNodeBuilder>(builder: T) -> T::Result {
+        let builder = builder.record(
+            Some("QuotaTokenRecord".to_string()),
+            Some("golem:quota".to_string()),
+        );
+        let builder = <EnvironmentId>::add_to_type_builder(builder.field("environment-id"));
+        let builder = <String>::add_to_type_builder(builder.field("resource-name"));
+        let builder = <u64>::add_to_type_builder(builder.field("expected-use"));
+        let builder = <i64>::add_to_type_builder(builder.field("last-credit"));
+        let builder = <Datetime>::add_to_type_builder(builder.field("last-credit-at"));
+        builder.finish()
+    }
+}
+
+impl FromValueAndType for QuotaToken {
+    fn from_extractor<'a, 'b>(
+        extractor: &'a impl WitValueExtractor<'a, 'b>,
+    ) -> Result<Self, String> {
+        let environment_id = <EnvironmentId>::from_extractor(
+            &extractor
+                .field(0)
+                .ok_or_else(|| "Missing environment-id".to_string())?,
+        )?;
+        let resource_name = <String>::from_extractor(
+            &extractor
+                .field(1)
+                .ok_or_else(|| "Missing resource-name".to_string())?,
+        )?;
+        let expected_use = <u64>::from_extractor(
+            &extractor
+                .field(2)
+                .ok_or_else(|| "Missing expected-use".to_string())?,
+        )?;
+        let last_credit = <i64>::from_extractor(
+            &extractor
+                .field(3)
+                .ok_or_else(|| "Missing last-credit".to_string())?,
+        )?;
+        let last_credit_at = <Datetime>::from_extractor(
+            &extractor
+                .field(4)
+                .ok_or_else(|| "Missing last-credit-at".to_string())?,
+        )?;
+        let record = types::QuotaTokenRecord {
+            environment_id,
+            resource_name,
+            expected_use,
+            last_credit,
+            last_credit_at,
+        };
+        Ok(QuotaToken::from_record(&record))
+    }
 }

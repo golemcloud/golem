@@ -29,6 +29,7 @@ import { AsyncCompleter } from 'readline';
 import { PassThrough } from 'node:stream';
 import { ts } from 'ts-morph';
 import { flushStdIO, setOutput, writeln } from './process';
+import { initTestSyncEventsFromEnv, writeTestSyncEvent } from './test-sync-events';
 import { formatAsTable, formatEvalError, logSnippetInfo } from './format';
 import type * as base from '@golemcloud/golem-ts-bridge';
 import type {
@@ -49,6 +50,7 @@ export class Repl {
 
   constructor(config: Config) {
     this.config = config;
+    initTestSyncEventsFromEnv();
     this.replCliFlags = loadReplCliFlags();
     this.overrideSnippetForNextEval = undefined;
 
@@ -145,6 +147,7 @@ export class Repl {
           if (!err) {
             languageService.addSnippetToHistory(code);
           }
+          writeTestSyncEvent('eval_done');
           callback(err, result);
         });
       };
@@ -185,6 +188,7 @@ export class Repl {
 
         writeln(typeCheckResult.formattedErrors);
 
+        writeTestSyncEvent('eval_done');
         callback(null, undefined);
       }
     };
@@ -198,18 +202,23 @@ export class Repl {
     const languageService = this.getLanguageService();
     const cli = this.cli;
     const customCompleter: AsyncCompleter = function (line, callback) {
+      const callbackWithSync = (err?: Error | null, result?: [string[], string]): void => {
+        writeTestSyncEvent('completion_done');
+        callback(err, result);
+      };
+
       if (line.trimStart().startsWith('.') || line.trimStart().startsWith(':')) {
         cli
           .complete(line)
           .then((result) => {
             if (result) {
-              callback(null, result);
+              callbackWithSync(null, result);
             } else {
-              nodeCompleter(line, callback);
+              nodeCompleter(line, callbackWithSync);
             }
           })
           .catch(() => {
-            nodeCompleter(line, callback);
+            nodeCompleter(line, callbackWithSync);
           });
       } else {
         languageService.setSnippet(line);
@@ -219,9 +228,9 @@ export class Repl {
           const replaceStart = completions.replaceStart ?? 0;
           const replaceEnd = completions.replaceEnd ?? line.length;
           const completeOn = line.slice(replaceStart, replaceEnd);
-          callback(null, [completions.entries, completeOn]);
+          callbackWithSync(null, [completions.entries, completeOn]);
         } else {
-          callback(null, [[], '']);
+          callbackWithSync(null, [[], '']);
         }
       }
     };
@@ -368,14 +377,13 @@ export class Repl {
 
     await this.setupRepl(replServer);
 
-    if (!script) {
-      this.showAgentTypeInfo(replServer, false);
-    }
-
     if (script) {
       await this.runScript(replServer, script);
       await flushStdIO();
       replServer.close();
+    } else {
+      this.showAgentTypeInfo(replServer, false);
+      writeTestSyncEvent('repl_ready');
     }
   }
 

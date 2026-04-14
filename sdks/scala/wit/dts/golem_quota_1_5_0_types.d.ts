@@ -3,7 +3,9 @@
  * Agents use quota-tokens to declare intent to consume a named resource and to
  * reserve / commit actual usage.
  */
-declare module 'golem:quota/host@1.5.0' {
+declare module 'golem:quota/types@1.5.0' {
+  import * as golemApi150Host from 'golem:api/host@1.5.0';
+  import * as wasiClocks023WallClock from 'wasi:clocks/wall-clock@0.2.3';
   export class Reservation {
     /**
      * Commit actual usage, consuming the reservation.
@@ -43,7 +45,17 @@ declare module 'golem:quota/host@1.5.0' {
      * Traps if the tokens refer to different resources.
      */
     merge(other: QuotaToken): void;
+    /**
+     * Serialize this token to a quota-token-record
+     */
+    toRecord(): QuotaTokenRecord;
+    /**
+     * Deserialize a token from this record, restoring all associated state
+     */
+    static fromRecord(serialized: QuotaTokenRecord): QuotaToken;
   }
+  export type EnvironmentId = golemApi150Host.EnvironmentId;
+  export type Datetime = wasiClocks023WallClock.Datetime;
   /**
    * Error returned when a reservation cannot be satisfied because the
    * resource's enforcement policy is `reject`.
@@ -53,6 +65,16 @@ declare module 'golem:quota/host@1.5.0' {
    */
   export type FailedReservation = {
     estimatedWaitNanos?: bigint;
+  };
+  /**
+   * A serializable represenation of a quota-token, useful when sending across rpc boundaries.
+   */
+  export type QuotaTokenRecord = {
+    environmentId: EnvironmentId;
+    resourceName: string;
+    expectedUse: bigint;
+    lastCredit: bigint;
+    lastCreditAt: Datetime;
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

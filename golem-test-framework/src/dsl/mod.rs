@@ -596,7 +596,7 @@ pub trait TestDsl {
                 return Ok(metadata);
             }
 
-            last_known = Some(metadata.status.clone());
+            last_known = Some(metadata.clone());
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
