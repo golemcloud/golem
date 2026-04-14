@@ -873,6 +873,7 @@ impl ComponentCommandHandler {
                     env: resolve_env_vars(component_name, resolved_agent.env())?,
                     wasi_config: resolved_agent.wasi_config().clone(),
                     config: materialize_agent_config_entries(agent_type, resolved_agent.config()),
+                    files_source: component.source().to_path_buf(),
                     files: resolved_agent.files().to_vec(),
                     plugins: resolved_agent.plugins().to_vec(),
                 },
@@ -941,22 +942,39 @@ impl ComponentCommandHandler {
         let mut agent_type_provision_configs = BTreeMap::new();
         for (agent_type_name, manifest_config) in &properties.agent_type_configs {
             // Hash files for this agent type
-            let rich_files: Vec<crate::model::app::InitialComponentFile> = manifest_config
+            let resolved_files: Vec<crate::model::app::InitialComponentFile> = manifest_config
                 .files
                 .iter()
-                .filter_map(|f| {
-                    crate::model::app::InitialComponentFile::from_raw(
-                        &mut ValidationBuilder::new(),
-                        std::path::Path::new(""),
-                        f.clone(),
+                .map(|f| {
+                    crate::model::app::InitialComponentFileSource::new(
+                        &f.source_path,
+                        &manifest_config.files_source,
                     )
+                    .map_err(|err| {
+                        anyhow!(
+                            "Failed to resolve source path '{}' for component {} and agent {}: {}",
+                            f.source_path,
+                            component_name.0,
+                            agent_type_name.0,
+                            err
+                        )
+                    })
+                    .map(|source| crate::model::app::InitialComponentFile {
+                        source,
+                        target: crate::model::app::CanonicalFilePathWithPermissions {
+                            path: f.target_path.clone(),
+                            permissions: f.permissions.unwrap_or(
+                                golem_common::model::component::AgentFilePermissions::ReadOnly,
+                            ),
+                        },
+                    })
                 })
-                .collect();
+                .collect::<anyhow::Result<Vec<_>>>()?;
 
             let file_hashes = ifs_manager
                 .collect_file_hashes(
                     &format!("{}:{}", component_name.0, agent_type_name.0),
-                    &rich_files,
+                    &resolved_files,
                 )
                 .await?;
 

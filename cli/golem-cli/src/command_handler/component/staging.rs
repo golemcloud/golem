@@ -25,8 +25,8 @@ use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::model::EnvironmentPluginGrantWithDetails;
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::component::{
-    AgentFilePath, AgentFilePermissions, AgentTypeProvisionConfigCreation,
-    AgentTypeProvisionConfigUpdate, PluginInstallation, PluginInstallationAction,
+    AgentFileOptions, AgentFilePath, AgentFilePermissions, AgentTypeProvisionConfigCreation,
+    AgentTypeProvisionConfigUpdate, ArchiveFilePath, PluginInstallation, PluginInstallationAction,
     PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
 use golem_common::model::diff::{self, AgentFileDiff, AgentTypeProvisionConfigDiff};
@@ -35,14 +35,17 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::fs::File;
 
-fn to_rich_ifs_entry(raw: &app_raw::InitialComponentFile) -> anyhow::Result<InitialComponentFile> {
-    let source = InitialComponentFileSource::new(&raw.source_path, std::path::Path::new(""))
-        .map_err(|e| anyhow::anyhow!("Invalid IFS source path '{}': {e}", raw.source_path))?;
+fn resolve_ifs_entry(
+    file: &app_raw::InitialComponentFile,
+    source: &std::path::Path,
+) -> anyhow::Result<InitialComponentFile> {
+    let source = InitialComponentFileSource::new(&file.source_path, source)
+        .map_err(|e| anyhow::anyhow!("Invalid IFS source path '{}': {e}", file.source_path))?;
     Ok(InitialComponentFile {
         source,
         target: CanonicalFilePathWithPermissions {
-            path: raw.target_path.clone(),
-            permissions: raw.permissions.unwrap_or(AgentFilePermissions::ReadOnly),
+            path: file.target_path.clone(),
+            permissions: file.permissions.unwrap_or(AgentFilePermissions::ReadOnly),
         },
     })
 }
@@ -179,8 +182,11 @@ impl<'a> ComponentStager<'a> {
         self.component_deploy_properties
             .agent_type_configs
             .values()
-            .flat_map(|c| c.files.iter())
-            .map(to_rich_ifs_entry)
+            .flat_map(|c| {
+                c.files
+                    .iter()
+                    .map(|file| resolve_ifs_entry(file, &c.files_source))
+            })
             .collect()
     }
 
@@ -195,16 +201,16 @@ impl<'a> ComponentStager<'a> {
                     .agent_type_configs
                     .iter()
                     .filter(|(name, _)| changed.contains(name.0.as_str()))
-                    .flat_map(|(_, c)| c.files.iter())
-                    .filter(|f| {
+                    .flat_map(|(_, c)| c.files.iter().map(|file| (file, c.files_source.as_path())))
+                    .filter(|(file, _)| {
                         // If we have fine-grained diff, skip permissions-only files
                         if content_changed_paths.is_empty() {
                             true // no fine-grained data: include all
                         } else {
-                            content_changed_paths.contains(f.target_path.as_abs_str())
+                            content_changed_paths.contains(file.target_path.as_abs_str())
                         }
                     })
-                    .map(to_rich_ifs_entry)
+                    .map(|(file, source)| resolve_ifs_entry(file, source))
                     .collect()
             }
         }
@@ -374,6 +380,56 @@ impl<'a> ComponentStager<'a> {
             .collect()
     }
 
+    fn files_to_add_or_update_for_agent(
+        &self,
+        agent_type_name: &AgentTypeName,
+        files: BTreeMap<ArchiveFilePath, AgentFileOptions>,
+    ) -> BTreeMap<ArchiveFilePath, AgentFileOptions> {
+        match &self.diff {
+            ComponentDiff::All => files,
+            ComponentDiff::Diff { diff } => {
+                let Some(agent_change) = diff
+                    .agent_type_provision_config_changes
+                    .get(agent_type_name.0.as_str())
+                else {
+                    return BTreeMap::new();
+                };
+
+                match agent_change {
+                    diff::BTreeMapDiffValue::Create
+                    | diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff { .. }) => {
+                        files
+                    }
+                    diff::BTreeMapDiffValue::Delete => BTreeMap::new(),
+                    diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff { diff }) => {
+                        let changed_content_paths: BTreeSet<&str> = diff
+                            .file_changes
+                            .iter()
+                            .filter_map(|(path, change)| match change {
+                                diff::BTreeMapDiffValue::Create => Some(path.as_str()),
+                                diff::BTreeMapDiffValue::Update(
+                                    diff::DiffForHashOf::ValueDiff { diff },
+                                ) if diff.content_changed => Some(path.as_str()),
+                                _ => None,
+                            })
+                            .collect();
+
+                        if changed_content_paths.is_empty() {
+                            BTreeMap::new()
+                        } else {
+                            files
+                                .into_iter()
+                                .filter(|(_, options)| {
+                                    changed_content_paths.contains(options.target_path.as_abs_str())
+                                })
+                                .collect()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn agent_type_provision_configs(
         &self,
     ) -> BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation> {
@@ -419,7 +475,8 @@ impl<'a> ComponentStager<'a> {
                                     env: Some(creation.env),
                                     wasi_config: Some(creation.wasi_config),
                                     config: Some(creation.config),
-                                    files_to_add_or_update: creation.files,
+                                    files_to_add_or_update: self
+                                        .files_to_add_or_update_for_agent(name, creation.files),
                                     files_to_remove,
                                     file_permission_updates,
                                     plugin_updates: creation
@@ -529,7 +586,8 @@ impl<'a> ComponentStager<'a> {
                             env: Some(creation.env),
                             wasi_config: Some(creation.wasi_config),
                             config: Some(creation.config),
-                            files_to_add_or_update: creation.files,
+                            files_to_add_or_update: self
+                                .files_to_add_or_update_for_agent(name, creation.files),
                             files_to_remove,
                             file_permission_updates,
                             plugin_updates,

@@ -131,6 +131,7 @@ pub struct AgentTypeManifestProvisionConfig {
     pub env: BTreeMap<String, String>,
     pub wasi_config: BTreeMap<String, String>,
     pub config: Vec<AgentConfigEntryDto>,
+    pub files_source: PathBuf,
     pub files: Vec<app_raw::InitialComponentFile>,
     pub plugins: Vec<app_raw::PluginInstallation>,
 }
