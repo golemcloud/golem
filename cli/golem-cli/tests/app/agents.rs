@@ -895,11 +895,10 @@ async fn test_component_env_var_substitution() {
     assert!(outputs.success_or_dump());
 
     assert!(outputs.stdout_contains_ordered([
-        "+      env:",
-        "+        COMPOSED: 123-456",
-        "+        NORMAL: REALLY",
-        "+        VERY_CUSTOM_ENV_VAR_SECRET_1: '123'",
-        "+        VERY_CUSTOM_ENV_VAR_SECRET_2: '456'",
+        "COMPOSED: 123-456",
+        "NORMAL: REALLY",
+        "VERY_CUSTOM_ENV_VAR_SECRET_1: '123'",
+        "VERY_CUSTOM_ENV_VAR_SECRET_2: '456'",
     ]));
 }
 
