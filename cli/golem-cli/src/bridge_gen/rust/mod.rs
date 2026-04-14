@@ -336,7 +336,7 @@ impl RustBridgeGenerator {
                             agent_type_name: #agent_type_name_lit.to_string(),
                             parameters: constructor_parameters.clone(),
                             phantom_id,
-                            agent_config: Some(agent_config),
+                            config: Some(agent_config),
                         },
                     ).await?;
 
