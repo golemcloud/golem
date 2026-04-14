@@ -4,6 +4,7 @@ import { z } from "zod";
 const ResultJsonAssertionSchema = z.object({
   path: z.string(),
   equals: z.unknown().optional(),
+  equals_unordered: z.unknown().optional(),
   contains: z.string().optional(),
 });
 
@@ -15,6 +16,7 @@ export const ExpectSchema = z.object({
   status: z.number().optional(),
   body_contains: z.string().optional(),
   body_matches: z.string().optional(),
+  body_json: z.array(ResultJsonAssertionSchema).optional(),
   result_json: z.array(ResultJsonAssertionSchema).optional(),
 });
 
@@ -33,6 +35,24 @@ export interface AssertionResult {
   assertion: string;
   passed: boolean;
   message: string;
+}
+
+function previewText(text: string, maxChars = 600): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}...`;
+}
+
+function previewValue(value: unknown, maxChars = 600): string {
+  if (typeof value === "string") {
+    return previewText(value, maxChars);
+  }
+
+  const serialized = JSON.stringify(value);
+  return serialized === undefined ? String(value) : previewText(serialized, maxChars);
+}
+
+function formatResultJsonContext(resultJson: unknown): string {
+  return `; result_json=${previewValue(resultJson)}`;
 }
 
 export function evaluate(context: AssertionContext, expect: ExpectSpec): AssertionResult[] {
@@ -102,7 +122,7 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
       passed,
       message: passed
         ? `body contains "${expect.body_contains}"`
-        : `body does not contain "${expect.body_contains}"`,
+        : `body does not contain "${expect.body_contains}"; received ${JSON.stringify(previewText(body))}`,
     });
   }
 
@@ -115,48 +135,99 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
       passed,
       message: passed
         ? `body matches /${expect.body_matches}/`
-        : `body does not match /${expect.body_matches}/`,
+        : `body does not match /${expect.body_matches}/; received ${JSON.stringify(previewText(body))}`,
     });
   }
 
-  if (expect.result_json && expect.result_json.length > 0) {
-    for (const jsonAssert of expect.result_json) {
-      const rawPathResults = JSONPath({
-        path: jsonAssert.path,
-        json: context.resultJson as object,
+  if (expect.body_json && expect.body_json.length > 0) {
+    const body = context.body ?? "";
+    let parsedBody: unknown;
+    try {
+      parsedBody = JSON.parse(body);
+    } catch {
+      results.push({
+        assertion: "body_json",
+        passed: false,
+        message: `body is not valid JSON: ${previewText(body)}`,
       });
-      const pathResults = Array.isArray(rawPathResults)
-        ? rawPathResults
-        : rawPathResults === undefined
-          ? []
-          : [rawPathResults];
-
-      if (jsonAssert.equals !== undefined) {
-        const passed =
-          pathResults.length > 0 &&
-          JSON.stringify(pathResults[0]) === JSON.stringify(jsonAssert.equals);
-        results.push({
-          assertion: `result_json[${jsonAssert.path}].equals`,
-          passed,
-          message: passed
-            ? `${jsonAssert.path} equals ${JSON.stringify(jsonAssert.equals)}`
-            : `${jsonAssert.path} expected ${JSON.stringify(jsonAssert.equals)}, got ${JSON.stringify(pathResults[0])}`,
-        });
-      }
-
-      if (jsonAssert.contains !== undefined) {
-        const value = pathResults.length > 0 ? String(pathResults[0]) : "";
-        const passed = value.includes(jsonAssert.contains);
-        results.push({
-          assertion: `result_json[${jsonAssert.path}].contains`,
-          passed,
-          message: passed
-            ? `${jsonAssert.path} contains "${jsonAssert.contains}"`
-            : `${jsonAssert.path} does not contain "${jsonAssert.contains}" (got "${value}")`,
-        });
-      }
+      parsedBody = undefined;
+    }
+    if (parsedBody !== undefined) {
+      evaluateJsonAssertions(parsedBody, expect.body_json, "body_json", results);
     }
   }
 
+  if (expect.result_json && expect.result_json.length > 0) {
+    evaluateJsonAssertions(context.resultJson, expect.result_json, "result_json", results);
+  }
+
   return results;
+}
+
+function evaluateJsonAssertions(
+  json: unknown,
+  assertions: z.infer<typeof ResultJsonAssertionSchema>[],
+  label: string,
+  results: AssertionResult[],
+): void {
+  for (const jsonAssert of assertions) {
+    const rawPathResults = JSONPath({
+      path: jsonAssert.path,
+      json: json as object,
+    });
+    // JSONPath returns undefined for falsy root values (false, 0, null, "").
+    // When querying "$" and the result is undefined, fall back to wrapping the
+    // root value itself so that scalar assertions work for all values.
+    const pathResults = Array.isArray(rawPathResults)
+      ? rawPathResults
+      : rawPathResults === undefined
+        ? jsonAssert.path === "$" && json !== undefined
+          ? [json]
+          : []
+        : [rawPathResults];
+
+    if (jsonAssert.equals !== undefined) {
+      const passed =
+        pathResults.length > 0 &&
+        JSON.stringify(pathResults[0]) === JSON.stringify(jsonAssert.equals);
+      results.push({
+        assertion: `${label}[${jsonAssert.path}].equals`,
+        passed,
+        message: passed
+          ? `${jsonAssert.path} equals ${JSON.stringify(jsonAssert.equals)}`
+          : `${jsonAssert.path} expected ${JSON.stringify(jsonAssert.equals)}, got ${JSON.stringify(pathResults[0])}${formatResultJsonContext(json)}`,
+      });
+    }
+
+    if (jsonAssert.equals_unordered !== undefined) {
+      const actual = pathResults.length > 0 ? pathResults[0] : undefined;
+      const expected = jsonAssert.equals_unordered;
+      const passed =
+        Array.isArray(actual) &&
+        Array.isArray(expected) &&
+        actual.length === expected.length &&
+        expected.every((exp: unknown) =>
+          actual.some((act: unknown) => JSON.stringify(act) === JSON.stringify(exp)),
+        );
+      results.push({
+        assertion: `${label}[${jsonAssert.path}].equals_unordered`,
+        passed,
+        message: passed
+          ? `${jsonAssert.path} equals (unordered) ${JSON.stringify(expected)}`
+          : `${jsonAssert.path} expected (unordered) ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}${formatResultJsonContext(json)}`,
+      });
+    }
+
+    if (jsonAssert.contains !== undefined) {
+      const value = pathResults.length > 0 ? String(pathResults[0]) : "";
+      const passed = value.includes(jsonAssert.contains);
+      results.push({
+        assertion: `${label}[${jsonAssert.path}].contains`,
+        passed,
+        message: passed
+          ? `${jsonAssert.path} contains "${jsonAssert.contains}"`
+          : `${jsonAssert.path} does not contain "${jsonAssert.contains}" (got "${value}")${formatResultJsonContext(json)}`,
+      });
+    }
+  }
 }

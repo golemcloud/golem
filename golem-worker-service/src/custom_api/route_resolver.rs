@@ -262,9 +262,8 @@ impl RouteResolver {
 }
 
 fn authority_from_request(request: &poem::Request) -> Result<Domain, String> {
-    request
-        .header(http::header::HOST)
-        .map(|h| Domain(h.to_string()))
+    crate::mcp::resolve_effective_host(request.headers())
+        .map(Domain)
         .ok_or("No host header provided".to_string())
 }
 

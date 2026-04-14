@@ -297,6 +297,74 @@ describe("Variable substitution integration", () => {
     assert.equal(result.status, "pass", result.stepResults[0]?.error);
   });
 
+  it("resolves language-conditional invoke_json method names before execution", async () => {
+    const driver = new StubDriver();
+    const watcher = new SkillWatcher(workspace);
+    const opts: ScenarioExecutorOptions = { agent: "amp", language: "rust" };
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir, opts);
+
+    (executor as unknown as Record<string, unknown>)["findGolemProjectDir"] = async () => workspace;
+
+    const runCalls: Array<{ command: string; args: string[] }> = [];
+    (executor as unknown as Record<string, unknown>)["runLocalCommand"] = async (
+      command: string,
+      args: string[],
+    ) => {
+      runCalls.push({ command, args });
+      return {
+        success: true,
+        stdout: JSON.stringify({
+          idempotency_key: "abc-123",
+          result_json: {
+            typ: { type: "Bool" },
+            value: true,
+          },
+          result_wave: ["true"],
+          result_format: "Rust syntax",
+        }),
+        stderr: "",
+        output: "",
+        exitCode: 0,
+      };
+    };
+
+    const spec: ScenarioSpec = {
+      name: "invoke-json-language-method",
+      settings: { cleanup: false },
+      steps: [
+        {
+          id: "invoke-json",
+          tag: "invoke_json" as const,
+          invoke_json: {
+            agent: 'ItemRepositoryAgent("test")',
+            method: {
+              rust: "create_item",
+              ts: "createItem",
+              scala: "createItem",
+            },
+            args: '{id: "item-1", name: "Hammer"}',
+          },
+          expect: {
+            result_json: [{ path: "$", equals: true }],
+          },
+        },
+      ],
+    };
+
+    const result = await executor.execute(spec);
+    assert.equal(result.status, "pass", result.stepResults[0]?.error);
+    assert.equal(runCalls.length, 1);
+    assert.equal(runCalls[0].command, "golem");
+    assert.deepEqual(runCalls[0].args.slice(0, 5), [
+      "--format",
+      "json",
+      "agent",
+      "invoke",
+      'ItemRepositoryAgent("test")',
+    ]);
+    assert.equal(runCalls[0].args[5], "create_item");
+  });
+
   it("substitutes variables in create_agent name", async () => {
     const driver = new StubDriver();
     const watcher = new SkillWatcher(workspace);

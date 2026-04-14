@@ -5,10 +5,11 @@ use golem_rust::bindings::golem::api::host::{
 };
 use golem_rust::{
     agent_definition, agent_implementation, generate_idempotency_key, golem_operation, Schema,
-    atomically, get_promise, fork, oplog_commit,
+    atomically, atomically_async, get_promise, fork, oplog_commit,
     fallible_transaction, infallible_transaction,
     use_idempotence_mode, use_persistence_level,
-    with_persistence_level, Checkpoint, CheckpointResultExt, PersistenceLevel,
+    with_persistence_level, with_persistence_level_async,
+    Checkpoint, CheckpointResultExt, PersistenceLevel,
     ForkResult, PromiseId, Transaction, Uuid,
 };
 use golem_rust::retry::{
@@ -41,13 +42,16 @@ pub trait GolemHostApi {
     fn fail_with_custom_max_retries(&self, max_retries: u64);
     fn explicit_commit(&self, replicas: u8);
     fn atomic_region(&self);
+    async fn atomic_region_async(&self);
     fn idempotence_flag(&self, enabled: bool);
     fn persist_nothing(&self);
-    fn fallible_transaction_test(&self) -> u64;
-    fn infallible_transaction_test(&self) -> u64;
+    async fn persist_nothing_async(&self);
+    async fn fallible_transaction_test(&self) -> u64;
+    async fn infallible_transaction_test(&self) -> u64;
     fn fork_test(&self, input: String) -> String;
 
     fn checkpoint_test(&self) -> u64;
+    async fn checkpoint_test_async(&self) -> u64;
     fn jump(&self) -> u64;
     fn get_workers(
         &self,
@@ -168,6 +172,39 @@ impl GolemHostApi for GolemHostApiImpl {
         remote_side_effect("6");
     }
 
+    async fn atomic_region_async(&self) {
+        let now = std::time::SystemTime::now();
+        println!("Starting atomic region at {now:?}");
+
+        atomically_async(|| async {
+            remote_side_effect("1");
+            remote_side_effect("2");
+
+            let decision = remote_call(1);
+            if decision {
+                panic!("crash 1");
+            }
+
+            remote_side_effect("3");
+        })
+        .await;
+
+        println!("Finished atomic region");
+
+        remote_side_effect("4");
+
+        atomically_async(|| async {
+            remote_side_effect("5");
+            let decision = remote_call(2);
+            if decision {
+                panic!("crash 2");
+            }
+        })
+        .await;
+
+        remote_side_effect("6");
+    }
+
     fn idempotence_flag(&self, enabled: bool) {
         let _guard = use_idempotence_mode(enabled);
 
@@ -210,29 +247,52 @@ impl GolemHostApi for GolemHostApiImpl {
         remote_side_effect("4");
     }
 
-    fn fallible_transaction_test(&self) -> u64 {
-        fallible_transaction(|tx| {
-            tx.transaction_step(1)?;
-            tx.transaction_step(2)?;
-            if tx.transaction_step(3)? {
-                tx.fail("fail after 3".to_string())?
-            }
-            tx.transaction_step(4)?;
-            Ok(11)
+    async fn persist_nothing_async(&self) {
+        remote_side_effect("1");
+
+        with_persistence_level_async(PersistenceLevel::PersistNothing, || async {
+            remote_side_effect("2");
         })
+        .await;
+
+        remote_side_effect("3");
+
+        atomically_async(|| async {
+            let decision = remote_call(1);
+            if decision {
+                panic!("crash 1");
+            }
+        })
+        .await;
+
+        remote_side_effect("4");
+    }
+
+    async fn fallible_transaction_test(&self) -> u64 {
+        fallible_transaction(|tx| golem_rust::boxed(async move {
+            tx.transaction_step(1).await?;
+            tx.transaction_step(2).await?;
+            if tx.transaction_step(3).await? {
+                tx.fail("fail after 3".to_string()).await?
+            }
+            tx.transaction_step(4).await?;
+            Ok(11)
+        }))
+        .await
         .expect("Transaction failed")
     }
 
-    fn infallible_transaction_test(&self) -> u64 {
-        infallible_transaction(|tx| {
-            let _ = tx.transaction_step(1);
-            let _ = tx.transaction_step(2);
-            if tx.transaction_step(3).unwrap() {
+    async fn infallible_transaction_test(&self) -> u64 {
+        infallible_transaction(|tx| golem_rust::boxed(async move {
+            let _ = tx.transaction_step(1).await;
+            let _ = tx.transaction_step(2).await;
+            if tx.transaction_step(3).await.unwrap() {
                 panic!("crash after 3");
             }
-            let _ = tx.transaction_step(4);
+            let _ = tx.transaction_step(4).await;
             11
-        })
+        }))
+        .await
     }
 
     fn fork_test(&self, input: String) -> String {
@@ -284,6 +344,29 @@ impl GolemHostApi for GolemHostApiImpl {
             Ok(())
         };
         call_result.unwrap_or_revert(&cp);
+        state += 1;
+        println!("third: {state}");
+        cp.assert_or_revert(!remote_call(state));
+        state += 1;
+        println!("fourth: {state}");
+        state
+    }
+
+    async fn checkpoint_test_async(&self) -> u64 {
+        let mut state = 0u64;
+        println!("started: {state}");
+        state += 1;
+        let cp = Checkpoint::new();
+        state += 1;
+        println!("second: {state}");
+        cp.run_or_revert_async(|| async {
+            if remote_call(state) {
+                Err::<(), String>("reverting".to_string())
+            } else {
+                Ok(())
+            }
+        })
+        .await;
         state += 1;
         println!("third: {state}");
         cp.assert_or_revert(!remote_call(state));

@@ -67,10 +67,11 @@ export function useRetryPolicy(policy: NamedRetryPolicy): RetryPolicyGuard {
 
 /**
  * Executes a function with a named retry policy temporarily set.
+ * Supports both sync and async callbacks.
  * The policy is restored (or removed) after the function completes.
  * @param policy - The named retry policy to set.
- * @param f - The function to execute.
- * @returns The result of the executed function.
+ * @param f - The function to execute (sync or async).
+ * @returns The result of the executed function, or a Promise if an async function was passed.
  */
 export function withRetryPolicy<R>(policy: NamedRetryPolicy, f: () => R): R {
   const guard = useRetryPolicy(policy);

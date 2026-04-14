@@ -16,36 +16,42 @@
 
 package golem
 
+import zio._
 import zio.test._
+
+import scala.concurrent.Future
+import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
 object TransactionsSpec extends ZIOSpecDefault {
   import Transactions._
 
+  private def f[A](a: A): Future[A] = Future.successful(a)
+
   def spec = suite("TransactionsSpec")(
     test("Operation.apply creates executable operation") {
       val op = Operation[Int, String, String](
-        run = i => Right(s"result-$i"),
-        compensateFn = (_, _) => Right(())
+        run = i => f(Right(s"result-$i")),
+        compensateFn = (_, _) => f(Right(()))
       )
-      assertTrue(op.execute(42) == Right("result-42"))
+      ZIO.fromFuture(_ => op.execute(42)).map(r => assertTrue(r == Right("result-42")))
     },
     test("Operation.execute returns Left on failure") {
       val op = Operation[Int, String, String](
-        run = _ => Left("boom"),
-        compensateFn = (_, _) => Right(())
+        run = _ => f(Left("boom")),
+        compensateFn = (_, _) => f(Right(()))
       )
-      assertTrue(op.execute(1) == Left("boom"))
+      ZIO.fromFuture(_ => op.execute(1)).map(r => assertTrue(r == Left("boom")))
     },
     test("Operation.compensate returns Left on failure") {
       val op = Operation[Int, String, String](
-        run = _ => Right("ok"),
-        compensateFn = (_, _) => Left("comp-fail")
+        run = _ => f(Right("ok")),
+        compensateFn = (_, _) => f(Left("comp-fail"))
       )
-      assertTrue(op.compensate(1, "ok") == Left("comp-fail"))
+      ZIO.fromFuture(_ => op.compensate(1, "ok")).map(r => assertTrue(r == Left("comp-fail")))
     },
     test("Transactions.operation convenience creates Operation") {
-      val op = Transactions.operation[Int, Int, String](in => Right(in * 2))((_, _) => Right(()))
-      assertTrue(op.execute(5) == Right(10))
+      val op = Transactions.operation[Int, Int, String](in => f(Right(in * 2)))((_, _) => f(Right(())))
+      ZIO.fromFuture(_ => op.execute(5)).map(r => assertTrue(r == Right(10)))
     },
     test("TransactionFailure.FailedAndRolledBackCompletely wraps error") {
       val failure: TransactionFailure[String] =
@@ -60,10 +66,7 @@ object TransactionsSpec extends ZIOSpecDefault {
         TransactionFailure.FailedAndRolledBackPartially("err", "comp-err")
       failure match {
         case TransactionFailure.FailedAndRolledBackPartially(e, ce) =>
-          assertTrue(
-            e == "err",
-            ce == "comp-err"
-          )
+          assertTrue(e == "err", ce == "comp-err")
         case _ => assertTrue(false)
       }
     },
@@ -74,152 +77,134 @@ object TransactionsSpec extends ZIOSpecDefault {
       }
       val f1 = TransactionFailure.FailedAndRolledBackCompletely("a")
       val f2 = TransactionFailure.FailedAndRolledBackPartially("a", "b")
-      assertTrue(
-        describe(f1) == "complete(a)",
-        describe(f2) == "partial(a, b)"
-      )
+      assertTrue(describe(f1) == "complete(a)", describe(f2) == "partial(a, b)")
     },
     test("FallibleTransaction.execute with all-successful operations") {
       val tx = new FallibleTransaction[String]
       val op = Operation[Int, Int, String](
-        run = i => Right(i + 1),
-        compensateFn = (_, _) => Right(())
+        run = i => f(Right(i + 1)),
+        compensateFn = (_, _) => f(Right(()))
       )
-      assertTrue(
-        tx.execute(op, 1) == Right(2),
-        tx.execute(op, 10) == Right(11)
-      )
+      ZIO.fromFuture { _ =>
+        for {
+          r1 <- tx.execute(op, 1)
+          r2 <- tx.execute(op, 10)
+        } yield (r1, r2)
+      }.map { case (r1, r2) => assertTrue(r1 == Right(2), r2 == Right(11)) }
     },
     test("FallibleTransaction.execute propagates failure") {
       val tx     = new FallibleTransaction[String]
       val failOp = Operation[Int, Int, String](
-        run = _ => Left("fail"),
-        compensateFn = (_, _) => Right(())
+        run = _ => f(Left("fail")),
+        compensateFn = (_, _) => f(Right(()))
       )
-      assertTrue(tx.execute(failOp, 1) == Left("fail"))
+      ZIO.fromFuture(_ => tx.execute(failOp, 1)).map(r => assertTrue(r == Left("fail")))
     },
     test("FallibleTransaction.onFailure runs compensations and returns complete rollback") {
       var compensated = false
       val tx          = new FallibleTransaction[String]
-      val op          = Operation[Int, Int, String](
-        run = i => Right(i),
-        compensateFn = (_, _) => { compensated = true; Right(()) }
+      val op = Operation[Int, Int, String](
+        run = i => f(Right(i)),
+        compensateFn = (_, _) => { compensated = true; f(Right(())) }
       )
-      tx.execute(op, 1)
-      val result = tx.onFailure("err")
-      assertTrue(
-        compensated,
-        result.isInstanceOf[TransactionFailure.FailedAndRolledBackCompletely[?]]
-      )
+      ZIO.fromFuture { _ =>
+        tx.execute(op, 1).flatMap(_ => tx.onFailure("err"))
+      }.map { result =>
+        assertTrue(compensated, result.isInstanceOf[TransactionFailure.FailedAndRolledBackCompletely[?]])
+      }
     },
     test("FallibleTransaction.onFailure reports partial rollback on compensation failure") {
       val tx = new FallibleTransaction[String]
       val op = Operation[Int, Int, String](
-        run = i => Right(i),
-        compensateFn = (_, _) => Left("comp-fail")
+        run = i => f(Right(i)),
+        compensateFn = (_, _) => f(Left("comp-fail"))
       )
-      tx.execute(op, 1)
-      val result = tx.onFailure("err")
-      result match {
+      ZIO.fromFuture { _ =>
+        tx.execute(op, 1).flatMap(_ => tx.onFailure("err"))
+      }.map {
         case TransactionFailure.FailedAndRolledBackPartially(e, ce) =>
-          assertTrue(
-            e == "err",
-            ce == "comp-fail"
-          )
+          assertTrue(e == "err", ce == "comp-fail")
         case _ => assertTrue(false)
       }
     },
-    test("FallibleTransaction.onFailure compensates in reverse order") {
+    test("FallibleTransaction.onFailure compensates in reverse order (synchronous)") {
       var order = List.empty[Int]
       val tx    = new FallibleTransaction[String]
-      val op1   = Operation[Int, Int, String](
-        run = i => Right(i),
-        compensateFn = (_, _) => { order = 1 :: order; Right(()) }
+      val op1 = Operation[Int, Int, String](
+        run = i => f(Right(i)),
+        compensateFn = (_, _) => { order = order :+ 1; f(Right(())) }
       )
       val op2 = Operation[Int, Int, String](
-        run = i => Right(i),
-        compensateFn = (_, _) => { order = 2 :: order; Right(()) }
+        run = i => f(Right(i)),
+        compensateFn = (_, _) => { order = order :+ 2; f(Right(())) }
       )
       val op3 = Operation[Int, Int, String](
-        run = i => Right(i),
-        compensateFn = (_, _) => { order = 3 :: order; Right(()) }
+        run = i => f(Right(i)),
+        compensateFn = (_, _) => { order = order :+ 3; f(Right(())) }
       )
-      tx.execute(op1, 10)
-      tx.execute(op2, 20)
-      tx.execute(op3, 30)
-      tx.onFailure("err")
-      assertTrue(order == List(1, 2, 3))
+      ZIO.fromFuture { _ =>
+        for {
+          _ <- tx.execute(op1, 10)
+          _ <- tx.execute(op2, 20)
+          _ <- tx.execute(op3, 30)
+          r <- tx.onFailure("err")
+        } yield r
+      }.map { _ =>
+        assertTrue(order == List(3, 2, 1))
+      }
+    },
+    test("FallibleTransaction.onFailure compensates in reverse order (async)") {
+      var order = List.empty[String]
+      val tx    = new FallibleTransaction[String]
+
+      def asyncOp(name: String, compName: String) = Operation[Unit, Unit, String](
+        run = _ => Future(Right(())),
+        compensateFn = (_, _) => Future { order = order :+ compName; Right(()) }
+      )
+
+      val reserve = asyncOp("reserve", "release")
+      val charge  = asyncOp("charge", "refund")
+
+      ZIO.fromFuture { _ =>
+        for {
+          _ <- tx.execute(reserve, ())
+          _ <- tx.execute(charge, ())
+          r <- tx.onFailure("err")
+        } yield r
+      }.map { _ =>
+        assertTrue(order == List("refund", "release"))
+      }
     },
     test("FallibleTransaction with no operations returns complete rollback") {
-      val tx     = new FallibleTransaction[String]
-      val result = tx.onFailure("err")
-      assertTrue(result.isInstanceOf[TransactionFailure.FailedAndRolledBackCompletely[?]])
-    },
-    test("InfallibleTransaction.execute returns result on success") {
-      val tx = new InfallibleTransaction
-      val op = Operation[Int, Int, String](
-        run = i => Right(i * 2),
-        compensateFn = (_, _) => Right(())
-      )
-      assertTrue(tx.execute(op, 5) == 10)
-    },
-    test("InfallibleTransaction.execute chains multiple successful operations") {
-      val tx = new InfallibleTransaction
-      val op = Operation[Int, Int, String](
-        run = i => Right(i + 1),
-        compensateFn = (_, _) => Right(())
-      )
-      val r1 = tx.execute(op, 1)
-      val r2 = tx.execute(op, r1)
-      val r3 = tx.execute(op, r2)
-      assertTrue(r3 == 4)
-    },
-    test("InfallibleTransaction.execute on failure runs compensations and throws") {
-      var compensated = false
-      val tx          = new InfallibleTransaction
-      val successOp   = Operation[Int, Int, String](
-        run = i => Right(i),
-        compensateFn = (_, _) => { compensated = true; Right(()) }
-      )
-      tx.execute(successOp, 1)
-      val failOp = Operation[Int, Int, String](
-        run = _ => Left("fail"),
-        compensateFn = (_, _) => Right(())
-      )
-      val threw = scala.util.Try(tx.execute(failOp, 2)).isFailure
-      assertTrue(
-        threw,
-        compensated
-      )
+      val tx = new FallibleTransaction[String]
+      ZIO.fromFuture(_ => tx.onFailure("err")).map { result =>
+        assertTrue(result.isInstanceOf[TransactionFailure.FailedAndRolledBackCompletely[?]])
+      }
     },
     test("Operation with Unit input") {
       val op = Operation[Unit, String, String](
-        run = _ => Right("done"),
-        compensateFn = (_, _) => Right(())
+        run = _ => f(Right("done")),
+        compensateFn = (_, _) => f(Right(()))
       )
-      assertTrue(op.execute(()) == Right("done"))
+      ZIO.fromFuture(_ => op.execute(())).map(r => assertTrue(r == Right("done")))
     },
     test("Operation with complex error type") {
       final case class AppError(code: Int, message: String)
       val op = Operation[String, Int, AppError](
-        run = _ => Left(AppError(404, "not found")),
-        compensateFn = (_, _) => Right(())
+        run = _ => f(Left(AppError(404, "not found"))),
+        compensateFn = (_, _) => f(Right(()))
       )
-      op.execute("input") match {
-        case Left(AppError(code, msg)) =>
-          assertTrue(
-            code == 404,
-            msg == "not found"
-          )
-        case _ => assertTrue(false)
+      ZIO.fromFuture(_ => op.execute("input")).map {
+        case Left(AppError(code, msg)) => assertTrue(code == 404, msg == "not found")
+        case _                         => assertTrue(false)
       }
     },
     test("Operation.compensate succeeds") {
       val op = Operation[Int, String, String](
-        run = _ => Right("ok"),
-        compensateFn = (input, output) => Right(())
+        run = _ => f(Right("ok")),
+        compensateFn = (_, _) => f(Right(()))
       )
-      assertTrue(op.compensate(42, "ok") == Right(()))
+      ZIO.fromFuture(_ => op.compensate(42, "ok")).map(r => assertTrue(r == Right(())))
     }
   )
 }

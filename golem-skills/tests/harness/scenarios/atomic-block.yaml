@@ -1,0 +1,71 @@
+name: "atomic-block"
+settings:
+  golem_server:
+    custom_request_port: 9006
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-atomic-region-test"
+    prompt: >
+      In the test-app project, add a second durable agent type called `SideEffectRecorder`
+      identified by a single name constructor parameter. Give it an HTTP mount under
+      `/recorder/{name}` and make sure it is exposed through the app HTTP API on
+      `test-app.localhost:9006`.
+
+      `SideEffectRecorder` must expose these HTTP endpoints:
+      - `POST /record` accepts a plain text body string and appends it to an internal event list
+      - `GET /events` returns the event list as a JSON array of strings
+      - `POST /decide` returns `true` the first time it is called and `false` on every subsequent
+        call, tracking the call count in agent state
+
+      New recorder agents must start with an empty event list and a call count of zero.
+
+      Then modify the existing `CounterAgent` to add a new externally invokable method named
+      `run-atomic-test`. It must take no parameters and return nothing.
+
+      Implement that method as follows. Use the language's atomic block API from the SDK to
+      wrap the first group of operations:
+
+      Inside the atomic block:
+      1. HTTP POST `"a"` to `http://test-app.localhost:9006/recorder/main/record`
+      2. HTTP POST `"b"` to `http://test-app.localhost:9006/recorder/main/record`
+      3. HTTP POST to `http://test-app.localhost:9006/recorder/main/decide` and read the boolean
+         response. If the response is `true`, panic / throw / crash the agent.
+      4. HTTP POST `"c"` to `http://test-app.localhost:9006/recorder/main/record`
+
+      After the atomic block:
+      5. HTTP POST `"d"` to `http://test-app.localhost:9006/recorder/main/record`
+
+      Make sure the project builds successfully.
+    expectedSkills:
+      rust:
+        - "golem-atomic-block-rust"
+      ts:
+        - "golem-atomic-block-ts"
+      scala:
+        - "golem-atomic-block-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "invoke-atomic-test"
+    invoke:
+      agent: 'CounterAgent("main")'
+      method:
+        rust: "run_atomic_test"
+        ts: "runAtomicTest"
+        scala: "runAtomicTest"
+
+  - id: "verify-event-sequence"
+    http:
+      url: "http://test-app.localhost:9006/recorder/main/events"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: ["a", "b", "a", "b", "c", "d"]

@@ -179,6 +179,31 @@ steps:
     assert.equal(step.expect?.stdout_contains, "success");
   });
 
+  it("loads step with a language-conditional invoke method", async () => {
+    const filePath = await writeTempYaml(`
+name: "invoke-lang-method-test"
+steps:
+  - id: "invoke-step"
+    invoke:
+      agent: "my-agent"
+      method:
+        rust: "create_item"
+        ts: "createItem"
+        scala: "createItem"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    const step = spec.steps[0];
+    assert.equal(step.tag, "invoke");
+    if (step.tag === "invoke") {
+      assert.equal(step.invoke.agent, "my-agent");
+      assert.deepEqual(step.invoke.method, {
+        rust: "create_item",
+        ts: "createItem",
+        scala: "createItem",
+      });
+    }
+  });
+
   // Shell/sleep/trigger tests
 
   it("loads step with sleep", async () => {

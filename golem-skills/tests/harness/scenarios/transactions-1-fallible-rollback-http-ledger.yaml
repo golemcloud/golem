@@ -1,0 +1,106 @@
+name: "transactions-1-fallible-rollback-http-ledger"
+settings:
+  golem_server:
+    custom_request_port: 9006
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-fallible-transaction-with-http-ledger"
+    prompt: >
+      In the test-app project, add a second durable agent type called `OrderLedger` identified by
+      a single order id constructor parameter. Give it an HTTP mount under `/orders/{order-id}` and
+      make sure it is exposed through the app HTTP API on `test-app.localhost:9006`.
+
+      `OrderLedger` must expose these HTTP endpoints:
+      - `POST /reserve` to set `reserved = true` and append `"reserve"` to a history list
+      - `DELETE /reserve` to set `reserved = false` and append `"release"` to history
+      - `POST /charge` to set `charged = true` and append `"charge"` to history
+      - `DELETE /charge` to set `charged = false` and append `"refund"` to history
+      - `GET /state` to return a JSON object with exactly `reserved`, `charged`, and `history`
+
+      New ledger agents must start with `reserved = false`, `charged = false`, and empty history.
+
+      Then modify `CounterAgent` to add a new externally invokable method named `process-order`
+      or `processOrder` following the source language convention. It must take two parameters:
+      the order id and a boolean flag controlling whether the transaction should fail after the
+      charge step. It must return a `ProcessOrderResult` value with `success` and `error` fields.
+
+      Implement that method using the language's transaction API from the SDK and two transaction
+      steps whose execute paths perform HTTP `POST` requests to `/orders/{order-id}/reserve` and
+      `/orders/{order-id}/charge`, and whose compensation paths perform matching HTTP `DELETE`
+      requests. After both steps succeed, if the boolean flag is true, deliberately fail the
+      transaction so compensation runs. On success return a successful result with no error. On
+      transaction failure return an unsuccessful result with an error value.
+      
+      Make sure you use test-app.localhost:9006 as the HTTP API endpoint for the OrderLedger.
+      If you are using TypeScript or Scala, use `fetch` for the request.
+      
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-transactions-rust"
+      ts:
+        - "golem-add-transactions-ts"
+      scala:
+        - "golem-add-transactions-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "failed-transaction"
+    invoke_json:
+      agent: 'CounterAgent("main")'
+      method:
+        rust: "process_order"
+        ts: "processOrder"
+        scala: "processOrder"
+      args: '"order-1", true'
+    expect:
+      result_json:
+        - path: "$.success"
+          equals: false
+
+  - id: "verify-rollback-via-http"
+    http:
+      url: "http://test-app.localhost:9006/orders/order-1/state"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$.reserved"
+          equals: false
+        - path: "$.charged"
+          equals: false
+        - path: "$.history"
+          equals: ["reserve", "charge", "refund", "release"]
+
+  - id: "successful-transaction"
+    invoke_json:
+      agent: 'CounterAgent("main")'
+      method:
+        rust: "process_order"
+        ts: "processOrder"
+        scala: "processOrder"
+      args: '"order-2", false'
+    expect:
+      result_json:
+        - path: "$.success"
+          equals: true
+
+  - id: "verify-success-via-http"
+    http:
+      url: "http://test-app.localhost:9006/orders/order-2/state"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$.reserved"
+          equals: true
+        - path: "$.charged"
+          equals: true
+        - path: "$.history"
+          equals: ["reserve", "charge"]

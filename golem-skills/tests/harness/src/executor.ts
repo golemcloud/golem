@@ -106,8 +106,8 @@ const HttpSchema = z.object({
 
 const InvokeSchema = z.object({
   agent: z.string(),
-  method: z.string(),
-  args: z.string().optional(),
+  method: langConditional(z.string()),
+  args: langConditional(z.string()).optional(),
 });
 
 const ShellSchema = z.object({
@@ -118,8 +118,8 @@ const ShellSchema = z.object({
 
 const TriggerSchema = z.object({
   agent: z.string(),
-  method: z.string(),
-  args: z.string().optional(),
+  method: langConditional(z.string()),
+  args: langConditional(z.string()).optional(),
 });
 
 const CreateAgentSchema = z.object({
@@ -259,9 +259,19 @@ interface StepCommon {
   retry?: { attempts: number; delay: number };
 }
 
-type InvokeSpec = { agent: string; method: string; args?: string };
+type InvokeSpec = {
+  agent: string;
+  method: LangConditional<string>;
+  args?: LangConditional<string>;
+};
 type ShellSpec = { command: string; args?: string[]; cwd?: string };
-type TriggerSpec = { agent: string; method: string; args?: string };
+type TriggerSpec = {
+  agent: string;
+  method: LangConditional<string>;
+  args?: LangConditional<string>;
+};
+type ResolvedInvokeSpec = { agent: string; method: string; args?: string };
+type ResolvedTriggerSpec = { agent: string; method: string; args?: string };
 type CreateAgentSpec = {
   name: string;
   env?: Record<string, string>;
@@ -512,6 +522,9 @@ export class ScenarioExecutor {
         : Object.fromEntries(
             Object.entries(v).map(([k, s]) => [k, substituteVariables(s, variables)]),
           );
+    const subLangStrOpt = (
+      v: LangConditional<string> | undefined,
+    ): LangConditional<string> | undefined => (v === undefined ? undefined : subLangStr(v));
 
     switch (step.tag) {
       case "prompt":
@@ -521,8 +534,8 @@ export class ScenarioExecutor {
           ...step,
           invoke: {
             agent: substituteVariables(step.invoke.agent, variables),
-            method: substituteVariables(step.invoke.method, variables),
-            args: sub(step.invoke.args),
+            method: subLangStr(step.invoke.method),
+            args: subLangStrOpt(step.invoke.args),
           },
         };
       case "invoke_json":
@@ -530,8 +543,8 @@ export class ScenarioExecutor {
           ...step,
           invoke_json: {
             agent: substituteVariables(step.invoke_json.agent, variables),
-            method: substituteVariables(step.invoke_json.method, variables),
-            args: sub(step.invoke_json.args),
+            method: subLangStr(step.invoke_json.method),
+            args: subLangStrOpt(step.invoke_json.args),
           },
         };
       case "shell":
@@ -548,8 +561,8 @@ export class ScenarioExecutor {
           ...step,
           trigger: {
             agent: substituteVariables(step.trigger.agent, variables),
-            method: substituteVariables(step.trigger.method, variables),
-            args: sub(step.trigger.args),
+            method: subLangStr(step.trigger.method),
+            args: subLangStrOpt(step.trigger.args),
           },
         };
       case "create_agent":
@@ -613,7 +626,70 @@ export class ScenarioExecutor {
         prompt: resolveByLanguage(step.prompt, lang)!,
       } as StepSpec;
     }
+    if (step.tag === "invoke") {
+      return {
+        ...resolved,
+        tag: "invoke",
+        invoke: {
+          ...step.invoke,
+          method: resolveByLanguage(step.invoke.method, lang)!,
+          args: resolveByLanguage(step.invoke.args, lang),
+        },
+      } as StepSpec;
+    }
+    if (step.tag === "invoke_json") {
+      return {
+        ...resolved,
+        tag: "invoke_json",
+        invoke_json: {
+          ...step.invoke_json,
+          method: resolveByLanguage(step.invoke_json.method, lang)!,
+          args: resolveByLanguage(step.invoke_json.args, lang),
+        },
+      } as StepSpec;
+    }
+    if (step.tag === "trigger") {
+      return {
+        ...resolved,
+        tag: "trigger",
+        trigger: {
+          ...step.trigger,
+          method: resolveByLanguage(step.trigger.method, lang)!,
+          args: resolveByLanguage(step.trigger.args, lang),
+        },
+      } as StepSpec;
+    }
     return resolved as StepSpec;
+  }
+
+  private ensureResolvedInvokeSpec(invoke: InvokeSpec): ResolvedInvokeSpec {
+    if (typeof invoke.method !== "string") {
+      throw new Error("Invoke method must resolve to a string for the current language");
+    }
+    if (invoke.args !== undefined && typeof invoke.args !== "string") {
+      throw new Error("Invoke args must resolve to a string for the current language");
+    }
+
+    return {
+      ...invoke,
+      method: invoke.method,
+      args: invoke.args as string | undefined,
+    };
+  }
+
+  private ensureResolvedTriggerSpec(trigger: TriggerSpec): ResolvedTriggerSpec {
+    if (typeof trigger.method !== "string") {
+      throw new Error("Trigger method must resolve to a string for the current language");
+    }
+    if (trigger.args !== undefined && typeof trigger.args !== "string") {
+      throw new Error("Trigger args must resolve to a string for the current language");
+    }
+
+    return {
+      ...trigger,
+      method: trigger.method,
+      args: trigger.args as string | undefined,
+    };
   }
 
   async execute(spec: ScenarioSpec): Promise<ScenarioRunResult> {
@@ -883,7 +959,12 @@ export class ScenarioExecutor {
         );
         break;
       case "trigger":
-        await this.executeTrigger(stepLabel, step.trigger, stepTimeoutSeconds, commandEnv);
+        await this.executeTrigger(
+          stepLabel,
+          this.ensureResolvedTriggerSpec(step.trigger),
+          stepTimeoutSeconds,
+          commandEnv,
+        );
         break;
       case "prompt": {
         const idleTimeout = this.options.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS;
@@ -904,7 +985,7 @@ export class ScenarioExecutor {
       case "invoke":
         await this.executeInvoke(
           stepLabel,
-          step.invoke,
+          this.ensureResolvedInvokeSpec(step.invoke),
           step.expect,
           stepTimeoutSeconds,
           commandEnv,
@@ -914,7 +995,7 @@ export class ScenarioExecutor {
       case "invoke_json":
         await this.executeInvokeJson(
           stepLabel,
-          step.invoke_json,
+          this.ensureResolvedInvokeSpec(step.invoke_json),
           step.expect,
           stepTimeoutSeconds,
           commandEnv,
@@ -1060,7 +1141,8 @@ export class ScenarioExecutor {
     commandEnv: Record<string, string>,
     fail: (msg: string) => void,
   ): Promise<void> {
-    log.stepAction(stepLabel, `running shell command "${shell.command}"`);
+    const fullCommand = [shell.command, ...(shell.args ?? [])].join(" ");
+    log.stepAction(stepLabel, `running shell command: ${fullCommand}`);
     const shellCwd = shell.cwd ? path.resolve(this.workspace, shell.cwd) : this.workspace;
     const result = await this.runLocalCommand(
       shell.command,
@@ -1068,7 +1150,10 @@ export class ScenarioExecutor {
       timeout,
       shellCwd,
       commandEnv,
+      (stream, data) => log.stepOutput(stepLabel, stream, data),
     );
+
+    log.stepAction(stepLabel, `exit code: ${result.exitCode}`);
 
     if (expect) {
       this.evaluateAssertions(
@@ -1084,7 +1169,7 @@ export class ScenarioExecutor {
 
   private async executeTrigger(
     stepLabel: string,
-    trigger: TriggerSpec,
+    trigger: ResolvedTriggerSpec,
     timeout: number,
     commandEnv: Record<string, string>,
   ): Promise<void> {
@@ -1126,7 +1211,7 @@ export class ScenarioExecutor {
 
   private async executeInvoke(
     stepLabel: string,
-    invoke: InvokeSpec,
+    invoke: ResolvedInvokeSpec,
     expect: StepCommon["expect"],
     timeout: number,
     commandEnv: Record<string, string>,
@@ -1139,6 +1224,9 @@ export class ScenarioExecutor {
     const result = await this.runLocalCommand("golem", args, timeout, projectDir, commandEnv);
 
     log.invokeResult(stepLabel, `${invoke.agent}.${invoke.method}`, result.stdout);
+    if (result.stderr.trim()) {
+      log.stepLine(stepLabel, `stderr: ${result.stderr.trim()}`);
+    }
 
     if (expect) {
       let resultJson: unknown;
@@ -1160,7 +1248,7 @@ export class ScenarioExecutor {
 
   private async executeInvokeJson(
     stepLabel: string,
-    invoke: InvokeSpec,
+    invoke: ResolvedInvokeSpec,
     expect: StepCommon["expect"],
     timeout: number,
     commandEnv: Record<string, string>,
@@ -1175,6 +1263,10 @@ export class ScenarioExecutor {
     const resultJson = extractInvokeJsonResult(result.stdout);
 
     log.invokeResult(stepLabel, `${invoke.agent}.${invoke.method}`, result.stdout);
+    if (result.stderr.trim()) {
+      log.stepLine(stepLabel, `stderr: ${result.stderr.trim()}`);
+    }
+    log.stepLine(stepLabel, `extracted resultJson: ${JSON.stringify(resultJson)}`);
 
     if (expect) {
       this.evaluateAssertions(
@@ -1209,6 +1301,8 @@ export class ScenarioExecutor {
       });
       const body = await response.text();
 
+      log.httpResponse(stepLabel, response.status, body);
+
       if (expect) {
         this.evaluateAssertions(
           {
@@ -1227,8 +1321,10 @@ export class ScenarioExecutor {
       }
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
+        log.httpFailure(stepLabel, `request timed out after ${timeoutSeconds}s`);
         fail(`HTTP_FAILED: request timed out after ${timeoutSeconds}s`);
       } else {
+        log.httpFailure(stepLabel, err instanceof Error ? err.message : String(err));
         fail(`HTTP_FAILED: ${err instanceof Error ? err.message : String(err)}`);
       }
     } finally {
@@ -1247,9 +1343,13 @@ export class ScenarioExecutor {
   ): void {
     for (const ar of evaluate(ctx, expect)) {
       if (ar.passed) {
-        if (stepLabel)
-          log.stepAction(stepLabel, `✓ assertion passed (${ar.assertion}): ${ar.message}`);
+        if (stepLabel) {
+          log.assertionPassed(stepLabel, ar.assertion, ar.message);
+        }
       } else {
+        if (stepLabel) {
+          log.assertionFailed(stepLabel, ar.assertion, ar.message);
+        }
         fail(`ASSERTION_FAILED (${ar.assertion}): ${ar.message}`);
       }
     }
@@ -1458,6 +1558,7 @@ export class ScenarioExecutor {
     timeoutSeconds: number,
     cwd: string,
     extraEnv?: Record<string, string>,
+    onOutput?: (stream: "stdout" | "stderr", data: string) => void,
   ): Promise<LocalCommandResult> {
     return new Promise((resolve) => {
       const child = spawn(command, args, {
@@ -1470,8 +1571,16 @@ export class ScenarioExecutor {
       let stdout = "";
       let stderr = "";
       let timedOut = false;
-      child.stdout?.on("data", (data) => (stdout += data.toString()));
-      child.stderr?.on("data", (data) => (stderr += data.toString()));
+      child.stdout?.on("data", (chunk) => {
+        const text = chunk.toString();
+        stdout += text;
+        onOutput?.("stdout", text);
+      });
+      child.stderr?.on("data", (chunk) => {
+        const text = chunk.toString();
+        stderr += text;
+        onOutput?.("stderr", text);
+      });
 
       const timeoutId = setTimeout(() => {
         timedOut = true;

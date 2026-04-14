@@ -19,17 +19,20 @@ package golem
 import golem.host.RetryApi
 import golem.host.js.JsNamedRetryPolicy
 
+import scala.concurrent.{ExecutionContext, Future}
+
 /**
  * Utility guards that mirror the ergonomics of the JS SDK's guard helpers.
  *
  * Each `use*` method applies a configuration change on the host and returns a
  * guard that will automatically restore the previous value when `drop()` (or
  * `close()`) is invoked. The `with*` variants execute the supplied block with
- * the new setting and guarantee restoration.
+ * the new setting and guarantee restoration after the returned `Future`
+ * completes.
  */
 /** Scoped runtime controls for Scala.js agents. */
 object Guards {
-  def withPersistenceLevel[A](level: HostApi.PersistenceLevel)(block: => A): A =
+  def withPersistenceLevel[A](level: HostApi.PersistenceLevel)(block: => Future[A]): Future[A] =
     withGuard(usePersistenceLevel(level))(block)
 
   def usePersistenceLevel(level: HostApi.PersistenceLevel): PersistenceLevelGuard = {
@@ -38,7 +41,7 @@ object Guards {
     new PersistenceLevelGuard(() => HostApi.setOplogPersistenceLevel(original))
   }
 
-  def withRetryPolicy[A](policy: JsNamedRetryPolicy)(block: => A): A =
+  def withRetryPolicy[A](policy: JsNamedRetryPolicy)(block: => Future[A]): Future[A] =
     withGuard(useRetryPolicy(policy))(block)
 
   def useRetryPolicy(policy: JsNamedRetryPolicy): RetryPolicyGuard = {
@@ -53,7 +56,7 @@ object Guards {
     )
   }
 
-  def withIdempotenceMode[A](flag: Boolean)(block: => A): A =
+  def withIdempotenceMode[A](flag: Boolean)(block: => Future[A]): Future[A] =
     withGuard(useIdempotenceMode(flag))(block)
 
   def useIdempotenceMode(flag: Boolean): IdempotenceModeGuard = {
@@ -62,7 +65,7 @@ object Guards {
     new IdempotenceModeGuard(() => HostApi.setIdempotenceMode(original))
   }
 
-  def atomically[A](block: => A): A =
+  def atomically[A](block: => Future[A]): Future[A] =
     withGuard(markAtomicOperation())(block)
 
   def markAtomicOperation(): AtomicOperationGuard = {
@@ -70,10 +73,11 @@ object Guards {
     new AtomicOperationGuard(() => HostApi.markEndOperation(begin))
   }
 
-  private def withGuard[A, G <: Guard](guard: => G)(block: => A): A = {
+  private implicit val ec: ExecutionContext = ExecutionContext.global
+
+  private def withGuard[A, G <: Guard](guard: => G)(block: => Future[A]): Future[A] = {
     val active = guard
-    try block
-    finally active.drop()
+    block.andThen { case _ => active.drop() }
   }
 
   sealed abstract class Guard private[golem] (release: () => Unit) extends AutoCloseable {

@@ -14,9 +14,9 @@ A **scheduled invocation** enqueues a method call on the target agent to be exec
 Every method on the generated `<AgentName>Client` has a corresponding `schedule_` variant that takes a `Datetime` as the first argument:
 
 ```rust
-use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
+use golem_rust::wasip2::clocks::wall_clock::Datetime;
 
-let counter = CounterAgentClient::get("my-counter".to_string());
+let mut counter = CounterAgentClient::get("my-counter".to_string());
 
 // Schedule increment to run 60 seconds from now
 let now_secs = std::time::SystemTime::now()
@@ -31,9 +31,9 @@ counter.schedule_increment(Datetime {
 
 // Schedule with arguments
 let reporter = ReportAgentClient::get("daily".to_string());
-reporter.schedule_generate_report(
-    Datetime { seconds: tomorrow_midnight, nanoseconds: 0 },
+reporter.schedule_generate_report( 
     "summary".to_string(),
+    Datetime { seconds: tomorrow_midnight, nanoseconds: 0 }
 );
 ```
 
@@ -42,7 +42,7 @@ reporter.schedule_generate_report(
 The `Datetime` struct represents a point in time as seconds + nanoseconds since the Unix epoch:
 
 ```rust
-use golem_rust::wasm_rpc::golem_rpc_0_2_x::types::Datetime;
+use golem_rust::wasip2::clocks::wall_clock::Datetime;
 
 Datetime {
     seconds: 1700000000,  // Unix timestamp in seconds

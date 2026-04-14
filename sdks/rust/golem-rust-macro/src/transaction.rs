@@ -36,6 +36,7 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
     }
 
     let ast: ItemFn = syn::parse(item).unwrap();
+    let is_async = ast.sig.asyncness.is_some();
     let mut fnsig = ast.sig.clone();
 
     let (succ, err) = match fnsig.output {
@@ -70,7 +71,18 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
     let compensation_pattern = quote! { #input_pattern, op_result: #succ };
     let compensation_args = input_args.clone();
 
-    let operation = quote! { operation };
+    let fnname = &ast.sig.ident;
+    let execute_body = if is_async {
+        quote! { Box::pin(async move { #fnname(#(#input_args),*).await }) }
+    } else {
+        quote! { Box::pin(async move { #fnname(#(#input_args),*) }) }
+    };
+
+    let compensate_body = quote! {
+        Box::pin(async move {
+            #compensate(#compensation, (op_result,), (#(#compensation_args),*,)).await.map_err(|err| err.0)
+        })
+    };
 
     fnsig.inputs.insert(
         0,
@@ -79,6 +91,9 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
         },
     );
 
+    // Make the generated trait method async
+    fnsig.asyncness = Some(syn::token::Async::default());
+
     match fnsig.output {
         ReturnType::Type(_, ref mut typ) => {
             *typ = parse_quote! { Result<#succ, #err> };
@@ -86,7 +101,6 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
         _ => panic!("Expected function to have a return type of Result<_, _>"),
     };
 
-    let fnname = fnsig.ident.clone();
     let traitname = Ident::new(&fnname.to_string().to_pascal_case(), fnsig.ident.span());
 
     let result = quote! {
@@ -99,16 +113,16 @@ pub fn golem_operation_impl(args: TokenStream, item: TokenStream) -> TokenStream
         impl<T: golem_rust::Transaction<#err>> #traitname for &mut T {
             #fnsig {
                 self.execute(
-                    golem_rust::#operation(
+                    golem_rust::operation(
                         |#input_pattern| {
-                            #fnname(#(#input_args), *)
+                            #execute_body
                         },
                         |#compensation_pattern| {
-                            #compensate(#compensation, (op_result,), (#(#compensation_args), *,)).map_err(|err| err.0)
+                            #compensate_body
                         }
                     ),
                     (#(#input_args), *)
-                )
+                ).await
             }
         }
     };

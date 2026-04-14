@@ -41,7 +41,9 @@ final class GuardsDemoImpl(@unused private val name: String) extends GuardsDemo 
     else sb.append(s"result=retry-visible-missing (${missing.mkString(",")})\n")
   }
 
-  override def guardsBlockDemo(): Future[String] = Future.successful {
+  private implicit val ec: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.global
+
+  override def guardsBlockDemo(): Future[String] = {
     val sb = new StringBuilder
     sb.append("=== Block-scoped Guards Demo ===\n")
 
@@ -51,33 +53,35 @@ final class GuardsDemoImpl(@unused private val name: String) extends GuardsDemo 
     // withPersistenceLevel
     val origLevel = HostApi.getOplogPersistenceLevel()
     sb.append(s"original persistence=$origLevel\n")
-    val levelResult = Guards.withPersistenceLevel(HostApi.PersistenceLevel.PersistNothing) {
+    Guards.withPersistenceLevel(HostApi.PersistenceLevel.PersistNothing) {
       val inner = HostApi.getOplogPersistenceLevel()
       sb.append(s"inside withPersistenceLevel: level=$inner\n")
-      "level-ok"
-    }
-    val afterLevel = HostApi.getOplogPersistenceLevel()
-    sb.append(s"after withPersistenceLevel: level=$afterLevel, result=$levelResult\n")
+      Future.successful("level-ok")
+    }.flatMap { levelResult =>
+      val afterLevel = HostApi.getOplogPersistenceLevel()
+      sb.append(s"after withPersistenceLevel: level=$afterLevel, result=$levelResult\n")
 
-    // withIdempotenceMode
-    val origIdem = HostApi.getIdempotenceMode()
-    sb.append(s"original idempotence=$origIdem\n")
-    val idemResult = Guards.withIdempotenceMode(!origIdem) {
-      val inner = HostApi.getIdempotenceMode()
-      sb.append(s"inside withIdempotenceMode: mode=$inner\n")
-      "idem-ok"
-    }
-    val afterIdem = HostApi.getIdempotenceMode()
-    sb.append(s"after withIdempotenceMode: mode=$afterIdem, result=$idemResult\n")
+      // withIdempotenceMode
+      val origIdem = HostApi.getIdempotenceMode()
+      sb.append(s"original idempotence=$origIdem\n")
+      Guards.withIdempotenceMode(!origIdem) {
+        val inner = HostApi.getIdempotenceMode()
+        sb.append(s"inside withIdempotenceMode: mode=$inner\n")
+        Future.successful("idem-ok")
+      }.flatMap { idemResult =>
+        val afterIdem = HostApi.getIdempotenceMode()
+        sb.append(s"after withIdempotenceMode: mode=$afterIdem, result=$idemResult\n")
 
-    // atomically
-    val atomicResult = Guards.atomically {
-      sb.append("inside atomically block\n")
-      "atomic-ok"
+        // atomically
+        Guards.atomically {
+          sb.append("inside atomically block\n")
+          Future.successful("atomic-ok")
+        }.map { atomicResult =>
+          sb.append(s"after atomically: result=$atomicResult\n")
+          sb.result()
+        }
+      }
     }
-    sb.append(s"after atomically: result=$atomicResult\n")
-
-    sb.result()
   }
 
   override def guardsResourceDemo(): Future[String] = Future.successful {

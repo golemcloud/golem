@@ -11,32 +11,42 @@ Golem supports the **saga pattern** for multi-step operations where each step ha
 
 ## Defining Operations
 
-Each operation has an `execute` function and a `compensate` function:
+Each operation has an async `execute` function and an async `compensate` function that return `Future[Either[Err, Out]]`.
+
+**Critical:** Both `execute` and `compensate` must return a `Future` that completes only **after** the underlying work finishes. If the work involves a JS Promise (e.g., `fetch`), convert it to a `Future` via `FutureInterop.fromPromise` and chain with `flatMap`/`map`. Never fire a Promise and ignore the result — doing so makes operation ordering non-deterministic, which breaks compensation ordering.
 
 ```scala
-import golem.runtime.transactions.operation
-import golem.data.Result
+import golem.{Transactions, FutureInterop}
+import scala.concurrent.Future
+import scala.scalajs.js
 
-val reserveInventory = operation[String, String, String](
-  execute = sku => {
-    val reservationId = callInventoryApi(sku)
-    Result.ok(reservationId)
-  },
-  compensate = (sku, reservationId) => {
-    cancelReservation(reservationId)
-    Result.ok(())
+// Correct: awaits the fetch Promise before completing the Future
+val reserveInventory = Transactions.operation[String, Unit, String](
+  orderId => {
+    val promise = js.Dynamic.global.fetch(
+      s"http://example.com/orders/$orderId/reserve",
+      js.Dynamic.literal(method = "POST")
+    ).asInstanceOf[js.Promise[js.Dynamic]]
+    FutureInterop.fromPromise(promise).map(_ => Right(()))
+  }
+)(
+  (orderId, _) => {
+    val promise = js.Dynamic.global.fetch(
+      s"http://example.com/orders/$orderId/reserve",
+      js.Dynamic.literal(method = "DELETE")
+    ).asInstanceOf[js.Promise[js.Dynamic]]
+    FutureInterop.fromPromise(promise).map(_ => Right(()))
   }
 )
+```
 
-val chargePayment = operation[Long, String, String](
-  execute = amount => {
-    val chargeId = callPaymentApi(amount)
-    Result.ok(chargeId)
-  },
-  compensate = (amount, chargeId) => {
-    refundPayment(chargeId)
-    Result.ok(())
-  }
+For synchronous operations, `Future.successful` is fine:
+
+```scala
+val incrementCounter = Transactions.operation[Unit, Int, String](
+  _ => { counter += 1; Future.successful(Right(counter)) }
+)(
+  (_, oldValue) => { counter = oldValue - 1; Future.successful(Right(())) }
 )
 ```
 
@@ -45,13 +55,18 @@ val chargePayment = operation[Long, String, String](
 On failure, compensates completed steps and returns the error:
 
 ```scala
-import golem.runtime.transactions.fallibleTransaction
+import golem.Transactions
 
-val result = fallibleTransaction { tx =>
-  val reservation = tx.execute(reserveInventory, "SKU-123")
-  val charge = tx.execute(chargePayment, 4999L)
-  reservation.flatMap(r => charge.map(c => (r, c)))
-}
+val result: Future[Either[Transactions.TransactionFailure[String], (String, String)]] =
+  Transactions.fallibleTransaction[(String, String), String] { tx =>
+    for {
+      reservation <- tx.execute(reserveInventory, "SKU-123")
+      charge      <- reservation match {
+        case Right(r) => tx.execute(chargePayment, 4999L).map(_.map(c => (r, c)))
+        case Left(e)  => Future.successful(Left(e))
+      }
+    } yield charge
+  }
 ```
 
 ## Infallible Transactions
@@ -59,13 +74,15 @@ val result = fallibleTransaction { tx =>
 On failure, compensates completed steps and **retries the entire transaction**:
 
 ```scala
-import golem.runtime.transactions.infallibleTransaction
+import golem.Transactions
 
-val result = infallibleTransaction { tx =>
-  val reservation = tx.execute(reserveInventory, "SKU-123")
-  val charge = tx.execute(chargePayment, 4999L)
-  (reservation, charge)
-}
+val result: Future[(String, String)] =
+  Transactions.infallibleTransaction { tx =>
+    for {
+      reservation <- tx.execute(reserveInventory, "SKU-123")
+      charge      <- tx.execute(chargePayment, 4999L)
+    } yield (reservation, charge)
+  }
 // Always succeeds eventually
 ```
 

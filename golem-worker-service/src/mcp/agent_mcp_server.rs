@@ -210,7 +210,7 @@ impl ServerHandler for GolemAgentMcpServer {
                 .enable_tools()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides  tools related to agent in golem and prompts. Tools: increment, decrement, get_value, say_hello, echo, sum. Prompts: example_prompt (takes a message), counter_analysis (analyzes counter state with a goal).".to_string()),
+            instructions: None,
         }
     }
 
@@ -387,8 +387,8 @@ impl ServerHandler for GolemAgentMcpServer {
                 tracing::info!("No session ID found in headers");
             }
 
-            if let Some(host) = parts.headers.get("host") {
-                let domain = Domain(host.to_str().unwrap().to_string());
+            if let Some(host) = super::resolve_effective_host(&parts.headers) {
+                let domain = Domain(host);
                 let (router, agent_resources, agent_prompts) =
                     self.build_capabilities(&domain).await;
 
