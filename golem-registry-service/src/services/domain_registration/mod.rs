@@ -15,11 +15,6 @@
 mod config;
 mod errors;
 
-pub use config::{
-    AvailableDomainsConfig, DomainRegistrationConfig, RestrictedAvailableDomainsConfig,
-};
-pub use errors::DomainRegistrationError;
-
 use super::environment::{EnvironmentError, EnvironmentService};
 use crate::repo::domain_registration::DomainRegistrationRepo;
 use crate::repo::model::audit::ImmutableAuditFields;
@@ -29,6 +24,10 @@ use crate::repo::model::domain_registration::{
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
+pub use config::{
+    AvailableDomainsConfig, DomainRegistrationConfig, RestrictedAvailableDomainsConfig,
+};
+pub use errors::DomainRegistrationError;
 use golem_common::model::domain_registration::{
     Domain, DomainRegistration, DomainRegistrationCreation, DomainRegistrationId,
 };
