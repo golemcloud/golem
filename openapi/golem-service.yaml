@@ -14042,7 +14042,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
-        wasiConfig:
+        configVars:
           type: object
           additionalProperties:
             type: string
@@ -14063,7 +14063,7 @@ components:
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
-      - wasiConfig
+      - configVars
       - localAgentConfig
     r#CreateResourceParams:
       title: r#CreateResourceParams
