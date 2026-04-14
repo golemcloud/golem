@@ -169,12 +169,12 @@ The `webhookUrl` is combined with the agent's `webhookSuffix` (defined in code) 
 
 ## Deploying
 
-After configuring `golem.yaml`, deploy:
+After configuring `golem.yaml`, deploy. Always use `--yes` to avoid interactive prompts:
 
 ```shell
-golem deploy                     # Deploy all components and HTTP API
-golem deploy --reset             # Deploy and delete all previously created agents
-golem deploy --try-update-agents # Deploy and update running agents
+golem deploy --yes                     # Deploy all components and HTTP API
+golem deploy --yes --reset             # Deploy and delete all previously created agents
+golem deploy --yes --try-update-agents # Deploy and update running agents
 ```
 
 ## Auto-Generated OpenAPI
@@ -215,4 +215,4 @@ httpApi:
 - Each agent entry can have at most one of `securityScheme` or `testSessionHeaderName`
 - Security schemes must be created via `golem api security-scheme create` before they can be referenced
 - The domain must be unique per environment
-- After changing `golem.yaml`, run `golem deploy` to apply changes
+- After changing `golem.yaml`, run `golem deploy --yes` to apply changes
