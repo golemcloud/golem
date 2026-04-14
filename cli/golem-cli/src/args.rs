@@ -17,7 +17,7 @@ use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use golem_client::model::ScanCursor;
 use golem_common::model::agent_secret::AgentSecretPath;
-use golem_common::model::worker::WorkerAgentConfigEntry;
+use golem_common::model::worker::AgentConfigEntryDto;
 
 pub fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
     let pos = key_and_val.find('=').ok_or_else(|| {
@@ -32,21 +32,24 @@ pub fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
     ))
 }
 
-pub fn parse_worker_agent_config(s: &str) -> anyhow::Result<WorkerAgentConfigEntry> {
-    let (path, value) = split_worker_agent_config_path_and_value(s)?;
+pub fn parse_agent_config(s: &str) -> anyhow::Result<AgentConfigEntryDto> {
+    let (path, value) = split_agent_config_path_and_value(s)?;
 
     let path = parse_agent_config_path(path)?;
 
     let value: serde_json::Value = serde_json::from_str(value)?;
 
-    Ok(WorkerAgentConfigEntry { path, value })
+    Ok(AgentConfigEntryDto {
+        path,
+        value: value.into(),
+    })
 }
 
 pub fn parse_agent_secret_path(input: &str) -> anyhow::Result<AgentSecretPath> {
     Ok(AgentSecretPath(parse_agent_config_path(input)?))
 }
 
-fn split_worker_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str, &str)> {
+fn split_agent_config_path_and_value(input: &str) -> anyhow::Result<(&str, &str)> {
     let chars = input.char_indices();
     let mut in_quotes = false;
     let mut escape = false;
@@ -145,14 +148,14 @@ pub fn parse_instant(
 }
 
 #[cfg(test)]
-mod parse_worker_agent_config_tests {
-    use super::{parse_agent_config_path, parse_worker_agent_config};
-    use golem_common::model::worker::WorkerAgentConfigEntry;
+mod parse_agent_config_tests {
+    use super::{parse_agent_config, parse_agent_config_path};
+    use golem_common::model::worker::AgentConfigEntryDto;
     use serde_json::json;
     use test_r::test;
 
-    fn parse(input: &str) -> WorkerAgentConfigEntry {
-        parse_worker_agent_config(input).unwrap()
+    fn parse(input: &str) -> AgentConfigEntryDto {
+        parse_agent_config(input).unwrap()
     }
 
     #[test]
@@ -160,7 +163,7 @@ mod parse_worker_agent_config_tests {
         let e = parse(r#"a.b.c=1"#);
 
         assert_eq!(e.path, vec!["a", "b", "c"]);
-        assert_eq!(e.value, json!(1));
+        assert_eq!(e.value, json!(1).into());
     }
 
     #[test]
@@ -168,7 +171,7 @@ mod parse_worker_agent_config_tests {
         let e = parse(r#"a.b="hello""#);
 
         assert_eq!(e.path, vec!["a", "b"]);
-        assert_eq!(e.value, json!("hello"));
+        assert_eq!(e.value, json!("hello").into());
     }
 
     #[test]
@@ -176,7 +179,7 @@ mod parse_worker_agent_config_tests {
         let e = parse(r#"a.b={"x":1,"y":2}"#);
 
         assert_eq!(e.path, vec!["a", "b"]);
-        assert_eq!(e.value, json!({"x":1,"y":2}));
+        assert_eq!(e.value, json!({"x":1,"y":2}).into());
     }
 
     #[test]
@@ -184,7 +187,7 @@ mod parse_worker_agent_config_tests {
         let e = parse(r#""foo.bar".baz=1"#);
 
         assert_eq!(e.path, vec!["foo.bar", "baz"]);
-        assert_eq!(e.value, json!(1));
+        assert_eq!(e.value, json!(1).into());
     }
 
     #[test]
@@ -192,7 +195,7 @@ mod parse_worker_agent_config_tests {
         let e = parse(r#""foo bar".baz=1"#);
 
         assert_eq!(e.path, vec!["foo bar", "baz"]);
-        assert_eq!(e.value, json!(1));
+        assert_eq!(e.value, json!(1).into());
     }
 
     #[test]
@@ -200,7 +203,7 @@ mod parse_worker_agent_config_tests {
         let e = parse(r#"foo\.bar.baz=1"#);
 
         assert_eq!(e.path, vec!["foo.bar", "baz"]);
-        assert_eq!(e.value, json!(1));
+        assert_eq!(e.value, json!(1).into());
     }
 
     #[test]
@@ -208,7 +211,7 @@ mod parse_worker_agent_config_tests {
         let e = parse(r#"a.b="foo=bar""#);
 
         assert_eq!(e.path, vec!["a", "b"]);
-        assert_eq!(e.value, json!("foo=bar"));
+        assert_eq!(e.value, json!("foo=bar").into());
     }
 
     #[test]
@@ -216,7 +219,7 @@ mod parse_worker_agent_config_tests {
         let e = parse(r#""foo=bar".baz=1"#);
 
         assert_eq!(e.path, vec!["foo=bar", "baz"]);
-        assert_eq!(e.value, json!(1));
+        assert_eq!(e.value, json!(1).into());
     }
 
     #[test]
@@ -224,7 +227,7 @@ mod parse_worker_agent_config_tests {
         let e = parse(r#"foo\=bar.baz=1"#);
 
         assert_eq!(e.path, vec!["foo=bar", "baz"]);
-        assert_eq!(e.value, json!(1));
+        assert_eq!(e.value, json!(1).into());
     }
 
     #[test]
@@ -232,12 +235,12 @@ mod parse_worker_agent_config_tests {
         let e = parse(r#""foo.bar=baz"."x.y"={"hello":"world"}"#);
 
         assert_eq!(e.path, vec!["foo.bar=baz", "x.y"]);
-        assert_eq!(e.value, json!({"hello":"world"}));
+        assert_eq!(e.value, json!({"hello":"world"}).into());
     }
 
     #[test]
     fn split_fails_without_equals() {
-        let err = parse_worker_agent_config("a.b.c").unwrap_err();
+        let err = parse_agent_config("a.b.c").unwrap_err();
         assert!(err.to_string().contains("expected unescaped '='"));
     }
 

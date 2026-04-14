@@ -86,6 +86,7 @@ pub mod error_code {
     pub const TOKEN_ALREADY_EXISTS: &str = "TOKEN_ALREADY_EXISTS";
 
     // --- Validation ---
+    pub const AGENT_TYPE_NOT_DECLARED: &str = "AGENT_TYPE_NOT_DECLARED";
     pub const BAD_FILE_TYPE: &str = "BAD_FILE_TYPE";
     pub const COMPONENT_PROCESSING_ERROR: &str = "COMPONENT_PROCESSING_ERROR";
     pub const DEPLOYMENT_HASH_MISMATCH: &str = "DEPLOYMENT_HASH_MISMATCH";

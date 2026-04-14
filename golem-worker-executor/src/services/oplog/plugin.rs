@@ -29,7 +29,7 @@ use async_lock::Mutex;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::Principal;
+use golem_common::model::agent::{ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -985,11 +985,17 @@ impl ForwardingOplogState {
             _ => return,
         };
 
-        let plugin = match component_metadata
-            .installed_plugins
-            .iter()
-            .find(|p| p.environment_plugin_grant_id == grant_id)
-        {
+        let agent_type =
+            ParsedAgentId::parse_agent_type_name(&self.initial_worker_metadata.agent_id.agent_id)
+                .ok();
+        let plugin = match agent_type
+            .as_ref()
+            .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
+            .and_then(|plugins| {
+                plugins
+                    .iter()
+                    .find(|p| p.environment_plugin_grant_id == grant_id)
+            }) {
             Some(p) => p.clone(),
             None => return,
         };
@@ -1355,11 +1361,18 @@ impl ForwardingOplogState {
                 }
             }
 
-            let plugin = match component_metadata
-                .installed_plugins
-                .iter()
-                .find(|p| p.environment_plugin_grant_id == grant_id)
-            {
+            let agent_type = ParsedAgentId::parse_agent_type_name(
+                &self.initial_worker_metadata.agent_id.agent_id,
+            )
+            .ok();
+            let plugin = match agent_type
+                .as_ref()
+                .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
+                .and_then(|plugins| {
+                    plugins
+                        .iter()
+                        .find(|p| p.environment_plugin_grant_id == grant_id)
+                }) {
                 Some(p) => p.clone(),
                 None => continue,
             };
@@ -1535,7 +1548,7 @@ mod tests {
     fn deterministic_idempotency_key_same_inputs_produce_same_key() {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
-            agent_id: "test-worker".to_string(),
+            agent_id: "TestPlugin(test-worker)".to_string(),
         };
         let plugin_id = EnvironmentPluginGrantId::new();
         let first = OplogIndex::from_u64(10);
@@ -1554,7 +1567,7 @@ mod tests {
     fn deterministic_idempotency_key_different_batch_range_produces_different_key() {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
-            agent_id: "test-worker".to_string(),
+            agent_id: "TestPlugin(test-worker)".to_string(),
         };
         let plugin_id = EnvironmentPluginGrantId::new();
 
@@ -1602,7 +1615,7 @@ mod tests {
     fn deterministic_idempotency_key_different_plugin_produces_different_key() {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
-            agent_id: "test-worker".to_string(),
+            agent_id: "TestPlugin(test-worker)".to_string(),
         };
         let plugin_id1 = EnvironmentPluginGrantId::new();
         let plugin_id2 = EnvironmentPluginGrantId::new();
@@ -1762,6 +1775,22 @@ mod tests {
             component_id: ComponentId,
             _forced_revision: Option<ComponentRevision>,
         ) -> Result<Component, WorkerExecutorError> {
+            use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+            use golem_common::model::agent::AgentTypeName;
+            use std::collections::BTreeMap;
+
+            let provision_configs = if self.installed_plugins.is_empty() {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([(
+                    AgentTypeName("TestPlugin".to_string()),
+                    AgentTypeProvisionConfig {
+                        plugins: self.installed_plugins.clone(),
+                        ..Default::default()
+                    },
+                )])
+            };
+
             Ok(Component {
                 id: component_id,
                 revision: ComponentRevision::INITIAL,
@@ -1771,13 +1800,15 @@ mod tests {
                 application_id: ApplicationId::new(),
                 account_id: AccountId::new(),
                 component_size: 100,
-                metadata: ComponentMetadata::default(),
+                metadata: ComponentMetadata::from_parts(
+                    vec![],
+                    vec![],
+                    None,
+                    None,
+                    vec![],
+                    provision_configs,
+                ),
                 created_at: chrono::Utc::now(),
-                files: Vec::new(),
-                installed_plugins: self.installed_plugins.clone(),
-                env: BTreeMap::new(),
-                config_vars: BTreeMap::new(),
-                agent_config: Vec::new(),
                 wasm_hash: diff::Hash::empty(),
                 object_store_key: String::new(),
             })
@@ -1900,7 +1931,7 @@ mod tests {
     ) {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
-            agent_id: "test-worker".to_string(),
+            agent_id: "TestPlugin(test-worker)".to_string(),
         };
         let environment_id = EnvironmentId::new();
         let account_id = AccountId::new();
@@ -1914,8 +1945,8 @@ mod tests {
             env: vec![],
             environment_id,
             created_by: account_id,
-            config_vars: BTreeMap::new(),
-            agent_config: Vec::new(),
+            wasi_config: BTreeMap::new(),
+            config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: status.clone(),

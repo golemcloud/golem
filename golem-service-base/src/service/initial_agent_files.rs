@@ -17,20 +17,20 @@ use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use anyhow::{Context, Error};
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use golem_common::model::component::ComponentFileContentHash;
+use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::environment::EnvironmentId;
 use std::{path::PathBuf, sync::Arc};
 use tracing::debug;
 
-const INITIAL_COMPONENT_FILES_LABEL: &str = "initial_component_files";
+const INITIAL_AGENT_FILES_LABEL: &str = "initial_agent_files";
 
-/// Service for storing initial component files.
+/// Service for storing initial agent files.
 #[derive(Debug)]
-pub struct InitialComponentFilesService {
+pub struct InitialAgentFilesService {
     blob_storage: Arc<dyn BlobStorage>,
 }
 
-impl InitialComponentFilesService {
+impl InitialAgentFilesService {
     pub fn new(blob_storage: Arc<dyn BlobStorage>) -> Self {
         Self { blob_storage }
     }
@@ -38,14 +38,14 @@ impl InitialComponentFilesService {
     pub async fn exists(
         &self,
         environment_id: EnvironmentId,
-        key: ComponentFileContentHash,
+        key: AgentFileContentHash,
     ) -> Result<bool, Error> {
         let metadata = self
             .blob_storage
             .get_metadata(
-                INITIAL_COMPONENT_FILES_LABEL,
+                INITIAL_AGENT_FILES_LABEL,
                 "exists",
-                BlobStorageNamespace::InitialComponentFiles { environment_id },
+                BlobStorageNamespace::InitialAgentFiles { environment_id },
                 &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
             .await
@@ -57,13 +57,13 @@ impl InitialComponentFilesService {
     pub async fn get(
         &self,
         environment_id: EnvironmentId,
-        key: ComponentFileContentHash,
+        key: AgentFileContentHash,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         self.blob_storage
             .get_stream(
-                INITIAL_COMPONENT_FILES_LABEL,
+                INITIAL_AGENT_FILES_LABEL,
                 "get",
-                BlobStorageNamespace::InitialComponentFiles { environment_id },
+                BlobStorageNamespace::InitialAgentFiles { environment_id },
                 &PathBuf::from(key.0.into_blake3().to_hex().to_string()),
             )
             .await
@@ -74,35 +74,35 @@ impl InitialComponentFilesService {
         &self,
         environment_id: EnvironmentId,
         data: impl ReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
-    ) -> Result<ComponentFileContentHash, Error> {
+    ) -> Result<AgentFileContentHash, Error> {
         let hash = data.content_hash().await?;
         let key = PathBuf::from(hash.into_blake3().to_hex().to_string());
 
         let metadata = self
             .blob_storage
             .get_metadata(
-                INITIAL_COMPONENT_FILES_LABEL,
+                INITIAL_AGENT_FILES_LABEL,
                 "get_metadata",
-                BlobStorageNamespace::InitialComponentFiles { environment_id },
+                BlobStorageNamespace::InitialAgentFiles { environment_id },
                 &key,
             )
             .await
             .context("Failed getting metadata")?;
 
         if metadata.is_none() {
-            debug!("Storing initial component file with hash: {}", hash);
+            debug!("Storing initial agent file with hash: {}", hash);
 
             self.blob_storage
                 .put_stream(
-                    INITIAL_COMPONENT_FILES_LABEL,
+                    INITIAL_AGENT_FILES_LABEL,
                     "put",
-                    BlobStorageNamespace::InitialComponentFiles { environment_id },
+                    BlobStorageNamespace::InitialAgentFiles { environment_id },
                     &key,
                     &data.erased(),
                 )
                 .await
                 .context("Failed storing blob storage data")?;
         };
-        Ok(ComponentFileContentHash(hash))
+        Ok(AgentFileContentHash(hash))
     }
 }

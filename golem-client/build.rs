@@ -122,6 +122,26 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             // component
             (
+                "AgentFileOptions",
+                "golem_common::model::component::AgentFileOptions",
+            ),
+            (
+                "AgentFilePermissions",
+                "golem_common::model::component::AgentFilePermissions",
+            ),
+            (
+                "AgentTypeProvisionConfig",
+                "golem_common::base_model::component_metadata::AgentTypeProvisionConfig",
+            ),
+            (
+                "AgentTypeProvisionConfigCreation",
+                "golem_common::model::component::AgentTypeProvisionConfigCreation",
+            ),
+            (
+                "AgentTypeProvisionConfigUpdate",
+                "golem_common::model::component::AgentTypeProvisionConfigUpdate",
+            ),
+            (
                 "ComponentCreation",
                 "golem_common::model::component::ComponentCreation",
             ),
@@ -130,12 +150,12 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::component::ComponentDto",
             ),
             (
-                "ComponentFileOptions",
-                "golem_common::model::component::ComponentFileOptions",
-            ),
-            (
                 "ComponentUpdate",
                 "golem_common::model::component::ComponentUpdate",
+            ),
+            (
+                "InitialAgentFile",
+                "golem_common::model::component::InitialAgentFile",
             ),
             // deployment
             ("Deployment", "golem_common::model::deployment::Deployment"),
@@ -297,8 +317,16 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             // worker
             (
-                "FlatComponentFileSystemNode",
-                "golem_common::model::worker::FlatComponentFileSystemNode",
+                "AgentFileSystemNode",
+                "golem_common::model::worker::AgentFileSystemNode",
+            ),
+            (
+                "AgentFileSystemNodeKind",
+                "golem_common::model::worker::AgentFileSystemNodeKind",
+            ),
+            (
+                "TypedAgentConfigEntry",
+                "golem_common::model::worker::TypedAgentConfigEntry",
             ),
             (
                 "RevertWorkerTarget",
@@ -309,8 +337,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::worker::AgentCreationRequest",
             ),
             (
-                "WorkerAgentConfigEntry",
-                "golem_common::model::worker::WorkerAgentConfigEntry",
+                "AgentConfigEntryDto",
+                "golem_common::model::worker::AgentConfigEntryDto",
             ),
             (
                 "AgentMetadataDto",

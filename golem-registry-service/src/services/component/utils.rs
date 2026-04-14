@@ -17,7 +17,7 @@ use anyhow::anyhow;
 use async_zip::ZipEntry;
 use async_zip::tokio::read::seek::ZipFileReader;
 use futures::TryStreamExt;
-use golem_common::model::component::ComponentFilePath;
+use golem_common::model::component::ArchiveFilePath;
 use golem_service_base::replayable_stream::ReplayableStream;
 use std::sync::Arc;
 use std::vec;
@@ -29,7 +29,7 @@ use tokio_util::io::ReaderStream;
 
 pub async fn prepare_component_files_for_upload(
     archive: NamedTempFile,
-) -> Result<Vec<(ComponentFilePath, ZipEntryStream)>, ComponentError> {
+) -> Result<Vec<(ArchiveFilePath, ZipEntryStream)>, ComponentError> {
     let archive = Arc::new(archive);
     let archive_clone = archive.clone();
     let reopened = tokio::task::spawn_blocking(move || archive_clone.reopen())
@@ -114,7 +114,7 @@ impl ReplayableStream for ZipEntryStream {
 
 fn initial_component_file_path_from_zip_entry(
     entry: &ZipEntry,
-) -> Result<ComponentFilePath, ComponentError> {
+) -> Result<ArchiveFilePath, ComponentError> {
     let file_path =
         entry
             .filename()
@@ -131,9 +131,9 @@ fn initial_component_file_path_from_zip_entry(
         .collect::<Vec<_>>()
         .join("/");
 
-    ComponentFilePath::from_abs_str(&format!("/{file_path}")).map_err(|e| {
+    ArchiveFilePath::from_abs_str(&format!("/{file_path}")).map_err(|e| {
         ComponentError::MalformedComponentArchive {
-            message: format!("Failed to convert path to InitialComponentFilePath: {e}"),
+            message: format!("Failed to convert path to ArchiveFilePath: {e}"),
         }
     })
 }

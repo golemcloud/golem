@@ -411,7 +411,12 @@ async fn oplog_processor(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
     let component = user
         .component(&env.id, "it_agent_counters_release")
         .name("it:agent-counters")
-        .with_parametrized_plugin(&oplog_processor_plugin_grant.id, 0, plugin_params)
+        .with_parametrized_plugin(
+            "Repository",
+            &oplog_processor_plugin_grant.id,
+            0,
+            plugin_params,
+        )
         .store()
         .await?;
 
@@ -523,7 +528,12 @@ async fn oplog_processor_in_different_env_after_unregistering(
     let component = user_1
         .component(&env_1.id, "it_agent_counters_release")
         .name("it:agent-counters")
-        .with_parametrized_plugin(&oplog_processor_plugin_grant.id, 0, plugin_params)
+        .with_parametrized_plugin(
+            "Repository",
+            &oplog_processor_plugin_grant.id,
+            0,
+            plugin_params,
+        )
         .store()
         .await?;
 
@@ -631,7 +641,12 @@ async fn oplog_processor_crash_after_confirmed_flush(
     let component = user
         .component(&env.id, "it_agent_counters_release")
         .name("it:agent-counters")
-        .with_parametrized_plugin(&oplog_processor_plugin_grant.id, 0, plugin_params)
+        .with_parametrized_plugin(
+            "Repository",
+            &oplog_processor_plugin_grant.id,
+            0,
+            plugin_params,
+        )
         .store()
         .await?;
 
@@ -787,7 +802,12 @@ async fn oplog_processor_crash_stress(deps: &EnvBasedTestDependencies) -> anyhow
     let component = user
         .component(&env.id, "it_agent_counters_release")
         .name("it:agent-counters")
-        .with_parametrized_plugin(&oplog_processor_plugin_grant.id, 0, plugin_params)
+        .with_parametrized_plugin(
+            "Repository",
+            &oplog_processor_plugin_grant.id,
+            0,
+            plugin_params,
+        )
         .store()
         .await?;
 
@@ -1016,7 +1036,12 @@ async fn oplog_processor_no_duplicates_after_crash(
     let component = user
         .component(&env.id, "it_agent_counters_release")
         .name("it:agent-counters")
-        .with_parametrized_plugin(&oplog_processor_plugin_grant.id, 0, plugin_params)
+        .with_parametrized_plugin(
+            "Repository",
+            &oplog_processor_plugin_grant.id,
+            0,
+            plugin_params,
+        )
         .store()
         .await?;
 
@@ -1179,8 +1204,8 @@ async fn oplog_processor_multiple_plugins_independent(
     let component = user
         .component(&env.id, "it_agent_counters_release")
         .name("it:agent-counters")
-        .with_parametrized_plugin(&grant_a.id, 0, params_a)
-        .with_parametrized_plugin(&grant_b.id, 1, params_b)
+        .with_parametrized_plugin("Repository", &grant_a.id, 0, params_a)
+        .with_parametrized_plugin("Repository", &grant_b.id, 1, params_b)
         .store()
         .await?;
 
@@ -1308,8 +1333,8 @@ async fn oplog_processor_partial_plugin_failure(
     let component = user
         .component(&env.id, "it_agent_counters_release")
         .name("it:agent-counters")
-        .with_parametrized_plugin(&grant_a.id, 0, params_a)
-        .with_parametrized_plugin(&grant_b.id, 1, params_b)
+        .with_parametrized_plugin("Repository", &grant_a.id, 0, params_a)
+        .with_parametrized_plugin("Repository", &grant_b.id, 1, params_b)
         .store()
         .await?;
 
@@ -1437,16 +1462,18 @@ async fn oplog_processor_activation_mid_stream(
             &component.id,
             latest.revision,
             None,
+            Some(std::collections::BTreeMap::from([(
+                golem_common::model::agent::AgentTypeName("Repository".to_string()),
+                golem_common::model::component::AgentTypeProvisionConfigUpdate {
+                    plugin_updates: vec![PluginInstallationAction::Install(PluginInstallation {
+                        environment_plugin_grant_id: oplog_processor_plugin_grant.id,
+                        priority: PluginPriority(0),
+                        parameters: plugin_params,
+                    })],
+                    ..Default::default()
+                },
+            )])),
             Vec::new(),
-            Vec::new(),
-            None,
-            None,
-            None,
-            vec![PluginInstallationAction::Install(PluginInstallation {
-                environment_plugin_grant_id: oplog_processor_plugin_grant.id,
-                priority: PluginPriority(0),
-                parameters: plugin_params,
-            })],
         )
         .await?;
 
@@ -1543,7 +1570,12 @@ async fn oplog_processor_deactivation(deps: &EnvBasedTestDependencies) -> anyhow
     let component = user
         .component(&env.id, "it_agent_counters_release")
         .name("it:agent-counters")
-        .with_parametrized_plugin(&oplog_processor_plugin_grant.id, 0, plugin_params)
+        .with_parametrized_plugin(
+            "Repository",
+            &oplog_processor_plugin_grant.id,
+            0,
+            plugin_params,
+        )
         .store()
         .await?;
 
@@ -1594,14 +1626,18 @@ async fn oplog_processor_deactivation(deps: &EnvBasedTestDependencies) -> anyhow
             &component.id,
             latest.revision,
             None,
+            Some(std::collections::BTreeMap::from([(
+                golem_common::model::agent::AgentTypeName("Repository".to_string()),
+                golem_common::model::component::AgentTypeProvisionConfigUpdate {
+                    plugin_updates: vec![PluginInstallationAction::Uninstall(
+                        PluginUninstallation {
+                            environment_plugin_grant_id: oplog_processor_plugin_grant.id,
+                        },
+                    )],
+                    ..Default::default()
+                },
+            )])),
             Vec::new(),
-            Vec::new(),
-            None,
-            None,
-            None,
-            vec![PluginInstallationAction::Uninstall(PluginUninstallation {
-                environment_plugin_grant_id: oplog_processor_plugin_grant.id,
-            })],
         )
         .await?;
 
@@ -1688,7 +1724,12 @@ async fn oplog_processor_idle_worker_timer_flush(
     let component = user
         .component(&env.id, "it_agent_counters_release")
         .name("it:agent-counters")
-        .with_parametrized_plugin(&oplog_processor_plugin_grant.id, 0, plugin_params)
+        .with_parametrized_plugin(
+            "Repository",
+            &oplog_processor_plugin_grant.id,
+            0,
+            plugin_params,
+        )
         .store()
         .await?;
 
@@ -1781,7 +1822,12 @@ async fn oplog_processor_rapid_invocations(deps: &EnvBasedTestDependencies) -> a
     let component = user
         .component(&env.id, "it_agent_counters_release")
         .name("it:agent-counters")
-        .with_parametrized_plugin(&oplog_processor_plugin_grant.id, 0, plugin_params)
+        .with_parametrized_plugin(
+            "Repository",
+            &oplog_processor_plugin_grant.id,
+            0,
+            plugin_params,
+        )
         .store()
         .await?;
 
@@ -1882,7 +1928,12 @@ async fn oplog_processor_no_resend_after_confirmed(
     let component = user
         .component(&env.id, "it_agent_counters_release")
         .name("it:agent-counters")
-        .with_parametrized_plugin(&oplog_processor_plugin_grant.id, 0, plugin_params)
+        .with_parametrized_plugin(
+            "Repository",
+            &oplog_processor_plugin_grant.id,
+            0,
+            plugin_params,
+        )
         .store()
         .await?;
 

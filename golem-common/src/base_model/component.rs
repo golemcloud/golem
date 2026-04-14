@@ -13,13 +13,16 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::base_model::agent::AgentType;
+use crate::base_model::agent::{AgentFileContentHash, AgentType};
 use crate::base_model::application::ApplicationId;
 use crate::base_model::component_metadata::ComponentMetadata;
+use crate::base_model::diff;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use crate::base_model::path::{AgentFilePath, ArchiveFilePath};
 use crate::base_model::plugin_registration::PluginRegistrationId;
-use crate::base_model::{diff, validate_lower_kebab_case_identifier};
+use crate::base_model::validate_lower_kebab_case_identifier;
+use crate::base_model::worker::AgentConfigEntryDto;
 use crate::model::agent::AgentTypeName;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
@@ -27,10 +30,8 @@ use crate::{
 };
 use derive_more::Display;
 use golem_wasm_derive::{FromValue, IntoValue};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::str::FromStr;
-use typed_path::Utf8UnixPathBuf;
 
 newtype_uuid!(
     ComponentId,
@@ -46,11 +47,6 @@ declare_transparent_newtypes! {
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
     #[cfg_attr(feature = "full", desert(transparent))]
     pub struct ComponentName(pub String);
-
-    /// Key that can be used to identify a component file.
-    /// All files with the same content will have the same key.
-    #[derive(Copy, Display, Eq, Hash)]
-    pub struct ComponentFileContentHash(pub diff::Hash);
 
     /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
     /// There can only be a single plugin with a given priority installed to a component.
@@ -113,12 +109,6 @@ impl AsRef<str> for ComponentName {
 }
 
 declare_structs! {
-    pub struct AgentConfigEntry {
-        pub agent: AgentTypeName,
-        pub path: Vec<String>,
-        pub value: serde_json::Value
-    }
-
     pub struct ComponentDto {
         pub id: ComponentId,
         pub revision: ComponentRevision,
@@ -130,11 +120,6 @@ declare_structs! {
         pub component_size: u64,
         pub metadata: ComponentMetadata,
         pub created_at: chrono::DateTime<chrono::Utc>,
-        pub files: Vec<InitialComponentFile>,
-        pub installed_plugins: Vec<InstalledPlugin>,
-        pub env: BTreeMap<String, String>,
-        pub config_vars: BTreeMap<String, String>,
-        pub agent_config: Vec<AgentConfigEntry>,
         pub wasm_hash: diff::Hash,
     }
 
@@ -142,45 +127,62 @@ declare_structs! {
         pub component_name: ComponentName,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
+        pub agent_types: Vec<AgentType>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+    }
+
+    pub struct ComponentUpdate {
+        pub current_revision: ComponentRevision,
+        pub agent_types: Option<Vec<AgentType>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub agent_type_provision_config_updates: Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>>,
+    }
+
+    #[derive(Default)]
+    pub struct AgentTypeProvisionConfigCreation {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub env: BTreeMap<String, String>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub config_vars: BTreeMap<String, String>,
+        pub wasi_config: BTreeMap<String, String>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub agent_config: Vec<AgentConfigEntry>,
+        pub config: Vec<AgentConfigEntryDto>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub agent_types: Vec<AgentType>,
+        pub plugin_installations: Vec<PluginInstallation>,
+        /// key = source path inside uploaded archive; value specifies target path + permissions
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub plugins: Vec<PluginInstallation>,
-    }
-
-    pub struct ComponentUpdate {
-        pub current_revision: ComponentRevision,
-        #[serde(default)]
-        #[cfg_attr(feature = "full", oai(default))]
-        pub removed_files: Vec<ComponentFilePath>,
-        #[serde(default)]
-        #[cfg_attr(feature = "full", oai(default))]
-        pub new_file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
-        pub env: Option<BTreeMap<String, String>>,
-        pub config_vars: Option<BTreeMap<String, String>>,
-        pub agent_config: Option<Vec<AgentConfigEntry>>,
-        pub agent_types: Option<Vec<AgentType>>,
-        #[serde(default)]
-        #[cfg_attr(feature = "full", oai(default))]
-        pub plugin_updates: Vec<PluginInstallationAction>,
+        pub files: BTreeMap<ArchiveFilePath, AgentFileOptions>,
     }
 
     #[derive(Default)]
-    pub struct ComponentFileOptions {
-        /// Path of the file in the uploaded archive
-        pub permissions: ComponentFilePermissions,
+    pub struct AgentTypeProvisionConfigUpdate {
+        pub env: Option<BTreeMap<String, String>>,
+        pub wasi_config: Option<BTreeMap<String, String>>,
+        pub config: Option<Vec<AgentConfigEntryDto>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub plugin_updates: Vec<PluginInstallationAction>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub files_to_add_or_update: BTreeMap<ArchiveFilePath, AgentFileOptions>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub files_to_remove: Vec<AgentFilePath>,
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub file_permission_updates: BTreeMap<AgentFilePath, AgentFilePermissions>,
+    }
+
+    pub struct AgentFileOptions {
+        pub target_path: AgentFilePath,
+        pub permissions: AgentFilePermissions,
     }
 
     pub struct PluginInstallation {
@@ -202,6 +204,9 @@ declare_structs! {
         pub environment_plugin_grant_id: EnvironmentPluginGrantId,
     }
 
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct InstalledPlugin {
         pub environment_plugin_grant_id: EnvironmentPluginGrantId,
         pub priority: PluginPriority,
@@ -216,10 +221,13 @@ declare_structs! {
         pub oplog_processor_component_revision: Option<ComponentRevision>,
     }
 
-    pub struct InitialComponentFile {
-        pub content_hash: ComponentFileContentHash,
-        pub path: ComponentFilePath,
-        pub permissions: ComponentFilePermissions,
+    #[derive(Eq)]
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    #[cfg_attr(feature = "full", desert(evolution()))]
+    pub struct InitialAgentFile {
+        pub content_hash: AgentFileContentHash,
+        pub path: AgentFilePath,
+        pub permissions: AgentFilePermissions,
         pub size: u64,
     }
 }
@@ -234,102 +242,26 @@ declare_unions! {
 
 declare_enums! {
     #[derive(Default)]
-    pub enum ComponentFilePermissions {
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub enum AgentFilePermissions {
         #[default]
         ReadOnly,
         ReadWrite,
     }
 }
 
-impl ComponentFilePermissions {
+impl AgentFilePermissions {
     pub fn as_compact_str(&self) -> &'static str {
         match self {
-            ComponentFilePermissions::ReadOnly => "ro",
-            ComponentFilePermissions::ReadWrite => "rw",
+            AgentFilePermissions::ReadOnly => "ro",
+            AgentFilePermissions::ReadWrite => "rw",
         }
     }
     pub fn from_compact_str(s: &str) -> Result<Self, String> {
         match s {
-            "ro" => Ok(ComponentFilePermissions::ReadOnly),
-            "rw" => Ok(ComponentFilePermissions::ReadWrite),
+            "ro" => Ok(AgentFilePermissions::ReadOnly),
+            "rw" => Ok(AgentFilePermissions::ReadWrite),
             _ => Err(format!("Unknown permissions: {s}")),
         }
-    }
-}
-
-/// Path inside a component filesystem. Must be
-/// - absolute (start with '/')
-/// - not contain ".." components
-/// - not contain "." components
-/// - use '/' as a separator
-#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Display)]
-pub struct ComponentFilePath(Utf8UnixPathBuf);
-
-impl ComponentFilePath {
-    pub fn from_abs_str(s: &str) -> Result<Self, String> {
-        let buf: Utf8UnixPathBuf = s.into();
-        if !buf.is_absolute() {
-            return Err("Path must be absolute".to_string());
-        }
-
-        Ok(ComponentFilePath(buf.normalize()))
-    }
-
-    pub fn from_rel_str(s: &str) -> Result<Self, String> {
-        Self::from_abs_str(&format!("/{s}"))
-    }
-
-    pub fn from_either_str(s: &str) -> Result<Self, String> {
-        if s.starts_with('/') {
-            Self::from_abs_str(s)
-        } else {
-            Self::from_rel_str(s)
-        }
-    }
-
-    pub fn as_path(&self) -> &Utf8UnixPathBuf {
-        &self.0
-    }
-
-    pub fn as_abs_str(&self) -> &str {
-        self.0.as_str()
-    }
-
-    pub fn to_abs_string(&self) -> String {
-        self.0.to_string()
-    }
-
-    pub fn to_rel_string(&self) -> String {
-        self.0.strip_prefix("/").unwrap().to_string()
-    }
-
-    pub fn extend(&mut self, path: &str) -> Result<(), String> {
-        self.0.push_checked(path).map_err(|e| e.to_string())
-    }
-}
-
-impl Serialize for ComponentFilePath {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        String::serialize(&self.to_string(), serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for ComponentFilePath {
-    fn deserialize<D>(deserializer: D) -> Result<ComponentFilePath, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let str = String::deserialize(deserializer)?;
-        Self::from_abs_str(&str).map_err(serde::de::Error::custom)
-    }
-}
-
-impl FromStr for ComponentFilePath {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::from_either_str(s)
     }
 }

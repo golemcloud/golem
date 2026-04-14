@@ -997,15 +997,11 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<Vec<golem_api_1_x::oplog::PublicOplogEntry>>> {
         self.observe_function_call("golem::api::get-oplog", "get-next");
 
-        let agent_type = self
-            .state
-            .agent_id
-            .as_ref()
-            .map(|aid| aid.agent_type.clone());
+        let entry = self.as_wasi_view().table().get(&self_)?.clone();
+        let agent_type =
+            ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
-
-        let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
         let chunk = get_public_oplog_chunk(
             component_service,
@@ -1200,15 +1196,11 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
     > {
         self.observe_function_call("golem::api::search-oplog", "get-next");
 
-        let agent_type = self
-            .state
-            .agent_id
-            .as_ref()
-            .map(|aid| aid.agent_type.clone());
+        let entry = self.as_wasi_view().table().get(&self_)?.clone();
+        let agent_type =
+            ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
-
-        let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
         let chunk = search_public_oplog(
             component_service,
@@ -1335,17 +1327,13 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Vec<golem_api_1_x::oplog::PublicOplogEntry>, String>> {
         self.observe_function_call("golem::api::oplog", "enrich-oplog-entries");
 
-        let agent_type = self
-            .state
-            .agent_id
-            .as_ref()
-            .map(|aid| aid.agent_type.clone());
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
         let environment_id = golem_common::model::environment::EnvironmentId::from(
             Uuid::from_u64_pair(environment_id.uuid.high_bits, environment_id.uuid.low_bits),
         );
         let agent_id: AgentId = agent_id.into();
+        let agent_type = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
 
         let mut current_revision = match ComponentRevision::try_from(component_revision) {
@@ -1534,7 +1522,7 @@ impl TryFrom<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::
                 )
             }
             golem_api_1_x::host::AgentPropertyFilter::WasiConfigVars(filter) => {
-                golem_common::model::AgentFilter::new_config_vars(
+                golem_common::model::AgentFilter::new_wasi_config(
                     filter.name,
                     filter.comparator.into(),
                     filter.value,
@@ -1575,7 +1563,7 @@ impl From<AgentMetadataForGuests> for golem_api_1_x::host::AgentMetadata {
             agent_id: value.agent_id.into(),
             args: vec![],
             env: value.env,
-            config_vars: value.config_vars.into_iter().collect(),
+            config_vars: value.wasi_config.into_iter().collect(),
             status: value.status.into(),
             component_revision: value.component_revision.into(),
             retry_count: 0,

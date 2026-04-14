@@ -41,10 +41,11 @@ use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasOplog, HasWorker, worker_enumeration};
 use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
+use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
-use golem_common::model::component::{ComponentFilePath, ComponentRevision};
+use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -181,6 +182,8 @@ pub trait WorkerCtx:
     fn created_by(&self) -> AccountId;
 
     fn component_metadata(&self) -> &Component;
+
+    fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig>;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to
@@ -415,11 +418,11 @@ pub trait PublicWorkerIo {
 pub trait FileSystemReading {
     async fn get_file_system_node(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError>;
     async fn read_file(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError>;
 }
 

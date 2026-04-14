@@ -15,22 +15,40 @@
 use crate::command_handler::component::ifs::{ComponentFilesArchive, IfsFileManager};
 use crate::context::Context;
 use crate::log::LogColorize;
-use crate::model::app::InitialComponentFile;
-use crate::model::component::ComponentDeployProperties;
+use crate::model::app::{
+    CanonicalFilePathWithPermissions, InitialComponentFile, InitialComponentFileSource,
+};
+use crate::model::app_raw;
+use crate::model::component::{AgentTypeManifestProvisionConfig, ComponentDeployProperties};
 use crate::model::text::plugin::PluginNameAndVersion;
 use anyhow::{Context as AnyhowContext, anyhow};
 use golem_client::model::EnvironmentPluginGrantWithDetails;
-use golem_common::model::agent::AgentType;
+use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::component::{
-    AgentConfigEntry, ComponentFileOptions, ComponentFilePath, PluginInstallation,
-    PluginInstallationAction, PluginInstallationUpdate, PluginPriority, PluginUninstallation,
+    AgentFileOptions, AgentFilePath, AgentFilePermissions, AgentTypeProvisionConfigCreation,
+    AgentTypeProvisionConfigUpdate, ArchiveFilePath, PluginInstallation, PluginInstallationAction,
+    PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
-
-use golem_common::model::diff;
+use golem_common::model::diff::{self, AgentFileDiff, AgentTypeProvisionConfigDiff};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::fs::File;
+
+fn resolve_ifs_entry(
+    file: &app_raw::InitialComponentFile,
+    source: &std::path::Path,
+) -> anyhow::Result<InitialComponentFile> {
+    let source = InitialComponentFileSource::new(&file.source_path, source)
+        .map_err(|e| anyhow::anyhow!("Invalid IFS source path '{}': {e}", file.source_path))?;
+    Ok(InitialComponentFile {
+        source,
+        target: CanonicalFilePathWithPermissions {
+            path: file.target_path.clone(),
+            permissions: file.permissions.unwrap_or(AgentFilePermissions::ReadOnly),
+        },
+    })
+}
 
 enum ComponentDiff {
     All,
@@ -49,45 +67,58 @@ impl ComponentDiff {
         self.wasm_changed()
     }
 
-    pub fn files_changed(&self) -> bool {
+    pub fn provision_config_changed(&self) -> bool {
         match self {
             ComponentDiff::All => true,
-            ComponentDiff::Diff { diff } => !diff.file_changes.is_empty(),
+            ComponentDiff::Diff { diff } => !diff.agent_type_provision_config_changes.is_empty(),
         }
     }
 
-    pub fn metadata_changed(&self) -> bool {
+    pub fn changed_agent_types(&self) -> Option<BTreeSet<String>> {
         match self {
-            ComponentDiff::All => true,
-            ComponentDiff::Diff { diff } => diff.metadata_changed,
+            ComponentDiff::All => None,
+            ComponentDiff::Diff { diff } => {
+                if diff.agent_type_provision_config_changes.is_empty() {
+                    Some(BTreeSet::new())
+                } else {
+                    Some(
+                        diff.agent_type_provision_config_changes
+                            .keys()
+                            .cloned()
+                            .collect(),
+                    )
+                }
+            }
         }
     }
 
-    pub fn agent_config_changed(&self) -> bool {
+    pub fn file_changes_per_agent(&self) -> Vec<(&str, &AgentTypeProvisionConfigDiff)> {
         match self {
-            ComponentDiff::All => true,
-            ComponentDiff::Diff { diff } => !diff.agent_config_changes.is_empty(),
+            ComponentDiff::All => vec![],
+            ComponentDiff::Diff { diff } => {
+                diff.agent_type_provision_config_changes
+                    .iter()
+                    .filter_map(|(name, change)| match change {
+                        diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff {
+                            diff,
+                        }) if !diff.file_changes.is_empty() => Some((name.as_str(), diff)),
+                        _ => None,
+                    })
+                    .collect()
+            }
         }
     }
 }
 
 pub struct ChangedComponentFiles {
-    pub updated_meta_only: BTreeMap<ComponentFilePath, ComponentFileOptions>,
     pub new_or_updated_content: Option<ComponentFilesArchive>,
-    pub removed: Vec<ComponentFilePath>,
+    pub removed_per_agent: BTreeMap<AgentTypeName, Vec<AgentFilePath>>,
+    /// Files whose only change is permissions — no content re-upload needed.
+    pub file_permission_updates_per_agent:
+        BTreeMap<AgentTypeName, BTreeMap<AgentFilePath, AgentFilePermissions>>,
 }
 
 impl ChangedComponentFiles {
-    pub fn merged_file_options(&self) -> BTreeMap<ComponentFilePath, ComponentFileOptions> {
-        let mut file_options = self.updated_meta_only.clone();
-        if let Some(files) = &self.new_or_updated_content {
-            for (path, options) in &files.file_options {
-                file_options.insert(path.clone(), options.clone());
-            }
-        }
-        file_options
-    }
-
     pub async fn open_archive(&self) -> anyhow::Result<Option<File>> {
         match &self.new_or_updated_content {
             Some(files) => Ok(Some(files.open_archive().await?)),
@@ -108,7 +139,7 @@ impl<'a> ComponentStager<'a> {
         ctx: Arc<Context>,
         component_deploy_properties: &'a ComponentDeployProperties,
         plugin_grants: HashMap<PluginNameAndVersion, EnvironmentPluginGrantWithDetails>,
-        // NOTE: none means ALL changed (e.g. new)
+        // NOTE: none means ALL changed (e.g. new component)
         diff: Option<&diff::DiffForHashOf<diff::Component>>,
     ) -> Self {
         Self {
@@ -147,97 +178,165 @@ impl<'a> ComponentStager<'a> {
         }
     }
 
-    pub async fn all_files(&self) -> anyhow::Result<Option<ComponentFilesArchive>> {
-        if self.diff.files_changed() && !self.component_deploy_properties.files.is_empty() {
-            Ok(Some(
-                IfsFileManager::new(self.ctx.file_download_client().clone())
-                    .build_files_archive(self.component_deploy_properties.files.as_slice())
-                    .await?,
-            ))
-        } else {
-            Ok(None)
+    fn all_manifest_files(&self) -> anyhow::Result<Vec<InitialComponentFile>> {
+        self.component_deploy_properties
+            .agent_type_configs
+            .values()
+            .flat_map(|c| {
+                c.files
+                    .iter()
+                    .map(|file| resolve_ifs_entry(file, &c.files_source))
+            })
+            .collect()
+    }
+
+    fn changed_manifest_files(&self) -> anyhow::Result<Vec<InitialComponentFile>> {
+        match self.diff.changed_agent_types() {
+            None => self.all_manifest_files(), // all changed (new component or hash-diff)
+            Some(changed) if changed.is_empty() => Ok(Vec::new()),
+            Some(changed) => {
+                // Only include files that have content changes — skip permissions-only
+                let content_changed_paths = self.content_changed_file_paths();
+                self.component_deploy_properties
+                    .agent_type_configs
+                    .iter()
+                    .filter(|(name, _)| changed.contains(name.0.as_str()))
+                    .flat_map(|(_, c)| c.files.iter().map(|file| (file, c.files_source.as_path())))
+                    .filter(|(file, _)| {
+                        // If we have fine-grained diff, skip permissions-only files
+                        if content_changed_paths.is_empty() {
+                            true // no fine-grained data: include all
+                        } else {
+                            content_changed_paths.contains(file.target_path.as_abs_str())
+                        }
+                    })
+                    .map(|(file, source)| resolve_ifs_entry(file, source))
+                    .collect()
+            }
         }
     }
 
+    fn content_changed_file_paths(&self) -> BTreeSet<String> {
+        self.diff
+            .file_changes_per_agent()
+            .into_iter()
+            .flat_map(|(_, agent_diff)| {
+                agent_diff
+                    .file_changes
+                    .iter()
+                    .filter_map(|(path, change)| match change {
+                        diff::BTreeMapDiffValue::Create => Some(path.clone()),
+                        diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff {
+                            diff,
+                        }) if diff.content_changed => Some(path.clone()),
+                        _ => None,
+                    })
+            })
+            .collect()
+    }
+
+    pub async fn all_files(&self) -> anyhow::Result<Option<ComponentFilesArchive>> {
+        let files = self.all_manifest_files()?;
+        if files.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(
+            IfsFileManager::new(self.ctx.file_download_client().clone())
+                .build_files_archive(&files)
+                .await?,
+        ))
+    }
+
     pub async fn changed_files(&self) -> anyhow::Result<ChangedComponentFiles> {
-        match &self.diff {
-            ComponentDiff::All => Ok(ChangedComponentFiles {
-                updated_meta_only: BTreeMap::new(),
-                new_or_updated_content: self.all_files().await?,
-                removed: Vec::new(),
-            }),
-            ComponentDiff::Diff { diff } => {
-                if diff.file_changes.is_empty() {
-                    Ok(ChangedComponentFiles {
-                        updated_meta_only: BTreeMap::new(),
-                        new_or_updated_content: None,
-                        removed: Vec::new(),
-                    })
-                } else {
-                    let mut new_or_updated_paths = BTreeSet::<&str>::new();
-                    let mut removed = Vec::<ComponentFilePath>::new();
+        if !self.diff.provision_config_changed() {
+            return Ok(ChangedComponentFiles {
+                new_or_updated_content: None,
+                removed_per_agent: BTreeMap::new(),
+                file_permission_updates_per_agent: BTreeMap::new(),
+            });
+        }
 
-                    for (path, change) in &diff.file_changes {
-                        match change {
-                            diff::BTreeMapDiffValue::Create => {
-                                new_or_updated_paths.insert(path.as_str());
-                            }
-                            diff::BTreeMapDiffValue::Delete => {
-                                removed.push(
-                                    ComponentFilePath::from_either_str(path)
-                                        .map_err(|err| anyhow!(err))?,
-                                );
-                            }
-                            diff::BTreeMapDiffValue::Update(diff) => match diff {
-                                diff::DiffForHashOf::HashDiff { .. } => {
-                                    new_or_updated_paths.insert(path.as_str());
-                                }
-                                diff::DiffForHashOf::ValueDiff { diff } => {
-                                    if diff.content_changed {
-                                        new_or_updated_paths.insert(path.as_str());
-                                    }
-                                }
-                            },
-                        }
+        let files_to_archive = self.changed_manifest_files()?;
+        let new_or_updated_content = if files_to_archive.is_empty() {
+            None
+        } else {
+            Some(
+                IfsFileManager::new(self.ctx.file_download_client().clone())
+                    .build_files_archive(&files_to_archive)
+                    .await?,
+            )
+        };
+
+        // Compute removed files per agent type from the fine-grained diff
+        let mut removed_per_agent = BTreeMap::new();
+        for (agent_type_str, agent_diff) in self.diff.file_changes_per_agent() {
+            let removed: Vec<AgentFilePath> = agent_diff
+                .file_changes
+                .iter()
+                .filter_map(|(path, change)| {
+                    if matches!(change, diff::BTreeMapDiffValue::Delete) {
+                        AgentFilePath::from_abs_str(path).ok()
+                    } else {
+                        None
                     }
-
-                    let mut files_to_archive = Vec::<InitialComponentFile>::new();
-                    let mut updated_meta_only =
-                        BTreeMap::<ComponentFilePath, ComponentFileOptions>::new();
-
-                    for file in &self.component_deploy_properties.files {
-                        if new_or_updated_paths.contains(file.target.path.as_abs_str()) {
-                            files_to_archive.push(file.clone())
-                        } else {
-                            updated_meta_only.insert(
-                                file.target.path.clone(),
-                                ComponentFileOptions {
-                                    permissions: file.target.permissions,
-                                },
-                            );
-                        }
-                    }
-
-                    let new_or_updated_content = {
-                        if files_to_archive.is_empty() {
-                            None
-                        } else {
-                            Some(
-                                IfsFileManager::new(self.ctx.file_download_client().clone())
-                                    .build_files_archive(files_to_archive.as_slice())
-                                    .await?,
-                            )
-                        }
-                    };
-
-                    Ok(ChangedComponentFiles {
-                        updated_meta_only,
-                        new_or_updated_content,
-                        removed,
-                    })
-                }
+                })
+                .collect();
+            if !removed.is_empty() {
+                removed_per_agent.insert(
+                    golem_common::model::agent::AgentTypeName(agent_type_str.to_string()),
+                    removed,
+                );
             }
         }
+
+        // Compute permissions-only updates per agent type
+        let mut file_permission_updates_per_agent = BTreeMap::new();
+        for (agent_type_str, agent_diff) in self.diff.file_changes_per_agent() {
+            let agent_name = golem_common::model::agent::AgentTypeName(agent_type_str.to_string());
+            let manifest_files: std::collections::HashMap<
+                &str,
+                &crate::model::app_raw::InitialComponentFile,
+            > = self
+                .component_deploy_properties
+                .agent_type_configs
+                .get(&agent_name)
+                .map(|c| {
+                    c.files
+                        .iter()
+                        .map(|f| (f.target_path.as_abs_str(), f))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let mut perm_updates: BTreeMap<AgentFilePath, AgentFilePermissions> = BTreeMap::new();
+            for (path, change) in &agent_diff.file_changes {
+                if let diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff {
+                    diff:
+                        AgentFileDiff {
+                            content_changed: false,
+                            permissions_changed: true,
+                        },
+                }) = change
+                    && let Ok(file_path) = AgentFilePath::from_abs_str(path)
+                {
+                    // Look up the new permissions from the manifest
+                    let new_perms = manifest_files
+                        .get(path.as_str())
+                        .and_then(|f| f.permissions)
+                        .unwrap_or(AgentFilePermissions::ReadOnly);
+                    perm_updates.insert(file_path, new_perms);
+                }
+            }
+            if !perm_updates.is_empty() {
+                file_permission_updates_per_agent.insert(agent_name, perm_updates);
+            }
+        }
+
+        Ok(ChangedComponentFiles {
+            new_or_updated_content,
+            removed_per_agent,
+            file_permission_updates_per_agent,
+        })
     }
 
     pub fn agent_types(&self) -> &Vec<AgentType> {
@@ -252,44 +351,11 @@ impl<'a> ComponentStager<'a> {
         }
     }
 
-    pub fn env(&self) -> BTreeMap<String, String> {
-        self.component_deploy_properties.env.clone()
-    }
-
-    pub fn env_if_changed(&self) -> Option<BTreeMap<String, String>> {
-        if self.diff.metadata_changed() {
-            Some(self.env())
-        } else {
-            None
-        }
-    }
-
-    pub fn config_vars(&self) -> BTreeMap<String, String> {
-        self.component_deploy_properties.config_vars.clone()
-    }
-
-    pub fn config_vars_if_changed(&self) -> Option<BTreeMap<String, String>> {
-        if self.diff.metadata_changed() {
-            Some(self.config_vars())
-        } else {
-            None
-        }
-    }
-
-    pub fn agent_config(&self) -> Vec<AgentConfigEntry> {
-        self.component_deploy_properties.agent_config.clone()
-    }
-
-    pub fn agent_config_if_changed(&self) -> Option<Vec<AgentConfigEntry>> {
-        if self.diff.agent_config_changed() {
-            Some(self.agent_config())
-        } else {
-            None
-        }
-    }
-
-    pub fn plugins(&self) -> Vec<PluginInstallation> {
-        self.component_deploy_properties
+    fn resolve_plugins_for(
+        &self,
+        manifest_config: &AgentTypeManifestProvisionConfig,
+    ) -> Vec<PluginInstallation> {
+        manifest_config
             .plugins
             .iter()
             .enumerate()
@@ -300,7 +366,9 @@ impl<'a> ComponentStager<'a> {
                         name: p.name.clone(),
                         version: p.version.clone(),
                     })
-                    .expect("Plugin grant not found")
+                    .unwrap_or_else(|| {
+                        panic!("Plugin grant not found for {}/{}", p.name, p.version)
+                    })
                     .id,
                 priority: PluginPriority(idx as i32),
                 parameters: p
@@ -312,47 +380,221 @@ impl<'a> ComponentStager<'a> {
             .collect()
     }
 
-    pub fn plugins_if_changed(&self) -> Vec<PluginInstallationAction> {
+    fn files_to_add_or_update_for_agent(
+        &self,
+        agent_type_name: &AgentTypeName,
+        files: BTreeMap<ArchiveFilePath, AgentFileOptions>,
+    ) -> BTreeMap<ArchiveFilePath, AgentFileOptions> {
         match &self.diff {
-            ComponentDiff::All => self
-                .plugins()
-                .into_iter()
-                .map(PluginInstallationAction::Install)
-                .collect(),
+            ComponentDiff::All => files,
             ComponentDiff::Diff { diff } => {
-                let mut plugins_by_grant_id = self
-                    .plugins()
-                    .into_iter()
-                    .map(|p| (p.environment_plugin_grant_id.0, p))
-                    .collect::<HashMap<_, _>>();
+                let Some(agent_change) = diff
+                    .agent_type_provision_config_changes
+                    .get(agent_type_name.0.as_str())
+                else {
+                    return BTreeMap::new();
+                };
 
-                diff.plugin_changes
-                    .iter()
-                    .map(|(grant_id, diff)| match diff {
-                        diff::BTreeMapDiffValue::Create => PluginInstallationAction::Install(
-                            plugins_by_grant_id
-                                .remove(grant_id)
-                                .expect("Missing manifest plugin for creation"),
-                        ),
-                        diff::BTreeMapDiffValue::Delete => {
-                            PluginInstallationAction::Uninstall(PluginUninstallation {
-                                environment_plugin_grant_id: EnvironmentPluginGrantId(*grant_id),
+                match agent_change {
+                    diff::BTreeMapDiffValue::Create
+                    | diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::HashDiff { .. }) => {
+                        files
+                    }
+                    diff::BTreeMapDiffValue::Delete => BTreeMap::new(),
+                    diff::BTreeMapDiffValue::Update(diff::DiffForHashOf::ValueDiff { diff }) => {
+                        let changed_content_paths: BTreeSet<&str> = diff
+                            .file_changes
+                            .iter()
+                            .filter_map(|(path, change)| match change {
+                                diff::BTreeMapDiffValue::Create => Some(path.as_str()),
+                                diff::BTreeMapDiffValue::Update(
+                                    diff::DiffForHashOf::ValueDiff { diff },
+                                ) if diff.content_changed => Some(path.as_str()),
+                                _ => None,
                             })
-                        }
-                        diff::BTreeMapDiffValue::Update(diff) => {
-                            let p = plugins_by_grant_id
-                                .remove(grant_id)
-                                .expect("Missing manifest plugin for Update");
+                            .collect();
 
-                            PluginInstallationAction::Update(PluginInstallationUpdate {
-                                environment_plugin_grant_id: p.environment_plugin_grant_id,
-                                new_priority: diff.priority_changed.then_some(p.priority),
-                                new_parameters: diff.parameters_changed.then_some(p.parameters),
-                            })
+                        if changed_content_paths.is_empty() {
+                            BTreeMap::new()
+                        } else {
+                            files
+                                .into_iter()
+                                .filter(|(_, options)| {
+                                    changed_content_paths.contains(options.target_path.as_abs_str())
+                                })
+                                .collect()
                         }
-                    })
-                    .collect()
+                    }
+                }
             }
         }
+    }
+
+    pub fn agent_type_provision_configs(
+        &self,
+    ) -> BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation> {
+        self.component_deploy_properties
+            .agent_type_configs
+            .iter()
+            .map(|(agent_type_name, manifest_config)| {
+                let resolved_plugins = self.resolve_plugins_for(manifest_config);
+                let creation = manifest_config.to_provision_config_creation(resolved_plugins);
+                (agent_type_name.clone(), creation)
+            })
+            .collect()
+    }
+
+    pub fn agent_type_provision_config_updates(
+        &self,
+        changed_files: &ChangedComponentFiles,
+    ) -> Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>> {
+        let changed = match self.diff.changed_agent_types() {
+            None => {
+                // All changed — return updates for all agent types
+                return Some(
+                    self.component_deploy_properties
+                        .agent_type_configs
+                        .iter()
+                        .map(|(name, manifest_config)| {
+                            let resolved_plugins = self.resolve_plugins_for(manifest_config);
+                            let creation =
+                                manifest_config.to_provision_config_creation(resolved_plugins);
+                            let files_to_remove = changed_files
+                                .removed_per_agent
+                                .get(name)
+                                .cloned()
+                                .unwrap_or_default();
+                            let file_permission_updates = changed_files
+                                .file_permission_updates_per_agent
+                                .get(name)
+                                .cloned()
+                                .unwrap_or_default();
+                            (
+                                name.clone(),
+                                AgentTypeProvisionConfigUpdate {
+                                    env: Some(creation.env),
+                                    wasi_config: Some(creation.wasi_config),
+                                    config: Some(creation.config),
+                                    files_to_add_or_update: self
+                                        .files_to_add_or_update_for_agent(name, creation.files),
+                                    files_to_remove,
+                                    file_permission_updates,
+                                    plugin_updates: creation
+                                        .plugin_installations
+                                        .into_iter()
+                                        .map(PluginInstallationAction::Install)
+                                        .collect(),
+                                },
+                            )
+                        })
+                        .collect(),
+                );
+            }
+            Some(changed) if changed.is_empty() => return None,
+            Some(changed) => changed,
+        };
+
+        // Only update agent types that changed
+        Some(
+            self.component_deploy_properties
+                .agent_type_configs
+                .iter()
+                .filter(|(name, _)| changed.contains(name.0.as_str()))
+                .map(|(name, manifest_config)| {
+                    let resolved_plugins = self.resolve_plugins_for(manifest_config);
+                    let creation = manifest_config.to_provision_config_creation(resolved_plugins);
+
+                    let plugin_updates: Vec<PluginInstallationAction> = match &self.diff {
+                        ComponentDiff::All => creation
+                            .plugin_installations
+                            .into_iter()
+                            .map(PluginInstallationAction::Install)
+                            .collect(),
+                        ComponentDiff::Diff { diff } => {
+                            match diff
+                                .agent_type_provision_config_changes
+                                .get(name.0.as_str())
+                            {
+                                Some(diff::BTreeMapDiffValue::Update(
+                                    diff::DiffForHashOf::ValueDiff { diff },
+                                )) if !diff.plugin_changes.is_empty() => {
+                                    let resolved_by_grant: HashMap<
+                                        uuid::Uuid,
+                                        &PluginInstallation,
+                                    > = creation
+                                        .plugin_installations
+                                        .iter()
+                                        .map(|p| (p.environment_plugin_grant_id.0, p))
+                                        .collect();
+                                    diff.plugin_changes
+                                        .iter()
+                                        .filter_map(|(grant_id, change)| match change {
+                                            diff::BTreeMapDiffValue::Create => {
+                                                resolved_by_grant.get(grant_id).map(|&p| {
+                                                    PluginInstallationAction::Install(p.clone())
+                                                })
+                                            }
+                                            diff::BTreeMapDiffValue::Delete => {
+                                                Some(PluginInstallationAction::Uninstall(
+                                                    PluginUninstallation {
+                                                        environment_plugin_grant_id:
+                                                            EnvironmentPluginGrantId(*grant_id),
+                                                    },
+                                                ))
+                                            }
+                                            diff::BTreeMapDiffValue::Update(plugin_diff) => {
+                                                resolved_by_grant.get(grant_id).map(|&p| {
+                                                    PluginInstallationAction::Update(
+                                                        PluginInstallationUpdate {
+                                                            environment_plugin_grant_id: p
+                                                                .environment_plugin_grant_id,
+                                                            new_priority: plugin_diff
+                                                                .priority_changed
+                                                                .then_some(p.priority),
+                                                            new_parameters: plugin_diff
+                                                                .parameters_changed
+                                                                .then_some(p.parameters.clone()),
+                                                        },
+                                                    )
+                                                })
+                                            }
+                                        })
+                                        .collect()
+                                }
+                                _ => creation
+                                    .plugin_installations
+                                    .into_iter()
+                                    .map(PluginInstallationAction::Install)
+                                    .collect(),
+                            }
+                        }
+                    };
+
+                    let files_to_remove = changed_files
+                        .removed_per_agent
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_default();
+                    let file_permission_updates = changed_files
+                        .file_permission_updates_per_agent
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_default();
+                    (
+                        name.clone(),
+                        AgentTypeProvisionConfigUpdate {
+                            env: Some(creation.env),
+                            wasi_config: Some(creation.wasi_config),
+                            config: Some(creation.config),
+                            files_to_add_or_update: self
+                                .files_to_add_or_update_for_agent(name, creation.files),
+                            files_to_remove,
+                            file_permission_updates,
+                            plugin_updates,
+                        },
+                    )
+                })
+                .collect(),
+        )
     }
 }

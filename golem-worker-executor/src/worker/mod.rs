@@ -55,12 +55,12 @@ use golem_common::model::RetryConfig;
 use golem_common::model::agent::{
     AgentMode, ParsedAgentId, Principal, Snapshotting, SnapshottingConfig,
 };
-use golem_common::model::component::ComponentFilePath;
+use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::worker::{RevertWorkerTarget, WorkerAgentConfigEntry};
+use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, AgentMetadata,
     AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
@@ -155,7 +155,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
-        worker_agent_config: Vec<WorkerAgentConfigEntry>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
@@ -185,7 +185,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
-        worker_agent_config: Vec<WorkerAgentConfigEntry>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
@@ -243,7 +243,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        worker_agent_config: Vec<WorkerAgentConfigEntry>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
@@ -1130,7 +1130,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn get_file_system_node(
         &self,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -1166,7 +1166,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn read_file(
         &self,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -1793,7 +1793,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         component_revision: Option<ComponentRevision>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config_vars: Option<BTreeMap<String, String>>,
-        worker_agent_config: Vec<WorkerAgentConfigEntry>,
+        worker_agent_config: Vec<AgentConfigEntryDto>,
         parent: Option<AgentId>,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         let component_id = owned_agent_id.component_id();
@@ -1918,7 +1918,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     &component,
                 )?;
 
-                let worker_env = merge_worker_env_with_component_env(worker_env, component.env);
+                let default_agent_env = agent_id
+                    .as_ref()
+                    .and_then(|agent_id| {
+                        component
+                            .metadata
+                            .agent_type_env(&agent_id.agent_type)
+                            .cloned()
+                    })
+                    .unwrap_or_default();
+                let worker_env = merge_agent_env_with_default_env(worker_env, default_agent_env);
 
                 let created_at = Timestamp::now_utc();
 
@@ -1933,8 +1942,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .iter()
                         .map(|m| m.initial)
                         .sum(),
-                    active_plugins: component
-                        .installed_plugins
+                    active_plugins: agent_id
+                        .as_ref()
+                        .and_then(|agent_id| {
+                            component.metadata.agent_type_plugins(&agent_id.agent_type)
+                        })
+                        .unwrap_or_default()
                         .iter()
                         .map(|i| i.environment_plugin_grant_id)
                         .collect(),
@@ -1952,8 +1965,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // but we should only have the worker-level overrides here as we can't compute
                     // the new effective set as the component revision changes otherwise.
                     env: worker_env,
-                    config_vars: worker_config_vars.unwrap_or_default(),
-                    agent_config: initial_agent_config,
+                    wasi_config: worker_config_vars.unwrap_or_default(),
+                    config: initial_agent_config,
                     environment_id: component.environment_id,
                     created_by: component.account_id,
                     created_at,
@@ -1980,9 +1993,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .last_known_status
                         .active_plugins
                         .clone(),
-                    initial_worker_metadata.config_vars.clone(),
+                    initial_worker_metadata.wasi_config.clone(),
                     initial_worker_metadata
-                        .agent_config
+                        .config
                         .iter()
                         .cloned()
                         .map(Into::into)
@@ -2170,21 +2183,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 }
 
-pub fn merge_worker_env_with_component_env(
-    worker_env: Option<Vec<(String, String)>>,
-    component_env: BTreeMap<String, String>,
+pub fn merge_agent_env_with_default_env(
+    agent_env: Option<Vec<(String, String)>>,
+    default_agent_env: BTreeMap<String, String>,
 ) -> Vec<(String, String)> {
     let mut seen_keys = HashSet::new();
     let mut result = Vec::new();
 
-    if let Some(worker_env) = worker_env {
+    if let Some(worker_env) = agent_env {
         for (key, value) in worker_env {
             seen_keys.insert(key.clone());
             result.push((key, value));
         }
     }
 
-    for (key, value) in component_env {
+    for (key, value) in default_agent_env {
         // Prioritise per worker environment variables all the time
         if !seen_keys.contains(&key) {
             result.push((key, value));
@@ -2592,8 +2605,8 @@ impl RunningWorker {
                     .current_filesystem_storage_usage,
                 component_version_for_replay,
                 worker_metadata.created_by,
-                worker_metadata.config_vars,
-                worker_metadata.agent_config,
+                worker_metadata.wasi_config,
+                worker_metadata.config,
                 last_snapshot_index,
             ),
             parent.execution_status.clone(),
@@ -3069,12 +3082,12 @@ enum WorkerCommand {
 #[derive(Debug)]
 pub enum QueuedWorkerInvocation {
     GetFileSystemNode {
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         sender: oneshot::Sender<Result<GetFileSystemNodeResult, WorkerExecutorError>>,
     },
     // The worker will suspend execution until the stream is dropped, so consume in a timely manner.
     ReadFile {
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         sender: oneshot::Sender<Result<ReadFileResult, WorkerExecutorError>>,
     },
     // Waits for the invocation loop to pick up this message, ensuring that the worker is ready to process followup commands.

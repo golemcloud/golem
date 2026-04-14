@@ -130,3 +130,40 @@ impl<V: Clone, L: Layer> Property<L> for OptionalProperty<L, V> {
         })
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::{OptionalProperty, OptionalPropertyTraceElem};
+    use crate::model::cascade::property::Property;
+    use crate::model::cascade::property::test_support::TestLayer;
+    use test_r::test;
+
+    #[test]
+    fn override_then_skip_keeps_last_value() {
+        let mut prop: OptionalProperty<TestLayer, i32> = OptionalProperty::none();
+        let id = "layer-a".to_string();
+
+        prop.apply_layer(&id, None, Some(42));
+        prop.apply_layer(&id, None, None);
+
+        assert_eq!(prop.value(), &Some(42));
+        assert_eq!(prop.trace().len(), 2);
+    }
+
+    #[test]
+    fn compact_trace_removes_skips() {
+        let mut prop: OptionalProperty<TestLayer, i32> = OptionalProperty::none();
+        let id = "layer-a".to_string();
+
+        prop.apply_layer(&id, None, None);
+        prop.apply_layer(&id, None, Some(1));
+        prop.apply_layer(&id, None, None);
+
+        prop.compact_trace();
+        assert_eq!(prop.trace().len(), 1);
+        assert!(matches!(
+            prop.trace()[0],
+            OptionalPropertyTraceElem::Override { value: 1, .. }
+        ));
+    }
+}
