@@ -742,7 +742,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [claude-code, codex]
+        agent: [claude-code, codex, gemini]
         language: [ts, rust, scala]
         model: ['']
         include:
@@ -805,6 +805,10 @@ jobs:
       - name: Install OpenCode
         if: matrix.agent == 'opencode'
         run: npm install -g opencode-ai
+
+      - name: Install Gemini CLI
+        if: matrix.agent == 'gemini'
+        run: npm install -g @google/gemini-cli
 
       - name: Install Codex CLI
         if: matrix.agent == 'codex'
