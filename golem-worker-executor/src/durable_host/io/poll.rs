@@ -25,6 +25,7 @@ use golem_common::model::oplog::{
     HostResponsePollResult,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
+use std::collections::BTreeMap;
 use tracing::{debug, warn};
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView as _;
@@ -77,6 +78,23 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> wasmtime::Result<Vec<u32>> {
         let pollable_reps: Vec<u32> = in_.iter().map(Resource::rep).collect();
+        let duplicate_pollable_reps = {
+            let mut counts = BTreeMap::new();
+            for pollable_rep in &pollable_reps {
+                *counts.entry(*pollable_rep).or_insert(0usize) += 1;
+            }
+            counts
+                .into_iter()
+                .filter(|(_, count)| *count > 1)
+                .collect::<Vec<_>>()
+        };
+        if !duplicate_pollable_reps.is_empty() {
+            warn!(
+                pollable_reps = ?pollable_reps,
+                duplicate_pollable_reps = ?duplicate_pollable_reps,
+                "Polling duplicate wasi pollable reps"
+            );
+        }
 
         // check if all pollables are promise backed. In this case we can suspend immediately
         // This check only needs to be done in live mode, as we will never even persist the oplog entry for polling

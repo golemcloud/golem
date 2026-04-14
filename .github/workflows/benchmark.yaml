@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  WASM_RQUICKJS_VERSION: "v0.2.1"
+  WASM_RQUICKJS_VERSION: "debug"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 

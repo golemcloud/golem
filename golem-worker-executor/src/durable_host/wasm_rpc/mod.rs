@@ -695,6 +695,22 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         >,
     > {
         self.observe_function_call("golem::rpc::future-invoke-result", "get");
+        let future_rep = this.rep();
+        let (state, child_pollables) = {
+            let entry = self.table().get(&this)?;
+            let state = entry
+                .payload
+                .as_any()
+                .downcast_ref::<FutureInvokeResultState>()
+                .unwrap();
+            (format!("{state:?}"), entry.child_pollables.clone())
+        };
+        warn!(
+            future_rep,
+            state,
+            child_pollables = ?child_pollables,
+            "Getting future invoke result"
+        );
         let rpc = self.rpc();
 
         let span_id = {

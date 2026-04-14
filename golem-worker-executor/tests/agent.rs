@@ -93,6 +93,8 @@ async fn agent_await_parallel_rpc_calls(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
+    executor.log_output(&worker_id).await?;
+
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "run", data_value!(20f64))
         .await;
