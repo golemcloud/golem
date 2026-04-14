@@ -104,6 +104,12 @@ const HttpSchema = z.object({
   headers: z.record(z.string()).optional(),
 });
 
+const GetAgentTypeSchema = z.object({
+  name: z.string(),
+});
+
+const ListAgentTypesSchema = z.object({});
+
 const InvokeSchema = z.object({
   agent: z.string(),
   method: langConditional(z.string()),
@@ -149,6 +155,8 @@ const ACTION_FIELDS = [
   "create_project",
   "sleep",
   "http",
+  "get_agent_type",
+  "list_agent_types",
 ] as const;
 
 // Language-conditional: accepts either T or { ts: T, rust: T, scala: T, ... }
@@ -179,7 +187,7 @@ const StepSpecSchema = z
     verify: langConditional(VerifySchema).optional(),
     invoke: InvokeSchema.optional(),
     invoke_json: InvokeSchema.optional(),
-    expect: ExpectSchema.optional(),
+    expect: langConditional(ExpectSchema).optional(),
     sleep: z.number().optional(),
     shell: ShellSchema.optional(),
     trigger: TriggerSchema.optional(),
@@ -187,6 +195,8 @@ const StepSpecSchema = z
     delete_agent: DeleteAgentSchema.optional(),
     create_project: CreateProjectSchema.optional(),
     http: HttpSchema.optional(),
+    get_agent_type: GetAgentTypeSchema.optional(),
+    list_agent_types: ListAgentTypesSchema.optional(),
     retry: RetrySchema.optional(),
     only_if: StepConditionSchema.optional(),
     skip_if: StepConditionSchema.optional(),
@@ -253,7 +263,7 @@ interface StepCommon {
     deploy?: boolean;
     expectedFiles?: LangConditional<string[]>;
   }>;
-  expect?: z.infer<typeof ExpectSchema>;
+  expect?: LangConditional<z.infer<typeof ExpectSchema>>;
   only_if?: StepCondition;
   skip_if?: StepCondition;
   retry?: { attempts: number; delay: number };
@@ -285,6 +295,8 @@ type HttpSpec = {
   body?: string;
   headers?: Record<string, string>;
 };
+type GetAgentTypeSpec = { name: string };
+type ListAgentTypesSpec = Record<string, never>;
 
 type RawStepSpec = z.infer<typeof StepSpecSchema>;
 
@@ -298,6 +310,11 @@ type DeleteAgentStep = StepCommon & { tag: "delete_agent"; delete_agent: DeleteA
 type CreateProjectStep = StepCommon & { tag: "create_project"; create_project: CreateProjectSpec };
 type SleepStep = StepCommon & { tag: "sleep"; sleep: number };
 type HttpStep = StepCommon & { tag: "http"; http: HttpSpec };
+type GetAgentTypeStep = StepCommon & { tag: "get_agent_type"; get_agent_type: GetAgentTypeSpec };
+type ListAgentTypesStep = StepCommon & {
+  tag: "list_agent_types";
+  list_agent_types: ListAgentTypesSpec;
+};
 
 export type StepSpec =
   | PromptStep
@@ -309,7 +326,9 @@ export type StepSpec =
   | DeleteAgentStep
   | CreateProjectStep
   | SleepStep
-  | HttpStep;
+  | HttpStep
+  | GetAgentTypeStep
+  | ListAgentTypesStep;
 
 export interface ScenarioSpec {
   name: string;
@@ -367,6 +386,10 @@ export function parseStep(raw: RawStepSpec): StepSpec {
       return { ...common, tag, sleep: raw.sleep! };
     case "http":
       return { ...common, tag, http: raw.http! };
+    case "get_agent_type":
+      return { ...common, tag, get_agent_type: raw.get_agent_type! };
+    case "list_agent_types":
+      return { ...common, tag, list_agent_types: raw.list_agent_types ?? {} };
   }
 }
 
@@ -487,6 +510,7 @@ export class ScenarioExecutor {
   private workspace: string;
   private bootstrapSkillSourceDir: string;
   private options: ScenarioExecutorOptions;
+  private routerPort: number = 9881;
 
   constructor(
     driver: AgentDriver,
@@ -602,6 +626,16 @@ export class ScenarioExecutor {
         return { ...step };
       case "sleep":
         return { ...step };
+      case "get_agent_type":
+        return {
+          ...step,
+          get_agent_type: {
+            ...step.get_agent_type,
+            name: substituteVariables(step.get_agent_type.name, variables),
+          },
+        };
+      case "list_agent_types":
+        return { ...step };
     }
   }
 
@@ -612,6 +646,7 @@ export class ScenarioExecutor {
       ...step,
       expectedSkills: resolveByLanguage(step.expectedSkills, lang),
       allowedExtraSkills: resolveByLanguage(step.allowedExtraSkills, lang),
+      expect: resolveByLanguage(step.expect, lang),
       verify: resolvedVerify
         ? {
             ...resolvedVerify,
@@ -740,6 +775,7 @@ export class ScenarioExecutor {
 
     // Build extra env for commands from settings
     const commandEnv = this.buildCommandEnv(spec);
+    this.routerPort = spec.settings?.golem_server?.router_port ?? 9881;
     const variables = this.buildVariables(spec.name);
     const conditionContext = {
       agent: this.options.agent,
@@ -1009,6 +1045,25 @@ export class ScenarioExecutor {
         break;
       case "http":
         await this.executeHttp(stepLabel, step.http, step.expect, stepTimeoutSeconds, fail);
+        break;
+      case "get_agent_type":
+        await this.executeGetAgentType(
+          stepLabel,
+          step.get_agent_type,
+          step.expect,
+          stepTimeoutSeconds,
+          commandEnv,
+          fail,
+        );
+        break;
+      case "list_agent_types":
+        await this.executeListAgentTypes(
+          stepLabel,
+          step.expect,
+          stepTimeoutSeconds,
+          commandEnv,
+          fail,
+        );
         break;
     }
 
@@ -1282,6 +1337,178 @@ export class ScenarioExecutor {
       );
     } else if (!result.success) {
       fail(`INVOKE_JSON_FAILED: ${result.output}`);
+    }
+  }
+
+  private async resolveDeploymentContext(
+    stepLabel: string,
+    timeout: number,
+    commandEnv: Record<string, string>,
+  ): Promise<{ environmentId: string; deploymentRevision: number } | undefined> {
+    const projectDir = await this.findGolemProjectDir();
+    log.stepAction(stepLabel, "resolving deployment context via golem environment list");
+    const result = await this.runLocalCommand(
+      "golem",
+      ["--format", "json", "environment", "list"],
+      timeout,
+      projectDir,
+      commandEnv,
+    );
+    if (!result.success) {
+      return undefined;
+    }
+
+    const parsed = parseJsonCommandOutput<unknown[]>(result.stdout);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return undefined;
+    }
+
+    const env = parsed[0] as Record<string, unknown>;
+    const envSummary = env["environment"] as Record<string, unknown> | undefined;
+    if (!envSummary) {
+      return undefined;
+    }
+    const environmentId = envSummary["id"] as string | undefined;
+    const currentDeployment = envSummary["currentDeployment"] as
+      | Record<string, unknown>
+      | undefined;
+    const deploymentRevision = currentDeployment?.["deploymentRevision"] as number | undefined;
+
+    if (!environmentId || deploymentRevision === undefined) {
+      return undefined;
+    }
+
+    log.stepAction(
+      stepLabel,
+      `resolved env=${environmentId} deployment=${deploymentRevision}`,
+    );
+    return { environmentId, deploymentRevision };
+  }
+
+  private getRouterPort(): number {
+    return this.routerPort ?? 9881;
+  }
+
+  private static readonly LOCAL_WELL_KNOWN_TOKEN = "5c832d93-ff85-4a8f-9803-513950fdfdb1";
+
+  private golemApiHeaders(): Record<string, string> {
+    return { Authorization: `Bearer ${ScenarioExecutor.LOCAL_WELL_KNOWN_TOKEN}` };
+  }
+
+  private async executeGetAgentType(
+    stepLabel: string,
+    spec: GetAgentTypeSpec,
+    expect: StepCommon["expect"],
+    timeout: number,
+    commandEnv: Record<string, string>,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    const ctx = await this.resolveDeploymentContext(stepLabel, timeout, commandEnv);
+    if (!ctx) {
+      fail("GET_AGENT_TYPE_FAILED: could not resolve deployment context");
+      return;
+    }
+
+    const routerPort = this.getRouterPort();
+    const url = `http://localhost:${routerPort}/v1/envs/${ctx.environmentId}/deployments/${ctx.deploymentRevision}/agent-types/${spec.name}`;
+    log.stepAction(stepLabel, `GET ${url}`);
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout * 1000);
+      const onParentAbort = () => controller.abort();
+      this.options.abortSignal?.addEventListener("abort", onParentAbort);
+
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: this.golemApiHeaders(),
+        });
+        const body = await response.text();
+        log.httpResponse(stepLabel, response.status, body);
+
+        if (expect) {
+          this.evaluateAssertions(
+            {
+              stdout: body,
+              stderr: "",
+              exitCode: response.ok ? 0 : 1,
+              body,
+              status: response.status,
+            },
+            expect,
+            fail,
+            stepLabel,
+          );
+        } else if (!response.ok) {
+          fail(`GET_AGENT_TYPE_FAILED: ${response.status} ${body.slice(0, 500)}`);
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        this.options.abortSignal?.removeEventListener("abort", onParentAbort);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.httpFailure(stepLabel, msg);
+      fail(`GET_AGENT_TYPE_FAILED: ${msg}`);
+    }
+  }
+
+  private async executeListAgentTypes(
+    stepLabel: string,
+    expect: StepCommon["expect"],
+    timeout: number,
+    commandEnv: Record<string, string>,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    const ctx = await this.resolveDeploymentContext(stepLabel, timeout, commandEnv);
+    if (!ctx) {
+      fail("LIST_AGENT_TYPES_FAILED: could not resolve deployment context");
+      return;
+    }
+
+    const routerPort = this.getRouterPort();
+    const url = `http://localhost:${routerPort}/v1/envs/${ctx.environmentId}/deployments/${ctx.deploymentRevision}/agent-types`;
+    log.stepAction(stepLabel, `GET ${url}`);
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout * 1000);
+      const onParentAbort = () => controller.abort();
+      this.options.abortSignal?.addEventListener("abort", onParentAbort);
+
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: this.golemApiHeaders(),
+        });
+        const body = await response.text();
+        log.httpResponse(stepLabel, response.status, body);
+
+        if (expect) {
+          this.evaluateAssertions(
+            {
+              stdout: body,
+              stderr: "",
+              exitCode: response.ok ? 0 : 1,
+              body,
+              status: response.status,
+            },
+            expect,
+            fail,
+            stepLabel,
+          );
+        } else if (!response.ok) {
+          fail(`LIST_AGENT_TYPES_FAILED: ${response.status} ${body.slice(0, 500)}`);
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        this.options.abortSignal?.removeEventListener("abort", onParentAbort);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.httpFailure(stepLabel, msg);
+      fail(`LIST_AGENT_TYPES_FAILED: ${msg}`);
     }
   }
 
