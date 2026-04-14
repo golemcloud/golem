@@ -24,6 +24,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-http-auth-rust` | Enabling authentication on HTTP endpoints |
 | `golem-add-cors-rust` | Configuring CORS allowed origins for HTTP endpoints |
 | `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
+| `golem-make-http-request-rust` | Making outgoing HTTP requests from agent code using wstd |
 
 # Golem Application Development Guide (Rust)
 
