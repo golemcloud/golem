@@ -124,11 +124,30 @@ httpApi:
           testSessionHeaderName: X-Test-Auth
 ```
 
-Then pass identity in requests:
+Then pass identity in requests. The header value must be a **JSON object** representing an OIDC session. All fields have defaults, so only `subject` is needed to identify the caller:
 
 ```shell
-curl -H "X-Test-Auth: test-user-id" http://my-app.localhost:9006/secure/agent1/data
+curl -H 'X-Test-Auth: {"subject":"test-user-id"}' http://my-app.localhost:9006/secure/agent1/data
 ```
+
+Available fields (all optional, with defaults):
+
+| Field | Type | Default |
+|---|---|---|
+| `subject` | string | `"test-user"` |
+| `issuer` | string (URL) | `"http://test-idp.com"` |
+| `email` | string | `null` |
+| `name` | string | `null` |
+| `email_verified` | boolean | `null` |
+| `given_name` | string | `null` |
+| `family_name` | string | `null` |
+| `picture` | string (URL) | `null` |
+| `preferred_username` | string | `null` |
+| `scopes` | array of strings | `["openid"]` |
+| `issued_at` | ISO 8601 datetime | current time |
+| `expires_at` | ISO 8601 datetime | current time + 8 hours |
+
+> **⚠️ Important:** The header value must be valid JSON — a plain string like `"user1"` will be rejected with a 400 error.
 
 ## Multi-Environment Deployments
 
