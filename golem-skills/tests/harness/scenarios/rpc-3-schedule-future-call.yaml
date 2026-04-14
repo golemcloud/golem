@@ -1,0 +1,76 @@
+name: "rpc-3-schedule-future-call"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-delayed-recorder-agent"
+    prompt: >
+      In the test-app project, add a second agent type called `DelayedRecorder` that has
+      the same constructor parameter as the existing CounterAgent. `DelayedRecorder` must
+      expose two externally invokable methods: `record-count(value)` and
+      `recorded-counts()`. `record-count` must append the received counter value to the
+      recorder agent's durable state. `recorded-counts` must return all recorded values
+      in order.
+
+      Then modify `CounterAgent` so it has a new externally invokable method called
+      `schedule-report`. That method must increment the counter exactly like the existing
+      `increment` method, then schedule `DelayedRecorder("<same name>")`'s
+      `record-count` method to run 30 seconds in the future with the new counter value,
+      and then return the new counter value immediately. Do not directly invoke or await
+      `record-count` in `schedule-report`; the update to `DelayedRecorder` must happen
+      only via the scheduled future call.
+
+      Make sure the project builds successfully.
+    expectedSkills:
+      rust:
+        - "golem-schedule-future-call-rust"
+      ts:
+        - "golem-schedule-future-call-ts"
+      scala:
+        - "golem-schedule-future-call-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "schedule-first-report"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method:
+        rust: "schedule_report"
+        ts: "scheduleReport"
+        scala: "scheduleReport"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  - id: "recorder-empty-before-deadline"
+    invoke_json:
+      agent: 'DelayedRecorder("c1")'
+      method:
+        rust: "recorded_counts"
+        ts: "recordedCounts"
+        scala: "recordedCounts"
+    expect:
+      result_json:
+        - path: "$"
+          equals: []
+
+  - id: "wait-for-scheduled-call"
+    sleep: 30
+
+  - id: "recorder-updated-after-deadline"
+    invoke_json:
+      agent: 'DelayedRecorder("c1")'
+      method:
+        rust: "recorded_counts"
+        ts: "recordedCounts"
+        scala: "recordedCounts"
+    expect:
+      result_json:
+        - path: "$"
+          equals:
+            - 1

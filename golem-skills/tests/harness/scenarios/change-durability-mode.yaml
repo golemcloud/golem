@@ -1,0 +1,52 @@
+name: "change-durability-mode"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "change-to-ephemeral"
+    prompt: >
+      In the test-app project, change the CounterAgent's durability mode to ephemeral.
+    expectedSkills:
+      rust:
+        - "golem-configure-durability-rust"
+      ts:
+        - "golem-configure-durability-ts"
+      scala:
+        - "golem-configure-durability-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-ephemeral"
+    shell:
+      command: "golem"
+      args: ["list-agent-types", "--environment", "test-app/local", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: '"mode":"Ephemeral"'
+
+  - id: "change-to-durable"
+    prompt: >
+      In the test-app project, change the CounterAgent's durability mode back to durable.
+    expectedSkills:
+      rust:
+        - "golem-configure-durability-rust"
+      ts:
+        - "golem-configure-durability-ts"
+      scala:
+        - "golem-configure-durability-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-durable"
+    shell:
+      command: "golem"
+      args: ["list-agent-types", "--environment", "test-app/local", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: '"mode":"Durable"'

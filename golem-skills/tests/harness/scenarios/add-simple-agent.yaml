@@ -1,0 +1,119 @@
+name: "add-simple-agent"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+
+  - id: "add-item-repository-agent"
+    prompt: >
+      In the test-app project, add a new durable agent type named `ItemRepositoryAgent`
+      with a single constructor or identity parameter for the repository name. It must
+      represent a simple item repository and expose externally invokable CRUD methods
+      named `create-item`, `get-item`, `update-item`, `delete-item`, and `list-items`.
+      Use an `Item` record, object type, or case class with exactly two fields: `id`
+      and `name`. `create-item` must take an `Item` and return the stored `Item`.
+      `get-item` must take an item id string and return the stored `Item`. `update-item`
+      must take an `Item`, replace the stored value with the same id, and return the
+      updated `Item`. `delete-item` must take an item id string and return `true` when
+      the item was removed. `list-items` must return all stored items. Store the items
+      in agent state keyed by id. Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-agent-rust"
+      ts:
+        - "golem-add-agent-ts"
+      scala:
+        - "golem-add-agent-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "create-item"
+    invoke_json:
+      agent: 'ItemRepositoryAgent("catalog")'
+      method:
+        rust: "create_item"
+        ts: "createItem"
+        scala: "createItem"
+      args:
+        rust: '{ id: "item-1", name: "Hammer" }'
+        ts: '{ id: "item-1", name: "Hammer" }'
+        scala: 'Item(id = "item-1", name = "Hammer")'
+    expect:
+      result_json:
+        - path: "$.id"
+          equals: "item-1"
+        - path: "$.name"
+          equals: "Hammer"
+
+  - id: "get-item"
+    invoke_json:
+      agent: 'ItemRepositoryAgent("catalog")'
+      method:
+        rust: "get_item"
+        ts: "getItem"
+        scala: "getItem"
+      args: '"item-1"'
+    expect:
+      result_json:
+        - path: "$.id"
+          equals: "item-1"
+        - path: "$.name"
+          equals: "Hammer"
+
+  - id: "update-item"
+    invoke_json:
+      agent: 'ItemRepositoryAgent("catalog")'
+      method:
+        rust: "update_item"
+        ts: "updateItem"
+        scala: "updateItem"
+      args:
+        rust: '{ id: "item-1", name: "Updated Hammer" }'
+        ts: '{ id: "item-1", name: "Updated Hammer" }'
+        scala: 'Item(id = "item-1", name = "Updated Hammer")'
+    expect:
+      result_json:
+        - path: "$.id"
+          equals: "item-1"
+        - path: "$.name"
+          equals: "Updated Hammer"
+
+  - id: "list-items"
+    invoke_json:
+      agent: 'ItemRepositoryAgent("catalog")'
+      method:
+        rust: "list_items"
+        ts: "listItems"
+        scala: "listItems"
+    expect:
+      result_json:
+        - path: "$"
+          equals:
+            - id: "item-1"
+              name: "Updated Hammer"
+
+  - id: "delete-item"
+    invoke_json:
+      agent: 'ItemRepositoryAgent("catalog")'
+      method:
+        rust: "delete_item"
+        ts: "deleteItem"
+        scala: "deleteItem"
+      args: '"item-1"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: true
+
+  - id: "list-items-empty"
+    invoke_json:
+      agent: 'ItemRepositoryAgent("catalog")'
+      method:
+        rust: "list_items"
+        ts: "listItems"
+        scala: "listItems"
+    expect:
+      result_json:
+        - path: "$"
+          equals: []

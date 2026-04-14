@@ -19,6 +19,12 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-schedule-future-call-scala` | Scheduling a future agent invocation |
 | `golem-atomic-block-scala` | Atomic blocks, persistence control, and oplog management |
 | `golem-add-transactions-scala` | Saga-pattern transactions with compensation |
+| `golem-add-http-endpoint-scala` | Exposing an agent over HTTP with mount paths and endpoint annotations |
+| `golem-http-params-scala` | Mapping path, query, header, and body parameters for HTTP endpoints |
+| `golem-add-http-auth-scala` | Enabling authentication on HTTP endpoints |
+| `golem-add-cors-scala` | Configuring CORS allowed origins for HTTP endpoints |
+| `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
+| `golem-make-http-request-scala` | Making outgoing HTTP requests from agent code using fetch or ZIO HTTP |
 
 # Golem Application Development Guide (Scala)
 

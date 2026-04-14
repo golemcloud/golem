@@ -1,0 +1,112 @@
+name: "rpc-1-invoke-and-await"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-global-registry-and-rpc"
+    prompt: >
+      In the test-app project, add a second agent type called `GlobalRegistry` that is a
+      singleton (no constructor parameter / single global instance). It must expose two
+      externally invokable methods: `register(name: string, count: u64) -> bool` and
+      `get-all() -> list<tuple<string, u64>>`. `register` must store or update the name
+      and count in agent state and return `true` if count < 5, `false` otherwise.
+      `get-all` must return all stored entries as a list of (name, count) pairs.
+
+      Then modify the existing `CounterAgent` so that every time `increment` is called it
+      invokes the `GlobalRegistry` singleton's `register` method, passing the counter's
+      own name and its new count value, and awaits the result. Change `increment` to
+      return a `bool` — the value returned by `register`.
+
+      Make sure the project builds successfully.
+    expectedSkills:
+      rust:
+        - "golem-call-another-agent-rust"
+      ts:
+        - "golem-call-another-agent-ts"
+      scala:
+        - "golem-call-another-agent-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "c1-increment-1"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: true
+
+  - id: "c1-increment-2"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: true
+
+  - id: "c1-increment-3"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: true
+
+  - id: "c1-increment-4"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: true
+
+  - id: "c1-increment-5"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: false
+
+  - id: "c1-increment-6"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: false
+
+  - id: "c2-increment-1"
+    invoke_json:
+      agent: 'CounterAgent("c2")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: true
+
+  - id: "get-all-registry"
+    invoke_json:
+      agent: "GlobalRegistry()"
+      method:
+        rust: "get_all"
+        ts: "getAll"
+        scala: "getAll"
+    expect:
+      result_json:
+        - path: "$"
+          equals_unordered:
+            - - "c1"
+              - 6
+            - - "c2"
+              - 1

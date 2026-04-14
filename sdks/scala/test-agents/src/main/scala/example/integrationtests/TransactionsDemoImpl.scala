@@ -21,6 +21,7 @@ import golem.Transactions._
 import golem.runtime.annotations.agentImplementation
 
 import scala.annotation.unused
+import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Future
 
 @agentImplementation()
@@ -37,114 +38,119 @@ final class TransactionsDemoImpl(@unused private val name: String) extends Trans
     result
   }
 
-  override def infallibleDemo(): Future[String] = Future.successful {
+  override def infallibleDemo(): Future[String] = {
     val sb = new StringBuilder
     sb.append("=== Infallible Transaction Demo ===\n")
 
     val op1 = Transactions.operation[Int, Int, String](
-      run = i => { appendTrace(s"op1.run($i)"); Right(i + 10) }
+      run = i => { appendTrace(s"op1.run($i)"); Future.successful(Right(i + 10)) }
     )(
-      compensate = (input, output) => { appendTrace(s"op1.compensate($input,$output)"); Right(()) }
+      compensate = (input, output) => { appendTrace(s"op1.compensate($input,$output)"); Future.successful(Right(())) }
     )
     val op2 = Transactions.operation[Int, Int, String](
-      run = i => { appendTrace(s"op2.run($i)"); Right(i * 2) }
+      run = i => { appendTrace(s"op2.run($i)"); Future.successful(Right(i * 2)) }
     )(
-      compensate = (input, output) => { appendTrace(s"op2.compensate($input,$output)"); Right(()) }
+      compensate = (input, output) => { appendTrace(s"op2.compensate($input,$output)"); Future.successful(Right(())) }
     )
 
-    val result = Transactions.infallibleTransaction { tx =>
-      val r1 = tx.execute(op1, 5)
-      appendTrace(s"op1 result=$r1")
-      val r2 = tx.execute(op2, r1)
-      appendTrace(s"op2 result=$r2")
-      r2
+    Transactions.infallibleTransaction { tx =>
+      tx.execute(op1, 5).flatMap { r1 =>
+        appendTrace(s"op1 result=$r1")
+        tx.execute(op2, r1).map { r2 =>
+          appendTrace(s"op2 result=$r2")
+          sb.append(s"transaction result=$r2\n")
+          sb.append("trace:\n")
+          sb.append(resetAndGetTrace())
+          sb.append("\n")
+          sb.result()
+        }
+      }
     }
-
-    sb.append(s"transaction result=$result\n")
-    sb.append("trace:\n")
-    sb.append(resetAndGetTrace())
-    sb.append("\n")
-    sb.result()
   }
 
-  override def fallibleSuccessDemo(): Future[String] = Future.successful {
+  override def fallibleSuccessDemo(): Future[String] = {
     val sb = new StringBuilder
     sb.append("=== Fallible Transaction (Success) Demo ===\n")
 
     val op1 = Operation[Int, Int, String](
-      run = i => { appendTrace(s"op1.run($i)"); Right(i + 100) },
-      compensateFn = (input, output) => { appendTrace(s"op1.compensate($input,$output)"); Right(()) }
+      run = i => { appendTrace(s"op1.run($i)"); Future.successful(Right(i + 100)) },
+      compensateFn = (input, output) => { appendTrace(s"op1.compensate($input,$output)"); Future.successful(Right(())) }
     )
     val op2 = Operation[Int, Int, String](
-      run = i => { appendTrace(s"op2.run($i)"); Right(i - 50) },
-      compensateFn = (input, output) => { appendTrace(s"op2.compensate($input,$output)"); Right(()) }
+      run = i => { appendTrace(s"op2.run($i)"); Future.successful(Right(i - 50)) },
+      compensateFn = (input, output) => { appendTrace(s"op2.compensate($input,$output)"); Future.successful(Right(())) }
     )
 
-    val result = Transactions.fallibleTransaction[Int, String] { tx =>
-      val r1 = tx.execute(op1, 1)
-      appendTrace(s"op1 result=$r1")
-      r1 match {
-        case Left(err) => Left(err)
+    Transactions.fallibleTransaction[Int, String] { tx =>
+      tx.execute(op1, 1).flatMap {
+        case Left(err) =>
+          appendTrace(s"op1 result=Left($err)")
+          Future.successful(Left(err))
         case Right(v1) =>
-          val r2 = tx.execute(op2, v1)
-          appendTrace(s"op2 result=$r2")
-          r2
+          appendTrace(s"op1 result=Right($v1)")
+          tx.execute(op2, v1).map { r2 =>
+            appendTrace(s"op2 result=$r2")
+            r2
+          }
       }
+    }.map { result =>
+      sb.append(s"transaction result=$result\n")
+      sb.append("trace:\n")
+      sb.append(resetAndGetTrace())
+      sb.append("\n")
+      sb.result()
     }
-
-    sb.append(s"transaction result=$result\n")
-    sb.append("trace:\n")
-    sb.append(resetAndGetTrace())
-    sb.append("\n")
-    sb.result()
   }
 
-  override def fallibleFailureDemo(): Future[String] = Future.successful {
+  override def fallibleFailureDemo(): Future[String] = {
     val sb = new StringBuilder
     sb.append("=== Fallible Transaction (Failure + Rollback) Demo ===\n")
 
     val op1 = Operation[Int, Int, String](
-      run = i => { appendTrace(s"op1.run($i)"); Right(i + 1) },
-      compensateFn = (input, output) => { appendTrace(s"op1.compensate($input,$output)"); Right(()) }
+      run = i => { appendTrace(s"op1.run($i)"); Future.successful(Right(i + 1)) },
+      compensateFn = (input, output) => { appendTrace(s"op1.compensate($input,$output)"); Future.successful(Right(())) }
     )
     val op2 = Operation[Int, Int, String](
-      run = i => { appendTrace(s"op2.run($i)"); Right(i + 2) },
-      compensateFn = (input, output) => { appendTrace(s"op2.compensate($input,$output)"); Right(()) }
+      run = i => { appendTrace(s"op2.run($i)"); Future.successful(Right(i + 2)) },
+      compensateFn = (input, output) => { appendTrace(s"op2.compensate($input,$output)"); Future.successful(Right(())) }
     )
     val failOp = Operation[Int, Int, String](
-      run = i => { appendTrace(s"failOp.run($i) -> LEFT"); Left("intentional-failure") },
-      compensateFn = (input, output) => { appendTrace(s"failOp.compensate($input,$output)"); Right(()) }
+      run = i => { appendTrace(s"failOp.run($i) -> LEFT"); Future.successful(Left("intentional-failure")) },
+      compensateFn = (input, output) => { appendTrace(s"failOp.compensate($input,$output)"); Future.successful(Right(())) }
     )
 
-    val result = Transactions.fallibleTransaction[Int, String] { tx =>
-      val r1 = tx.execute(op1, 10)
-      appendTrace(s"op1 result=$r1")
-      r1 match {
-        case Left(err) => Left(err)
+    Transactions.fallibleTransaction[Int, String] { tx =>
+      tx.execute(op1, 10).flatMap {
+        case Left(err) =>
+          appendTrace(s"op1 result=Left($err)")
+          Future.successful(Left(err))
         case Right(v1) =>
-          val r2 = tx.execute(op2, v1)
-          appendTrace(s"op2 result=$r2")
-          r2 match {
-            case Left(err) => Left(err)
+          appendTrace(s"op1 result=Right($v1)")
+          tx.execute(op2, v1).flatMap {
+            case Left(err) =>
+              appendTrace(s"op2 result=Left($err)")
+              Future.successful(Left(err))
             case Right(v2) =>
-              val r3 = tx.execute(failOp, v2)
-              appendTrace(s"failOp result=$r3")
-              r3
+              appendTrace(s"op2 result=Right($v2)")
+              tx.execute(failOp, v2).map { r3 =>
+                appendTrace(s"failOp result=$r3")
+                r3
+              }
           }
       }
-    }
+    }.map { result =>
+      val resultStr = result match {
+        case Right(v)                                                            => s"Right($v)"
+        case Left(TransactionFailure.FailedAndRolledBackCompletely(err))         => s"FailedAndRolledBackCompletely($err)"
+        case Left(TransactionFailure.FailedAndRolledBackPartially(err, compErr)) =>
+          s"FailedAndRolledBackPartially($err, $compErr)"
+      }
 
-    val resultStr = result match {
-      case Right(v)                                                            => s"Right($v)"
-      case Left(TransactionFailure.FailedAndRolledBackCompletely(err))         => s"FailedAndRolledBackCompletely($err)"
-      case Left(TransactionFailure.FailedAndRolledBackPartially(err, compErr)) =>
-        s"FailedAndRolledBackPartially($err, $compErr)"
+      sb.append(s"transaction result=$resultStr\n")
+      sb.append("trace:\n")
+      sb.append(resetAndGetTrace())
+      sb.append("\n")
+      sb.result()
     }
-
-    sb.append(s"transaction result=$resultStr\n")
-    sb.append("trace:\n")
-    sb.append(resetAndGetTrace())
-    sb.append("\n")
-    sb.result()
   }
 }

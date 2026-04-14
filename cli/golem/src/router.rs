@@ -36,6 +36,14 @@ pub async fn start_router(
     use poem::endpoint::PrometheusExporter;
     use poem::listener::TcpListener;
 
+    let StartedComponents {
+        registry_service,
+        worker_executor,
+        worker_service,
+        prometheus_registry,
+        ..
+    } = started_components;
+
     info!("Starting single-executable http api");
 
     let ipv4_addr: Ipv4Addr = listener_addr.parse().context(format!(
@@ -51,10 +59,10 @@ pub async fn start_router(
         .expect("socket address")
         .port();
 
-    let metrics = PrometheusExporter::new(started_components.prometheus_registry.clone());
+    let metrics = PrometheusExporter::new(prometheus_registry.clone());
 
-    let worker_service_api = Arc::new(started_components.worker_service.api_endpoint);
-    let registry_service_api = Arc::new(started_components.registry_service.endpoint);
+    let worker_service_api = Arc::new(worker_service.api_endpoint);
+    let registry_service_api = Arc::new(registry_service.endpoint);
 
     let app = Route::new()
         // Worker endpoints
@@ -147,6 +155,11 @@ pub async fn start_router(
 
     join_set.spawn(
         async move {
+            // Keep the worker executor alive for as long as the router is serving requests.
+            // Dropping its RunDetails cancels the shutdown token that drives background services
+            // such as the scheduler loop.
+            let _worker_executor = worker_executor;
+
             Server::new_with_acceptor(acceptor)
                 .run(app)
                 .await

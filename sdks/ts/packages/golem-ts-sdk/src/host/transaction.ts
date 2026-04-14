@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { executeWithDrop, markAtomicOperation } from './guard';
+import { executeWithDropAsync, markAtomicOperation } from './guard';
 import { type OplogIndex, getOplogIndex, setOplogIndex } from './hostapi';
 import { Result } from './result';
 
@@ -26,18 +26,18 @@ export interface Operation<In, Out, Err> {
   /**
    * The action to execute.
    * @param input - The input to the operation.
-   * @returns The result of the operation.
+   * @returns A promise resolving to the result of the operation.
    */
-  execute(input: In): Result<Out, Err>;
+  execute(input: In): Promise<Result<Out, Err>>;
 
   /**
    * Compensation to perform in case of failure.
    * Compensations should not throw errors.
    * @param input - The input to the operation.
    * @param result - The result of the operation.
-   * @returns The result of the compensation.
+   * @returns A promise resolving to the result of the compensation.
    */
-  compensate(input: In, result: Out): Result<void, Err>;
+  compensate(input: In, result: Out): Promise<Result<void, Err>>;
 }
 
 /**
@@ -47,21 +47,21 @@ export interface Operation<In, Out, Err> {
  * @returns The created Operation.
  */
 export function operation<In, Out, Err>(
-  execute: (input: In) => Result<Out, Err>,
-  compensate: (input: In, result: Out) => Result<void, Err>,
+  execute: (input: In) => Promise<Result<Out, Err>>,
+  compensate: (input: In, result: Out) => Promise<Result<void, Err>>,
 ): Operation<In, Out, Err> {
   return new OperationImpl(execute, compensate);
 }
 
 class OperationImpl<In, Out, Err> implements Operation<In, Out, Err> {
   constructor(
-    public readonly execute: (input: In) => Result<Out, Err>,
-    public readonly compensate: (input: In, result: Out) => Result<void, Err>,
+    public readonly execute: (input: In) => Promise<Result<Out, Err>>,
+    public readonly compensate: (input: In, result: Out) => Promise<Result<void, Err>>,
   ) {}
 }
 
 class InfallibleTransaction {
-  private compensations: (() => void)[] = [];
+  private compensations: (() => Promise<void>)[] = [];
 
   constructor(private readonly beginOplogIndex: OplogIndex) {}
 
@@ -69,15 +69,15 @@ class InfallibleTransaction {
    * Executes an operation within the infallible transaction.
    * @param operation - The operation to execute.
    * @param input - The input to the operation.
-   * @returns The result of the operation.
+   * @returns A promise resolving to the result of the operation.
    */
-  execute<In, Out, Err>(operation: Operation<In, Out, Err>, input: In): Out {
-    const result = operation.execute(input);
+  async execute<In, Out, Err>(operation: Operation<In, Out, Err>, input: In): Promise<Out> {
+    const result = await operation.execute(input);
     if (result.isOk()) {
       this.compensations.push(
         // Compensations cannot fail in infallible transactions.
-        () => {
-          const compensationResult = operation.compensate(input, result.val);
+        async () => {
+          const compensationResult = await operation.compensate(input, result.val);
           if (compensationResult.isErr()) {
             throw new Error('Compensation action failed');
           }
@@ -85,37 +85,37 @@ class InfallibleTransaction {
       );
       return result.val;
     } else {
-      this.retry();
+      await this.retry();
       throw new Error('Unreachable code');
     }
   }
 
-  private retry(): void {
+  private async retry(): Promise<void> {
     // Rollback all the compensations in reverse order
     for (let i = this.compensations.length - 1; i >= 0; i--) {
-      this.compensations[i]();
+      await this.compensations[i]();
     }
     setOplogIndex(this.beginOplogIndex);
   }
 }
 
 class FallibleTransaction<Err> {
-  private compensations: (() => Result<void, Err>)[] = [];
+  private compensations: (() => Promise<Result<void, Err>>)[] = [];
 
   /**
    * Executes an operation within the fallible transaction.
    * @param operation - The operation to execute.
    * @param input - The input to the operation.
-   * @returns The result of the operation.
+   * @returns A promise resolving to the result of the operation.
    */
-  execute<In, Out, OpErr extends Err>(
+  async execute<In, Out, OpErr extends Err>(
     operation: Operation<In, Out, OpErr>,
     input: In,
-  ): Result<Out, Err> {
-    const result = operation.execute(input);
+  ): Promise<Result<Out, Err>> {
+    const result = await operation.execute(input);
     if (result.isOk()) {
-      this.compensations.push(() => {
-        return operation.compensate(input, result.val);
+      this.compensations.push(async () => {
+        return await operation.compensate(input, result.val);
       });
       return result;
     } else {
@@ -126,11 +126,11 @@ class FallibleTransaction<Err> {
   /**
    * Handles the failure of the fallible transaction.
    * @param error - The error that caused the failure.
-   * @returns The transaction failure result.
+   * @returns A promise resolving to the transaction failure result.
    */
-  onFailure(error: Err): TransactionFailure<Err> {
+  async onFailure(error: Err): Promise<TransactionFailure<Err>> {
     for (let i = this.compensations.length - 1; i >= 0; i--) {
-      const compensationResult = this.compensations[i]();
+      const compensationResult = await this.compensations[i]();
       if (compensationResult.isErr()) {
         return {
           type: 'FailedAndRolledBackPartially',
@@ -173,14 +173,16 @@ export type TransactionFailure<Err> =
  * Fatal errors (panic) and external executor failures currently cannot perform the
  * rollback actions.
  *
- * @param f - The function that defines the transaction.
- * @returns The result of the transaction.
+ * @param f - The async function that defines the transaction.
+ * @returns A promise resolving to the result of the transaction.
  */
-export function infallibleTransaction<Out>(f: (tx: InfallibleTransaction) => Out): Out {
+export async function infallibleTransaction<Out>(
+  f: (tx: InfallibleTransaction) => Promise<Out>,
+): Promise<Out> {
   const guard = markAtomicOperation();
   const beginOplogIndex = getOplogIndex();
   const tx = new InfallibleTransaction(beginOplogIndex);
-  return executeWithDrop([guard], () => f(tx));
+  return executeWithDropAsync([guard], () => f(tx));
 }
 
 /**
@@ -193,23 +195,23 @@ export function infallibleTransaction<Out>(f: (tx: InfallibleTransaction) => Out
  * In case of fatal errors (panic) and external executor failures, it does not perform the
  * compensation actions and the whole transaction gets retried.
  *
- * @param f - The function that defines the transaction.
- * @returns The result of the transaction.
+ * @param f - The async function that defines the transaction.
+ * @returns A promise resolving to the result of the transaction.
  */
-export function fallibleTransaction<Out, Err>(
-  f: (tx: FallibleTransaction<Err>) => Result<Out, Err>,
-): TransactionResult<Out, Err> {
+export async function fallibleTransaction<Out, Err>(
+  f: (tx: FallibleTransaction<Err>) => Promise<Result<Out, Err>>,
+): Promise<TransactionResult<Out, Err>> {
   const guard = markAtomicOperation();
   const tx = new FallibleTransaction<Err>();
-  const execute = () => {
-    const result = f(tx);
+  const execute = async () => {
+    const result = await f(tx);
     if (result.isOk()) {
       return Result.ok(result.val);
     } else {
-      return Result.err(tx.onFailure(result.val));
+      return Result.err(await tx.onFailure(result.val));
     }
   };
-  return executeWithDrop([guard], execute);
+  return executeWithDropAsync([guard], execute);
 }
 
 /**

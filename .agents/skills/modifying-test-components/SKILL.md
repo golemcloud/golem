@@ -38,6 +38,12 @@ If no `AGENTS.md` exists, **stop** — you cannot rebuild this component.
 
 Each component's `AGENTS.md` contains specific build instructions. Follow them exactly.
 
+**Important:** When running `golem build` (or `../../target/debug/golem build`) for test components, always pass `--yes` to automatically confirm dependency/configuration updates without interactive prompts. For example:
+
+```shell
+../../target/debug/golem build --yes
+```
+
 ## TS SDK Change Rebuild Chain
 
 When modifying the TypeScript SDK, you must follow this exact rebuild order:

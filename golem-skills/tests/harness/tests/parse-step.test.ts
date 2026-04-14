@@ -33,6 +33,30 @@ describe("parseStep", () => {
     }
   });
 
+  it("parses an invoke step with language-conditional method names", () => {
+    const result = parseStep({
+      invoke: {
+        agent: "my-agent",
+        method: {
+          rust: "create_item",
+          ts: "createItem",
+          scala: "createItem",
+        },
+        args: '{"x":1}',
+      },
+    });
+    assert.equal(result.tag, "invoke");
+    if (result.tag === "invoke") {
+      assert.equal(result.invoke.agent, "my-agent");
+      assert.deepEqual(result.invoke.method, {
+        rust: "create_item",
+        ts: "createItem",
+        scala: "createItem",
+      });
+      assert.equal(result.invoke.args, '{"x":1}');
+    }
+  });
+
   it("parses a shell step", () => {
     const result = parseStep({
       shell: { command: "echo", args: ["hi"], cwd: "/tmp" },

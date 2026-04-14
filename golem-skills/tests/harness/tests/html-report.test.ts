@@ -105,14 +105,15 @@ describe("generateHtmlReport", () => {
 
   it("includes scenario details", () => {
     const html = generateHtmlReport(baseSummary, sampleReports);
-    assert.ok(html.includes("passing-scenario"));
-    assert.ok(html.includes("failing-scenario"));
+    assert.ok(html.includes("passing-scenario [claude-code x ts]"));
+    assert.ok(html.includes("failing-scenario [claude-code x ts]"));
   });
 
   it("includes failure summary", () => {
     const html = generateHtmlReport(baseSummary, sampleReports);
     assert.ok(html.includes("Failures"));
     assert.ok(html.includes("BUILD_FAILED"));
+    assert.ok(html.includes("failing-scenario [claude-code x ts]"));
   });
 
   it("escapes user strings in scenario names", () => {
@@ -249,7 +250,24 @@ describe("generateHtmlReport", () => {
           failed: 1,
         },
       ],
-      summaries: [],
+      summaries: [
+        {
+          ...baseSummary,
+          agent: "opencode",
+          language: "ts",
+          failed: 1,
+          passed: 1,
+          total: 2,
+          worstFailures: [
+            {
+              scenario: "failing-scenario",
+              agent: "opencode",
+              language: "ts",
+              error: "ASSERTION_FAILED",
+            },
+          ],
+        },
+      ],
     };
 
     const html = generateHtmlReport(merged, []);
@@ -257,5 +275,7 @@ describe("generateHtmlReport", () => {
     assert.ok(html.includes("Matrix Results"));
     assert.ok(html.includes("claude-code"));
     assert.ok(html.includes("opencode"));
+    assert.ok(html.includes("Failures"));
+    assert.ok(html.includes("failing-scenario [opencode x ts]"));
   });
 });

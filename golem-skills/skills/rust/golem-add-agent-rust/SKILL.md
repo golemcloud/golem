@@ -83,3 +83,4 @@ pub struct MyData {
 - Constructor parameters form the agent identity — two agents with the same parameters are the same agent
 - Agents are created implicitly on first invocation — no separate creation step
 - Invocations are processed sequentially in a single thread — no concurrency within a single agent
+- **Never use `block_on`** — all agent methods run in an async context. Use `async` methods and `.await` instead of blocking on futures

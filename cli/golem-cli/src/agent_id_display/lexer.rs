@@ -25,6 +25,8 @@ pub enum Token {
     Comma,
     Colon,
     DoubleColon,
+    Dot,
+    Eq,
     Ident(String),
     StringLit(String),
     CharLit(char),
@@ -198,6 +200,14 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                     Ok((Token::Colon, start, self.pos))
                 }
+            }
+            b'.' => {
+                self.pos += 1;
+                Ok((Token::Dot, start, self.pos))
+            }
+            b'=' => {
+                self.pos += 1;
+                Ok((Token::Eq, start, self.pos))
             }
             b'@' => {
                 if self.pos + 1 < bytes.len() && bytes[self.pos + 1] == b't' {

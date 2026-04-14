@@ -1,0 +1,75 @@
+name: "rpc-2-trigger"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-callback-agent"
+    prompt: >
+      In the test-app project, add a second agent type called `Callback` that has the same constructor parameter as
+      the existing CounterAgent. Create a method in `Callback` called `run` that takes no parameters, but instead calls
+      back the `CounterAgent`'s increment identified by the same name as its own constructor parameter. 
+      In CounterAgent, add a second method called `test` that receives a counter value and _triggers_ the `Callback` agent's (identified by the
+      counter's name) `run` method and then increments the counter just like the existing `increment` method. Make sure
+      to just trigger the remote call otherwise we end up with a deadlock. Add another method to Callback called `lastSeen`
+      for testing - it should return the last seen counter value (passed to `run`). 
+      
+      With this setup we expect that the CounterAgent's original `increment` behaves as before (increment by 1, no remote call),
+      but after calling `test`, the counter eventually got incremented by 2 (as it did a roundtrip call to its corresponding `Callback` 
+      agent instance).
+
+      Make sure the project builds successfully.
+    expectedSkills:
+      rust:
+        - "golem-call-another-agent-rust"
+        - "golem-fire-and-forget-rust"
+      ts:
+        - "golem-call-another-agent-ts"
+        - "golem-fire-and-forget-ts"
+      scala:
+        - "golem-call-another-agent-scala"
+        - "golem-fire-and-forget-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "c1-increment-1"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  - id: "c1-test-1"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "test"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2
+
+  - id: "callback-last-seen"
+    invoke_json:
+      agent: 'Callback("c1")'
+      method:
+        rust: "last_seen"
+        ts: "lastSeen"
+        scala: "lastSeen"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  - id: "c1-increment-2"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 4

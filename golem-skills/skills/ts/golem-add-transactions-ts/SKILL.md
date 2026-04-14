@@ -11,31 +11,31 @@ Golem supports the **saga pattern** for multi-step operations where each step ha
 
 ## Defining Operations
 
-Each operation has an `execute` function and a `compensate` function:
+Each operation has an async `execute` function and an async `compensate` function:
 
 ```typescript
 import { operation, Result } from '@golemcloud/golem-ts-sdk';
 
 const reserveInventory = operation<string, string, string>(
-    (sku) => {
+    async (sku) => {
         // Execute: reserve the item
-        const reservationId = callInventoryApi(sku);
+        const reservationId = await callInventoryApi(sku);
         return Result.ok(reservationId);
     },
-    (sku, reservationId) => {
+    async (sku, reservationId) => {
         // Compensate: cancel the reservation
-        cancelReservation(reservationId);
+        await cancelReservation(reservationId);
         return Result.ok(undefined);
     },
 );
 
 const chargePayment = operation<number, string, string>(
-    (amount) => {
-        const chargeId = callPaymentApi(amount);
+    async (amount) => {
+        const chargeId = await callPaymentApi(amount);
         return Result.ok(chargeId);
     },
-    (amount, chargeId) => {
-        refundPayment(chargeId);
+    async (amount, chargeId) => {
+        await refundPayment(chargeId);
         return Result.ok(undefined);
     },
 );
@@ -48,11 +48,11 @@ On failure, compensates completed steps and returns the error:
 ```typescript
 import { fallibleTransaction, Result } from '@golemcloud/golem-ts-sdk';
 
-const result = fallibleTransaction((tx) => {
-    const reservation = tx.execute(reserveInventory, "SKU-123");
+const result = await fallibleTransaction(async (tx) => {
+    const reservation = await tx.execute(reserveInventory, "SKU-123");
     if (reservation.isErr()) return reservation;
 
-    const charge = tx.execute(chargePayment, 49.99);
+    const charge = await tx.execute(chargePayment, 49.99);
     if (charge.isErr()) return charge;
 
     return Result.ok({ reservation: reservation.val, charge: charge.val });
@@ -66,9 +66,9 @@ On failure, compensates completed steps and **retries the entire transaction**:
 ```typescript
 import { infallibleTransaction } from '@golemcloud/golem-ts-sdk';
 
-const result = infallibleTransaction((tx) => {
-    const reservation = tx.execute(reserveInventory, "SKU-123");
-    const charge = tx.execute(chargePayment, 49.99);
+const result = await infallibleTransaction(async (tx) => {
+    const reservation = await tx.execute(reserveInventory, "SKU-123");
+    const charge = await tx.execute(chargePayment, 49.99);
     return { reservation, charge };
 });
 // Always succeeds eventually

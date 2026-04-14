@@ -9,6 +9,8 @@ description: "Using atomic blocks, persistence control, idempotency, and oplog m
 
 Golem provides **automatic durable execution** — all agents are durable by default. These APIs are **advanced controls** that most agents will never need. Only use them when you have specific requirements around persistence granularity, idempotency, or atomicity.
 
+All helper functions (`atomically`, `withPersistenceLevel`, `withIdempotenceMode`, `withRetryPolicy`) accept both sync and async callbacks. When an async callback is passed, the function returns a `Promise`.
+
 ## Atomic Operations
 
 Group side effects so they are retried together on failure:
@@ -16,9 +18,17 @@ Group side effects so they are retried together on failure:
 ```typescript
 import { atomically } from '@golemcloud/golem-ts-sdk';
 
+// Sync
 const [a, b] = atomically(() => {
     const a = sideEffect1();
     const b = sideEffect2(a);
+    return [a, b];
+});
+
+// Async
+const [a, b] = await atomically(async () => {
+    const a = await sideEffect1();
+    const b = await sideEffect2(a);
     return [a, b];
 });
 ```
@@ -32,9 +42,14 @@ Temporarily disable oplog recording for performance-sensitive sections:
 ```typescript
 import { withPersistenceLevel } from '@golemcloud/golem-ts-sdk';
 
+// Sync
 withPersistenceLevel({ tag: 'persist-nothing' }, () => {
     // No oplog entries — side effects will be replayed on recovery
-    // Use for idempotent operations where replay is safe
+});
+
+// Async
+await withPersistenceLevel({ tag: 'persist-nothing' }, async () => {
+    await someAsyncOperation();
 });
 ```
 
@@ -45,9 +60,14 @@ Control whether HTTP requests are retried when the result is uncertain:
 ```typescript
 import { withIdempotenceMode } from '@golemcloud/golem-ts-sdk';
 
+// Sync
 withIdempotenceMode(false, () => {
     // HTTP requests won't be automatically retried
-    // Use for non-idempotent external API calls (e.g., payments)
+});
+
+// Async
+await withIdempotenceMode(false, async () => {
+    await nonIdempotentApiCall();
 });
 ```
 
@@ -80,7 +100,13 @@ Override the default retry policy for a block of code:
 ```typescript
 import { withRetryPolicy } from '@golemcloud/golem-ts-sdk';
 
+// Sync
 withRetryPolicy({ /* ... */ }, () => {
     // Code with custom retry behavior
+});
+
+// Async
+await withRetryPolicy({ /* ... */ }, async () => {
+    await someRetryableOperation();
 });
 ```

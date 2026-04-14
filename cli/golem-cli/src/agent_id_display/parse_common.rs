@@ -105,6 +105,33 @@ pub(super) trait Dialect: Sized {
         typ: &AnalysedType,
     ) -> Result<ValueAndType, ParseError>;
 
+    fn parse_list(
+        lexer: &mut Lexer,
+        tl: &golem_wasm::analysis::TypeList,
+        typ: &AnalysedType,
+    ) -> Result<ValueAndType, ParseError> {
+        lexer.expect(&Token::LBrack)?;
+        let mut items = Vec::new();
+        while *lexer.peek()? != Token::RBrack {
+            if !items.is_empty() {
+                lexer.expect(&Token::Comma)?;
+                if *lexer.peek()? == Token::RBrack {
+                    break;
+                }
+            }
+            items.push(parse_cm_value::<Self>(lexer, &tl.inner)?.value);
+        }
+        lexer.expect(&Token::RBrack)?;
+        Ok(ValueAndType::new(Value::List(items), typ.clone()))
+    }
+
+    /// The token used to separate field names from values in named element lists.
+    /// Defaults to `Token::Colon` (`:`) for Rust and TypeScript.
+    /// Scala overrides this to `Token::Eq` (`=`).
+    fn named_element_separator() -> Token {
+        Token::Colon
+    }
+
     fn parse_unstructured_text(lexer: &mut Lexer) -> Result<TextReference, ParseError>;
     fn parse_unstructured_binary(lexer: &mut Lexer) -> Result<BinaryReference, ParseError>;
 }
@@ -162,7 +189,7 @@ fn parse_named_elements<D: Dialect>(
         }
         first = false;
         let (key, pos, _) = lexer.expect_ident()?;
-        lexer.expect(&Token::Colon)?;
+        lexer.expect(&D::named_element_separator())?;
         let normalized_key = D::normalize_field_name(&key);
         let (_, idx) = name_map
             .iter()
@@ -268,21 +295,7 @@ pub(super) fn parse_cm_value<D: Dialect>(
             let (s, _, _) = lexer.expect_string()?;
             Ok(ValueAndType::new(Value::String(s), typ.clone()))
         }
-        AnalysedType::List(tl) => {
-            lexer.expect(&Token::LBrack)?;
-            let mut items = Vec::new();
-            while *lexer.peek()? != Token::RBrack {
-                if !items.is_empty() {
-                    lexer.expect(&Token::Comma)?;
-                    if *lexer.peek()? == Token::RBrack {
-                        break;
-                    }
-                }
-                items.push(parse_cm_value::<D>(lexer, &tl.inner)?.value);
-            }
-            lexer.expect(&Token::RBrack)?;
-            Ok(ValueAndType::new(Value::List(items), typ.clone()))
-        }
+        AnalysedType::List(tl) => D::parse_list(lexer, tl, typ),
         AnalysedType::Tuple(tt) => D::parse_tuple(lexer, tt, typ),
         AnalysedType::Record(tr) => D::parse_record(lexer, tr, typ),
         AnalysedType::Variant(tv) => D::parse_variant(lexer, tv, typ),

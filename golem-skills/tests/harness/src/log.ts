@@ -13,6 +13,8 @@ import chalk from "chalk";
 
 type Colorizer = (text: string) => string;
 
+const TOOL_INLINE_VALUE_LIMIT = 200;
+
 const DRIVER_TAGS = ["amp", "claude-code", "codex", "opencode"] as const;
 const TAG_WIDTH = Math.max(
   ...["golem", "scenario", "step", "run", "dry-run", "summary", ...DRIVER_TAGS].map(
@@ -50,7 +52,7 @@ function scenarioDetail(line: string, lineColor?: Colorizer): void {
   emit("scenario", chalk.blue, line, lineColor);
 }
 
-function stepLine(label: string, line: string): void {
+export function stepLine(label: string, line: string): void {
   emit("step", chalk.cyan, `${chalk.bold(label)} ${line}`);
 }
 
@@ -127,7 +129,7 @@ function formatStepAction(description: string): string {
     return `${chalk.cyan("• delete agent")} ${chalk.white(name)}`;
   }
 
-  match = /^running shell command "(.+)"$/.exec(description);
+  match = /^running shell command(?::| )"?(.+?)"?$/.exec(description);
   if (match) {
     const [, command] = match;
     return `${chalk.yellow("▶ shell")} ${chalk.white(command)}`;
@@ -217,9 +219,152 @@ export function driverToolUse(
   toolName: string,
   input?: Record<string, unknown>,
 ): void {
-  const inputStr =
-    input && Object.keys(input).length > 0 ? " " + chalk.gray(JSON.stringify(input)) : "";
-  driverLine(prefix, `${chalk.yellow("▶")} ${chalk.yellow(toolName)}${inputStr}`);
+  const { summary, details } = formatToolLog(toolName, input);
+  driverLine(prefix, `${chalk.yellow("▶")} ${chalk.yellow(toolName)}${summary}`);
+  for (const line of details) {
+    driverLine(prefix, `${chalk.gray("│")} ${line}`);
+  }
+}
+
+function formatToolLog(
+  toolName: string,
+  input?: Record<string, unknown>,
+): { summary: string; details: string[] } {
+  if (!input || Object.keys(input).length === 0) {
+    return { summary: "", details: [] };
+  }
+
+  const filePath = pickString(input, [
+    "path",
+    "file_path",
+    "filePath",
+    "target_file",
+    "targetFile",
+    "newPath",
+    "new_path",
+  ]);
+  const patchText = pickString(input, ["patchText", "patch", "diff"]);
+  if (patchText !== undefined) {
+    return {
+      summary: filePath ? ` ${chalk.gray(filePath)}` : "",
+      details: limitDetailLines(patchText.split(/\r?\n/)),
+    };
+  }
+
+  const content = pickString(input, ["content", "file_text", "fileText"]);
+  const oldText = pickString(input, ["old_str", "oldText", "old_text"]);
+  const newText = pickString(input, ["new_str", "newText", "new_text"]);
+
+  if (filePath && (content !== undefined || oldText !== undefined || newText !== undefined)) {
+    const rest = omitKeys(input, [
+      "path",
+      "file_path",
+      "filePath",
+      "target_file",
+      "targetFile",
+      "newPath",
+      "new_path",
+      "content",
+      "file_text",
+      "fileText",
+      "old_str",
+      "oldText",
+      "old_text",
+      "new_str",
+      "newText",
+      "new_text",
+    ]);
+
+    const details = [
+      ...formatObjectDetails(rest),
+      ...(content !== undefined ? formatNamedBlock("content", content) : []),
+      ...(oldText !== undefined ? formatNamedBlock("old", oldText) : []),
+      ...(newText !== undefined ? formatNamedBlock("new", newText) : []),
+    ];
+
+    return {
+      summary: ` ${chalk.gray(filePath)}`,
+      details: limitDetailLines(details),
+    };
+  }
+
+  if (filePath) {
+    const rest = omitKeys(input, [
+      "path",
+      "file_path",
+      "filePath",
+      "target_file",
+      "targetFile",
+      "newPath",
+      "new_path",
+    ]);
+    return {
+      summary: ` ${chalk.gray(filePath)}`,
+      details: formatObjectDetails(rest),
+    };
+  }
+
+  const command = pickString(input, ["command", "cmd"]);
+  if (command !== undefined) {
+    const rest = omitKeys(input, ["command", "cmd"]);
+    const commandSummary =
+      command.length <= TOOL_INLINE_VALUE_LIMIT ? ` ${chalk.gray(command)}` : "";
+    return {
+      summary: commandSummary,
+      details:
+        command.length <= TOOL_INLINE_VALUE_LIMIT
+          ? formatObjectDetails(rest)
+          : limitDetailLines([
+              ...formatNamedBlock("command", command),
+              ...formatObjectDetails(rest),
+            ]),
+    };
+  }
+
+  const pretty = JSON.stringify(input, null, 2);
+  if (pretty.length <= TOOL_INLINE_VALUE_LIMIT && !pretty.includes("\n")) {
+    return { summary: ` ${chalk.gray(pretty)}`, details: [] };
+  }
+
+  return {
+    summary: "",
+    details: limitDetailLines(pretty.split(/\r?\n/)).map((line) => chalk.gray(line)),
+  };
+}
+
+function limitDetailLines(lines: string[]): string[] {
+  return lines;
+}
+
+function pickString(input: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === "string") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function omitKeys(input: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const result = { ...input };
+  for (const key of keys) {
+    delete result[key];
+  }
+  return result;
+}
+
+function formatObjectDetails(input: Record<string, unknown>): string[] {
+  if (Object.keys(input).length === 0) {
+    return [];
+  }
+  return limitDetailLines(JSON.stringify(input, null, 2).split(/\r?\n/)).map((line) =>
+    chalk.gray(line),
+  );
+}
+
+function formatNamedBlock(label: string, value: string): string[] {
+  return [chalk.gray(`${label}:`), ...value.split(/\r?\n/)];
 }
 
 export function driverSuccess(prefix: string, durationStr: string, extra?: string): void {
@@ -293,6 +438,13 @@ export function stepAction(label: string, description: string): void {
   stepLine(label, formatStepAction(description));
 }
 
+export function stepOutput(label: string, stream: "stdout" | "stderr", text: string): void {
+  const prefix = stream === "stderr" ? chalk.red("err│") : chalk.gray("out│");
+  for (const line of text.split(/\r?\n/)) {
+    stepLine(label, `${prefix} ${line}`);
+  }
+}
+
 export function stepPrompt(
   label: string,
   prompt: string,
@@ -349,6 +501,30 @@ export function invokeResult(label: string, target: string, stdout: string): voi
   for (const line of stdout.split(/\r?\n/)) {
     if (line.trim()) stepLine(label, `${chalk.gray("│")} ${chalk.white(line)}`);
   }
+}
+
+export function httpResponse(label: string, status: number, body: string): void {
+  stepLine(label, `${chalk.green("✓ http")} ${chalk.gray(`status=${status}`)}`);
+  if (!body.trim()) {
+    stepLine(label, `${chalk.gray("│")} ${chalk.gray("<empty body>")}`);
+    return;
+  }
+
+  for (const line of body.split(/\r?\n/)) {
+    stepLine(label, `${chalk.gray("│")} ${chalk.white(line)}`);
+  }
+}
+
+export function httpFailure(label: string, message: string): void {
+  stepLine(label, `${chalk.red("✗ http")} ${chalk.red(message)}`);
+}
+
+export function assertionPassed(label: string, assertion: string, message: string): void {
+  stepLine(label, `${chalk.green("✓ assertion")} ${chalk.white(assertion)} ${chalk.gray(message)}`);
+}
+
+export function assertionFailed(label: string, assertion: string, message: string): void {
+  stepLine(label, `${chalk.red("✗ assertion")} ${chalk.white(assertion)} ${chalk.gray(message)}`);
 }
 
 // --- Scenario results ------------------------------------------------------

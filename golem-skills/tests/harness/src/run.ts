@@ -24,6 +24,7 @@ import {
   type HtmlScenarioReport,
 } from "./html-report.js";
 import * as log from "./log.js";
+import { formatScenarioMatrixLabel, renderGitHubStepSummary } from "./summary.js";
 import { detectGolemWorkspaceRoot, resolveGolemTargetDir, GolemServer } from "./workspace.js";
 
 const DEFAULT_SCENARIO_RETRIES = 5;
@@ -314,6 +315,20 @@ Options:
     (f) => f.endsWith(".yaml") || f.endsWith(".yml"),
   );
 
+  // Validate that the --scenario filter matches an existing scenario
+  if (scenarioFilter) {
+    const allSpecs = await Promise.all(
+      scenarioFiles.map((f) => ScenarioLoader.load(path.join(scenariosDir, f))),
+    );
+    const scenarioNames = allSpecs.map((s) => s.name);
+    if (!scenarioNames.includes(scenarioFilter)) {
+      log.error(
+        `Scenario '${scenarioFilter}' not found. Available scenarios: ${scenarioNames.join(", ")}`,
+      );
+      process.exit(1);
+    }
+  }
+
   // Dry-run mode: validate and print step summaries, then exit
   if (dryRun) {
     log.bold("=== Dry Run ===");
@@ -566,6 +581,8 @@ Options:
           const failedStep = r.results.find((s) => !s.success);
           return {
             scenario: r.scenario,
+            agent: r.matrix.agent,
+            language: r.matrix.language,
             error: failedStep?.error ?? "unknown",
             guidance: failedStep?.classification?.guidance,
           };
@@ -583,6 +600,8 @@ Options:
         durationSeconds: totalDuration,
         worstFailures: worstFailures.map((f) => ({
           scenario: f.scenario,
+          agent: f.agent,
+          language: f.language,
           error: f.error,
         })),
         scenarios: scenarioReports.map((r) => ({
@@ -603,36 +622,22 @@ Options:
       // GitHub Actions job summary
       const ghSummaryPath = process.env["GITHUB_STEP_SUMMARY"];
       if (ghSummaryPath) {
-        const lines: string[] = [];
-        lines.push("## Skill Test Results");
-        lines.push("");
-        lines.push("| Scenario | Agent | Language | Status | Duration |");
-        lines.push("|----------|-------|----------|--------|----------|");
-        for (const r of scenarioReports) {
-          const icon = r.status === "pass" ? "\u2705" : "\u274c";
-          lines.push(
-            `| ${r.scenario} | ${r.matrix.agent} | ${r.matrix.language} | ${icon} ${r.status} | ${r.durationSeconds.toFixed(1)}s |`,
-          );
-        }
-        lines.push("");
-        lines.push(
-          `**Total:** ${totalScenarios} | **Passed:** ${passed} | **Failed:** ${failed} | **Duration:** ${totalDuration.toFixed(1)}s`,
+        await fs.appendFile(
+          ghSummaryPath,
+          renderGitHubStepSummary({
+            scenarioReports,
+            totalScenarios,
+            passed,
+            failed,
+            totalDuration,
+            worstFailures: worstFailures.map((failure) => ({
+              scenario: failure.scenario,
+              matrix: { agent: failure.agent, language: failure.language },
+              error: failure.error,
+              guidance: failure.guidance,
+            })),
+          }),
         );
-
-        if (worstFailures.length > 0) {
-          lines.push("");
-          lines.push("### Failures");
-          for (const f of worstFailures) {
-            const truncatedError = f.error.length > 200 ? f.error.slice(0, 197) + "..." : f.error;
-            lines.push(`- **${f.scenario}**: ${truncatedError}`);
-            if (f.guidance) {
-              lines.push(`  - _${f.guidance}_`);
-            }
-          }
-        }
-        lines.push("");
-
-        await fs.appendFile(ghSummaryPath, lines.join("\n"));
       }
 
       // Print summary
@@ -647,7 +652,13 @@ Options:
         log.blank();
         log.error("Failures:");
         for (const f of worstFailures) {
-          log.summaryFailure(f.scenario, f.error);
+          log.summaryFailure(
+            formatScenarioMatrixLabel({
+              scenario: f.scenario,
+              matrix: { agent: f.agent, language: f.language },
+            }),
+            f.error,
+          );
           if (f.guidance) {
             log.summaryGuidance(f.guidance);
           }

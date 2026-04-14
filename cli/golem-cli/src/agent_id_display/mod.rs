@@ -15,8 +15,10 @@
 mod lexer;
 mod parse_common;
 mod parse_rust;
+mod parse_scala;
 mod parse_ts;
 mod render_rust;
+mod render_scala;
 mod render_ts;
 
 #[cfg(test)]
@@ -34,6 +36,7 @@ pub use parse_common::ParseError;
 pub enum SourceLanguage {
     Rust,
     TypeScript,
+    Scala,
     Other(String),
 }
 
@@ -46,7 +49,10 @@ impl Default for SourceLanguage {
 impl SourceLanguage {
     /// Returns true if this is a known language with specialized rendering/parsing support.
     pub fn is_known(&self) -> bool {
-        matches!(self, SourceLanguage::Rust | SourceLanguage::TypeScript)
+        matches!(
+            self,
+            SourceLanguage::Rust | SourceLanguage::TypeScript | SourceLanguage::Scala
+        )
     }
 }
 
@@ -57,6 +63,8 @@ impl From<&str> for SourceLanguage {
             SourceLanguage::Rust
         } else if trimmed.eq_ignore_ascii_case("typescript") || trimmed.eq_ignore_ascii_case("ts") {
             SourceLanguage::TypeScript
+        } else if trimmed.eq_ignore_ascii_case("scala") {
+            SourceLanguage::Scala
         } else {
             SourceLanguage::Other(trimmed.to_string())
         }
@@ -74,6 +82,7 @@ impl std::fmt::Display for SourceLanguage {
         match self {
             SourceLanguage::Rust => write!(f, "rust"),
             SourceLanguage::TypeScript => write!(f, "typescript"),
+            SourceLanguage::Scala => write!(f, "scala"),
             SourceLanguage::Other(s) => write!(f, "{s}"),
         }
     }
@@ -87,6 +96,7 @@ impl std::fmt::Display for SourceLanguage {
 pub fn render_data_value(data_value: &DataValue, source_language: &SourceLanguage) -> String {
     match source_language {
         SourceLanguage::Rust => render_rust::render_data_value_rust(data_value),
+        SourceLanguage::Scala => render_scala::render_data_value_scala(data_value),
         SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
             render_ts::render_data_value_ts(data_value)
         }
@@ -100,6 +110,7 @@ pub fn render_data_value(data_value: &DataValue, source_language: &SourceLanguag
 pub fn render_value_and_type(vat: &ValueAndType, source_language: &SourceLanguage) -> String {
     match source_language {
         SourceLanguage::Rust => render_rust::render_value_and_type_rust(vat),
+        SourceLanguage::Scala => render_scala::render_value_and_type_scala(vat),
         SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
             render_ts::render_value_and_type_ts(vat)
         }
@@ -129,6 +140,7 @@ pub fn render_type_for_language(
 ) -> String {
     match lang {
         SourceLanguage::Rust => render_rust::render_type_rust(typ, prefer_name),
+        SourceLanguage::Scala => render_scala::render_type_scala(typ, prefer_name),
         SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
             render_ts::render_type_ts(typ, prefer_name)
         }
@@ -164,6 +176,16 @@ pub fn parse_agent_id_params(
                 position: 0,
                 message: format!(
                     "TypeScript parser: {}; Structural parser: {}",
+                    lang_err, structural_err
+                ),
+            }),
+        },
+        SourceLanguage::Scala => match parse_scala::parse_data_value_scala(input, schema) {
+            Ok(value) => Ok(value),
+            Err(lang_err) => parse_structural(input, schema).map_err(|structural_err| ParseError {
+                position: 0,
+                message: format!(
+                    "Scala parser: {}; Structural parser: {}",
                     lang_err, structural_err
                 ),
             }),

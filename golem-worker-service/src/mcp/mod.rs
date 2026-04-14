@@ -1,5 +1,5 @@
 pub use agent_mcp_server::*;
-pub use auth::{McpBearerAuth, oauth_proxy_routes};
+pub use auth::{McpBearerAuth, oauth_proxy_routes, resolve_effective_host};
 pub use mcp_capabilities_lookup::*;
 
 mod agent_mcp_capability;

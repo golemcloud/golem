@@ -25,10 +25,10 @@ Transactions group a sequence of operations where:
 
 ### Transaction Types
 
-| Type           | Behavior on Failure               | Return Type                          |
-|----------------|-----------------------------------|--------------------------------------|
-| **Infallible** | Auto-retry until success          | `A`                                  |
-| **Fallible**   | Return error with rollback status | `Either[TransactionFailure[Err], A]` |
+| Type           | Behavior on Failure               | Return Type                                        |
+|----------------|-----------------------------------|----------------------------------------------------|
+| **Infallible** | Auto-retry until success          | `Future[A]`                                        |
+| **Fallible**   | Return error with rollback status | `Future[Either[TransactionFailure[Err], A]]`       |
 
 ---
 
@@ -39,25 +39,25 @@ transaction retries automatically.
 
 ```scala
 import golem.Transactions
+import scala.concurrent.Future
 
-val result: Int = Transactions.infallibleTransaction { tx =>
+val result: Future[Int] = Transactions.infallibleTransaction { tx =>
   // Define an operation with its compensation
   val createResource = Transactions.operation[Unit, Int, String](
     // Execute: create the resource, return its ID
-    _ => Right(42)
+    _ => Future.successful(Right(42))
   )(
     // Compensate: delete the resource on rollback
     (_, resourceId) => {
       deleteResource(resourceId)
-      Right(())
+      Future.successful(Right(()))
     }
   )
 
   // Execute the operation
-  val resourceId = tx.execute(createResource, ())
-
-  // Continue with more operations...
-  resourceId
+  for {
+    resourceId <- tx.execute(createResource, ())
+  } yield resourceId
 }
 ```
 
@@ -80,24 +80,31 @@ Use `fallibleTransaction` when you want to handle failures explicitly without au
 ```scala
 import golem.Transactions
 import golem.Transactions.TransactionFailure
+import scala.concurrent.Future
 
-val result: Either[TransactionFailure[String], Int] =
+val result: Future[Either[TransactionFailure[String], Int]] =
   Transactions.fallibleTransaction[Int, String] { tx =>
     val increment = Transactions.operation[Int, Int, String](
-      in => Right(in + 1)
+      in => Future.successful(Right(in + 1))
     )(
-      (_, _) => Right(())
+      (_, _) => Future.successful(Right(()))
     )
 
     for {
       a <- tx.execute(increment, 1)
-      b <- tx.execute(increment, a)
-      c <- tx.execute(increment, b)
-    } yield c
+      b <- a match {
+        case Right(v) => tx.execute(increment, v)
+        case left     => Future.successful(left)
+      }
+      c <- b match {
+        case Right(v) => tx.execute(increment, v)
+        case left     => Future.successful(left)
+      }
+    } yield c.flatMap(v => Right(v))
   }
 
 // Handle the result
-result match {
+result.foreach {
   case Right(value) =>
     println(s"Success: $value")
 
@@ -124,19 +131,19 @@ Operations bundle an execute function with its compensation:
 
 ```scala
 val operation = Transactions.operation[In, Out, Err](
-  // Execute: In => Either[Err, Out]
+  // Execute: In => Future[Either[Err, Out]]
   run = (input: In) => {
     // Perform the operation
-    // Return Right(result) on success
-    // Return Left(error) on failure
-    Right(result)
+    // Return Future(Right(result)) on success
+    // Return Future(Left(error)) on failure
+    Future.successful(Right(result))
   }
 )(
-  // Compensate: (In, Out) => Either[Err, Unit]
+  // Compensate: (In, Out) => Future[Either[Err, Unit]]
   compensate = (input: In, output: Out) => {
     // Undo the operation
     // Has access to both input and successful output
-    Right(())
+    Future.successful(Right(()))
   }
 )
 ```
@@ -145,9 +152,9 @@ val operation = Transactions.operation[In, Out, Err](
 
 ```scala
 trait Operation[-In, Out, Err] {
-  def execute(input: In): Either[Err, Out]
+  def execute(input: In): Future[Either[Err, Out]]
 
-  def compensate(input: In, output: Out): Either[Err, Unit]
+  def compensate(input: In, output: Out): Future[Either[Err, Unit]]
 }
 ```
 
@@ -162,9 +169,9 @@ Compensation failures throw `IllegalStateException`:
 ```scala
 Transactions.infallibleTransaction { tx =>
   val op = Transactions.operation[Unit, Int, String](
-    _ => Right(42)
+    _ => Future.successful(Right(42))
   )(
-    (_, _) => Left("Compensation failed!") // Throws on failure
+    (_, _) => Future.successful(Left("Compensation failed!")) // Throws on failure
   )
 
   tx.execute(op, ())
@@ -197,7 +204,7 @@ val deleteOp = Transactions.operation[Unit, String, String](
 )(
   (_, path) => {
     if (fileExists(path)) deleteFile(path)
-    Right(())
+    Future.successful(Right(()))
   }
 )
 
@@ -210,7 +217,7 @@ val badOp = Transactions.operation[Unit, String, String](
     archiveFile(path)
     notifySystem()
     updateDatabase()
-    Right(())
+    Future.successful(Right(()))
   }
 )
 ```
@@ -221,14 +228,14 @@ Put easily-reversible operations first:
 
 ```scala
 Transactions.fallibleTransaction[Unit, String] { tx =>
-  // Easy to reverse (just delete)
-  tx.execute(createTempFile, ())
-
-  // Harder to reverse (external API)
-  tx.execute(sendNotification, ())
-
-  // Hardest to reverse (payment)
-  tx.execute(processPayment, ())
+  for {
+    // Easy to reverse (just delete)
+    _ <- tx.execute(createTempFile, ())
+    // Harder to reverse (external API)
+    _ <- tx.execute(sendNotification, ())
+    // Hardest to reverse (payment)
+    r <- tx.execute(processPayment, ())
+  } yield r
 }
 ```
 
@@ -250,9 +257,10 @@ For debugging, log when transactions start and complete:
 ```scala
 Transactions.fallibleTransaction[Int, String] { tx =>
   console.log("Transaction started")
-  val result = tx.execute(operation, input)
-  console.log(s"Transaction completed: $result")
-  result
+  tx.execute(operation, input).map { result =>
+    console.log(s"Transaction completed: $result")
+    result
+  }
 }
 ```
 
