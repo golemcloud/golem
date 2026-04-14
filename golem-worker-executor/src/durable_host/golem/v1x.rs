@@ -998,7 +998,8 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api::get-oplog", "get-next");
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
-        let agent_type = ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
+        let agent_type =
+            ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 
@@ -1196,7 +1197,8 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         self.observe_function_call("golem::api::search-oplog", "get-next");
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
-        let agent_type = ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
+        let agent_type =
+            ParsedAgentId::parse_agent_type_name(&entry.owned_agent_id.agent_id.agent_id).ok();
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 

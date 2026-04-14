@@ -54,7 +54,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
-                                         config_vars: wasi_config,
+                config_vars: wasi_config,
                 local_agent_config,
                 original_phantom_id,
             }) => Self::Create(oplog::CreateParameters {
