@@ -240,7 +240,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
-                config_vars,
+                wasi_config,
                 local_agent_config,
                 original_phantom_id,
             } => {
@@ -277,7 +277,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     component_size,
                     initial_total_linear_memory_size,
                     initial_active_plugins: initial_plugins,
-                    config_vars,
+                    wasi_config,
                     local_agent_config,
                     original_phantom_id,
                 }))

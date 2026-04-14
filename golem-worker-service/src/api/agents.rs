@@ -150,7 +150,7 @@ pub struct CreateAgentRequest {
     pub phantom_id: Option<Uuid>,
     #[oai(default)]
     #[serde(default)]
-    pub agent_config: Vec<AgentConfigEntryDto>,
+    pub config: Vec<AgentConfigEntryDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]

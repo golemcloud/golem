@@ -59,7 +59,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
-        agent_config: Vec<AgentConfigEntryDto>,
+        config: Vec<AgentConfigEntryDto>,
         principal: Principal,
     ) -> Result<(), WorkerProxyError>;
 
@@ -258,7 +258,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
-        agent_config: Vec<AgentConfigEntryDto>,
+        config: Vec<AgentConfigEntryDto>,
         principal: Principal,
     ) -> Result<(), WorkerProxyError> {
         debug!(owned_agent_id=%owned_agent_id, "Starting remote worker");
@@ -274,14 +274,14 @@ impl WorkerProxy for RemoteWorkerProxy {
                     component_id: Some(owned_agent_id.component_id().into()),
                     name: owned_agent_id.agent_name(),
                     env: caller_env.clone(),
-                    config_vars: caller_config_vars.clone().into_iter().collect(),
-                    agent_config: agent_config.clone().into_iter().map(Into::into).collect(),
+                    wasi_config: caller_config_vars.clone().into_iter().collect(),
+                    config: config.clone().into_iter().map(Into::into).collect(),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_agent_id.clone().into()),
                         env: caller_env,
-                        config_vars: caller_config_vars.clone().into_iter().collect(),
+                        wasi_config: caller_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     principal: Some(principal.clone().into()),
@@ -346,7 +346,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_agent_id.clone().into()),
                         env: caller_env.clone(),
-                        config_vars: caller_config_vars.clone().into_iter().collect(),
+                        wasi_config: caller_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),

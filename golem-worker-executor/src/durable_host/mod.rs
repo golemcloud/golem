@@ -323,7 +323,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         }
 
-        let config_vars = effective_config_vars(
+        let wasi_config = effective_config_vars(
             worker_config.initial_wasi_config.clone(),
             agent_type_provision_configs
                 .as_ref()
@@ -402,7 +402,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 file_loader,
                 worker_config.created_by,
                 worker_config.initial_wasi_config,
-                config_vars,
+                wasi_config,
                 worker_config.initial_agent_config,
                 agent_config,
                 shard_service,
@@ -1956,7 +1956,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut read_only_paths = self.state.read_only_paths.write().unwrap();
         *read_only_paths = compute_read_only_paths(&current_files);
 
-        self.state.config_vars = effective_config_vars(
+        self.state.wasi_config = effective_config_vars(
             self.state.initial_config_vars.clone(),
             new_agent_type_provision_configs
                 .as_ref()
@@ -3574,7 +3574,7 @@ struct PrivateDurableWorkerState {
     /// The initial config vars that the worker was configured with
     initial_config_vars: BTreeMap<String, String>,
     /// The current config vars of the worker, taking into account component version, etc.
-    config_vars: BTreeMap<String, String>,
+    wasi_config: BTreeMap<String, String>,
 
     // The initial local agent config that the worker was configured with
     initial_agent_config: Vec<TypedAgentConfigEntry>,
@@ -3664,7 +3664,7 @@ impl PrivateDurableWorkerState {
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
         initial_config_vars: BTreeMap<String, String>,
-        config_vars: BTreeMap<String, String>,
+        wasi_config: BTreeMap<String, String>,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
         shard_service: Arc<dyn ShardService>,
@@ -3712,7 +3712,7 @@ impl PrivateDurableWorkerState {
             agent_types_service,
             environment_state_service,
             agent_webhooks_service,
-            config,
+            agent_config,
             owned_agent_id,
             current_idempotency_key: None,
             rpc,
@@ -3742,9 +3742,9 @@ impl PrivateDurableWorkerState {
             file_loader,
             created_by,
             initial_config_vars,
-            config_vars,
+            wasi_config,
             initial_agent_config,
-            agent_config,
+            config,
             cached_agent_config_retry_policies: None,
             runtime_retry_policy_mutations: std::collections::BTreeMap::new(),
             shard_service,

@@ -295,20 +295,20 @@ impl WorkerGrpcApi {
             agent_id: request.name,
         };
 
-        let agent_config = request
-            .agent_config
+        let config = request
+            .config
             .into_iter()
             .map(AgentConfigEntryDto::try_from)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| bad_request_error(format!("failed converting agent_config: {e}")))?;
+            .map_err(|e| bad_request_error(format!("failed converting config: {e}")))?;
 
         let latest_component_revision = self
             .worker_service
             .create(
                 &agent_id,
                 request.env,
-                request.config_vars.into_iter().collect(),
-                agent_config,
+                request.wasi_config.into_iter().collect(),
+                config,
                 request.ignore_already_existing,
                 auth,
                 request.context,

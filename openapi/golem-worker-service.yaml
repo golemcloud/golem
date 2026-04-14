@@ -1793,12 +1793,12 @@ components:
           type: object
           additionalProperties:
             type: string
-        configVars:
+        wasiConfig:
           type: object
           default: {}
           additionalProperties:
             type: string
-        agentConfig:
+        config:
           type: array
           default: []
           items:
@@ -1870,7 +1870,7 @@ components:
           And: '#/components/schemas/AgentFilter_AgentAndFilter'
           Or: '#/components/schemas/AgentFilter_AgentOrFilter'
           Not: '#/components/schemas/AgentFilter_AgentNotFilter'
-          ConfigVars: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+          WasiConfig: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
     AgentFilter_AgentAndFilter:
       allOf:
       - type: object
@@ -1892,8 +1892,8 @@ components:
           type:
             type: string
             enum:
-            - ConfigVars
-            example: ConfigVars
+            - WasiConfig
+            example: WasiConfig
       - $ref: '#/components/schemas/AgentConfigVarsFilter'
     AgentFilter_AgentCreatedAtFilter:
       allOf:
@@ -2086,8 +2086,8 @@ components:
       - environmentId
       - createdBy
       - env
-      - configVars
-      - agentConfig
+      - wasiConfig
+      - config
       - status
       - componentRevision
       - retryCount
@@ -2113,11 +2113,11 @@ components:
           type: object
           additionalProperties:
             type: string
-        configVars:
+        wasiConfig:
           type: object
           additionalProperties:
             type: string
-        agentConfig:
+        config:
           type: array
           items:
             $ref: '#/components/schemas/TypedAgentConfigEntry'
@@ -3353,7 +3353,7 @@ components:
         phantomId:
           type: string
           format: uuid
-        agentConfig:
+        config:
           type: array
           default: []
           items:
@@ -5841,7 +5841,7 @@ components:
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
-      - configVars
+      - wasiConfig
       - localAgentConfig
       properties:
         timestamp:
@@ -5874,7 +5874,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
-        configVars:
+        wasiConfig:
           type: object
           additionalProperties:
             type: string

@@ -353,23 +353,23 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         component_id: &ComponentId,
         id: ParsedAgentId,
         env: HashMap<String, String>,
-        config_vars: HashMap<String, String>,
-        agent_config: Vec<AgentConfigEntryDto>,
+        wasi_config: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>> {
         let client = self
             .deps
             .worker_service()
             .worker_http_client(&self.token)
             .await;
-        let config_vars: BTreeMap<String, String> = config_vars.into_iter().collect();
+        let wasi_config: BTreeMap<String, String> = wasi_config.into_iter().collect();
         let response = client
             .launch_new_worker(
                 &component_id.0,
                 &golem_client::model::AgentCreationRequest {
                     name: id.to_string(),
                     env,
-                    config_vars,
-                    agent_config,
+                    wasi_config: wasi_config,
+                    config: config,
                 },
             )
             .await;

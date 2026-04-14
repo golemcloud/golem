@@ -214,8 +214,8 @@ fn worker_filter_matches() {
         ],
         environment_id: EnvironmentId::new(),
         created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
-        config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
-        agent_config: Vec::new(),
+        wasi_config: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
+        config: Vec::new(),
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: AgentStatusRecord {
@@ -297,7 +297,7 @@ fn worker_filter_matches() {
     );
 
     assert!(
-        AgentFilter::new_config_vars(
+        AgentFilter::new_wasi_config(
             "var1".to_string(),
             StringFilterComparator::Equal,
             "value1".to_string(),
@@ -306,7 +306,7 @@ fn worker_filter_matches() {
     );
 
     assert!(
-        !AgentFilter::new_config_vars(
+        !AgentFilter::new_wasi_config(
             "var1".to_string(),
             StringFilterComparator::Equal,
             "value2".to_string(),

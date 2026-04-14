@@ -9970,12 +9970,12 @@ components:
           type: object
           additionalProperties:
             type: string
-        configVars:
+        wasiConfig:
           default: {}
           type: object
           additionalProperties:
             type: string
-        agentConfig:
+        config:
           default: []
           type: array
           items:
@@ -10039,7 +10039,7 @@ components:
           And: '#/components/schemas/AgentFilter_AgentAndFilter'
           Or: '#/components/schemas/AgentFilter_AgentOrFilter'
           Not: '#/components/schemas/AgentFilter_AgentNotFilter'
-          ConfigVars: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+          WasiConfig: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
       type: object
       oneOf:
       - $ref: '#/components/schemas/AgentFilter_AgentNameFilter'
@@ -10068,10 +10068,10 @@ components:
       - type: object
         properties:
           type:
-            example: ConfigVars
+            example: WasiConfig
             type: string
             enum:
-            - ConfigVars
+            - WasiConfig
         required:
         - type
       - $ref: '#/components/schemas/AgentConfigVarsFilter'
@@ -10274,11 +10274,11 @@ components:
           type: object
           additionalProperties:
             type: string
-        configVars:
+        wasiConfig:
           type: object
           additionalProperties:
             type: string
-        agentConfig:
+        config:
           type: array
           items:
             $ref: '#/components/schemas/TypedAgentConfigEntry'
@@ -10335,8 +10335,8 @@ components:
       - environmentId
       - createdBy
       - env
-      - configVars
-      - agentConfig
+      - wasiConfig
+      - config
       - status
       - componentRevision
       - retryCount
@@ -11528,7 +11528,7 @@ components:
         phantomId:
           type: string
           format: uuid
-        agentConfig:
+        config:
           default: []
           type: array
           items:
@@ -14042,7 +14042,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
-        configVars:
+        wasiConfig:
           type: object
           additionalProperties:
             type: string
@@ -14063,7 +14063,7 @@ components:
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
-      - configVars
+      - wasiConfig
       - localAgentConfig
     r#CreateResourceParams:
       title: r#CreateResourceParams

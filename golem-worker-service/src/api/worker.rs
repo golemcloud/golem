@@ -113,7 +113,7 @@ impl WorkerApi {
         let AgentCreationRequest {
             name,
             env,
-            config_vars,
+            wasi_config,
             ..
         } = request;
 
@@ -127,8 +127,8 @@ impl WorkerApi {
                 &agent_id,
                 component,
                 env,
-                config_vars,
-                request.agent_config,
+                wasi_config,
+                request.config,
                 false,
                 auth,
                 None,

@@ -1965,8 +1965,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // but we should only have the worker-level overrides here as we can't compute
                     // the new effective set as the component revision changes otherwise.
                     env: worker_env,
-                    config_vars: worker_config_vars.unwrap_or_default(),
-                    agent_config: initial_agent_config,
+                    wasi_config: worker_config_vars.unwrap_or_default(),
+                    config: initial_agent_config,
                     environment_id: component.environment_id,
                     created_by: component.account_id,
                     created_at,
@@ -1993,9 +1993,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .last_known_status
                         .active_plugins
                         .clone(),
-                    initial_worker_metadata.config_vars.clone(),
+                    initial_worker_metadata.wasi_config.clone(),
                     initial_worker_metadata
-                        .agent_config
+                        .config
                         .iter()
                         .cloned()
                         .map(Into::into)
@@ -2605,8 +2605,8 @@ impl RunningWorker {
                     .current_filesystem_storage_usage,
                 component_version_for_replay,
                 worker_metadata.created_by,
-                worker_metadata.config_vars,
-                worker_metadata.agent_config,
+                worker_metadata.wasi_config,
+                worker_metadata.config,
                 last_snapshot_index,
             ),
             parent.execution_status.clone(),

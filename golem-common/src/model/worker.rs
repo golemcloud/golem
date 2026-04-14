@@ -90,9 +90,9 @@ mod protobuf {
                     .try_into()?,
                 created_by: value.created_by.ok_or("Missing account_id")?.try_into()?,
                 env: value.env,
-                config_vars: value.config_vars.into_iter().collect(),
-                agent_config: value
-                    .agent_config
+                wasi_config: value.wasi_config.into_iter().collect(),
+                config: value
+                    .config
                     .into_iter()
                     .map(TryInto::try_into)
                     .collect::<Result<Vec<_>, _>>()?,
@@ -146,8 +146,8 @@ mod protobuf {
                 environment_id: Some(value.environment_id.into()),
                 created_by: Some(value.created_by.into()),
                 env: value.env,
-                config_vars: value.config_vars.into_iter().collect(),
-                agent_config: value.agent_config.into_iter().map(Into::into).collect(),
+                wasi_config: value.wasi_config.into_iter().collect(),
+                config: value.config.into_iter().map(Into::into).collect(),
                 status: value.status.into(),
                 component_revision: value.component_revision.into(),
                 retry_count: value.retry_count,

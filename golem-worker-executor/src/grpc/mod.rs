@@ -272,10 +272,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        let config_vars = request.config_vars.into_iter().collect();
+        let wasi_config = request.wasi_config.into_iter().collect();
 
-        let agent_config = request
-            .agent_config
+        let config = request
+            .config
             .into_iter()
             .map(AgentConfigEntryDto::try_from)
             .collect::<Result<Vec<_>, _>>()
@@ -291,8 +291,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             Some(env),
-            Some(config_vars),
-            agent_config,
+            Some(wasi_config),
+            config,
             None,
             None,
             &invocation_context,
@@ -777,8 +777,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             request.env(),
-            request.config_vars()?,
-            request.agent_config(),
+            request.wasi_config()?,
+            request.config(),
             None,
             request.parent(),
             &invocation_context,
@@ -813,8 +813,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             request.env(),
-            request.config_vars()?,
-            request.agent_config(),
+            request.wasi_config()?,
+            request.config(),
             None,
             request.parent(),
             &invocation_context,
@@ -1826,8 +1826,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_id: Some(metadata.agent_id.into()),
             environment_id: Some(metadata.environment_id.into()),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
-            config_vars: metadata.config_vars.into_iter().collect(),
-            agent_config: metadata.agent_config.into_iter().map(Into::into).collect(),
+            wasi_config: metadata.wasi_config.into_iter().collect(),
+            config: metadata.config.into_iter().map(Into::into).collect(),
             created_by: Some(metadata.created_by.into()),
             component_revision: latest_status.component_revision.into(),
             status: Into::<golem::worker::AgentStatus>::into(latest_status.status.clone()).into(),

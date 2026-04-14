@@ -379,8 +379,8 @@ impl TestDsl for TestWorkerExecutor {
         component_id: &ComponentId,
         id: ParsedAgentId,
         env: HashMap<String, String>,
-        config_vars: HashMap<String, String>,
-        agent_config: Vec<AgentConfigEntryDto>,
+        wasi_config: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, WorkerExecutorError>> {
         let latest_revision = self.get_latest_component_revision(component_id).await?;
 
@@ -397,8 +397,8 @@ impl TestDsl for TestWorkerExecutor {
                 component_owner_account_id: Some(latest_revision.account_id.into()),
                 environment_id: Some(latest_revision.environment_id.into()),
                 env,
-                config_vars,
-                agent_config: agent_config.into_iter().map(|lac| lac.into()).collect(),
+                wasi_config,
+                config: config.into_iter().map(|lac| lac.into()).collect(),
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,

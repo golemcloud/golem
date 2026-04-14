@@ -81,9 +81,9 @@ declare_structs! {
         pub name: String,
         pub env: HashMap<String, String>,
         #[cfg_attr(feature = "full", oai(default))]
-        pub config_vars: BTreeMap<String, String>,
+        pub wasi_config: BTreeMap<String, String>,
         #[cfg_attr(feature = "full", oai(default))]
-        pub agent_config: Vec<AgentConfigEntryDto>
+        pub config: Vec<AgentConfigEntryDto>
     }
 
     pub struct PendingUpdate {
@@ -112,8 +112,8 @@ declare_structs! {
         pub environment_id: EnvironmentId,
         pub created_by: AccountId,
         pub env: HashMap<String, String>,
-        pub config_vars: BTreeMap<String, String>,
-        pub agent_config: Vec<TypedAgentConfigEntry>,
+        pub wasi_config: BTreeMap<String, String>,
+        pub config: Vec<TypedAgentConfigEntry>,
         pub status: AgentStatus,
         pub component_revision: ComponentRevision,
         pub retry_count: u32,

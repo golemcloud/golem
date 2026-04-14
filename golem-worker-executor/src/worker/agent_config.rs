@@ -132,9 +132,9 @@ pub fn parse_worker_creation_agent_config(
             .map(|s| s.to_vec())
             .unwrap_or_default();
 
-        let agent_config = effective_agent_config(initial_agent_config.clone(), component_config);
+        let config = effective_agent_config(initial_agent_config.clone(), component_config);
 
-        validate_agent_config(&agent_config, &agent_type)?;
+        validate_agent_config(&config, &agent_type)?;
     }
 
     Ok(initial_agent_config)
@@ -144,7 +144,7 @@ pub fn parse_worker_creation_agent_config(
 /// the worker-creation config entries, with worker entries taking precedence.
 /// Returns a map from config path to `ValueAndType`.
 pub fn effective_agent_config(
-    agent_config: Vec<TypedAgentConfigEntry>,
+    config: Vec<TypedAgentConfigEntry>,
     default_agent_config: Vec<TypedAgentConfigEntry>,
 ) -> HashMap<Vec<String>, ValueAndType> {
     let mut result = HashMap::new();
@@ -153,7 +153,7 @@ pub fn effective_agent_config(
         result.insert(entry.path, entry.value);
     }
 
-    for entry in agent_config {
+    for entry in config {
         result.insert(entry.path, entry.value);
     }
 
@@ -161,7 +161,7 @@ pub fn effective_agent_config(
 }
 
 pub fn validate_agent_config(
-    agent_config: &HashMap<Vec<String>, ValueAndType>,
+    config: &HashMap<Vec<String>, ValueAndType>,
     agent_type: &AgentType,
 ) -> Result<(), WorkerExecutorError> {
     for entry in &agent_type.config {
@@ -169,7 +169,7 @@ pub fn validate_agent_config(
             continue;
         };
 
-        match agent_config.get(&entry.path) {
+        match config.get(&entry.path) {
             Some(config_value) => {
                 if config_value.typ != entry.value_type {
                     // TODO: better rendering of analysed type.

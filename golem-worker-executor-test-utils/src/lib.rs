@@ -1165,12 +1165,12 @@ impl HostWasmRpc for TestWorkerCtx {
         agent_type_name: String,
         constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
         phantom_id: Option<golem_wasm::Uuid>,
-        agent_config: Vec<
+        config: Vec<
             golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx
-            .new(agent_type_name, constructor, phantom_id, agent_config)
+            .new(agent_type_name, constructor, phantom_id, config)
             .await
     }
 
@@ -2637,7 +2637,7 @@ impl Rpc for FailingRpc {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-        agent_config: Vec<AgentConfigEntryDto>,
+        config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
         self.inner
             .create_demand(
@@ -2647,7 +2647,7 @@ impl Rpc for FailingRpc {
                 self_env,
                 self_config,
                 self_stack,
-                agent_config,
+                config,
             )
             .await
     }

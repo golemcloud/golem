@@ -1380,8 +1380,8 @@ impl WorkerCommandHandler {
                 &golem_client::model::AgentCreationRequest {
                     name: agent_name,
                     env,
-                    config_vars: wasi_config,
-                    agent_config: config,
+                    wasi_config,
+                    config,
                 },
             )
             .await

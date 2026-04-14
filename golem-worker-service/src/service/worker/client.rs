@@ -63,8 +63,8 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
-        config_vars: BTreeMap<String, String>,
-        agent_config: Vec<AgentConfigEntryDto>,
+        wasi_config: BTreeMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
@@ -403,8 +403,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
-        config_vars: BTreeMap<String, String>,
-        agent_config: Vec<AgentConfigEntryDto>,
+        wasi_config: BTreeMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
@@ -423,8 +423,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     worker_executor_client.create_worker(CreateWorkerRequest {
                         agent_id: Some(agent_id.into()),
                         env: environment_variables.clone(),
-                        config_vars: config_vars.clone().into_iter().collect(),
-                        agent_config: agent_config
+                        wasi_config: wasi_config.clone().into_iter().collect(),
+                        config: config
                             .clone()
                             .into_iter()
                             .map(golem_api_grpc::proto::golem::worker::AgentConfigEntryDto::from)

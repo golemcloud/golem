@@ -67,7 +67,7 @@ pub trait Rpc: Send + Sync {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-        agent_config: Vec<AgentConfigEntryDto>,
+        config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, RpcError>;
 
     async fn invoke_and_await(
@@ -268,7 +268,7 @@ impl Rpc for RemoteInvocationRpc {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-        agent_config: Vec<AgentConfigEntryDto>,
+        config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         debug!("Ensuring remote target worker exists");
 
@@ -283,7 +283,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_config,
                 self_stack,
                 self_created_by,
-                agent_config,
+                config,
                 principal,
             )
             .await?;
@@ -767,7 +767,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_env: &[(String, String)],
         self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
-        agent_config: Vec<AgentConfigEntryDto>,
+        config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, RpcError> {
         let owned_agent_id = &self.canonicalize_owned_agent_id(owned_agent_id).await?;
 
@@ -791,7 +791,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 owned_agent_id,
                 Some(self_env.to_vec()),
                 Some(self_config),
-                agent_config,
+                config,
                 None,
                 Some(self_agent_id.clone()),
                 &self_stack,
@@ -812,7 +812,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     self_env,
                     self_config,
                     self_stack,
-                    agent_config,
+                    config,
                 )
                 .await
         }
