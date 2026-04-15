@@ -137,7 +137,8 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                     "Received retry policy changed event, ignoring"
                 );
             }
-            RegistryInvalidationEvent::ResourceDefinitionChanged { .. } => {}
+            RegistryInvalidationEvent::ResourceDefinitionChanged { .. } => {},
+            RegistryInvalidationEvent::AgentSecretChanged { .. } => {},
         }
     }
 }

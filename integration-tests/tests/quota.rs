@@ -29,6 +29,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::task::JoinSet;
+use test_r::non_flaky;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -373,6 +374,7 @@ async fn merge_and_reserve_succeeds(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+#[non_flaky(100)]
 async fn acquire_and_drop_does_not_panic(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,

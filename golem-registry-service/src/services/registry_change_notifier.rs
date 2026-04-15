@@ -26,6 +26,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::ResourceDefinitionId;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast, mpsc};
+use golem_api_grpc::proto::golem::registry::v1::AgentSecretChangedEvent;
 
 /// Manages registry change event broadcasting. Delivery is at-least-once;
 /// subscribers must deduplicate by event_id.
@@ -369,6 +370,15 @@ fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvali
                 environment_id: Some(EnvironmentId(*environment_id).into()),
                 resource_definition_id: Some(ResourceDefinitionId(*resource_definition_id).into()),
                 resource_name: resource_name.clone(),
+            }),
+        ),
+        RegistryChangeEvent::AgentSecretChanged {
+            event_id,
+            environment_id,
+        } => (
+            *event_id,
+            Payload::AgentSecretChanged(AgentSecretChangedEvent {
+                environment_id: Some(EnvironmentId(*environment_id).into()),
             }),
         ),
     };
