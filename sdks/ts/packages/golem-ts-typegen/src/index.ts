@@ -543,14 +543,12 @@ function extractConfigPropertiesFromTypeLiteral(
 
     // 2. nested type literal
     const nestedTypeLiteral = resolveStrictTypeLiteralNode(propType);
-    // eslint-disable-next-line eqeqeq
     if (nestedTypeLiteral != null) {
       const nested = extractConfigPropertiesFromTypeLiteral(
         nestedTypeLiteral,
         nextPath,
         wellKnownTypes,
       );
-      // eslint-disable-next-line eqeqeq
       if (nested == null) return undefined;
       results.push(...nested);
       continue;
@@ -997,7 +995,6 @@ export function getNominalSymbol(type: TsMorphType): TsMorphSymbol | undefined {
 
 function isExactly(type: TsMorphType, wellKnown: WellKnown): boolean {
   const nominalSymbol = getNominalSymbol(type);
-  // eslint-disable-next-line eqeqeq
   if (nominalSymbol == null) {
     return false;
   }
