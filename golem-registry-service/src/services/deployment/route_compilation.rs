@@ -221,9 +221,7 @@ pub fn add_cors_preflight_http_routes(
             method: HttpMethod::Options(Empty {}),
             path: path_segments,
             body: RequestBodySchema::Unused,
-            behaviour: RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
-                method_policies,
-            }),
+            behaviour: RouteBehaviour::CorsPreflight(CorsPreflightBehaviour { method_policies }),
             security: UnboundRouteSecurity::None,
             cors: CorsOptions {
                 allowed_patterns: vec![],
