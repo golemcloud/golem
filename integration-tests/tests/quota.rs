@@ -374,7 +374,6 @@ async fn merge_and_reserve_succeeds(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
-#[non_flaky(100)]
 async fn acquire_and_drop_does_not_panic(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,

@@ -170,9 +170,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         crate::services::quota::GrpcQuotaService::new(
             shard_manager_client,
             golem_config.grpc.port,
+            golem_config.quota_service.clone(),
             shutdown_token,
-            golem_config.quota_service.renewal_interval,
-            golem_config.quota_service.inline_wait_threshold,
         )
     }
 

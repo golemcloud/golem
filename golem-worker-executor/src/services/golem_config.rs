@@ -1640,6 +1640,10 @@ pub struct QuotaServiceConfig {
     /// How often to renew quota leases with the shard manager.
     #[serde(with = "humantime_serde")]
     pub renewal_interval: Duration,
+    /// When leases should be renewed before they expire.
+    /// Leases will be renewed if now >= lease_expires_at - renewal_threshold
+    #[serde(with = "humantime_serde")]
+    pub renewal_threshold: Duration,
     /// Maximum wait time for inline throttling before returning
     /// `InsufficientAllocation` to the caller (which may then suspend).
     /// Reservations whose estimated wait exceeds this threshold are not
@@ -1653,6 +1657,7 @@ impl SafeDisplay for QuotaServiceConfig {
         use std::fmt::Write;
         let mut result = String::new();
         let _ = writeln!(&mut result, "renewal interval: {:?}", self.renewal_interval);
+        let _ = writeln!(&mut result, "renewal threshold: {:?}", self.renewal_threshold);
         let _ = writeln!(
             &mut result,
             "inline wait threshold: {:?}",
@@ -1666,6 +1671,7 @@ impl Default for QuotaServiceConfig {
     fn default() -> Self {
         Self {
             renewal_interval: Duration::from_secs(10),
+            renewal_threshold: Duration::from_secs(20),
             inline_wait_threshold: Duration::from_mins(1),
         }
     }

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::{
     EnforcementAction, LeaseEpoch, ResourceDefinitionId, ResourceLimit, ResourceName,
@@ -28,6 +28,7 @@ use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::{Instrument, info, info_span};
+use super::golem_config::QuotaServiceConfig;
 
 type ResourceKey = (EnvironmentId, ResourceName);
 
@@ -341,7 +342,7 @@ struct UnlimitedLease {
 pub struct GrpcQuotaService {
     client: Arc<dyn ShardManager>,
     port: u16,
-    renewal_interval: Duration,
+    renewal_threshold: Duration,
     inline_wait_threshold: Duration,
     /// Per-resource state, each protected by its own Mutex so that
     /// `try_reserve` and `renew_all` for different resources are fully
@@ -353,25 +354,24 @@ impl GrpcQuotaService {
     pub fn new(
         client: Arc<dyn ShardManager>,
         port: u16,
+        config: QuotaServiceConfig,
         shutdown_token: CancellationToken,
-        renewal_interval: Duration,
-        inline_wait_threshold: Duration,
     ) -> Arc<Self> {
-        let svc = Self::new_inner(client, port, renewal_interval, inline_wait_threshold);
-        svc.start_renewal_loop(shutdown_token, renewal_interval);
+        let svc = Self::new_inner(client, port, config.renewal_threshold, config.inline_wait_threshold);
+        svc.start_renewal_loop(shutdown_token, config.renewal_interval);
         svc
     }
 
     fn new_inner(
         client: Arc<dyn ShardManager>,
         port: u16,
-        renewal_interval: Duration,
+        renewal_threshold: Duration,
         inline_wait_threshold: Duration,
     ) -> Arc<Self> {
         Arc::new(Self {
             client,
             port,
-            renewal_interval,
+            renewal_threshold,
             inline_wait_threshold,
             state: scc::HashMap::new(),
         })
@@ -665,7 +665,7 @@ impl GrpcQuotaService {
                     // Try to take the lease for release; skip if inner is locked.
                     if let Ok(mut inner) = entry.inner.try_lock() {
                         leases_to_release.push(inner.take_lease());
-                        false // remove from map
+                        false
                     } else {
                         // Inner is locked — keep for next pass.
                         true
@@ -688,9 +688,6 @@ impl GrpcQuotaService {
 
         // phase 3: renew live leases before they expire.
         // Bounded leases are batched; unlimited leases are re-acquired individually.
-        let renewal_threshold = chrono::Duration::from_std(self.renewal_interval * 2)
-            .expect("renewal_interval should result in valid renewal_threshold");
-
         let mut bounded_to_renew: Vec<(ResourceKey, Arc<LeaseEntry>)> = Vec::new();
         let mut unlimited_to_renew: Vec<(ResourceKey, Arc<LeaseEntry>)> = Vec::new();
 
@@ -698,13 +695,13 @@ impl GrpcQuotaService {
             let slot = slot_mutex.inner.lock().await;
             match &slot.lease {
                 TrackedLease::Bounded(b) => {
-                    if b.expires_at - Utc::now() >= renewal_threshold {
+                    if (b.expires_at - Utc::now()).to_std().unwrap_or_default() >= self.renewal_threshold {
                         continue; // Plenty of time left — skip until closer to expiry.
                     }
                     bounded_to_renew.push((key.clone(), slot_mutex.clone()));
                 }
                 TrackedLease::Unlimited(u) => {
-                    if u.expires_at - Utc::now() >= renewal_threshold {
+                    if (u.expires_at - Utc::now()).to_std().unwrap_or_default() >= self.renewal_threshold {
                         continue;
                     }
                     unlimited_to_renew.push((key.clone(), slot_mutex.clone()));
