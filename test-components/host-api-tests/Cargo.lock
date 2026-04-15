@@ -344,7 +344,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm"
-version = "0.0.0"
+version = "1.5.0-dev.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a3a0ebb5ea8461b3dce6007eac76911835a030bafd8eff1d581af99d33f417e"
 dependencies = [
  "chrono",
  "itertools",
