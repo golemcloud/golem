@@ -502,6 +502,10 @@ pub struct OplogConfig {
     /// (`oplog_writes_per_second`). Defaults to false (disabled).
     #[serde(default)]
     pub oplog_rate_limit_enabled: bool,
+    /// Retry configuration for transient indexed-storage errors (pool exhaustion,
+    /// connection resets). Defaults to 3 attempts, 100 ms–1 s exponential backoff.
+    #[serde(default = "default_oplog_indexed_storage_retry")]
+    pub indexed_storage_retry: RetryConfig,
 }
 
 impl SafeDisplay for OplogConfig {
@@ -557,8 +561,17 @@ impl SafeDisplay for OplogConfig {
             "oplog rate limit enabled: {}",
             self.oplog_rate_limit_enabled
         );
+        let _ = writeln!(
+            &mut result,
+            "indexed storage retry: {:?}",
+            self.indexed_storage_retry
+        );
         result
     }
+}
+
+fn default_oplog_indexed_storage_retry() -> RetryConfig {
+    RetryConfig::max_attempts_3()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -812,6 +825,8 @@ pub struct IndexedStoragePostgresConfig {
     pub postgres: DbPostgresConfig,
     #[serde(default = "default_indexed_storage_postgres_drop_prefix_delete_batch_size")]
     pub drop_prefix_delete_batch_size: u64,
+    #[serde(default)]
+    pub max_concurrent_ops: Option<u32>,
 }
 
 impl SafeDisplay for IndexedStoragePostgresConfig {
@@ -822,6 +837,11 @@ impl SafeDisplay for IndexedStoragePostgresConfig {
             &mut result,
             "drop prefix delete batch size: {}",
             self.drop_prefix_delete_batch_size
+        );
+        let _ = writeln!(
+            &mut result,
+            "max concurrent ops: {:?}",
+            self.max_concurrent_ops
         );
         result
     }
@@ -1330,6 +1350,7 @@ impl Default for OplogConfig {
             plugin_max_commit_count: 3,
             plugin_max_elapsed_time: Duration::from_secs(5),
             oplog_rate_limit_enabled: false,
+            indexed_storage_retry: default_oplog_indexed_storage_retry(),
         }
     }
 }

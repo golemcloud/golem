@@ -303,6 +303,12 @@ pub mod oplog {
             &["account_id", "environment_id"]
         )
         .unwrap();
+        static ref OPLOG_STORAGE_RETRY_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_storage_retry_total",
+            "Number of oplog storage operation retries due to transient errors",
+            &["op"]
+        )
+        .unwrap();
     }
 
     pub fn record_oplog_call(api_name: &'static str) {
@@ -312,6 +318,12 @@ pub mod oplog {
     pub fn record_oplog_rate_limited(account_id: &str, environment_id: &str) {
         OPLOG_RATE_LIMITED_TOTAL
             .with_label_values(&[account_id, environment_id])
+            .inc();
+    }
+
+    pub fn record_oplog_storage_retry(op_name: &str) {
+        OPLOG_STORAGE_RETRY_TOTAL
+            .with_label_values(&[op_name])
             .inc();
     }
 

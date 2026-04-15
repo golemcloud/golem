@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::storage::indexed::{
-    IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor,
+    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+    ScanCursor,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -83,13 +84,13 @@ impl RedisIndexedStorage {
 
     const KEY: &'static str = "key";
 
-    fn parse_entry_id(id: &str) -> Result<u64, String> {
+    fn parse_entry_id(id: &str) -> Result<u64, IndexedStorageError> {
         if let Some((id, _)) = id.split_once('-') {
             id.parse::<u64>()
-                .map_err(|e| format!("Failed to parse {id} as u64: {e}"))
+                .map_err(|e| IndexedStorageError::Other(format!("Failed to parse {id} as u64: {e}")))
         } else {
             id.parse::<u64>()
-                .map_err(|e| format!("Failed to parse {id} as u64: {e}"))
+                .map_err(|e| IndexedStorageError::Other(format!("Failed to parse {id} as u64: {e}")))
         }
     }
 
@@ -98,7 +99,7 @@ impl RedisIndexedStorage {
         svc_name: &'static str,
         entity_name: &'static str,
         items: Vec<HashMap<String, HashMap<String, Bytes>>>,
-    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
         let mut result = Vec::new();
         for item in items {
             for (id, value) in item {
@@ -121,12 +122,12 @@ impl IndexedStorage for RedisIndexedStorage {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-    ) -> Result<u8, String> {
+    ) -> Result<u8, IndexedStorageError> {
         self.redis
             .with(svc_name, api_name)
             .info_connected_slaves()
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| IndexedStorageError::Other(e.to_string()))
     }
 
     async fn wait_for_replicas(
@@ -135,13 +136,13 @@ impl IndexedStorage for RedisIndexedStorage {
         api_name: &'static str,
         replicas: u8,
         timeout: Duration,
-    ) -> Result<u8, String> {
+    ) -> Result<u8, IndexedStorageError> {
         self.redis
             .with(svc_name, api_name)
             .wait(replicas as i64, timeout.as_millis() as i64)
             .await
             .map(|r| r as u8)
-            .map_err(|e| e.to_string())
+            .map_err(|e| IndexedStorageError::Other(e.to_string()))
     }
 
     async fn exists(
@@ -150,12 +151,12 @@ impl IndexedStorage for RedisIndexedStorage {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, IndexedStorageError> {
         self.redis
             .with(svc_name, api_name)
             .exists(Self::composite_key(namespace, key))
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| IndexedStorageError::Other(e.to_string()))
     }
 
     async fn scan(
@@ -166,7 +167,7 @@ impl IndexedStorage for RedisIndexedStorage {
         prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), String> {
+    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
         let pattern = Self::to_scan_pattern(prefix);
         let (cursor, keys) = self
             .redis
@@ -177,7 +178,7 @@ impl IndexedStorage for RedisIndexedStorage {
                 count,
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
         let keys = keys
             .into_iter()
             .map(|k| Self::parse_composite_meta_key(namespace.clone(), &k))
@@ -194,7 +195,7 @@ impl IndexedStorage for RedisIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
 
         let _: String = self
@@ -208,7 +209,7 @@ impl IndexedStorage for RedisIndexedStorage {
                 (Key::from(Self::KEY), Value::Bytes(Bytes::from(value))),
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
         Ok(())
     }
 
@@ -220,7 +221,7 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         pairs: Vec<(u64, Vec<u8>)>,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         if !pairs.is_empty() {
             let mut redis_pairs = Vec::with_capacity(pairs.len());
             for (id, value) in pairs {
@@ -240,7 +241,7 @@ impl IndexedStorage for RedisIndexedStorage {
                     redis_pairs,
                 )
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
         }
         Ok(())
     }
@@ -251,12 +252,12 @@ impl IndexedStorage for RedisIndexedStorage {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, IndexedStorageError> {
         self.redis
             .with(svc_name, api_name)
             .xlen(Self::composite_key(namespace, key))
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| IndexedStorageError::Other(e.to_string()))
     }
 
     async fn delete(
@@ -265,12 +266,12 @@ impl IndexedStorage for RedisIndexedStorage {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         self.redis
             .with(svc_name, api_name)
             .del(Self::composite_key(namespace, key))
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| IndexedStorageError::Other(e.to_string()))
     }
 
     async fn read(
@@ -282,13 +283,13 @@ impl IndexedStorage for RedisIndexedStorage {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
         let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
             .redis
             .with(svc_name, api_name)
             .xrange(Self::composite_key(namespace, key), start_id, end_id, None)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result)
@@ -301,13 +302,13 @@ impl IndexedStorage for RedisIndexedStorage {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
             .redis
             .with(svc_name, api_name)
             .xrange(Self::composite_key(namespace, key), "-", "+", Some(1))
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())
@@ -320,13 +321,13 @@ impl IndexedStorage for RedisIndexedStorage {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
             .redis
             .with(svc_name, api_name)
             .xrevrange(Self::composite_key(namespace, key), "+", "-", Some(1))
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())
@@ -340,13 +341,13 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         let items: Vec<HashMap<String, HashMap<String, Bytes>>> = self
             .redis
             .with(svc_name, api_name)
             .xrange(Self::composite_key(namespace, key), id, "+", Some(1))
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())
@@ -359,7 +360,7 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         let _: u64 = self
             .redis
             .with(svc_name, api_name)
@@ -368,7 +369,7 @@ impl IndexedStorage for RedisIndexedStorage {
                 (XCapKind::MinID, last_dropped_id + 1),
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
         Ok(())
     }
 }
