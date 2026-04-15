@@ -16,17 +16,24 @@ use super::{CompiledRoute, CompiledRoutes, OpenApiSpecBehaviour, RouteSecurity};
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
-    CallAgentBehaviour, ConstructorParameter, CorsPreflightBehaviour, MethodParameter,
-    OriginPattern, QueryOrHeaderType, SecuritySchemeRouteSecurity, SessionFromHeaderRouteSecurity,
-    WebhookCallbackBehaviour,
+    CallAgentBehaviour, ConstructorParameter, CorsPreflightBehaviour, CorsPreflightMethodPolicy,
+    MethodParameter, OriginPattern, QueryOrHeaderType, SecuritySchemeRouteSecurity,
+    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
 use golem_common::model::agent::{AgentTypeName, HttpMethod};
 use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
 use golem_wasm::analysis::TypeEnum;
+use http::HeaderName;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::{BTreeSet, HashMap};
 use std::ops::Deref;
+
+fn normalize_header_name(header_name: String) -> String {
+    HeaderName::from_bytes(header_name.trim().as_bytes())
+        .map(|header_name| header_name.as_str().to_string())
+        .unwrap_or_else(|_| header_name.trim().to_ascii_lowercase())
+}
 
 impl TryFrom<proto::golem::customapi::SecuritySchemeDetails> for SecuritySchemeDetails {
     type Error = String;
@@ -186,6 +193,28 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
             })),
             Kind::CorsPreflight(cors_preflight) => {
                 Ok(RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
+                    method_policies: cors_preflight
+                        .method_policies
+                        .into_iter()
+                        .map(|method_policy| {
+                            Ok::<_, String>(CorsPreflightMethodPolicy {
+                                method: method_policy
+                                    .method
+                                    .ok_or("Missing cors preflight method")?
+                                    .try_into()?,
+                                allowed_origins: method_policy
+                                    .allowed_origins
+                                    .into_iter()
+                                    .map(OriginPattern)
+                                    .collect(),
+                                allowed_headers: method_policy
+                                    .allowed_headers
+                                    .into_iter()
+                                    .map(normalize_header_name)
+                                    .collect(),
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
                     allowed_origins: cors_preflight
                         .allowed_origins
                         .into_iter()
@@ -243,6 +272,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 )),
             },
             RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
+                method_policies,
                 allowed_origins,
                 allowed_methods,
             }) => Self {
@@ -252,6 +282,23 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                         allowed_methods: allowed_methods
                             .into_iter()
                             .map(proto::golem::component::HttpMethod::from)
+                            .collect(),
+                        method_policies: method_policies
+                            .into_iter()
+                            .map(|method_policy| {
+                                proto::golem::customapi::route_behaviour::cors_preflight::MethodPolicy {
+                                    method: Some(method_policy.method.into()),
+                                    allowed_origins: method_policy
+                                        .allowed_origins
+                                        .into_iter()
+                                        .map(|origin| origin.0)
+                                        .collect(),
+                                    allowed_headers: method_policy
+                                        .allowed_headers
+                                        .into_iter()
+                                        .collect(),
+                                }
+                            })
                             .collect(),
                     },
                 )),

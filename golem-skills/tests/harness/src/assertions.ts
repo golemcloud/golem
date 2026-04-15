@@ -16,6 +16,7 @@ export const ExpectSchema = z.object({
   status: z.number().optional(),
   body_contains: z.string().optional(),
   body_matches: z.string().optional(),
+  header_contains: z.record(z.string()).optional(),
   body_json: z.array(ResultJsonAssertionSchema).optional(),
   result_json: z.array(ResultJsonAssertionSchema).optional(),
 });
@@ -28,6 +29,7 @@ export interface AssertionContext {
   exitCode: number | null;
   body?: string;
   status?: number;
+  headers?: Record<string, string>;
   resultJson?: unknown;
 }
 
@@ -137,6 +139,20 @@ export function evaluate(context: AssertionContext, expect: ExpectSpec): Asserti
         ? `body matches /${expect.body_matches}/`
         : `body does not match /${expect.body_matches}/; received ${JSON.stringify(previewText(body))}`,
     });
+  }
+
+  if (expect.header_contains !== undefined) {
+    for (const [name, expected] of Object.entries(expect.header_contains)) {
+      const actual = context.headers?.[name.toLowerCase()];
+      const passed = actual !== undefined && actual.includes(expected);
+      results.push({
+        assertion: `header_contains[${name}]`,
+        passed,
+        message: passed
+          ? `header "${name}" contains "${expected}"`
+          : `header "${name}" expected to contain "${expected}", got ${actual === undefined ? "(missing)" : JSON.stringify(actual)}`,
+      });
+    }
   }
 
   if (expect.body_json && expect.body_json.length > 0) {

@@ -265,8 +265,22 @@ pub struct CallAgentBehaviour {
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
 pub struct CorsPreflightBehaviour {
+    #[desert(default)]
+    pub method_policies: Vec<CorsPreflightMethodPolicy>,
+    #[desert(default)]
     pub allowed_origins: BTreeSet<OriginPattern>,
+    #[desert(default)]
     pub allowed_methods: BTreeSet<HttpMethod>,
+}
+
+#[derive(Debug, BinaryCodec)]
+#[desert(evolution())]
+pub struct CorsPreflightMethodPolicy {
+    pub method: HttpMethod,
+    #[desert(default)]
+    pub allowed_origins: BTreeSet<OriginPattern>,
+    #[desert(default)]
+    pub allowed_headers: BTreeSet<String>,
 }
 
 #[derive(Debug, BinaryCodec)]

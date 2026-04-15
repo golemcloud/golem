@@ -99,7 +99,7 @@ const RetrySchema = z.object({
 
 const HttpSchema = z.object({
   url: z.string(),
-  method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]).default("GET"),
+  method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]).default("GET"),
   body: langConditional(z.string()).optional(),
   headers: z.record(z.string()).optional(),
 });
@@ -291,7 +291,7 @@ type DeleteAgentSpec = { name: string };
 type CreateProjectSpec = { name: string; presets?: LangConditional<string[]> };
 type HttpSpec = {
   url: string;
-  method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
+  method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "OPTIONS";
   body?: LangConditional<string>;
   headers?: Record<string, string>;
 };
@@ -945,18 +945,17 @@ export class ScenarioExecutor {
       DEFAULT_STEP_TIMEOUT_SECONDS;
     const shouldTrackSkills = this.needsSkillTracking(step);
     const driverTracksSkills = shouldTrackSkills && this.driver.getActivatedSkills() !== undefined;
-    let stepBaseline = 0;
-    if (shouldTrackSkills) {
-      if (driverTracksSkills) {
-        this.driver.resetActivatedSkills();
-      } else {
-        if (!this.watcherStarted) {
-          await this.watcher.start();
-          this.watcherStarted = true;
-        }
+    const stepBaseline = 0;
+    // Do NOT reset activated skills between steps — skills are loaded once
+    // per thread and remain available across subsequent prompts.  For the
+    // filesystem watcher we start it once and keep baseline 0 so that all
+    // activations across the entire scenario are visible.
+    if (shouldTrackSkills && !driverTracksSkills) {
+      if (!this.watcherStarted) {
+        await this.watcher.start();
+        this.watcherStarted = true;
         await this.watcher.snapshotAtimes();
         await new Promise((resolve) => setTimeout(resolve, WATCHER_SNAPSHOT_SETTLE_MS));
-        stepBaseline = this.watcher.markBaseline();
       }
     }
     const stepLabel = step.id ?? "(unnamed)";
@@ -1546,6 +1545,10 @@ export class ScenarioExecutor {
       log.httpResponse(stepLabel, response.status, body);
 
       if (expect) {
+        const headers: Record<string, string> = {};
+        response.headers.forEach((value, key) => {
+          headers[key.toLowerCase()] = value;
+        });
         this.evaluateAssertions(
           {
             stdout: body,
@@ -1553,6 +1556,7 @@ export class ScenarioExecutor {
             exitCode: response.ok ? 0 : 1,
             body,
             status: response.status,
+            headers,
           },
           expect,
           fail,

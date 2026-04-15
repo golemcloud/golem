@@ -23,7 +23,6 @@ use super::webhoooks::WebhookCallbackHandler;
 use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
 use crate::custom_api::RichRequest;
 use anyhow::anyhow;
-use golem_service_base::custom_api::CorsPreflightBehaviour;
 use golem_service_base::custom_api::OpenApiSpecBehaviour;
 use golem_service_base::custom_api::PathSegment;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
@@ -83,21 +82,19 @@ impl RequestHandler {
         request: &mut RichRequest,
         resolved_route: &ResolvedRouteEntry,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        if let Some(short_circuit) = self
+        let mut result = if let Some(short_circuit) = self
             .oidc_handler
             .apply_oidc_incoming_middleware(request, resolved_route)
             .await?
         {
-            return Ok(short_circuit);
-        }
-
-        if let Some(short_circuit) =
+            short_circuit
+        } else if let Some(short_circuit) =
             apply_session_from_header_security_middleware(request, resolved_route)?
         {
-            return Ok(short_circuit);
-        }
-
-        let mut result = self.execute_route(request, resolved_route).await?;
+            short_circuit
+        } else {
+            self.execute_route(request, resolved_route).await?
+        };
 
         apply_cors_outgoing_middleware(&mut result, request, resolved_route).await?;
 
@@ -116,10 +113,9 @@ impl RequestHandler {
                     .await
             }
 
-            RichRouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
-                allowed_origins,
-                allowed_methods,
-            }) => handle_cors_preflight_behaviour(request, allowed_origins, allowed_methods),
+            RichRouteBehaviour::CorsPreflight(cors_preflight) => {
+                handle_cors_preflight_behaviour(request, cors_preflight)
+            }
 
             RichRouteBehaviour::OidcCallback(OidcCallbackBehaviour { security_scheme }) => {
                 self.oidc_handler

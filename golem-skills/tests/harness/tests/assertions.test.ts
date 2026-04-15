@@ -195,6 +195,49 @@ describe("Assertion Engine", () => {
     });
   });
 
+  describe("header_contains", () => {
+    it("passes when header contains the expected value", () => {
+      const results = evaluate(
+        makeContext({ headers: { "access-control-allow-origin": "https://example.com" } }),
+        { header_contains: { "Access-Control-Allow-Origin": "https://example.com" } },
+      );
+      assert.equal(results.length, 1);
+      assert.equal(results[0].passed, true);
+    });
+
+    it("passes for substring match", () => {
+      const results = evaluate(
+        makeContext({ headers: { "access-control-allow-origin": "https://example.com" } }),
+        { header_contains: { "Access-Control-Allow-Origin": "example" } },
+      );
+      assert.equal(results[0].passed, true);
+    });
+
+    it("fails when header is missing", () => {
+      const results = evaluate(makeContext({ headers: {} }), {
+        header_contains: { "Access-Control-Allow-Origin": "*" },
+      });
+      assert.equal(results[0].passed, false);
+      assert.ok(results[0].message.includes("(missing)"));
+    });
+
+    it("fails when header value does not match", () => {
+      const results = evaluate(
+        makeContext({ headers: { "access-control-allow-origin": "https://other.com" } }),
+        { header_contains: { "Access-Control-Allow-Origin": "https://example.com" } },
+      );
+      assert.equal(results[0].passed, false);
+    });
+
+    it("handles missing headers context gracefully", () => {
+      const results = evaluate(makeContext(), {
+        header_contains: { "X-Custom": "value" },
+      });
+      assert.equal(results[0].passed, false);
+      assert.ok(results[0].message.includes("(missing)"));
+    });
+  });
+
   describe("empty expect", () => {
     it("returns no results for empty expect", () => {
       const results = evaluate(makeContext(), {});
