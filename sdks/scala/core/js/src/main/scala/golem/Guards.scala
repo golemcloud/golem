@@ -65,8 +65,22 @@ object Guards {
     new IdempotenceModeGuard(() => HostApi.setIdempotenceMode(original))
   }
 
-  def atomically[A](block: => Future[A]): Future[A] =
-    withGuard(markAtomicOperation())(block)
+  /**
+   * Executes a block atomically.
+   *
+   * On success the atomic region is committed via `markEndOperation`.
+   * On failure the region is intentionally left open so the executor sees the
+   * trap as occurring *inside* the atomic region and can retry from the
+   * begin-operation marker (matching the Rust SDK behaviour where `Drop` is
+   * never called on panic because WASM panics don't unwind).
+   */
+  def atomically[A](block: => Future[A]): Future[A] = {
+    val guard = markAtomicOperation()
+    block.transform(
+      result => { guard.drop(); result },
+      error  => { /* Do NOT drop — leave the atomic region open for retry */ error }
+    )
+  }
 
   def markAtomicOperation(): AtomicOperationGuard = {
     val begin = HostApi.markBeginOperation()

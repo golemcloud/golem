@@ -46,8 +46,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetFileContentsRequest, GetFileContentsResponse, GetFileSystemNodeRequest,
     GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest,
     GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InvokeAgentRequest, InvokeAgentResponse, RevertWorkerRequest, RevertWorkerResponse,
-    SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    InvokeAgentRequest, InvokeAgentResponse, ProcessOplogEntriesRequest,
+    ProcessOplogEntriesResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
+    SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse, process_oplog_entries_response,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
@@ -55,9 +56,10 @@ use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal, UntypedDat
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
-use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
@@ -1759,6 +1761,93 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    async fn process_oplog_entries_internal(
+        &self,
+        request: ProcessOplogEntriesRequest,
+    ) -> Result<(), WorkerExecutorError> {
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        Self::validate_auth_ctx(&request.auth_ctx)?;
+
+        let component_revision: golem_common::model::component::ComponentRevision =
+            request.component_revision.try_into().map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("invalid component_revision: {e}"))
+            })?;
+
+        let idempotency_key: IdempotencyKey = request
+            .idempotency_key
+            .ok_or(WorkerExecutorError::invalid_request(
+                "idempotency_key not found",
+            ))?
+            .into();
+
+        let account_id: AccountId = request
+            .account_id
+            .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("invalid account_id: {e}"))
+            })?;
+
+        let config: Vec<(String, String)> = request.config.into_iter().collect();
+
+        let metadata_dto: AgentMetadataDto = request
+            .metadata
+            .ok_or(WorkerExecutorError::invalid_request("metadata not found"))?
+            .try_into()
+            .map_err(|e: String| {
+                WorkerExecutorError::invalid_request(format!("invalid metadata: {e}"))
+            })?;
+
+        let metadata = AgentMetadataForGuests {
+            agent_id: metadata_dto.agent_id,
+            args: vec![],
+            env: metadata_dto.env.into_iter().collect(),
+            wasi_config: metadata_dto.wasi_config,
+            status: metadata_dto.status,
+            component_revision: metadata_dto.component_revision,
+            retry_count: metadata_dto.retry_count as u64,
+            environment_id: metadata_dto.environment_id,
+        };
+
+        let entries: Vec<golem_common::model::oplog::OplogEntry> = request
+            .entries
+            .into_iter()
+            .map(golem_common::model::oplog::OplogEntry::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(WorkerExecutorError::invalid_request)?;
+
+        let first_entry_index = OplogIndex::from_u64(request.first_entry_index);
+
+        let worker = Worker::get_or_create_running(
+            self,
+            &owned_agent_id,
+            None,
+            None,
+            Vec::new(),
+            Some(component_revision),
+            None,
+            &InvocationContextStack::fresh(),
+            Principal::anonymous(),
+        )
+        .await?;
+
+        let _result = worker
+            .invoke(AgentInvocation::ProcessOplogEntries {
+                idempotency_key,
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+            })
+            .await?;
+
+        Ok(())
+    }
+
     fn create_proto_metadata(
         metadata: AgentMetadata,
         last_error_and_retry_count: Option<LastError>,
@@ -2701,6 +2790,38 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             err.clone().into(),
                         ),
                     ),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn process_oplog_entries(
+        &self,
+        request: Request<ProcessOplogEntriesRequest>,
+    ) -> ResponseResult<ProcessOplogEntriesResponse> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "process_oplog_entries",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+
+        let result = self
+            .process_oplog_entries_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(_) => record.succeed(Ok(Response::new(ProcessOplogEntriesResponse {
+                result: Some(process_oplog_entries_response::Result::Success(
+                    golem::common::Empty {},
+                )),
+            }))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(ProcessOplogEntriesResponse {
+                    result: Some(process_oplog_entries_response::Result::Failure(
+                        err.clone().into(),
+                    )),
                 })),
                 &mut err,
             ),

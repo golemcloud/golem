@@ -91,7 +91,7 @@ impl SdkOverrides {
                 fs::path_to_str(&workspace_dir.join("sdks/ts/packages"))?.to_string(),
             ),
             ts_version: None,
-            scala_sdk_version: None,
+            scala_sdk_version: Some("0.0.0-SNAPSHOT".to_string()),
             moonbit_sdk_path: Some(
                 fs::path_to_str(&workspace_dir.join("sdks/moonbit/golem_sdk"))?.to_string(),
             ),

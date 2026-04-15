@@ -82,7 +82,7 @@ final class ShardAgentImpl(input: (String, Int)) extends ShardAgent {
 
 ## Custom Types
 
-Use case classes for structured data. The SDK requires a `zio.blocks.schema.Schema` for custom types used as method parameters or return values:
+Use case classes for structured data. The SDK requires a `zio.blocks.schema.Schema` for custom types used as method parameters or return values. For collections, use `List[T]` instead of `Array[T]` — `Array` does not have automatic `Schema` derivation support:
 
 ```scala
 import zio.blocks.schema.Schema

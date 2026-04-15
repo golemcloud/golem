@@ -3,6 +3,7 @@ syntax = "proto3";
 package golem.worker.v1;
 
 import "golem/auth/auth_ctx.proto";
+import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
 import "golem/common/environment.proto";
 import "golem/common/revert_worker_response.proto";
@@ -23,6 +24,7 @@ import "golem/worker/update_mode.proto";
 import "golem/worker/v1/worker_error.proto";
 import "golem/worker/worker_filter.proto";
 import "golem/worker/worker_id.proto";
+import "golem/worker/raw_oplog.proto";
 import "golem/worker/worker_metadata.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -35,6 +37,7 @@ service WorkerService {
   rpc CompletePromise (CompletePromiseRequest) returns (CompletePromiseResponse);
   rpc InvokeAgent (InvokeAgentRequest) returns (InvokeAgentResponse);
   rpc CancelInvocation (CancelInvocationRequest) returns (CancelInvocationResponse);
+  rpc ProcessOplogEntries (ProcessOplogEntriesRequest) returns (ProcessOplogEntriesResponse);
 }
 
 message LaunchNewWorkerRequest {
@@ -170,5 +173,25 @@ message CancelInvocationResponse {
   oneof result {
     bool success = 1;
     AgentError error = 2;
+  }
+}
+
+message ProcessOplogEntriesRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  uint64 component_revision = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+  golem.common.AccountId account_id = 5;
+  map<string, string> config = 6;
+  golem.worker.AgentMetadata metadata = 7;
+  uint64 first_entry_index = 8;
+  repeated golem.worker.RawOplogEntry entries = 9;
+  golem.auth.AuthCtx auth_ctx = 10;
+}
+
+message ProcessOplogEntriesResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.AgentError error = 2;
   }
 }

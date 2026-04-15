@@ -301,4 +301,19 @@ impl WorkerProxy for TestWorkerProxy {
     ) -> Result<InvocationStatus, WorkerProxyError> {
         Ok(InvocationStatus::Unknown)
     }
+
+    async fn process_oplog_entries(
+        &self,
+        _target_agent_id: &AgentId,
+        _environment_id: golem_common::base_model::environment::EnvironmentId,
+        _component_revision: golem_common::base_model::component::ComponentRevision,
+        _idempotency_key: IdempotencyKey,
+        _account_id: AccountId,
+        _config: Vec<(String, String)>,
+        _metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
+        _first_entry_index: golem_common::base_model::OplogIndex,
+        _entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
+    ) -> Result<(), WorkerProxyError> {
+        unimplemented!()
+    }
 }

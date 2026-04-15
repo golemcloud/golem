@@ -242,7 +242,10 @@ Every step must have **exactly one** action field. Common fields available on al
   allowedExtraSkills:              # Extra skills that are OK to activate
     - "golem-db-app-rust"
   strictSkillMatch: false          # If true, ONLY expectedSkills may activate
-  continue_session: true           # Continue previous agent session (vs new session)
+  continueSession: true            # Continue previous agent session and keep cumulative
+                                   # skill tracking for that prompt session.
+                                   # Set to false to start a fresh agent session with
+                                   # fresh skill tracking.
   verify:
     build: true                    # Run `golem build` after the prompt
     deploy: true                   # Run `golem build` + `golem deploy --yes`
@@ -431,6 +434,11 @@ Available assertion fields:
 | `body_matches` | http | Response body matches regex |
 | `result_json` | invoke_json | JSONPath assertions on parsed JSON result |
 
+Regex-based assertions use JavaScript `RegExp` syntax because the harness evaluates them with
+Node.js. `--dry-run` validates that `stdout_matches` and `body_matches` compile successfully.
+Use JavaScript-compatible patterns such as `\\d+`, `(?:...)`, and `[\\s\\S]*` for cross-line
+matches. Do not use PCRE-only inline flags such as `(?s)`.
+
 `result_json` entries support:
 - `path`: JSONPath expression (e.g., `$.name`, `$.items[0].id`)
 - `equals`: Exact match (deep equality)
@@ -535,7 +543,10 @@ The harness detects whether an agent actually read a skill using two mechanisms:
 1. **Filesystem watcher**: `fswatch` (macOS) or `inotifywait` (Linux) monitors SKILL.md file access events
 2. **atime comparison**: Snapshots file access times before each step and compares after
 
-Both mechanisms feed into `expectedSkills` / `allowedExtraSkills` / `strictSkillMatch` verification.
+Both mechanisms feed into `expectedSkills` / `allowedExtraSkills` / `strictSkillMatch`
+verification. Skill tracking is scoped to the current prompt session: followup prompts accumulate
+activations, while the first prompt in a scenario and any prompt with `continueSession: false`
+start a fresh tracking session.
 
 ## Agent Drivers
 

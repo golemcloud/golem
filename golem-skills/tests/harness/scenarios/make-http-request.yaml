@@ -1,0 +1,87 @@
+name: "make-http-request"
+settings:
+  golem_server:
+    custom_request_port: 9006
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-request-recorder"
+    prompt: >
+      In the test-app project, add a new durable agent type called `RequestRecorder` identified by
+      a single constructor parameter named `name`. Give it an HTTP mount under `/requests/{name}`
+      and make sure it is exposed through the app HTTP API on `test-app.localhost:9006`.
+
+      RequestRecorder must store a list of recorded messages in agent state, initially empty.
+
+      Expose these HTTP endpoints:
+      - `POST /record` — accepts a `message` string in the JSON request body and appends it to the
+        stored list. It may return unit / no content.
+      - `GET /messages` — returns all recorded messages as a JSON array of strings.
+
+      Do not modify CounterAgent yet. Make sure the project builds successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-http-endpoint-rust"
+      ts:
+        - "golem-add-http-endpoint-ts"
+      scala:
+        - "golem-add-http-endpoint-scala"
+    verify:
+      build: true
+
+  - id: "make-outgoing-http-request"
+    continueSession: false
+    prompt: >
+      In the test-app project, modify CounterAgent to add a new externally invokable method named
+      `record_message_via_http` in Rust and `recordMessageViaHttp` in TypeScript and Scala.
+
+      The method must take a single string parameter called `message`.
+
+      When called, it must make an outgoing HTTP POST request to exactly
+      `http://test-app.localhost:9006/requests/main/record`.
+
+      The request must use `Content-Type: application/json` and send the JSON body
+      `{"message": <message>}` where the JSON field name matches the RequestRecorder endpoint
+      parameter name exactly.
+
+      Do not directly invoke RequestRecorder as an agent. Use an actual outgoing HTTP request from
+      CounterAgent code. After the request succeeds, return the original `message` string.
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-make-http-request-rust"
+      ts:
+        - "golem-make-http-request-ts"
+      scala:
+        - "golem-make-http-request-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "invoke-http-request"
+    invoke_json:
+      agent: 'CounterAgent("main")'
+      method:
+        rust: "record_message_via_http"
+        ts: "recordMessageViaHttp"
+        scala: "recordMessageViaHttp"
+      args: '"hello from counter"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "hello from counter"
+
+  - id: "verify-recorded-message"
+    http:
+      url: "http://test-app.localhost:9006/requests/main/messages"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: ["hello from counter"]

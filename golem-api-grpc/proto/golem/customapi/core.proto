@@ -186,8 +186,13 @@ message RouteBehaviour {
   }
 
   message CorsPreflight {
-    repeated string allowed_origins = 1;
-    repeated golem.component.HttpMethod allowed_methods = 2;
+    message MethodPolicy {
+      golem.component.HttpMethod method = 1;
+      repeated string allowed_origins = 2;
+      repeated string allowed_headers = 3;
+    }
+
+    repeated MethodPolicy method_policies = 1;
   }
 
   message WebhookCallback {

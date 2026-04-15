@@ -1,0 +1,62 @@
+name: "annotate-agent"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+
+  - id: "annotate-counter-agent"
+    prompt: >
+      In the test-app project, add a new externally invokable method to the existing
+      CounterAgent named `get-double` (or `getDouble` following the source language
+      naming convention) that returns the current count multiplied by 2 as a u64/number.
+
+      Add the following annotations to this new method:
+        - prompt: "Get the doubled value of the counter"
+        - description: "Returns the current count multiplied by two. Useful for scaling operations."
+
+      Also set the agent-level description of CounterAgent to exactly:
+        "A test counter agent for tracking numeric values"
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-annotate-agent-rust"
+      ts:
+        - "golem-annotate-agent-ts"
+      scala:
+        - "golem-annotate-agent-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-agent-metadata"
+    get_agent_type:
+      name: "CounterAgent"
+    expect:
+      rust:
+        status: 200
+        body_json:
+          - path: "$.agentType.description"
+            contains: "A test counter agent for tracking numeric values"
+          - path: "$.agentType.methods[?(@.name=='get_double')].promptHint"
+            contains: "Get the doubled value of the counter"
+          - path: "$.agentType.methods[?(@.name=='get_double')].description"
+            contains: "Returns the current count multiplied by two"
+      ts:
+        status: 200
+        body_json:
+          - path: "$.agentType.description"
+            contains: "A test counter agent for tracking numeric values"
+          - path: "$.agentType.methods[?(@.name=='getDouble')].promptHint"
+            contains: "Get the doubled value of the counter"
+          - path: "$.agentType.methods[?(@.name=='getDouble')].description"
+            contains: "Returns the current count multiplied by two"
+      scala:
+        status: 200
+        body_json:
+          - path: "$.agentType.description"
+            contains: "A test counter agent for tracking numeric values"
+          - path: "$.agentType.methods[?(@.name=='getDouble')].promptHint"
+            contains: "Get the doubled value of the counter"
+          - path: "$.agentType.methods[?(@.name=='getDouble')].description"
+            contains: "Returns the current count multiplied by two"
