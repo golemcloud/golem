@@ -23,7 +23,7 @@ inputs:
     description: 'Whether to install wasm-rquickjs'
     default: 'true'
   wasm-rquickjs-version:
-    description: 'wasm-rquickjs tag to install'
+    description: 'wasm-rquickjs git ref to install (tag or branch)'
     required: true
   install-cargo-component:
     description: 'Whether to install cargo-component'

@@ -64,7 +64,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{Instrument, error};
-use wasmtime::component::Resource;
+use wasmtime::component::{Resource, ResourceTableError};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
 use golem_common::model::worker::AgentConfigEntryDto;
@@ -521,6 +521,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     begin_index,
                 }),
                 child_pollables: Vec::new(),
+                drop_pending: false,
             })?;
             Ok(fut)
         } else {
@@ -538,6 +539,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     begin_index,
                 }),
                 child_pollables: Vec::new(),
+                drop_pending: false,
             })?;
             Ok(fut)
         };
@@ -679,6 +681,9 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let parent: Resource<FutureInvokeResult> = Resource::new_borrow(parent_rep);
         let entry = self.table().get_mut(&parent)?;
         entry.child_pollables.push(child_rep);
+        self.state
+            .rpc_pollable_to_parent
+            .insert(child_rep, parent_rep);
         Ok(pollable)
     }
 
@@ -1078,20 +1083,21 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
     async fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         self.observe_function_call("golem::rpc::future-invoke-result", "drop");
+        let future_rep = this.rep();
 
-        let child_reps = {
-            let entry = self.table().get_mut(&this)?;
-            std::mem::take(&mut entry.child_pollables)
-        };
-
-        for rep in child_reps {
-            let child: Resource<golem_wasm::DynPollable> = Resource::new_own(rep);
-            if let Err(err) = self.table().delete(child) {
-                tracing::debug!(rep, err=%err, "Child pollable already dropped by guest");
+        match self.table().delete(this) {
+            Ok(entry) => {
+                for child_rep in &entry.child_pollables {
+                    self.state.rpc_pollable_to_parent.remove(child_rep);
+                }
             }
+            Err(ResourceTableError::HasChildren) => {
+                let parent: Resource<FutureInvokeResult> = Resource::new_borrow(future_rep);
+                self.table().get_mut(&parent)?.drop_pending = true;
+            }
+            Err(err) => return Err(err.into()),
         }
 
-        let _ = self.table().delete(this)?;
         Ok(())
     }
 }

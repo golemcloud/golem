@@ -299,18 +299,11 @@ impl Services {
             component_service.clone(),
         ));
 
-        let domain_provisioner = crate::services::domain_registration::provisioner::configured(
-            &config.environment,
-            &config.workspace,
-            &config.domain_provisioner,
-        )
-        .await?;
-
         let domain_registration_service = Arc::new(DomainRegistrationService::new(
             repos.domain_registration_repo.clone(),
             environment_service.clone(),
-            domain_provisioner.clone(),
             registry_change_notifier.clone(),
+            config.domain_registration.clone(),
         ));
 
         let security_scheme_service = Arc::new(SecuritySchemeService::new(
