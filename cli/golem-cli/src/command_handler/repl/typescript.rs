@@ -39,6 +39,8 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::process::Command;
 
+const TS_REPL_PACKAGE_NAME: &str = "@golemcloud/golem-ts-repl";
+
 pub struct TypeScriptRepl {
     ctx: Arc<Context>,
 }
@@ -184,7 +186,7 @@ impl TypeScriptRepl {
           "workspaces": workspaces,
           "dependencies": dependencies,
           "devDependencies": {
-            "@golem/golem-ts-repl": sdk_overrides()?.ts_package_dep("golem-ts-repl")?,
+            TS_REPL_PACKAGE_NAME: sdk_overrides()?.ts_package_dep("golem-ts-repl")?,
             "tsx": "^4.7",
             "typescript": "^5.9"
           }
@@ -277,7 +279,7 @@ impl TypeScriptRepl {
 
         let repl_ts = formatdoc! {"
                 import 'tsx/patch-repl';
-                const {{ Repl }} = await import('@golem/golem-ts-repl');
+                const {{ Repl }} = await import({ts_repl_package_name});
 
                 const repl = new Repl({{
                   binary: {binary},
@@ -296,6 +298,7 @@ impl TypeScriptRepl {
             repl_history_file_path = js_string_literal(args.repl_history_file_path.display().to_string())?,
             repl_cli_commands_metadata_json_path =
                 js_string_literal(args.repl_cli_commands_metadata_json_path.display().to_string())?,
+            ts_repl_package_name = js_string_literal(TS_REPL_PACKAGE_NAME)?,
         };
 
         fs::write_str(repl_ts_path, repl_ts)
