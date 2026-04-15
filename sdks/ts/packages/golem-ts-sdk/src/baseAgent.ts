@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentType, Principal } from 'golem:agent/common@1.5.0';
+import { AgentType } from 'golem:agent/common@1.5.0';
 import { ParsedAgentId } from './agentId';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentClassName } from './agentClassName';
 import { Datetime } from 'wasi:clocks/wall-clock@0.2.3';
 import { Uuid } from './uuid';
+import { Principal } from './principal';
 import { getAgentId } from './internal/registry/agentId';
 import { Config, Secret } from './agentConfig';
 import {

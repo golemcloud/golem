@@ -3629,7 +3629,6 @@
                     "type": "Tuple"
                   },
                   "name": "MapType",
-                  "owner": "./model",
                   "type": "List"
                 },
                 "type": "ComponentModel"
@@ -6920,7 +6919,6 @@
                     "type": "Tuple"
                   },
                   "name": "MapType",
-                  "owner": "./model",
                   "type": "List"
                 },
                 "type": "ComponentModel"

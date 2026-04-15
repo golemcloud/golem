@@ -5,8 +5,6 @@ import typescript from 'rollup-plugin-typescript2';
 import dts from 'rollup-plugin-dts';
 import { defineConfig } from 'rollup';
 
-const external = ['ts-morph'];
-
 export default defineConfig([
   {
     input: 'src/index.ts',
@@ -15,20 +13,12 @@ export default defineConfig([
       format: 'esm',
       sourcemap: true,
     },
-    external,
     plugins: [
-      resolve({
-        extensions: ['.js', '.ts'],
-      }),
-      commonjs(),
       typescript({
         tsconfig: './tsconfig.json',
-        useTsconfigDeclarationDir: true,
+        include: ['src/**/*'],
         tsconfigOverride: {
-          compilerOptions: {
-            declaration: true,
-            declarationDir: 'dist',
-          },
+          compilerOptions: { declaration: false },
         },
       }),
     ],
@@ -40,7 +30,6 @@ export default defineConfig([
       file: 'dist/index.d.mts',
       format: 'esm',
     },
-    external,
     plugins: [dts()],
   },
 ]);

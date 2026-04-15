@@ -208,6 +208,14 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
     case 'quota-token':
       return { kind: 'quota-token', name: type.name, owner: type.owner, optional: type.optional };
 
+    case 'principal':
+      return {
+        kind: 'principal',
+        name: type.name,
+        owner: type.owner,
+        optional: type.optional,
+      };
+
     case 'unresolved-type':
       return {
         kind: 'unresolved-type',

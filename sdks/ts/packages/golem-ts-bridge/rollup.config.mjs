@@ -21,10 +21,7 @@ export default defineConfig([
         tsconfig: './tsconfig.json',
         useTsconfigDeclarationDir: true,
         tsconfigOverride: {
-          compilerOptions: {
-            declaration: true,
-            declarationDir: 'dist',
-          },
+          compilerOptions: { declaration: false },
         },
       }),
     ],
