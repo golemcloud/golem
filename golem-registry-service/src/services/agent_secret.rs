@@ -30,6 +30,8 @@ use golem_service_base::model::auth::{AuthCtx, AuthorizationError, EnvironmentAc
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::sync::Arc;
+use futures::TryFutureExt;
+use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentSecretError {
@@ -68,16 +70,19 @@ error_forwarding!(AgentSecretError, EnvironmentError, AgentSecretRepoError);
 pub struct AgentSecretService {
     agent_secret_repo: Arc<dyn AgentSecretRepo>,
     environment_service: Arc<EnvironmentService>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl AgentSecretService {
     pub fn new(
         agent_secret_repo: Arc<dyn AgentSecretRepo>,
         environment_service: Arc<EnvironmentService>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             agent_secret_repo,
             environment_service,
+            registry_change_notifier
         }
     }
 
@@ -115,7 +120,7 @@ impl AgentSecretService {
 
         let agent_secret_path: CanonicalAgentSecretPath = data.path.into();
 
-        let result = self
+        let stored_agent_secret = self
             .agent_secret_repo
             .create(AgentSecretCreationRecord::new(
                 id,
@@ -125,17 +130,17 @@ impl AgentSecretService {
                 secret_value,
                 auth.account_id(),
             ))
-            .await;
+            .await
+            .map_err(|err| match err {
+                AgentSecretRepoError::SecretViolatesUniqueness => AgentSecretError::AgentSecretForPathAlreadyExists {
+                        path: agent_secret_path,
+                    },
+                other => other.into(),
+            })?
+            .signal_new_events_available(&self.registry_change_notifier)
+            .try_into()?;
 
-        match result {
-            Ok(record) => Ok(record.try_into()?),
-            Err(AgentSecretRepoError::SecretViolatesUniqueness) => {
-                Err(AgentSecretError::AgentSecretForPathAlreadyExists {
-                    path: agent_secret_path,
-                })
-            }
-            Err(other) => Err(other.into()),
-        }
+        Ok(stored_agent_secret)
     }
 
     pub async fn update(
@@ -177,18 +182,18 @@ impl AgentSecretService {
 
         let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
 
-        let result = self
+        let stored_agent_secret = self
             .agent_secret_repo
             .update(AgentSecretRevisionRecord::from_model(agent_secret, audit))
-            .await;
+            .await
+            .map_err(|err| match err {
+                AgentSecretRepoError::ConcurrentModification => AgentSecretError::ConcurrentModification,
+                other => other.into(),
+            })?
+            .signal_new_events_available(&self.registry_change_notifier)
+            .try_into()?;
 
-        match result {
-            Ok(record) => Ok(record.try_into()?),
-            Err(AgentSecretRepoError::ConcurrentModification) => {
-                Err(AgentSecretError::ConcurrentModification)
-            }
-            Err(other) => Err(other.into()),
-        }
+        Ok(stored_agent_secret)
     }
 
     pub async fn delete(
@@ -214,18 +219,18 @@ impl AgentSecretService {
 
         let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
 
-        let result = self
+        let stored_agent_secret = self
             .agent_secret_repo
             .delete(AgentSecretRevisionRecord::from_model(agent_secret, audit))
-            .await;
+            .await
+            .map_err(|err| match err {
+                AgentSecretRepoError::ConcurrentModification => AgentSecretError::ConcurrentModification,
+                other => other.into(),
+            })?
+            .signal_new_events_available(&self.registry_change_notifier)
+            .try_into()?;
 
-        match result {
-            Ok(record) => Ok(record.try_into()?),
-            Err(AgentSecretRepoError::ConcurrentModification) => {
-                Err(AgentSecretError::ConcurrentModification)
-            }
-            Err(other) => Err(other.into()),
-        }
+        Ok(stored_agent_secret)
     }
 
     pub async fn get(

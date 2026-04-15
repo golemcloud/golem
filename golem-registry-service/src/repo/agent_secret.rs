@@ -29,23 +29,25 @@ use golem_service_base::repo::{PoolLabelledTransaction, ResultExt};
 use indoc::indoc;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
+use super::registry_change::{RequiresNotificationSignal, RequiresSignalExt};
+use crate::repo::registry_change::{DbRegistryChangeRepo, NewRegistryChangeEvent};
 
 #[async_trait]
 pub trait AgentSecretRepo: Send + Sync {
     async fn create(
         &self,
         record: AgentSecretCreationRecord,
-    ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError>;
+    ) -> Result<RequiresNotificationSignal<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
 
     async fn update(
         &self,
         revision: AgentSecretRevisionRecord,
-    ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError>;
+    ) -> Result<RequiresNotificationSignal<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
 
     async fn delete(
         &self,
         revision: AgentSecretRevisionRecord,
-    ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError>;
+    ) -> Result<RequiresNotificationSignal<AgentSecretExtRevisionRecord>, AgentSecretRepoError>;
 
     async fn get_by_id(
         &self,
@@ -83,7 +85,7 @@ impl<Repo: AgentSecretRepo> AgentSecretRepo for LoggedAgentSecretRepo<Repo> {
     async fn create(
         &self,
         record: AgentSecretCreationRecord,
-    ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
+    ) -> Result<RequiresNotificationSignal<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
         let span = Self::span_environment_id(record.environment_id);
         self.repo.create(record).instrument(span).await
     }
@@ -91,7 +93,7 @@ impl<Repo: AgentSecretRepo> AgentSecretRepo for LoggedAgentSecretRepo<Repo> {
     async fn update(
         &self,
         revision: AgentSecretRevisionRecord,
-    ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
+    ) -> Result<RequiresNotificationSignal<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
         let span = Self::span_agent_secret_id(revision.agent_secret_id);
         self.repo.update(revision).instrument(span).await
     }
@@ -99,7 +101,7 @@ impl<Repo: AgentSecretRepo> AgentSecretRepo for LoggedAgentSecretRepo<Repo> {
     async fn delete(
         &self,
         revision: AgentSecretRevisionRecord,
-    ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
+    ) -> Result<RequiresNotificationSignal<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
         let span = Self::span_agent_secret_id(revision.agent_secret_id);
         self.repo.delete(revision).instrument(span).await
     }
@@ -197,6 +199,9 @@ impl DbAgentSecretRepo<PostgresPool> {
 
         let revision = Self::insert_revision(tx, record.revision).await?;
 
+        let change_event = NewRegistryChangeEvent::agent_secret_changed(record.environment_id);
+        DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event).await?;
+
         Ok(AgentSecretExtRevisionRecord {
             environment_id: agent_secret_record.environment_id,
             path: agent_secret_record.path,
@@ -227,6 +232,9 @@ impl DbAgentSecretRepo<PostgresPool> {
             ).await?
             .ok_or(AgentSecretRepoError::ConcurrentModification)?;
 
+        let change_event = NewRegistryChangeEvent::agent_secret_changed(agent_secret_record.environment_id);
+        DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event).await?;
+
         Ok(AgentSecretExtRevisionRecord {
             environment_id: agent_secret_record.environment_id,
             path: agent_secret_record.path,
@@ -243,29 +251,31 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
     async fn create(
         &self,
         record: AgentSecretCreationRecord,
-    ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
+    ) -> Result<RequiresNotificationSignal<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "create", |tx| {
                 Self::create_within_transaction(tx, record).boxed()
             })
             .await
+            .map(RequiresSignalExt::requires_notification_signal)
     }
 
     async fn update(
         &self,
         revision: AgentSecretRevisionRecord,
-    ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
+    ) -> Result<RequiresNotificationSignal<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "update", |tx| {
                 Self::update_within_transaction(tx, revision).boxed()
             })
             .await
+            .map(RequiresSignalExt::requires_notification_signal)
     }
 
     async fn delete(
         &self,
         revision: AgentSecretRevisionRecord,
-    ) -> Result<AgentSecretExtRevisionRecord, AgentSecretRepoError> {
+    ) -> Result<RequiresNotificationSignal<AgentSecretExtRevisionRecord>, AgentSecretRepoError> {
         self.db_pool.with_tx_err(METRICS_SVC_NAME, "update", |tx| {
             async move {
                 let revision = Self::insert_revision(tx, revision.clone()).await?;
@@ -285,6 +295,12 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
                     ).await?
                     .ok_or(AgentSecretRepoError::ConcurrentModification)?;
 
+                let change_event = NewRegistryChangeEvent::agent_secret_changed(
+                    agent_secret_record.environment_id,
+                );
+                DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(tx, &change_event)
+                    .await?;
+
                 Ok(AgentSecretExtRevisionRecord {
                     environment_id: agent_secret_record.environment_id,
                     path: agent_secret_record.path,
@@ -293,7 +309,9 @@ impl AgentSecretRepo for DbAgentSecretRepo<PostgresPool> {
                     revision
                 })
             }.boxed()
-        }).await
+        })
+        .await
+        .map(RequiresSignalExt::requires_notification_signal)
     }
 
     async fn get_by_id(
