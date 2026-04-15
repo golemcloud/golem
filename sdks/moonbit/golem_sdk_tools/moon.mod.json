@@ -1,0 +1,14 @@
+{
+  "name": "golemcloud/golem_sdk_tools",
+  "version": "0.4.0",
+  "deps": {
+    "moonbitlang/x": "0.4.39",
+    "moonbitlang/parser": "0.2.2",
+    "moonbitlang/formatter": "0.1.4"
+  },
+  "readme": "README.mbt.md",
+  "repository": "https://github.com/golemcloud/moonbit-sdk",
+  "license": "Apache-2.0",
+  "keywords": ["golem", "wasm", "agent", "codegen", "webassembly", "component-model"],
+  "description": "Code generation tools for the Golem SDK for MoonBit"
+}
