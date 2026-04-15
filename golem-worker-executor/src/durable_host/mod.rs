@@ -3590,6 +3590,10 @@ struct PrivateDurableWorkerState {
     /// Applied on top of base policies from agent_config during `named_retry_policies()`.
     runtime_retry_policy_mutations: std::collections::BTreeMap<String, Option<NamedRetryPolicy>>,
 
+    /// Maps child pollable rep → parent FutureInvokeResult rep.
+    /// Used to finalize deferred parent deletion when a child pollable is dropped.
+    rpc_pollable_to_parent: HashMap<u32, u32>,
+
     // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
     promise_backed_pollables: TRwLock<HashMap<u32, GetPromiseResultEntry>>,
     // Map from resource_id to the dyn_pollables that wrap it
@@ -3747,6 +3751,7 @@ impl PrivateDurableWorkerState {
             config,
             cached_agent_config_retry_policies: None,
             runtime_retry_policy_mutations: std::collections::BTreeMap::new(),
+            rpc_pollable_to_parent: HashMap::new(),
             shard_service,
             promise_backed_pollables: TRwLock::new(HashMap::new()),
             promise_dyn_pollables: TRwLock::new(HashMap::new()),
