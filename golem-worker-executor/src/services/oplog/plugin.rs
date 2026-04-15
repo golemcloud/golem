@@ -366,7 +366,9 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 .map(golem_api_grpc::proto::golem::worker::RawOplogEntry::try_from)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| {
-                    WorkerExecutorError::unknown(format!("Failed to convert oplog entries to proto: {e}"))
+                    WorkerExecutorError::unknown(format!(
+                        "Failed to convert oplog entries to proto: {e}"
+                    ))
                 })?;
 
             self.worker_proxy

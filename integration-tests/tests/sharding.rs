@@ -44,7 +44,7 @@ mod tests {
     use std::collections::{BTreeMap, HashSet};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
-    use test_r::{flaky, non_flaky, test, test_dep, timeout};
+    use test_r::{flaky, test, test_dep, timeout};
     use tokio::sync::mpsc;
     use tokio::task::{JoinHandle, JoinSet};
     use tracing::{Instrument, error, info};
@@ -1265,7 +1265,6 @@ mod tests {
 
     #[test]
     #[timeout(240000)]
-    #[non_flaky(10)]
     async fn oplog_processor_locality_recovery(
         deps: &EnvBasedTestDependencies,
         _tracing: &Tracing,
