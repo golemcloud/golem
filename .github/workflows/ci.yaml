@@ -238,6 +238,10 @@ jobs:
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         uses: sbt/setup-sbt@v1
 
+      - name: Setup MoonBit
+        if: matrix.group.name == 'cli-integration-tests-group2'
+        uses: hustcer/setup-moonbit@v1
+
       - name: Sync WIT dependencies
         if: matrix.group.name == 'cli-integration-tests-group2'
         run: cargo make wit
