@@ -82,19 +82,21 @@ impl RequestHandler {
         request: &mut RichRequest,
         resolved_route: &ResolvedRouteEntry,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        let mut result = if let Some(short_circuit) = self
+        if let Some(short_circuit) = self
             .oidc_handler
             .apply_oidc_incoming_middleware(request, resolved_route)
             .await?
         {
-            short_circuit
-        } else if let Some(short_circuit) =
+            return Ok(short_circuit);
+        }
+
+        if let Some(short_circuit) =
             apply_session_from_header_security_middleware(request, resolved_route)?
         {
-            short_circuit
-        } else {
-            self.execute_route(request, resolved_route).await?
-        };
+            return Ok(short_circuit);
+        }
+
+        let mut result = self.execute_route(request, resolved_route).await?;
 
         apply_cors_outgoing_middleware(&mut result, request, resolved_route).await?;
 
