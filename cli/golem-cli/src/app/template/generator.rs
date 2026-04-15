@@ -452,6 +452,10 @@ fn transform(
             }
             Transform::MoonBitSdk => {
                 replacements.insert(
+                    "GOLEM_MOONBIT_SDK_VERSION_OR_PATH",
+                    sdk_overrides.moonbit_sdk_dep(),
+                );
+                replacements.insert(
                     "GOLEM_MOONBIT_SDK_VERSION",
                     versions::sdk::MOONBIT.to_string(),
                 );
