@@ -125,6 +125,7 @@ use tracing::{Instrument, info};
 use wasmtime::component::{HasSelf, Linker};
 use wasmtime::{Config, Engine, WasmBacktraceDetails};
 use self::services::quota::LazyQuotaService;
+use self::services::HasQuotaService;
 
 pub struct RunDetails {
     pub http_port: u16,
@@ -1016,6 +1017,8 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
     let listener = TcpListener::bind(addr).await?;
 
     let grpc_port = listener.local_addr()?.port();
+
+    service_dependencies.quota_service().initialize(grpc_port).await;
 
     let worker_impl = WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
         service_dependencies,

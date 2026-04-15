@@ -181,7 +181,7 @@ impl LeaseInterest {
 
 #[async_trait]
 pub trait QuotaService: Send + Sync {
-    async fn initialize(&mut self, _grpc_port: u16) { }
+    async fn initialize(&self, _grpc_port: u16) { }
 
     /// Declare interest in a resource. If a lease already exists it is
     /// reused; otherwise one is acquired from the shard manager.
@@ -223,7 +223,7 @@ pub trait QuotaService: Send + Sync {
 
 pub struct LazyQuotaService {
     inner: RwLock<Option<Arc<dyn QuotaService>>>,
-    make_inner: Option<Box<dyn FnOnce(u16) -> Pin<Box<dyn Future<Output = Arc<dyn QuotaService>> + Send>> + Send + Sync>>
+    make_inner: Mutex<Option<Box<dyn FnOnce(u16) -> Pin<Box<dyn Future<Output = Arc<dyn QuotaService>> + Send>> + Send + Sync>>>
 }
 
 impl LazyQuotaService {
@@ -234,15 +234,15 @@ impl LazyQuotaService {
     {
         Self {
             inner: RwLock::new(None),
-            make_inner: Some(Box::new(|port| Box::pin(async move { f(port).await })))
+            make_inner: Mutex::new(Some(Box::new(|port| Box::pin(async move { f(port).await }))))
         }
     }
 }
 
 #[async_trait]
 impl QuotaService for LazyQuotaService {
-    async fn initialize(&mut self, port: u16) {
-        let make_inner = self.make_inner.take().expect("LazyQuotaService already initialized");
+    async fn initialize(&self, port: u16) {
+        let make_inner = self.make_inner.lock().await.take().expect("LazyQuotaService already initialized");
         let inner = make_inner(port).await;
         let _ = self.inner.write().await.insert(inner);
     }
