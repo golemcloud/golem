@@ -38,12 +38,12 @@
     "lint": "eslint . --ext .ts,.tsx,.mjs",
     "lint:fix": "eslint . --ext .ts,.tsx,.mjs --fix",
     "generate-dts": "wasm-rquickjs generate-dts --wit ../../wit --output types",
-    "clean-test-data": "node ./scripts/clean-test-data.mjs",
-    "generate-sample-agents-types": "node ../golem-ts-typegen/dist/bin/golem-typegen ./tsconfig.json --files 'tests/**/*.ts' --include-class-decorators agent",
-    "prebuild": "npm run clean-test-data && pnpm run generate-dts && pnpm run generate-sample-agents-types",
-    "build": "pnpm run prebuild && tsc --noEmit && rollup -c",
+    "build": "pnpm run generate-dts && rollup --failAfterWarnings -c",
+    "prepare": "pnpm build",
     "clean": "node ./scripts/clean.mjs",
-    "test": "npm run build && tsc --noEmit && vitest run",
+    "clean-test-data": "node ../../scripts/clean-test-data.mjs",
+    "generate-sample-agents-types": "golem-typegen ./tsconfig.json --files 'tests/**/*.ts' --include-class-decorators agent --golem-ts-sdk-import './src'",
+    "test": "pnpm run clean-test-data && pnpm run generate-sample-agents-types && vitest run",
     "dev": "rollup -c -w",
     "generate-agent-template": "node ./scripts/generate-agent-template.mjs",
     "compile-agent-template": "cargo build --target wasm32-wasip2 --manifest-path=agent-template/Cargo.toml --release --features full,golem",
@@ -51,22 +51,23 @@
     "build-agent-template": "pnpm run generate-agent-template && pnpm run compile-agent-template && pnpm run copy-agent-template"
   },
   "keywords": [],
-  "sideEffects": [
-    "src/index.ts"
-  ],
   "author": "",
   "license": "SEE LICENSE IN LICENSE",
   "description": "",
   "devDependencies": {
     "@eslint/js": "^9.33.0",
+    "@golemcloud/golem-ts-typegen": "workspace:*",
+    "@golemcloud/golem-ts-types-core": "workspace:*",
     "@rollup/plugin-commonjs": "^28.0.6",
     "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-terser": "^1.0.0",
     "@types/ms": "^2.1.0",
     "@types/node": "^24.3.0",
     "@typescript-eslint/eslint-plugin": "^8.39.0",
     "@typescript-eslint/parser": "^8.39.0",
     "eslint": "^9.33.0",
     "fast-check": "^4.2.0",
+    "ms": "^2.1.3",
     "prettier": "^3.6.2",
     "reflect-metadata": "^0.1.14",
     "rollup": "^4.46.2",
@@ -78,9 +79,5 @@
     "vitest": "^3.2.4"
   },
   "private": false,
-  "dependencies": {
-    "@golemcloud/golem-ts-types-core": "workspace:*",
-    "ms": "^2.1.3"
-  },
   "repository": "https://github.com/golemcloud/golem"
 }

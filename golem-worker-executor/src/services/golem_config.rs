@@ -502,6 +502,10 @@ pub struct OplogConfig {
     /// (`oplog_writes_per_second`). Defaults to false (disabled).
     #[serde(default)]
     pub oplog_rate_limit_enabled: bool,
+    /// Retry configuration for transient indexed-storage errors (pool exhaustion,
+    /// connection resets). Defaults to 3 attempts, 100 ms–1 s exponential backoff.
+    #[serde(default = "default_oplog_indexed_storage_retry")]
+    pub indexed_storage_retry: RetryConfig,
 }
 
 impl SafeDisplay for OplogConfig {
@@ -557,8 +561,17 @@ impl SafeDisplay for OplogConfig {
             "oplog rate limit enabled: {}",
             self.oplog_rate_limit_enabled
         );
+        let _ = writeln!(
+            &mut result,
+            "indexed storage retry: {:?}",
+            self.indexed_storage_retry
+        );
         result
     }
+}
+
+fn default_oplog_indexed_storage_retry() -> RetryConfig {
+    RetryConfig::max_attempts_3()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -812,6 +825,8 @@ pub struct IndexedStoragePostgresConfig {
     pub postgres: DbPostgresConfig,
     #[serde(default = "default_indexed_storage_postgres_drop_prefix_delete_batch_size")]
     pub drop_prefix_delete_batch_size: u64,
+    #[serde(default)]
+    pub max_concurrent_ops: Option<u32>,
 }
 
 impl SafeDisplay for IndexedStoragePostgresConfig {
@@ -822,6 +837,11 @@ impl SafeDisplay for IndexedStoragePostgresConfig {
             &mut result,
             "drop prefix delete batch size: {}",
             self.drop_prefix_delete_batch_size
+        );
+        let _ = writeln!(
+            &mut result,
+            "max concurrent ops: {:?}",
+            self.max_concurrent_ops
         );
         result
     }
@@ -1330,6 +1350,7 @@ impl Default for OplogConfig {
             plugin_max_commit_count: 3,
             plugin_max_elapsed_time: Duration::from_secs(5),
             oplog_rate_limit_enabled: false,
+            indexed_storage_retry: default_oplog_indexed_storage_retry(),
         }
     }
 }
@@ -1640,6 +1661,10 @@ pub struct QuotaServiceConfig {
     /// How often to renew quota leases with the shard manager.
     #[serde(with = "humantime_serde")]
     pub renewal_interval: Duration,
+    /// When leases should be renewed before they expire.
+    /// Leases will be renewed if now >= lease_expires_at - renewal_threshold
+    #[serde(with = "humantime_serde")]
+    pub renewal_threshold: Duration,
     /// Maximum wait time for inline throttling before returning
     /// `InsufficientAllocation` to the caller (which may then suspend).
     /// Reservations whose estimated wait exceeds this threshold are not
@@ -1655,6 +1680,11 @@ impl SafeDisplay for QuotaServiceConfig {
         let _ = writeln!(&mut result, "renewal interval: {:?}", self.renewal_interval);
         let _ = writeln!(
             &mut result,
+            "renewal threshold: {:?}",
+            self.renewal_threshold
+        );
+        let _ = writeln!(
+            &mut result,
             "inline wait threshold: {:?}",
             self.inline_wait_threshold
         );
@@ -1666,6 +1696,7 @@ impl Default for QuotaServiceConfig {
     fn default() -> Self {
         Self {
             renewal_interval: Duration::from_secs(10),
+            renewal_threshold: Duration::from_secs(20),
             inline_wait_threshold: Duration::from_mins(1),
         }
     }

@@ -29,13 +29,15 @@ pub mod workerctx;
 test_r::enable!();
 
 use self::durable_host::{DurableWorkerCtx, DurableWorkerCtxView};
+use self::services::HasQuotaService;
 use self::services::agent_webhooks::AgentWebhooksService;
 use self::services::direct_invocation_auth::{
     DefaultDirectInvocationAuthService, DirectInvocationAuthService,
 };
 use self::services::environment_state::EnvironmentStateService;
-use self::services::golem_config::EnvironmentStateServiceConfig;
+use self::services::golem_config::{EnvironmentStateServiceConfig, QuotaServiceConfig};
 use self::services::promise::LazyPromiseService;
+use self::services::quota::LazyQuotaService;
 use self::services::rdbms::RdbmsService;
 use self::services::resource_limits::ResourceLimits;
 use self::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
@@ -164,16 +166,19 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     fn create_quota_service(
         &self,
         shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
-        golem_config: &GolemConfig,
+        config: &QuotaServiceConfig,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn QuotaService> {
-        crate::services::quota::GrpcQuotaService::new(
-            shard_manager_client,
-            golem_config.grpc.port,
-            shutdown_token,
-            golem_config.quota_service.renewal_interval,
-            golem_config.quota_service.inline_wait_threshold,
-        )
+        let config = config.clone();
+        Arc::new(LazyQuotaService::new(async move |port| {
+            let service: Arc<dyn QuotaService> = crate::services::quota::GrpcQuotaService::new(
+                shard_manager_client,
+                port,
+                config,
+                shutdown_token,
+            );
+            service
+        }))
     }
 
     fn create_environment_state_service(
@@ -699,6 +704,7 @@ pub async fn create_worker_executor_impl<
         let svc: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
             indexed_storage.clone(),
             idx,
+            golem_config.oplog.indexed_storage_retry.clone(),
         ));
         oplog_archives.push(svc);
     }
@@ -717,6 +723,7 @@ pub async fn create_worker_executor_impl<
                 golem_config.oplog.max_operations_before_commit,
                 golem_config.oplog.max_operations_before_commit_ephemeral,
                 golem_config.oplog.max_payload_size,
+                golem_config.oplog.indexed_storage_retry.clone(),
             )
             .await,
         ),
@@ -728,6 +735,7 @@ pub async fn create_worker_executor_impl<
                     golem_config.oplog.max_operations_before_commit,
                     golem_config.oplog.max_operations_before_commit_ephemeral,
                     golem_config.oplog.max_payload_size,
+                    golem_config.oplog.indexed_storage_retry.clone(),
                 )
                 .await,
             );
@@ -765,8 +773,11 @@ pub async fn create_worker_executor_impl<
     let shard_manager_service =
         bootstrap.create_shard_manager_service(shard_manager_client.clone());
 
-    let quota_service =
-        bootstrap.create_quota_service(shard_manager_client, &golem_config, shutdown_token.clone());
+    let quota_service = bootstrap.create_quota_service(
+        shard_manager_client,
+        &golem_config.quota_service,
+        shutdown_token.clone(),
+    );
 
     let config = bootstrap.create_wasmtime_config(&golem_config.engine);
     let engine = Arc::new(Engine::new(&config)?);
@@ -1013,6 +1024,11 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
     let listener = TcpListener::bind(addr).await?;
 
     let grpc_port = listener.local_addr()?.port();
+
+    service_dependencies
+        .quota_service()
+        .initialize(grpc_port)
+        .await;
 
     let worker_impl = WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
         service_dependencies,

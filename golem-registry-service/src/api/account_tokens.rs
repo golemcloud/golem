@@ -47,34 +47,34 @@ impl AccountTokensApi {
         }
     }
 
-    /// Get all tokens
-    ///
-    /// Gets all created tokens of an account.
+    /// List all tokens of an account.
     /// The format of each element is the same as the data object in the oauth2 endpoint's response.
     #[oai(
         path = "/:account_id/tokens",
         method = "get",
-        operation_id = "get_account_tokens"
+        operation_id = "list_account_tokens"
     )]
-    async fn get_tokens(
+    async fn list_account_tokens(
         &self,
         account_id: Path<AccountId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<Token>>> {
-        let record =
-            recorded_http_api_request!("get_account_tokens", account_id = account_id.0.to_string());
+        let record = recorded_http_api_request!(
+            "list_account_tokens",
+            account_id = account_id.0.to_string()
+        );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_tokens_internal(account_id.0, auth)
+            .list_account_tokens_internal(account_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_tokens_internal(
+    async fn list_account_tokens_internal(
         &self,
         account_id: AccountId,
         auth: AuthCtx,

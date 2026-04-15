@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { Project } from 'ts-morph';
 import pc from 'picocolors';
 import logSymbols from 'log-symbols';
@@ -26,6 +26,9 @@ program
     'Exclude methods that override parent class methods',
     true,
   )
+  .addOption(
+    new Option('--golem-ts-sdk-import <value>').default('@golemcloud/golem-ts-sdk').hideHelp(),
+  )
   .action(
     (
       tsconfig: string,
@@ -34,6 +37,7 @@ program
         includeClassDecorators: string[];
         includeOnlyPublicScope: boolean;
         excludeOverriddenMethods: boolean;
+        golemTsSdkImport: string;
       },
     ) => {
       console.log(logSymbols.info, pc.cyan('Starting type metadata generation…'));
@@ -51,9 +55,10 @@ program
         classDecorators: options.includeClassDecorators,
         includeOnlyPublicScope: options.includeOnlyPublicScope,
         excludeOverriddenMethods: options.excludeOverriddenMethods,
+        golemTsSdkImport: options.golemTsSdkImport,
       };
 
-      updateMetadataFromSourceFiles(genConfig);
+      updateMetadataFromSourceFiles(genConfig, project);
 
       const result = TypeMetadata.getAll();
 

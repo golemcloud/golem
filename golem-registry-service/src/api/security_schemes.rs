@@ -98,30 +98,30 @@ impl SecuritySchemesApi {
     #[oai(
         path = "/envs/:environment_id/security-schemes",
         method = "get",
-        operation_id = "get_environment_security_schemes",
+        operation_id = "list_environment_security_schemes",
         tag = ApiTags::Environment
     )]
-    async fn get_environment_security_schemes(
+    async fn list_environment_security_schemes(
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<SecuritySchemeDto>>> {
         let record = recorded_http_api_request!(
-            "get_environment_security_schemes",
+            "list_environment_security_schemes",
             environment_id = environment_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_environment_security_schemes_internal(environment_id.0, auth)
+            .list_environment_security_schemes_internal(environment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_environment_security_schemes_internal(
+    async fn list_environment_security_schemes_internal(
         &self,
         environment_id: EnvironmentId,
         auth: AuthCtx,

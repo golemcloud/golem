@@ -178,7 +178,7 @@ impl DomainRegistrationsApi {
     #[oai(
         path = "/domain-registrations/:domain_registration_id",
         method = "delete",
-        operation_id = "delete_domain_registrations"
+        operation_id = "delete_domain_registration"
     )]
     pub async fn delete_domain_registration(
         &self,

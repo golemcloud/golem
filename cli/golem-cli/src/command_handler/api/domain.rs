@@ -145,7 +145,7 @@ impl ApiDomainCommandHandler {
 
         clients
             .api_domain
-            .delete_domain_registrations(&domain_to_delete.id.0)
+            .delete_domain_registration(&domain_to_delete.id.0)
             .await
             .map_service_error()?;
 

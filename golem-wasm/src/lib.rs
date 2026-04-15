@@ -174,9 +174,12 @@ pub trait SubscribeAny: std::any::Any {
 pub struct FutureInvokeResultEntry {
     pub payload: Box<dyn SubscribeAny + Send + Sync>,
     /// Tracks child Pollable rep indices created by `subscribe()`.
-    /// Used to delete children before the parent in `drop()`, because
-    /// JS GC does not guarantee LIFO drop order.
+    /// Used to defer parent deletion until all children are dropped,
+    /// because JS GC does not guarantee LIFO drop order.
     pub child_pollables: Vec<u32>,
+    /// Set to `true` when the guest drops the parent while children still exist.
+    /// The parent entry stays alive until the last child pollable is dropped.
+    pub drop_pending: bool,
 }
 
 #[cfg(feature = "host")]

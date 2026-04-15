@@ -144,7 +144,7 @@ build_rust_apps() {
       "$GOLEM_CLI" build --step check --yes
     elif [ "$clean_only" = false ]; then
       echo "Building $subdir..."
-      "$GOLEM_CLI" --preset release build --yes
+      "$GOLEM_CLI" --preset release build --yes --skip-check
       "$GOLEM_CLI" --preset release exec copy
     fi
 
@@ -177,7 +177,7 @@ build_node_apps() {
     elif [ "$clean_only" = false ]; then
       echo "Building $subdir..."
       npm install
-      "$GOLEM_CLI" build --yes
+      "$GOLEM_CLI" build --yes --skip-check
       "$GOLEM_CLI" exec copy
     fi
 

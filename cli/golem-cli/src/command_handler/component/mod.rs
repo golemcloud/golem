@@ -125,7 +125,7 @@ impl ComponentCommandHandler {
                         .golem_clients()
                         .await?
                         .component
-                        .get_deployment_components(
+                        .list_deployment_components(
                             &environment.environment_id.0,
                             current_deployment_revision.into(),
                         )

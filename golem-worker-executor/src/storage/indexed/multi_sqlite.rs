@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor};
+use super::{
+    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+    ScanCursor,
+};
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -29,7 +32,7 @@ use tokio::sync::Mutex;
 /// IndexedStorage implementation that uses multiple separate SQLite databases depending
 /// on the namespace.
 pub struct MultiSqliteIndexedStorage {
-    cache: Cache<String, (), SqliteIndexedStorage, String>,
+    cache: Cache<String, (), SqliteIndexedStorage, IndexedStorageError>,
     hash_cache: Arc<Mutex<HashCache>>,
     root_dir: PathBuf,
     max_connections: u32,
@@ -71,27 +74,32 @@ impl MultiSqliteIndexedStorage {
         max_connections: u32,
         foreign_keys: bool,
         database: String,
-    ) -> Result<SqliteIndexedStorage, String> {
+    ) -> Result<SqliteIndexedStorage, IndexedStorageError> {
         let config = DbSqliteConfig {
             database,
             max_connections,
             foreign_keys,
         };
-        let pool = SqlitePool::configured(&config)
+        let pool = SqlitePool::configured(&config).await.map_err(|e| {
+            IndexedStorageError::Other(format!("Failed to initialize sqlite database: {:?}", e))
+        })?;
+        SqliteIndexedStorage::new(pool)
             .await
-            .map_err(|e| format!("Failed to initialize sqlite database: {:?}", e))?;
-        SqliteIndexedStorage::new(pool).await
+            .map_err(IndexedStorageError::Other)
     }
 
     async fn storage_by_namespace(
         &self,
         namespace: &IndexedStorageNamespace,
-    ) -> Result<SqliteIndexedStorage, String> {
+    ) -> Result<SqliteIndexedStorage, IndexedStorageError> {
         let db = self.namespace_to_db(namespace).await;
         self.storage_by_db_name(db).await
     }
 
-    async fn storage_by_db_name(&self, db: String) -> Result<SqliteIndexedStorage, String> {
+    async fn storage_by_db_name(
+        &self,
+        db: String,
+    ) -> Result<SqliteIndexedStorage, IndexedStorageError> {
         let max_connections = self.max_connections;
         let foreign_keys = self.foreign_keys;
         let db_path = self.root_dir.join(db.clone()).to_string_lossy().to_string();
@@ -147,7 +155,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-    ) -> Result<u8, String> {
+    ) -> Result<u8, IndexedStorageError> {
         Ok(0)
     }
 
@@ -157,7 +165,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         _api_name: &'static str,
         _replicas: u8,
         _timeout: Duration,
-    ) -> Result<u8, String> {
+    ) -> Result<u8, IndexedStorageError> {
         Ok(0)
     }
 
@@ -167,7 +175,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .exists(svc_name, api_name, namespace, key)
@@ -182,7 +190,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), String> {
+    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
         use std::fs;
 
         let db_prefix = match namespace {
@@ -194,7 +202,9 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
 
         // List all .db files matching the namespace prefix, sorted consistently
         let mut matching_files: Vec<_> = fs::read_dir(&self.root_dir)
-            .map_err(|e| format!("Failed to read root directory: {:?}", e))?
+            .map_err(|e| {
+                IndexedStorageError::Other(format!("Failed to read root directory: {:?}", e))
+            })?
             .filter_map(|entry| {
                 entry.ok().and_then(|e| {
                     let path = e.path();
@@ -256,7 +266,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .append(svc_name, api_name, entity_name, namespace, key, id, value)
@@ -269,7 +279,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .length(svc_name, api_name, namespace, key)
@@ -282,7 +292,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .delete(svc_name, api_name, namespace, key)
@@ -298,7 +308,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .read(
@@ -320,7 +330,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .first(svc_name, api_name, entity_name, namespace, key)
@@ -334,7 +344,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .last(svc_name, api_name, entity_name, namespace, key)
@@ -349,7 +359,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .closest(svc_name, api_name, entity_name, namespace, key, id)
@@ -363,7 +373,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .drop_prefix(svc_name, api_name, namespace, key, last_dropped_id)

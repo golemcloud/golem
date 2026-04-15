@@ -97,30 +97,30 @@ impl RetryPoliciesApi {
     #[oai(
         path = "/envs/:environment_id/retry-policies",
         method = "get",
-        operation_id = "get_environment_retry_policies",
+        operation_id = "list_environment_retry_policies",
         tag = ApiTags::Environment
     )]
-    async fn get_environment_retry_policies(
+    async fn list_environment_retry_policies(
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<RetryPolicyDto>>> {
         let record = recorded_http_api_request!(
-            "get_environment_retry_policies",
+            "list_environment_retry_policies",
             environment_id = environment_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_environment_retry_policies_internal(environment_id.0, auth)
+            .list_environment_retry_policies_internal(environment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_environment_retry_policies_internal(
+    async fn list_environment_retry_policies_internal(
         &self,
         environment_id: EnvironmentId,
         auth: AuthCtx,

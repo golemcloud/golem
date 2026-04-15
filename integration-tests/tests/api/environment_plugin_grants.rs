@@ -16,7 +16,7 @@ use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateEnvironmentPluginGrantError,
     RegistryServiceDeleteEnvironmentPluginGrantError, RegistryServiceGetComponentError,
     RegistryServiceGetEnvironmentPluginGrantError, RegistryServiceGetPluginByIdError,
-    RegistryServiceListEnvironmentPluginGrantsError,
+    RegistryServiceListEnvironmentEnvironmentPluginGrantsError,
 };
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
@@ -103,7 +103,7 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
     // both users can see the plugin grant when listing
     for client in [&client_1, &client_2] {
         let grants = client
-            .list_environment_plugin_grants(&shared_env.id.0)
+            .list_environment_environment_plugin_grants(&shared_env.id.0)
             .await?;
 
         assert_eq!(grants.values.len(), 1);
@@ -147,7 +147,7 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
     // both users do not see plugin grant anymore when listing
     for client in [&client_1, &client_2] {
         let grants = client
-            .list_environment_plugin_grants(&shared_env.id.0)
+            .list_environment_environment_plugin_grants(&shared_env.id.0)
             .await?;
         assert!(grants.values.is_empty());
     }
@@ -542,18 +542,18 @@ async fn shared_user_cannot_list_grants_after_share_revoked(
         .await?;
 
     let result_shared = client_shared
-        .list_environment_plugin_grants(&env.id.0)
+        .list_environment_environment_plugin_grants(&env.id.0)
         .await;
     assert!(matches!(
         result_shared,
         Err(golem_client::Error::Item(
-            RegistryServiceListEnvironmentPluginGrantsError::Error404(_)
+            RegistryServiceListEnvironmentEnvironmentPluginGrantsError::Error404(_)
         ))
     ));
 
     // Environment owner can still list plugin grants
     let result_owner = client_owner
-        .list_environment_plugin_grants(&env.id.0)
+        .list_environment_environment_plugin_grants(&env.id.0)
         .await?;
     assert!(
         result_owner

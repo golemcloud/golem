@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::Debug;
+use std::fmt::{self, Debug, Display, Formatter};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -28,6 +28,43 @@ pub mod sqlite;
 
 pub type ScanCursor = u64;
 
+/// Typed error for [`IndexedStorage`] operations.
+///
+/// `Transient` errors (pool exhaustion, connection resets) are retriable;
+/// `Other` errors (data issues, schema problems) are not.
+#[derive(Debug, Clone)]
+pub enum IndexedStorageError {
+    /// Transient error — pool exhaustion, connection reset, broken pipe.
+    /// Caller may retry.
+    Transient(String),
+    /// Permanent error — data issue, unique violation, schema error.
+    /// Caller should not retry.
+    Other(String),
+}
+
+impl IndexedStorageError {
+    pub fn is_retriable(&self) -> bool {
+        matches!(self, IndexedStorageError::Transient(_))
+    }
+}
+
+impl Display for IndexedStorageError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            IndexedStorageError::Transient(msg) => write!(f, "Transient storage error: {msg}"),
+            IndexedStorageError::Other(msg) => write!(f, "Storage error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for IndexedStorageError {}
+
+impl From<String> for IndexedStorageError {
+    fn from(s: String) -> Self {
+        IndexedStorageError::Other(s)
+    }
+}
+
 /// Generic indexed storage interface
 ///
 /// The storage holds indexes identified by keys. Each index is a sequence of entries,
@@ -42,7 +79,7 @@ pub trait IndexedStorage: Debug + Sync {
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-    ) -> Result<u8, String>;
+    ) -> Result<u8, IndexedStorageError>;
 
     /// Wait until all write operations are propagated to at least the given number of replicas,
     /// or the maximum `number_of_replicas` if it is smaller.
@@ -52,7 +89,7 @@ pub trait IndexedStorage: Debug + Sync {
         api_name: &'static str,
         replicas: u8,
         timeout: Duration,
-    ) -> Result<u8, String>;
+    ) -> Result<u8, IndexedStorageError>;
 
     /// Checks if a key exists in the storage
     async fn exists(
@@ -61,7 +98,7 @@ pub trait IndexedStorage: Debug + Sync {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<bool, String>;
+    ) -> Result<bool, IndexedStorageError>;
 
     /// Returns keys in the given meta-namespace, optionally filtered by key prefix, in a
     /// paginated way. If there are no more pages to scan, the returned cursor will be 0.
@@ -73,7 +110,7 @@ pub trait IndexedStorage: Debug + Sync {
         prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), String>;
+    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError>;
 
     /// Appends an entry to the given key with the given id
     async fn append(
@@ -85,7 +122,7 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
         id: u64,
         value: Vec<u8>,
-    ) -> Result<(), String>;
+    ) -> Result<(), IndexedStorageError>;
 
     /// Appends multiple entries to the given key with the given id
     async fn append_many(
@@ -96,7 +133,7 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: IndexedStorageNamespace,
         key: &str,
         pairs: Vec<(u64, Vec<u8>)>,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         for (id, value) in pairs {
             self.append(
                 svc_name,
@@ -119,7 +156,7 @@ pub trait IndexedStorage: Debug + Sync {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<u64, String>;
+    ) -> Result<u64, IndexedStorageError>;
 
     /// Deletes the index of the given key
     async fn delete(
@@ -128,7 +165,7 @@ pub trait IndexedStorage: Debug + Sync {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<(), String>;
+    ) -> Result<(), IndexedStorageError>;
 
     /// Reads a closed range of entries from the index of the given key
     async fn read(
@@ -140,7 +177,7 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<(u64, Vec<u8>)>, String>;
+    ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError>;
 
     /// Gets the first entry in the index of the given key
     async fn first(
@@ -150,7 +187,7 @@ pub trait IndexedStorage: Debug + Sync {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String>;
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError>;
 
     /// Gets the last entry in the index of the given key
     async fn last(
@@ -160,7 +197,7 @@ pub trait IndexedStorage: Debug + Sync {
         entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String>;
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError>;
 
     /// Gets the entry with the closest id to the given id in the index of the given key,
     /// in a way that `id` is less or equal to the id of the returned entry.
@@ -172,7 +209,7 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Vec<u8>)>, String>;
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError>;
 
     /// Deletes the entry with the closest id to the given id in the index of the given key,
     /// in a way that `last_dropped_id` is greater to the id of the deleted entries.
@@ -183,7 +220,7 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
-    ) -> Result<(), String>;
+    ) -> Result<(), IndexedStorageError>;
 }
 
 pub trait IndexedStorageLabelledApi<T: IndexedStorage + ?Sized> {
@@ -231,13 +268,17 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         }
     }
 
-    pub async fn number_of_replicas(&self) -> Result<u8, String> {
+    pub async fn number_of_replicas(&self) -> Result<u8, IndexedStorageError> {
         self.storage
             .number_of_replicas(self.svc_name, self.api_name)
             .await
     }
 
-    pub async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> Result<u8, String> {
+    pub async fn wait_for_replicas(
+        &self,
+        replicas: u8,
+        timeout: Duration,
+    ) -> Result<u8, IndexedStorageError> {
         self.storage
             .wait_for_replicas(self.svc_name, self.api_name, replicas, timeout)
             .await
@@ -247,7 +288,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, IndexedStorageError> {
         self.storage
             .exists(self.svc_name, self.api_name, namespace, key)
             .await
@@ -259,7 +300,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), String> {
+    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
         self.storage
             .scan(
                 self.svc_name,
@@ -276,7 +317,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, IndexedStorageError> {
         self.storage
             .length(self.svc_name, self.api_name, namespace, key)
             .await
@@ -286,7 +327,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         self.storage
             .delete(self.svc_name, self.api_name, namespace, key)
             .await
@@ -297,7 +338,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         self.storage
             .drop_prefix(
                 self.svc_name,
@@ -339,7 +380,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         id: u64,
         value: &V,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         self.storage
             .append(
                 self.svc_name,
@@ -348,7 +389,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 namespace,
                 key,
                 id,
-                serialize(value)?,
+                serialize(value).map_err(IndexedStorageError::Other)?,
             )
             .await
     }
@@ -360,7 +401,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         id: u64,
         value: Vec<u8>,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         self.storage
             .append(
                 self.svc_name,
@@ -381,11 +422,11 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
         pairs: &[(u64, &V)],
-    ) -> Result<u64, String> {
+    ) -> Result<u64, IndexedStorageError> {
         let mut serialized_pairs = Vec::with_capacity(pairs.len());
         let mut total_bytes = 0u64;
         for (id, value) in pairs {
-            let bytes = serialize(value)?;
+            let bytes = serialize(value).map_err(IndexedStorageError::Other)?;
             total_bytes += bytes.len() as u64;
             serialized_pairs.push((*id, bytes));
         }
@@ -409,8 +450,9 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<(u64, V)>, String> {
-        self.storage
+    ) -> Result<Vec<(u64, V)>, IndexedStorageError> {
+        let values = self
+            .storage
             .read(
                 self.svc_name,
                 self.api_name,
@@ -420,13 +462,12 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 start_id,
                 end_id,
             )
-            .await
-            .and_then(|values| {
-                values
-                    .into_iter()
-                    .map(|(idx, bytes)| deserialize::<V>(&bytes).map(|v| (idx, v)))
-                    .collect::<Result<Vec<_>, _>>()
-            })
+            .await?;
+        values
+            .into_iter()
+            .map(|(idx, bytes)| deserialize::<V>(&bytes).map(|v| (idx, v)))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(IndexedStorageError::Other)
     }
 
     /// Reads a closed range of entries from the index of the given key, returning the raw bytes
@@ -436,7 +477,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         from: u64,
         count: u64,
-    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
         self.storage
             .read(
                 self.svc_name,
@@ -455,7 +496,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         self.storage
             .first(
                 self.svc_name,
@@ -472,7 +513,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, V)>, String> {
+    ) -> Result<Option<(u64, V)>, IndexedStorageError> {
         if let Some((id, bytes)) = self
             .storage
             .first(
@@ -484,7 +525,10 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             )
             .await?
         {
-            Ok(Some((id, deserialize::<V>(&bytes)?)))
+            Ok(Some((
+                id,
+                deserialize::<V>(&bytes).map_err(IndexedStorageError::Other)?,
+            )))
         } else {
             Ok(None)
         }
@@ -495,7 +539,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<u64>, String> {
+    ) -> Result<Option<u64>, IndexedStorageError> {
         self.first_raw(namespace, key).await.map(|r| r.map(|p| p.0))
     }
 
@@ -504,7 +548,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         self.storage
             .last(
                 self.svc_name,
@@ -521,7 +565,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, V)>, String> {
+    ) -> Result<Option<(u64, V)>, IndexedStorageError> {
         if let Some((id, bytes)) = self
             .storage
             .last(
@@ -533,7 +577,10 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             )
             .await?
         {
-            Ok(Some((id, deserialize::<V>(&bytes)?)))
+            Ok(Some((
+                id,
+                deserialize::<V>(&bytes).map_err(IndexedStorageError::Other)?,
+            )))
         } else {
             Ok(None)
         }
@@ -544,7 +591,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<u64>, String> {
+    ) -> Result<Option<u64>, IndexedStorageError> {
         self.last_raw(namespace, key).await.map(|r| r.map(|p| p.0))
     }
 
@@ -555,7 +602,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         self.storage
             .closest(
                 self.svc_name,
@@ -575,7 +622,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, V)>, String> {
+    ) -> Result<Option<(u64, V)>, IndexedStorageError> {
         if let Some((id, bytes)) = self
             .storage
             .closest(
@@ -588,7 +635,10 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             )
             .await?
         {
-            Ok(Some((id, deserialize::<V>(&bytes)?)))
+            Ok(Some((
+                id,
+                deserialize::<V>(&bytes).map_err(IndexedStorageError::Other)?,
+            )))
         } else {
             Ok(None)
         }
@@ -601,7 +651,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<u64>, String> {
+    ) -> Result<Option<u64>, IndexedStorageError> {
         self.closest_raw(namespace, key, id)
             .await
             .map(|r| r.map(|p| p.0))

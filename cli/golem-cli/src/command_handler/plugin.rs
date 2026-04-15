@@ -51,7 +51,7 @@ impl PluginCommandHandler {
 
         let plugin_definitions = clients
             .plugin
-            .get_account_plugins(&self.ctx.account_id().await?.0)
+            .list_account_plugins(&self.ctx.account_id().await?.0)
             .await
             .map_service_error()?
             .values;

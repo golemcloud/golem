@@ -138,6 +138,7 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
                 );
             }
             RegistryInvalidationEvent::ResourceDefinitionChanged { .. } => {}
+            RegistryInvalidationEvent::AgentSecretChanged { .. } => {}
         }
     }
 }

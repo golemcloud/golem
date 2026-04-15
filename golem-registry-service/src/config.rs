@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::domain_registration::provisioner::DomainProvisionerConfig;
+use crate::services::domain_registration::DomainRegistrationConfig;
 use golem_common::config::DbConfig;
 use golem_common::config::{ConfigLoader, DbSqliteConfig};
 use golem_common::model::Empty;
@@ -42,7 +42,7 @@ pub struct RegistryServiceConfig {
     pub login: LoginConfig,
     pub blob_storage: BlobStorageConfig,
     pub cors_origin_regex: String,
-    pub domain_provisioner: DomainProvisionerConfig,
+    pub domain_registration: DomainRegistrationConfig,
     pub component_compilation: ComponentCompilationConfig,
     pub initial_accounts: HashMap<String, PrecreatedAccount>,
     pub initial_plans: HashMap<String, PrecreatedPlan>,
@@ -81,11 +81,11 @@ impl SafeDisplay for RegistryServiceConfig {
 
         let _ = writeln!(&mut result, "CORS origin regex: {}", self.cors_origin_regex);
 
-        let _ = writeln!(&mut result, "domain provisioner:");
+        let _ = writeln!(&mut result, "domain registration:");
         let _ = writeln!(
             &mut result,
             "{}",
-            self.domain_provisioner.to_safe_string_indented()
+            self.domain_registration.to_safe_string_indented()
         );
 
         let _ = writeln!(&mut result, "component compilation:");
@@ -203,7 +203,7 @@ impl Default for RegistryServiceConfig {
             cors_origin_regex: "https://*.golem.cloud".to_string(),
             component_compilation: ComponentCompilationConfig::default(),
             blob_storage: BlobStorageConfig::default(),
-            domain_provisioner: DomainProvisionerConfig::default(),
+            domain_registration: DomainRegistrationConfig::default(),
             initial_accounts,
             initial_plans,
             builtin_plugins: BuiltinPluginsConfig::default(),

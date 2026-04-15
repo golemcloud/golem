@@ -98,30 +98,30 @@ impl EnvironmentPluginGrantsApi {
     #[oai(
         path = "/envs/:environment_id/plugins",
         method = "get",
-        operation_id = "list_environment_plugin_grants",
+        operation_id = "list_environment_environment_plugin_grants",
         tag = ApiTags::Environment
     )]
-    pub async fn list_environment_plugin_grants(
+    pub async fn list_environment_environment_plugin_grants(
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<EnvironmentPluginGrantWithDetails>>> {
         let record = recorded_http_api_request!(
-            "list_environment_plugin_grants_internal",
+            "list_environment_environment_plugin_grants",
             environment_id = environment_id.0.to_string()
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .list_environment_plugin_grants_internal(environment_id.0, auth)
+            .list_environment_environment_plugin_grants_internal(environment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn list_environment_plugin_grants_internal(
+    async fn list_environment_environment_plugin_grants_internal(
         &self,
         environment_id: EnvironmentId,
         auth: AuthCtx,

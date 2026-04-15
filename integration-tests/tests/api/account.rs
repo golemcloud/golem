@@ -51,7 +51,7 @@ async fn get_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
 
     // get account tokens
     {
-        let tokens = client.get_account_tokens(&user.account_id.0).await?;
+        let tokens = client.list_account_tokens(&user.account_id.0).await?;
         assert_eq!(tokens.values.len(), 1)
     }
 
