@@ -242,7 +242,10 @@ Every step must have **exactly one** action field. Common fields available on al
   allowedExtraSkills:              # Extra skills that are OK to activate
     - "golem-db-app-rust"
   strictSkillMatch: false          # If true, ONLY expectedSkills may activate
-  continue_session: true           # Continue previous agent session (vs new session)
+  continueSession: true            # Continue previous agent session and keep cumulative
+                                   # skill tracking for that prompt session.
+                                   # Set to false to start a fresh agent session with
+                                   # fresh skill tracking.
   verify:
     build: true                    # Run `golem build` after the prompt
     deploy: true                   # Run `golem build` + `golem deploy --yes`
@@ -540,7 +543,10 @@ The harness detects whether an agent actually read a skill using two mechanisms:
 1. **Filesystem watcher**: `fswatch` (macOS) or `inotifywait` (Linux) monitors SKILL.md file access events
 2. **atime comparison**: Snapshots file access times before each step and compares after
 
-Both mechanisms feed into `expectedSkills` / `allowedExtraSkills` / `strictSkillMatch` verification.
+Both mechanisms feed into `expectedSkills` / `allowedExtraSkills` / `strictSkillMatch`
+verification. Skill tracking is scoped to the current prompt session: followup prompts accumulate
+activations, while the first prompt in a scenario and any prompt with `continueSession: false`
+start a fresh tracking session.
 
 ## Agent Drivers
 

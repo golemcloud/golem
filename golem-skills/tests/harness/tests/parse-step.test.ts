@@ -133,7 +133,7 @@ describe("parseStep", () => {
       allowedExtraSkills: ["skill-b"],
       strictSkillMatch: true,
       timeout: 60,
-      continue_session: true,
+      continueSession: true,
       verify: { build: true, deploy: false },
       only_if: { language: "ts" },
       skip_if: { os: "windows" },
@@ -144,7 +144,7 @@ describe("parseStep", () => {
     assert.deepEqual(result.allowedExtraSkills, ["skill-b"]);
     assert.equal(result.strictSkillMatch, true);
     assert.equal(result.timeout, 60);
-    assert.equal(result.continue_session, true);
+    assert.equal(result.continueSession, true);
     assert.deepEqual(result.verify, { build: true, deploy: false });
     assert.deepEqual(result.only_if, { language: "ts" });
     assert.deepEqual(result.skip_if, { os: "windows" });
@@ -373,7 +373,7 @@ steps:
       os: "linux"
     skip_if:
       agent: "opencode"
-    continue_session: true
+    continueSession: true
     expectedSkills: ["golem-integration"]
     allowedExtraSkills: ["golem-test-runner"]
 `);
@@ -392,7 +392,7 @@ steps:
 
     assert.deepEqual(multi.only_if, { language: "ts", os: "linux" });
     assert.deepEqual(multi.skip_if, { agent: "opencode" });
-    assert.equal(multi.continue_session, true);
+    assert.equal(multi.continueSession, true);
     assert.deepEqual(multi.expectedSkills, ["golem-integration"]);
     assert.deepEqual(multi.allowedExtraSkills, ["golem-test-runner"]);
   });

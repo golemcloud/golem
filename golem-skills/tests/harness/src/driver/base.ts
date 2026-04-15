@@ -61,20 +61,21 @@ export interface AgentDriver {
   setWorkingDirectory(dir: string): void;
 
   /**
-   * Return all skills activated during the current scenario run.
+   * Return all skills activated during the current prompt session.
    * Drivers that can detect skill activations natively (e.g. via tool-use
    * events) should override this. When `undefined` is returned the executor
    * falls back to the filesystem-based `SkillWatcher`.
    *
-   * Skills accumulate across steps within a scenario (they are not reset
-   * between prompts) because skills loaded in one prompt remain available
-   * in subsequent prompts of the same thread.
+   * Skills accumulate across followup prompts in the same agent thread. The
+   * executor resets tracking when a prompt starts a fresh session (the first
+   * prompt in a scenario, or any prompt with `continueSession: false`).
    */
   getActivatedSkills(): string[] | undefined;
 
   /**
    * Clear the driver's internal list of activated skills.
-   * Called during teardown, not between steps.
+   * Called both during teardown and when the executor starts a fresh prompt
+   * session.
    */
   resetActivatedSkills(): void;
 }

@@ -183,7 +183,7 @@ const StepSpecSchema = z
     allowedExtraSkills: langConditional(z.array(z.string())).optional(),
     strictSkillMatch: z.boolean().optional(),
     timeout: z.number().optional(),
-    continue_session: z.boolean().optional(),
+    continueSession: z.boolean().optional(),
     verify: langConditional(VerifySchema).optional(),
     invoke: InvokeSchema.optional(),
     invoke_json: InvokeSchema.optional(),
@@ -257,7 +257,7 @@ interface StepCommon {
   allowedExtraSkills?: LangConditional<string[]>;
   strictSkillMatch?: boolean;
   timeout?: number;
-  continue_session?: boolean;
+  continueSession?: boolean;
   verify?: LangConditional<{
     build?: boolean;
     deploy?: boolean;
@@ -357,7 +357,7 @@ export function parseStep(raw: RawStepSpec): StepSpec {
     ...(raw.allowedExtraSkills !== undefined && { allowedExtraSkills: raw.allowedExtraSkills }),
     ...(raw.strictSkillMatch !== undefined && { strictSkillMatch: raw.strictSkillMatch }),
     ...(raw.timeout !== undefined && { timeout: raw.timeout }),
-    ...(raw.continue_session !== undefined && { continue_session: raw.continue_session }),
+    ...(raw.continueSession !== undefined && { continueSession: raw.continueSession }),
     ...(raw.verify !== undefined && { verify: raw.verify }),
     ...(raw.expect !== undefined && { expect: raw.expect }),
     ...(raw.only_if !== undefined && { only_if: raw.only_if }),
@@ -507,6 +507,7 @@ export class ScenarioExecutor {
   private driver: AgentDriver;
   private watcher: SkillWatcher;
   private watcherStarted = false;
+  private currentSkillSessionBaseline: number | undefined;
   private workspace: string;
   private bootstrapSkillSourceDir: string;
   private options: ScenarioExecutorOptions;
@@ -737,6 +738,55 @@ export class ScenarioExecutor {
     };
   }
 
+  private startsNewPromptSession(step: StepSpec, isFirstPrompt: boolean): boolean {
+    return step.tag === "prompt" && (isFirstPrompt || step.continueSession === false);
+  }
+
+  private driverTracksSkillsNatively(): boolean {
+    return this.driver.getActivatedSkills() !== undefined;
+  }
+
+  private async ensureWatcherStarted(): Promise<void> {
+    if (!this.watcherStarted) {
+      await this.watcher.start();
+      this.watcherStarted = true;
+    }
+  }
+
+  private async beginSkillTrackingSession(): Promise<void> {
+    this.driver.resetActivatedSkills();
+
+    if (this.driverTracksSkillsNatively()) {
+      this.currentSkillSessionBaseline = undefined;
+      return;
+    }
+
+    await this.ensureWatcherStarted();
+    await this.watcher.snapshotAtimes();
+    await new Promise((resolve) => setTimeout(resolve, WATCHER_SNAPSHOT_SETTLE_MS));
+    this.currentSkillSessionBaseline = this.watcher.markBaseline();
+  }
+
+  private async ensureSkillTrackingReadyForStep(shouldTrackSkills: boolean): Promise<number> {
+    if (this.driverTracksSkillsNatively()) {
+      return 0;
+    }
+
+    if (this.currentSkillSessionBaseline !== undefined) {
+      return this.currentSkillSessionBaseline;
+    }
+
+    if (!shouldTrackSkills) {
+      return 0;
+    }
+
+    await this.ensureWatcherStarted();
+    await this.watcher.snapshotAtimes();
+    await new Promise((resolve) => setTimeout(resolve, WATCHER_SNAPSHOT_SETTLE_MS));
+    this.currentSkillSessionBaseline = this.watcher.markBaseline();
+    return this.currentSkillSessionBaseline;
+  }
+
   async execute(spec: ScenarioSpec): Promise<ScenarioRunResult> {
     // Scenario-level skip
     if (spec.skip_if) {
@@ -779,6 +829,7 @@ export class ScenarioExecutor {
     }
 
     // Setup workspace (each run gets a unique ID so no cleanup needed)
+    this.currentSkillSessionBaseline = undefined;
     await fs.mkdir(this.workspace, { recursive: true });
     await this.driver.setup(this.workspace, this.bootstrapSkillSourceDir);
     await this.verifyGolemConnectivity(spec);
@@ -943,21 +994,13 @@ export class ScenarioExecutor {
       spec.settings?.timeout_per_subprompt ??
       this.options.globalTimeoutSeconds ??
       DEFAULT_STEP_TIMEOUT_SECONDS;
-    const shouldTrackSkills = this.needsSkillTracking(step);
-    const driverTracksSkills = shouldTrackSkills && this.driver.getActivatedSkills() !== undefined;
-    const stepBaseline = 0;
-    // Do NOT reset activated skills between steps — skills are loaded once
-    // per thread and remain available across subsequent prompts.  For the
-    // filesystem watcher we start it once and keep baseline 0 so that all
-    // activations across the entire scenario are visible.
-    if (shouldTrackSkills && !driverTracksSkills) {
-      if (!this.watcherStarted) {
-        await this.watcher.start();
-        this.watcherStarted = true;
-        await this.watcher.snapshotAtimes();
-        await new Promise((resolve) => setTimeout(resolve, WATCHER_SNAPSHOT_SETTLE_MS));
-      }
+    const startsNewPromptSession = this.startsNewPromptSession(step, isFirstPrompt);
+    if (startsNewPromptSession) {
+      await this.beginSkillTrackingSession();
     }
+    const shouldTrackSkills = this.needsSkillTracking(step);
+    const driverTracksSkills = shouldTrackSkills && this.driverTracksSkillsNatively();
+    const stepBaseline = await this.ensureSkillTrackingReadyForStep(shouldTrackSkills);
     const stepLabel = step.id ?? "(unnamed)";
     log.stepStart(stepLabel, stepTimeoutSeconds);
 
@@ -1021,13 +1064,12 @@ export class ScenarioExecutor {
         const promptResult = await this.executePrompt(
           stepLabel,
           step.prompt as string,
-          step.continue_session,
+          step.continueSession,
           isFirstPrompt,
           stepTimeoutSeconds,
           idleTimeout,
           fail,
         );
-        isFirstPrompt = promptResult.isFirstPrompt;
         stepTimedOut = promptResult.timedOut;
         stepTimeoutKind = promptResult.timeoutKind;
         break;
@@ -1111,7 +1153,7 @@ export class ScenarioExecutor {
       success,
       errors,
       activatedSkills,
-      isFirstPrompt,
+      isFirstPrompt: step.tag === "prompt" && success ? false : isFirstPrompt,
       timedOut: stepTimedOut,
       timeoutKind: stepTimeoutKind,
     };
@@ -1259,7 +1301,7 @@ export class ScenarioExecutor {
     timeout: number,
     idleTimeout: number | undefined,
     fail: (msg: string) => void,
-  ): Promise<{ isFirstPrompt: boolean; timedOut?: boolean; timeoutKind?: "step" | "idle" }> {
+  ): Promise<{ timedOut?: boolean; timeoutKind?: "step" | "idle" }> {
     const opts: DriverTimeoutOptions = {
       stepTimeoutSeconds: timeout,
       idleTimeoutSeconds: idleTimeout,
@@ -1269,12 +1311,12 @@ export class ScenarioExecutor {
       log.stepPrompt(stepLabel, prompt, "followup");
       const result = await this.driver.sendFollowup(prompt, opts);
       if (!result.success) fail(`Agent failed: ${result.output}`);
-      return { isFirstPrompt: false, timedOut: result.timedOut, timeoutKind: result.timeoutKind };
+      return { timedOut: result.timedOut, timeoutKind: result.timeoutKind };
     } else {
       log.stepPrompt(stepLabel, prompt, "initial");
       const result = await this.driver.sendPrompt(prompt, opts);
       if (!result.success) fail(`Agent failed: ${result.output}`);
-      return { isFirstPrompt: false, timedOut: result.timedOut, timeoutKind: result.timeoutKind };
+      return { timedOut: result.timedOut, timeoutKind: result.timeoutKind };
     }
   }
 
