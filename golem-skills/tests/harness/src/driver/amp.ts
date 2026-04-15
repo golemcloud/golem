@@ -14,6 +14,7 @@ export class AmpAgentDriver extends BaseAgentDriver {
   protected readonly driverName = "amp";
   protected readonly skillDirs = [".agents/skills"];
   private sessionId: string | null = null;
+  private activatedSkillNames: Set<string> = new Set();
 
   async sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
     this.sessionId = null;
@@ -29,6 +30,15 @@ export class AmpAgentDriver extends BaseAgentDriver {
 
   async teardown(): Promise<void> {
     this.sessionId = null;
+    this.activatedSkillNames.clear();
+  }
+
+  getActivatedSkills(): string[] | undefined {
+    return Array.from(this.activatedSkillNames);
+  }
+
+  resetActivatedSkills(): void {
+    this.activatedSkillNames.clear();
   }
 
   private async executeAmp(
@@ -99,6 +109,13 @@ export class AmpAgentDriver extends BaseAgentDriver {
                 block.name,
                 block.input as Record<string, unknown> | undefined,
               );
+              if (block.name === "skill") {
+                const input = block.input as Record<string, unknown> | undefined;
+                const skillName = typeof input?.name === "string" ? input.name : undefined;
+                if (skillName) {
+                  this.activatedSkillNames.add(skillName);
+                }
+              }
             }
           }
         } else if (message.type === "result") {

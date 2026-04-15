@@ -25,6 +25,8 @@ const mockDriver: AgentDriver = {
     exitCode: 0,
   }),
   setWorkingDirectory: () => {},
+  getActivatedSkills: () => undefined,
+  resetActivatedSkills: () => {},
 };
 
 // Minimal mock watcher

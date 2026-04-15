@@ -87,6 +87,12 @@ object Guest {
         }
     }
 
+  private def isJsAgentError(err: Any): Boolean =
+    try {
+      val dyn = err.asInstanceOf[js.Dynamic]
+      !js.isUndefined(dyn.selectDynamic("tag")) && !js.isUndefined(dyn.selectDynamic("val"))
+    } catch { case _: Throwable => false }
+
   private def normalizeMethodName(methodName: String): String =
     if (methodName.contains(".{") && methodName.endsWith("}")) {
       val start = methodName.indexOf(".{") + 2
@@ -112,8 +118,11 @@ object Guest {
                 resolved = Resolved(defnAny, inst)
                 ()
               }
-              .recoverWith { case err =>
-                Future.failed(scala.scalajs.js.JavaScriptException(asAgentError(err, "invalid-input")))
+              .recoverWith {
+                // Only recover SDK-level errors (JsAgentError with {tag, val} shape).
+                // User code errors must propagate as WASM traps.
+                case js.JavaScriptException(err) if isJsAgentError(err) =>
+                  Future.failed(scala.scalajs.js.JavaScriptException(err))
               }
           FutureInterop.toPromise(initFuture).asInstanceOf[js.Promise[Unit]]
       }
@@ -123,13 +132,21 @@ object Guest {
     if (js.isUndefined(resolved)) {
       js.Promise.reject(invalidAgentId("Agent is not initialized")).asInstanceOf[js.Promise[js.Dynamic]]
     } else {
-      val r                                                      = resolved.asInstanceOf[Resolved]
-      val mn                                                     = normalizeMethodName(methodName)
-      val scalaPrincipal                                         = PrincipalConverter.fromJs(principal)
+      val r              = resolved.asInstanceOf[Resolved]
+      val mn             = normalizeMethodName(methodName)
+      val scalaPrincipal = PrincipalConverter.fromJs(principal)
       val onRejected: js.Function1[Any, js.Thenable[js.Dynamic]] =
-        js.Any.fromFunction1((err: Any) =>
-          js.Promise.reject(asAgentError(err, "invalid-method")).asInstanceOf[js.Thenable[js.Dynamic]]
-        )
+        js.Any.fromFunction1 { (err: Any) =>
+          // Only catch SDK-level errors (JsAgentError). User code errors must propagate
+          // as unhandled rejections so they become WASM traps, enabling atomic block retries.
+          if (isJsAgentError(err))
+            js.Promise.reject(err).asInstanceOf[js.Thenable[js.Dynamic]]
+          else
+            throw (err match {
+              case t: Throwable => t
+              case other        => js.JavaScriptException(other)
+            })
+        }
       r.defn
         .invokeAny(r.instance, mn, input.asInstanceOf[JsDataValue], scalaPrincipal)
         .asInstanceOf[js.Promise[js.Dynamic]]

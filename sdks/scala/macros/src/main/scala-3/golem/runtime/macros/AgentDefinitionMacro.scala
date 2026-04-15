@@ -565,6 +565,8 @@ object AgentDefinitionMacro {
     term match {
       case Inlined(_, _, inner)                         => extractStringArray(inner)
       case Typed(inner, _)                              => extractStringArray(inner)
+      // Curried form: Array.apply[T](elems*)(ClassTag[T]) — produced by Scala 3 for Array("a","b")
+      case Apply(inner @ Apply(_, _), _)                => extractStringArray(inner)
       case Apply(_, List(Typed(Repeated(elems, _), _))) =>
         elems.collect { case Literal(StringConstant(s)) => s }
       case Apply(_, args) =>

@@ -36,7 +36,7 @@ describe('Http Agent class', () => {
     expect(simpleHttpAgent.httpEndpoint).toEqual([
       {
         httpMethod: { tag: 'get' },
-        authDetails: { required: false },
+        authDetails: undefined,
         queryVars: [],
         corsOptions: {
           allowedPatterns: [],
@@ -136,7 +136,7 @@ describe('Http Agent class', () => {
     expect(complexHttpAgent.httpEndpoint).toEqual([
       {
         httpMethod: { tag: 'get' },
-        authDetails: { required: false },
+        authDetails: undefined,
         queryVars: [],
         corsOptions: {
           allowedPatterns: [],
@@ -164,7 +164,7 @@ describe('Http Agent class', () => {
     expect(complexHttpAgent.httpEndpoint).toEqual([
       {
         httpMethod: { tag: 'post' },
-        authDetails: { required: false },
+        authDetails: undefined,
         queryVars: [
           {
             queryParamName: 'l',
@@ -198,7 +198,7 @@ describe('Http Agent class', () => {
     expect(complexHttpAgentMetadata.httpEndpoint).toEqual([
       {
         httpMethod: { tag: 'custom', val: 'patch' },
-        authDetails: { required: false },
+        authDetails: undefined,
         queryVars: [
           {
             queryParamName: 'l',
@@ -255,7 +255,7 @@ describe('Http Agent class', () => {
       },
       {
         httpMethod: { tag: 'get' },
-        authDetails: { required: false },
+        authDetails: undefined,
         queryVars: [
           {
             queryParamName: 'l',

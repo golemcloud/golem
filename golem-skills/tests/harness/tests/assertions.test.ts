@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { evaluate, type AssertionContext, type ExpectSpec } from "../src/assertions.js";
+import {
+  evaluate,
+  ExpectSchema,
+  type AssertionContext,
+  type ExpectSpec,
+} from "../src/assertions.js";
 
 function makeContext(overrides: Partial<AssertionContext> = {}): AssertionContext {
   return {
@@ -71,6 +76,12 @@ describe("Assertion Engine", () => {
         stdout_matches: "version \\d+\\.\\d+\\.\\d+",
       });
       assert.equal(results[0].passed, false);
+    });
+
+    it("rejects invalid JavaScript regex syntax during validation", () => {
+      const parsed = ExpectSchema.safeParse({ stdout_matches: "(?s).*" });
+      assert.equal(parsed.success, false);
+      assert.ok(parsed.error.issues[0]?.message.includes("invalid JavaScript regular expression"));
     });
   });
 
@@ -192,6 +203,49 @@ describe("Assertion Engine", () => {
       assert.equal(results.length, 2);
       assert.equal(results[0].passed, false); // exit_code
       assert.equal(results[1].passed, true); // stdout_contains
+    });
+  });
+
+  describe("header_contains", () => {
+    it("passes when header contains the expected value", () => {
+      const results = evaluate(
+        makeContext({ headers: { "access-control-allow-origin": "https://example.com" } }),
+        { header_contains: { "Access-Control-Allow-Origin": "https://example.com" } },
+      );
+      assert.equal(results.length, 1);
+      assert.equal(results[0].passed, true);
+    });
+
+    it("passes for substring match", () => {
+      const results = evaluate(
+        makeContext({ headers: { "access-control-allow-origin": "https://example.com" } }),
+        { header_contains: { "Access-Control-Allow-Origin": "example" } },
+      );
+      assert.equal(results[0].passed, true);
+    });
+
+    it("fails when header is missing", () => {
+      const results = evaluate(makeContext({ headers: {} }), {
+        header_contains: { "Access-Control-Allow-Origin": "*" },
+      });
+      assert.equal(results[0].passed, false);
+      assert.ok(results[0].message.includes("(missing)"));
+    });
+
+    it("fails when header value does not match", () => {
+      const results = evaluate(
+        makeContext({ headers: { "access-control-allow-origin": "https://other.com" } }),
+        { header_contains: { "Access-Control-Allow-Origin": "https://example.com" } },
+      );
+      assert.equal(results[0].passed, false);
+    });
+
+    it("handles missing headers context gracefully", () => {
+      const results = evaluate(makeContext(), {
+        header_contains: { "X-Custom": "value" },
+      });
+      assert.equal(results[0].passed, false);
+      assert.ok(results[0].message.includes("(missing)"));
     });
   });
 

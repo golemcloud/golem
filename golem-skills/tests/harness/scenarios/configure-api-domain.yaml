@@ -1,0 +1,79 @@
+name: "configure-api-domain"
+settings:
+  golem_server:
+    custom_request_port: 9006
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-greeting-agent-with-http"
+    prompt: >
+      In the test-app project, add a new durable agent type called `GreetingAgent` identified by
+      a single constructor parameter for the greeting target name. Give it an HTTP mount under
+      `/greetings/{name}`.
+
+      GreetingAgent must expose one HTTP endpoint:
+      - `GET /hello` — returns a JSON object with a single `message` field whose value is exactly
+        `Hello, <name>!`, using the agent instance name from the path and constructor.
+
+      Do not add or change any `httpApi` deployment configuration in `golem.yaml` yet. Only add
+      the agent code and the HTTP mount/endpoint definitions so the project builds successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-http-endpoint-rust"
+      ts:
+        - "golem-add-http-endpoint-ts"
+      scala:
+        - "golem-add-http-endpoint-scala"
+    verify:
+      build: true
+
+  - id: "confirm-greeting-agent-not-deployed-yet"
+    shell:
+      command: "rg"
+      args: ["-n", "^[[:space:]]*GreetingAgent:", "test-app/golem.yaml"]
+    expect:
+      exit_code: 1
+
+  - id: "configure-api-domain"
+    prompt: >
+      In the test-app project, configure the application HTTP API deployment in `golem.yaml` so
+      that `GreetingAgent` is exposed on the local domain `test-app.localhost:9006`.
+
+      Add a `local` deployment under `httpApi.deployments` and include `GreetingAgent` in the
+      deployed agents map. Do not change any source files or endpoint logic. After this change,
+      the existing `GET /greetings/{name}/hello` endpoint must be reachable on that domain and
+      the generated OpenAPI specification must be served at `/openapi.yaml`.
+    expectedSkills:
+      - "golem-configure-api-domain"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-golem-yaml-domain-config"
+    shell:
+      command: "cat"
+      args: ["test-app/golem.yaml"]
+    expect:
+      stdout_matches: "[\\s\\S]*httpApi:[\\s\\S]*deployments:[\\s\\S]*local:[\\s\\S]*domain: test-app\\.localhost:9006[\\s\\S]*GreetingAgent:(?:\\s*\\{\\})?[\\s\\S]*"
+
+  - id: "http-hello"
+    http:
+      url: "http://test-app.localhost:9006/greetings/alice/hello"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$.message"
+          equals: "Hello, alice!"
+
+  - id: "openapi-served"
+    http:
+      url: "http://test-app.localhost:9006/openapi.yaml"
+      method: "GET"
+    expect:
+      status: 200
+      body_contains: "/greetings/{name}/hello"

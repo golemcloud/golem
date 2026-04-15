@@ -32,8 +32,8 @@ use golem_common::model::http_api_deployment::{
 };
 use golem_service_base::custom_api::{
     CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
-    OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour,
-    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    CorsPreflightMethodPolicy, MethodParameter, OpenApiSpecBehaviour, OriginPattern, PathSegment,
+    RequestBodySchema, RouteBehaviour, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use heck::ToKebabCase;
 use itertools::Itertools;
@@ -159,16 +159,19 @@ pub fn add_cors_preflight_http_routes(
     current_route_id: &mut i32,
     compiled_routes: &mut Vec<UnboundCompiledRoute>,
 ) {
-    struct PreflightMapEntry {
-        allowed_methods: BTreeSet<HttpMethod>,
+    struct PreflightMethodPolicyEntry {
         allowed_origins: BTreeSet<OriginPattern>,
+        allowed_headers: BTreeSet<String>,
+    }
+
+    struct PreflightMapEntry {
+        method_policies: BTreeMap<HttpMethod, PreflightMethodPolicyEntry>,
     }
 
     impl PreflightMapEntry {
         fn new() -> Self {
             PreflightMapEntry {
-                allowed_methods: BTreeSet::new(),
-                allowed_origins: BTreeSet::new(),
+                method_policies: BTreeMap::new(),
             }
         }
     }
@@ -181,24 +184,36 @@ pub fn add_cors_preflight_http_routes(
                 .entry(compiled_route.path.clone())
                 .or_insert(PreflightMapEntry::new());
 
-            entry.allowed_methods.insert(compiled_route.method.clone());
-            for allowed_pattern in &compiled_route.cors.allowed_patterns {
-                entry.allowed_origins.insert(allowed_pattern.clone());
-            }
+            let method_policy = entry
+                .method_policies
+                .entry(compiled_route.method.clone())
+                .or_insert_with(|| PreflightMethodPolicyEntry {
+                    allowed_origins: BTreeSet::new(),
+                    allowed_headers: BTreeSet::new(),
+                });
+
+            method_policy
+                .allowed_origins
+                .extend(compiled_route.cors.allowed_patterns.iter().cloned());
+            method_policy
+                .allowed_headers
+                .extend(collect_allowed_request_headers(compiled_route));
         }
     }
 
     // Generate synthetic OPTIONS routes for preflight requests
-    for (
-        path_segments,
-        PreflightMapEntry {
-            allowed_methods,
-            allowed_origins,
-        },
-    ) in preflight_map
-    {
+    for (path_segments, PreflightMapEntry { method_policies }) in preflight_map {
         let route_id = *current_route_id;
         *current_route_id = current_route_id.checked_add(1).unwrap();
+
+        let method_policies = method_policies
+            .into_iter()
+            .map(|(method, policy)| CorsPreflightMethodPolicy {
+                method,
+                allowed_origins: policy.allowed_origins,
+                allowed_headers: policy.allowed_headers,
+            })
+            .collect();
 
         compiled_routes.push(UnboundCompiledRoute {
             route_id,
@@ -206,16 +221,53 @@ pub fn add_cors_preflight_http_routes(
             method: HttpMethod::Options(Empty {}),
             path: path_segments,
             body: RequestBodySchema::Unused,
-            behaviour: RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
-                allowed_origins,
-                allowed_methods,
-            }),
+            behaviour: RouteBehaviour::CorsPreflight(CorsPreflightBehaviour { method_policies }),
             security: UnboundRouteSecurity::None,
             cors: CorsOptions {
                 allowed_patterns: vec![],
             },
         });
     }
+}
+
+fn collect_allowed_request_headers(compiled_route: &UnboundCompiledRoute) -> BTreeSet<String> {
+    let mut headers = BTreeSet::new();
+
+    if let RouteBehaviour::CallAgent(CallAgentBehaviour {
+        method_parameters, ..
+    }) = &compiled_route.behaviour
+    {
+        headers.extend(
+            method_parameters
+                .iter()
+                .filter_map(|parameter| match parameter {
+                    MethodParameter::Header { header_name, .. } => {
+                        Some(normalize_header_name(header_name))
+                    }
+                    _ => None,
+                }),
+        );
+    }
+
+    if !matches!(compiled_route.body, RequestBodySchema::Unused) {
+        headers.insert(http::header::CONTENT_TYPE.as_str().to_string());
+    }
+
+    if let UnboundRouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity { header_name }) =
+        &compiled_route.security
+    {
+        headers.insert(normalize_header_name(header_name));
+    }
+
+    headers
+}
+
+fn normalize_header_name(header_name: &str) -> String {
+    let trimmed = header_name.trim();
+
+    http::HeaderName::from_bytes(trimmed.as_bytes())
+        .map(|header_name| header_name.as_str().to_string())
+        .unwrap_or_else(|_| trimmed.to_ascii_lowercase())
 }
 
 pub fn add_webhook_callback_routes(
@@ -574,6 +626,14 @@ fn resolve_route_security(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::api_definition::UnboundRouteSecurity;
+    use chrono::Utc;
+    use golem_common::model::Empty;
+    use golem_common::model::diff::Hash;
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentId};
+    use std::collections::BTreeMap;
     use test_r::test;
 
     #[test]
@@ -630,5 +690,123 @@ mod tests {
         ];
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn preflight_routes_keep_origins_and_headers_per_method() {
+        let path = vec![PathSegment::Literal {
+            value: "notes".to_string(),
+        }];
+        let mut compiled_routes = vec![
+            UnboundCompiledRoute {
+                domain: Domain("example.com".to_string()),
+                route_id: 1,
+                method: HttpMethod::Get(Empty {}),
+                path: path.clone(),
+                body: RequestBodySchema::Unused,
+                behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
+                    component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
+                    component_revision:
+                        golem_common::model::component::ComponentRevision::try_from(0u64).unwrap(),
+                    agent_type: AgentTypeName("note-agent".to_string()),
+                    constructor_parameters: vec![],
+                    phantom: false,
+                    method_name: "list".to_string(),
+                    method_parameters: vec![MethodParameter::Header {
+                        header_name: "X-List-Token".to_string(),
+                        parameter_type:
+                            golem_service_base::custom_api::QueryOrHeaderType::Primitive(
+                                golem_service_base::custom_api::PathSegmentType::Str,
+                            ),
+                    }],
+                    expected_agent_response: DataSchema::Tuple(NamedElementSchemas::empty()),
+                }),
+                security: UnboundRouteSecurity::None,
+                cors: CorsOptions {
+                    allowed_patterns: vec![OriginPattern("https://public.example.com".to_string())],
+                },
+            },
+            UnboundCompiledRoute {
+                domain: Domain("example.com".to_string()),
+                route_id: 2,
+                method: HttpMethod::Post(Empty {}),
+                path: path.clone(),
+                body: RequestBodySchema::JsonBody {
+                    expected_type: golem_wasm::analysis::analysed_type::str(),
+                },
+                behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
+                    component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
+                    component_revision:
+                        golem_common::model::component::ComponentRevision::try_from(0u64).unwrap(),
+                    agent_type: AgentTypeName("note-agent".to_string()),
+                    constructor_parameters: vec![],
+                    phantom: false,
+                    method_name: "add".to_string(),
+                    method_parameters: vec![],
+                    expected_agent_response: DataSchema::Tuple(NamedElementSchemas::empty()),
+                }),
+                security: UnboundRouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+                    header_name: "X-Session".to_string(),
+                }),
+                cors: CorsOptions {
+                    allowed_patterns: vec![OriginPattern("https://admin.example.com".to_string())],
+                },
+            },
+        ];
+
+        let deployment = HttpApiDeployment {
+            id: HttpApiDeploymentId::new(),
+            revision:
+                golem_common::model::http_api_deployment::HttpApiDeploymentRevision::try_from(0u64)
+                    .unwrap(),
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            domain: Domain("example.com".to_string()),
+            hash: Hash::empty(),
+            agents: BTreeMap::new(),
+            webhooks_url: "/webhooks".to_string(),
+            created_at: Utc::now(),
+        };
+
+        let mut route_id = 3;
+        add_cors_preflight_http_routes(&deployment, &mut route_id, &mut compiled_routes);
+
+        let preflight = compiled_routes
+            .into_iter()
+            .find(|route| matches!(route.behaviour, RouteBehaviour::CorsPreflight(_)))
+            .expect("expected generated preflight route");
+
+        let RouteBehaviour::CorsPreflight(preflight) = preflight.behaviour else {
+            panic!("expected preflight route");
+        };
+
+        assert_eq!(preflight.method_policies.len(), 2);
+
+        let get_policy = preflight
+            .method_policies
+            .iter()
+            .find(|policy| matches!(policy.method, HttpMethod::Get(_)))
+            .expect("missing GET policy");
+        assert_eq!(
+            get_policy.allowed_origins,
+            BTreeSet::from([OriginPattern("https://public.example.com".to_string())])
+        );
+        assert_eq!(
+            get_policy.allowed_headers,
+            BTreeSet::from(["x-list-token".to_string()])
+        );
+
+        let post_policy = preflight
+            .method_policies
+            .iter()
+            .find(|policy| matches!(policy.method, HttpMethod::Post(_)))
+            .expect("missing POST policy");
+        assert_eq!(
+            post_policy.allowed_origins,
+            BTreeSet::from([OriginPattern("https://admin.example.com".to_string())])
+        );
+        assert_eq!(
+            post_policy.allowed_headers,
+            BTreeSet::from(["content-type".to_string(), "x-session".to_string(),])
+        );
     }
 }

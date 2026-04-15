@@ -146,6 +146,39 @@ final class WeatherAgentImpl(private val city: String) extends WeatherAgent {
 }
 ```
 
+## Calling Golem Agent HTTP Endpoints
+
+When making HTTP requests to other Golem agent endpoints (or your own), the request body must match the **Golem HTTP body mapping convention**: non-binary body parameters are always deserialized from a **JSON object** where each top-level field corresponds to a method parameter name. This is true even when the endpoint has a single body parameter.
+
+For example, given this endpoint definition:
+
+```scala
+@endpoint(method = "POST", path = "/record")
+def record(body: String): Future[Unit]
+```
+
+The correct HTTP request must send a JSON object with a `body` field — **not** a raw text string:
+
+```scala
+// ✅ CORRECT — JSON object with field name matching the parameter
+val options = js.Dynamic.literal(
+  method = "POST",
+  headers = js.Dynamic.literal("Content-Type" -> "application/json"),
+  body = """{"body": "a"}"""
+)
+js.Dynamic.global.fetch("http://my-app.localhost:9006/recorder/main/record", options)
+  .asInstanceOf[js.Promise[js.Dynamic]].toFuture
+
+// ❌ WRONG — raw text body does NOT match Golem's JSON body mapping
+val options = js.Dynamic.literal(
+  method = "POST",
+  headers = js.Dynamic.literal("Content-Type" -> "text/plain"),
+  body = "a"
+)
+```
+
+> **Rule of thumb:** If the target endpoint is a Golem agent, always send `application/json` with parameter names as JSON keys. Load the `golem-http-params-scala` skill for the full body mapping rules.
+
 ## Key Constraints
 
 - Golem Scala apps are compiled to JavaScript via **Scala.js** — the `fetch` API is available as a global function

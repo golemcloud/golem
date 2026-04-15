@@ -14,6 +14,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
   protected readonly driverName = "opencode";
   protected readonly skillDirs = [".agents/skills"];
   private lastSessionId: string | null = null;
+  private activatedSkillNames: Set<string> = new Set();
 
   private buildArgs(prompt: string, isFollowup: boolean): string[] {
     const args = ["run", "--format", "json", "--dangerously-skip-permissions"];
@@ -39,6 +40,15 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
 
   async teardown(): Promise<void> {
     this.lastSessionId = null;
+    this.activatedSkillNames.clear();
+  }
+
+  getActivatedSkills(): string[] | undefined {
+    return Array.from(this.activatedSkillNames);
+  }
+
+  resetActivatedSkills(): void {
+    this.activatedSkillNames.clear();
   }
 
   private async executeOpencode(
@@ -243,6 +253,12 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           const state = part.state as Record<string, unknown> | undefined;
           const input = state?.input as Record<string, unknown> | undefined;
           log.driverToolUse(prefix, toolName, input);
+          if (toolName === "skill") {
+            const skillName = typeof input?.name === "string" ? input.name : undefined;
+            if (skillName) {
+              this.activatedSkillNames.add(skillName);
+            }
+          }
         }
         break;
       }
