@@ -27,7 +27,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
 };
 use golem_common::base_model::api;
 use golem_common::model::AgentId;
-use golem_common::model::component::ComponentFilePath;
+use golem_common::model::component::CanonicalFilePath;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_wasm::json::OptionallyValueAndTypeJson;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -99,8 +99,8 @@ pub fn validate_protobuf_agent_id(
     })
 }
 
-pub fn validate_component_file_path(file_path: String) -> Result<ComponentFilePath, AgentError> {
-    ComponentFilePath::from_abs_str(&file_path).map_err(|_| {
+pub fn validate_component_file_path(file_path: String) -> Result<CanonicalFilePath, AgentError> {
+    CanonicalFilePath::from_abs_str(&file_path).map_err(|_| {
         bad_request_error_with_code(
             api::error_code::INVALID_COMPONENT_FILE_PATH,
             "Invalid file path",
@@ -238,7 +238,7 @@ pub fn error_to_status(error: AgentError) -> Status {
                 worker_execution_error::Error::ShardingNotReady(_) => {
                     "Sharding Not Ready".to_string()
                 }
-                worker_execution_error::Error::InitialComponentFileDownloadFailed(_) => {
+                worker_execution_error::Error::InitialAgentFileDownloadFailed(_) => {
                     "Initial File Download Failed".to_string()
                 }
                 worker_execution_error::Error::FileSystemError(_) => {

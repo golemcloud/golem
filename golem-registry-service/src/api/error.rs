@@ -333,7 +333,7 @@ impl From<ComponentError> for ApiError {
                 code: api::error_code::COMPONENT_PROCESSING_ERROR.to_string(),
                 cause: None,
             })),
-            ComponentError::InitialComponentFileNotFound { .. } => {
+            ComponentError::AgentFileNotFoundInArchive { .. } => {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: vec![error],
                     code: api::error_code::INITIAL_COMPONENT_FILE_NOT_FOUND.to_string(),
@@ -429,6 +429,9 @@ impl From<ComponentError> for ApiError {
             }
             ComponentError::ComponentByNameNotFound(_) => {
                 Self::not_found(api::error_code::COMPONENT_NOT_FOUND, error)
+            }
+            ComponentError::UndeclaredAgentTypeInProvisionConfig(_) => {
+                Self::bad_request(api::error_code::AGENT_TYPE_NOT_DECLARED, error)
             }
             ComponentError::Unauthorized(inner) => inner.into(),
 

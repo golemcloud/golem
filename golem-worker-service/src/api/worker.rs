@@ -22,7 +22,7 @@ use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
 use golem_common::model::auth::TokenSecret;
-use golem_common::model::component::{ComponentFilePath, ComponentId, PluginPriority};
+use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::{AgentCreationRequest, AgentMetadataDto, RevertWorkerTarget};
@@ -113,7 +113,7 @@ impl WorkerApi {
         let AgentCreationRequest {
             name,
             env,
-            config_vars,
+            wasi_config,
             ..
         } = request;
 
@@ -127,8 +127,8 @@ impl WorkerApi {
                 &agent_id,
                 component,
                 env,
-                config_vars,
-                request.agent_config,
+                wasi_config,
+                request.config,
                 false,
                 auth,
                 None,
@@ -1136,8 +1136,8 @@ impl WorkerApi {
     }
 }
 
-fn make_component_file_path(name: String) -> Result<ComponentFilePath> {
-    ComponentFilePath::from_rel_str(&name).map_err(|error| {
+fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
+    CanonicalFilePath::from_rel_str(&name).map_err(|error| {
         ApiEndpointError::bad_request(
             api::error_code::INVALID_FILE_NAME,
             golem_common::safe(format!("Invalid file name: {error}")),

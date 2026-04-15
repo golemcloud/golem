@@ -26,7 +26,7 @@ use crate::command_handler::app::deploy_diff::{
     DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, RollbackDetails, RollbackDiff,
     RollbackEntityDetails, RollbackQuickDiff,
 };
-use crate::command_handler::app::template::TemplateHandler;
+use crate::command_handler::app::template::{TemplateHandler, create_claude_symlink};
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit};
@@ -1585,7 +1585,7 @@ impl AppCommandHandler {
             .await
             .map_err(PostDeployError::PrepareError)?
             .environment
-            .get_deployment_components(&environment_id.0, deployment_revision.into())
+            .list_deployment_components(&environment_id.0, deployment_revision.into())
             .await
             .map_service_error()
             .map_err(PostDeployError::PrepareError)?
@@ -1719,6 +1719,7 @@ impl AppCommandHandler {
         }
 
         if plan.is_empty() {
+            create_claude_symlink(build_ctx.application().app_root_dir())?;
             return Ok(());
         }
 
@@ -1771,6 +1772,8 @@ impl AppCommandHandler {
                 fs::write_str(&step.path, step.new.as_str())?;
             }
         }
+
+        create_claude_symlink(build_ctx.application().app_root_dir())?;
 
         Ok(())
     }

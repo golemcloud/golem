@@ -19,7 +19,9 @@ use golem_client::api::{
 use golem_client::model::DeploymentCreation;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::{AgentSecretCreation, AgentSecretPath};
-use golem_common::model::component::{ComponentName, ComponentUpdate};
+use golem_common::model::component::{
+    AgentTypeProvisionConfigUpdate, ComponentName, ComponentUpdate,
+};
 use golem_common::model::deployment::{
     DeploymentAgentSecretDefault, DeploymentRollback, DeploymentVersion,
 };
@@ -169,16 +171,17 @@ async fn get_component_version_from_previous_deployment(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
-                new_file_options: BTreeMap::new(),
-                removed_files: Vec::new(),
-                env: Some(BTreeMap::from_iter(vec![(
-                    "ENV_VAR".to_string(),
-                    "ENV_VAR_VALUE".to_string(),
-                )])),
-                config_vars: None,
-                agent_config: None,
                 agent_types: None,
-                plugin_updates: Vec::new(),
+                agent_type_provision_config_updates: Some(BTreeMap::from([(
+                    AgentTypeName("CounterAgent".to_string()),
+                    AgentTypeProvisionConfigUpdate {
+                        env: Some(BTreeMap::from_iter(vec![(
+                            "ENV_VAR".to_string(),
+                            "ENV_VAR_VALUE".to_string(),
+                        )])),
+                        ..Default::default()
+                    },
+                )])),
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,
@@ -425,16 +428,17 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
-                new_file_options: BTreeMap::new(),
-                removed_files: Vec::new(),
-                env: Some(BTreeMap::from_iter(vec![(
-                    "ENV_VAR".to_string(),
-                    "ENV_VAR_VALUE".to_string(),
-                )])),
-                config_vars: None,
-                agent_config: None,
                 agent_types: None,
-                plugin_updates: Vec::new(),
+                agent_type_provision_config_updates: Some(BTreeMap::from([(
+                    AgentTypeName("CounterAgent".to_string()),
+                    AgentTypeProvisionConfigUpdate {
+                        env: Some(BTreeMap::from_iter(vec![(
+                            "ENV_VAR".to_string(),
+                            "ENV_VAR_VALUE".to_string(),
+                        )])),
+                        ..Default::default()
+                    },
+                )])),
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,
@@ -496,7 +500,7 @@ async fn deploy_creates_missing_secret_from_default(
         )
         .await?;
 
-    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
 
     assert_eq!(secrets.values.len(), 3);
     let secret = secrets
@@ -558,7 +562,7 @@ async fn deploy_ignores_default_if_secret_already_exists(
         )
         .await?;
 
-    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
 
     assert_eq!(secrets.values.len(), 3);
     let secret = secrets
@@ -622,7 +626,7 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
         )
         .await?;
 
-    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
 
     assert_eq!(secrets.values.len(), 3);
     let secret = secrets

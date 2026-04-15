@@ -16,15 +16,22 @@ use crate::agent_id_display::SourceLanguage;
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::worker::RawAgentId;
 use chrono::{DateTime, Utc};
+use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::{
     AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
 use golem_common::model::component::{
-    AgentConfigEntry, ComponentDto, ComponentId, ComponentRevision, InstalledPlugin,
+    AgentConfigEntryDto, ComponentDto, ComponentId, ComponentRevision,
 };
-use golem_common::model::component::{ComponentName, InitialComponentFile};
+use golem_common::model::component::{
+    AgentFileOptions, AgentFilePath, AgentTypeProvisionConfigCreation, ArchiveFilePath,
+    PluginInstallation,
+};
+use golem_common::model::component::{AgentFilePermissions, ComponentName};
 
 use crate::agent_id_display::render_type_for_language;
+use crate::model::app_raw;
 use golem_common::model::environment::EnvironmentId;
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use itertools::Itertools;
@@ -92,9 +99,7 @@ pub struct ComponentView {
     pub environment_id: EnvironmentId,
     pub exports: Vec<String>,
     pub agent_types: Vec<AgentType>,
-    pub files: Vec<InitialComponentFile>,
-    pub plugins: Vec<InstalledPlugin>,
-    pub env: BTreeMap<String, String>,
+    pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
 }
 
 impl ComponentView {
@@ -116,22 +121,53 @@ impl ComponentView {
             environment_id: value.environment_id,
             exports,
             agent_types: value.metadata.agent_types().to_vec(),
-            files: value.files,
-            plugins: value.installed_plugins,
-            env: value.env,
+            agent_type_provision_configs: value.metadata.agent_type_provision_configs().clone(),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
+pub struct AgentTypeManifestProvisionConfig {
+    pub env: BTreeMap<String, String>,
+    pub wasi_config: BTreeMap<String, String>,
+    pub config: Vec<AgentConfigEntryDto>,
+    pub files_source: PathBuf,
+    pub files: Vec<app_raw::InitialComponentFile>,
+    pub plugins: Vec<app_raw::PluginInstallation>,
+}
+
+impl AgentTypeManifestProvisionConfig {
+    pub fn to_provision_config_creation(
+        &self,
+        resolved_plugins: Vec<PluginInstallation>,
+    ) -> AgentTypeProvisionConfigCreation {
+        let files = self
+            .files
+            .iter()
+            .map(|f| {
+                let archive_path = ArchiveFilePath(f.target_path.clone());
+                let options = AgentFileOptions {
+                    target_path: AgentFilePath(f.target_path.clone()),
+                    permissions: f.permissions.unwrap_or(AgentFilePermissions::ReadOnly),
+                };
+                (archive_path, options)
+            })
+            .collect();
+        AgentTypeProvisionConfigCreation {
+            env: self.env.clone(),
+            wasi_config: self.wasi_config.clone(),
+            config: self.config.clone(),
+            files,
+            plugin_installations: resolved_plugins,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ComponentDeployProperties {
     pub wasm_path: PathBuf,
     pub agent_types: Vec<AgentType>,
-    pub files: Vec<crate::model::app::InitialComponentFile>,
-    pub plugins: Vec<crate::model::app::PluginInstallation>,
-    pub env: BTreeMap<String, String>,
-    pub config_vars: BTreeMap<String, String>,
-    pub agent_config: Vec<AgentConfigEntry>,
+    pub agent_type_configs: BTreeMap<AgentTypeName, AgentTypeManifestProvisionConfig>,
 }
 
 pub fn show_exported_agents(

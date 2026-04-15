@@ -135,6 +135,13 @@ plugin_max_elapsed_time = "5s"
 [oplog.default_snapshotting]
 type = "Disabled"
 
+[oplog.indexed_storage_retry]
+max_attempts = 3
+max_delay = "1s"
+max_jitter_factor = 0.15
+min_delay = "100ms"
+multiplier = 3.0
+
 [oplog.oplog_processor_snapshotting]
 type = "EveryNInvocation"
 
@@ -161,6 +168,7 @@ type = "Disabled"
 [quota_service]
 inline_wait_threshold = "1m"
 renewal_interval = "10s"
+renewal_threshold = "20s"
 
 [rdbms.pool]
 acquire_timeout = "3s"
@@ -319,7 +327,7 @@ without_time = false
 # components_bucket = "component-store"
 # compressed_oplog_buckets = ["oplog-archive-1"]
 # custom_data_bucket = "custom-data"
-# initial_component_files_bucket = "golem-initial-component-files"
+# initial_agent_files_bucket = "golem-initial-agent-files"
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
 # region = "us-east-1"
@@ -441,6 +449,13 @@ without_time = false
 # [oplog.default_snapshotting]
 # type = "Disabled"
 # 
+# [oplog.indexed_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
 # [oplog.oplog_processor_snapshotting]
 # type = "EveryNInvocation"
 # 
@@ -467,6 +482,7 @@ without_time = false
 # [quota_service]
 # inline_wait_threshold = "1m"
 # renewal_interval = "10s"
+# renewal_threshold = "20s"
 # 
 # [rdbms.pool]
 # acquire_timeout = "3s"
@@ -717,6 +733,13 @@ without_time = false
 # [oplog.default_snapshotting]
 # type = "Disabled"
 # 
+# [oplog.indexed_storage_retry]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
+# 
 # [oplog.oplog_processor_snapshotting]
 # type = "EveryNInvocation"
 # 
@@ -743,6 +766,7 @@ without_time = false
 # [quota_service]
 # inline_wait_threshold = "1m"
 # renewal_interval = "10s"
+# renewal_threshold = "20s"
 # 
 # [rdbms.pool]
 # acquire_timeout = "3s"

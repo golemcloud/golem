@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::{ComponentFilePath, ComponentRevision};
+use crate::model::component::{CanonicalFilePath, ComponentRevision};
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
 use crate::model::{
@@ -214,8 +214,8 @@ fn worker_filter_matches() {
         ],
         environment_id: EnvironmentId::new(),
         created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
-        config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
-        agent_config: Vec::new(),
+        wasi_config: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
+        config: Vec::new(),
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: AgentStatusRecord {
@@ -297,7 +297,7 @@ fn worker_filter_matches() {
     );
 
     assert!(
-        AgentFilter::new_config_vars(
+        AgentFilter::new_wasi_config(
             "var1".to_string(),
             StringFilterComparator::Equal,
             "value1".to_string(),
@@ -306,7 +306,7 @@ fn worker_filter_matches() {
     );
 
     assert!(
-        !AgentFilter::new_config_vars(
+        !AgentFilter::new_wasi_config(
             "var1".to_string(),
             StringFilterComparator::Equal,
             "value2".to_string(),
@@ -361,13 +361,13 @@ fn derived_idempotency_key() {
 }
 
 #[test]
-fn initial_component_file_path_from_absolute() {
-    let path = ComponentFilePath::from_abs_str("/a/b/c").unwrap();
+fn canonical_file_path_from_absolute() {
+    let path = CanonicalFilePath::from_abs_str("/a/b/c").unwrap();
     assert_eq!(path.to_string(), "/a/b/c");
 }
 
 #[test]
-fn initial_component_file_path_from_relative() {
-    let path = ComponentFilePath::from_abs_str("a/b/c");
+fn canonical_file_path_from_relative_is_error() {
+    let path = CanonicalFilePath::from_abs_str("a/b/c");
     assert!(path.is_err());
 }

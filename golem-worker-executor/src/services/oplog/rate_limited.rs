@@ -438,7 +438,17 @@ mod tests {
         let indexed = Arc::new(InMemoryIndexedStorage::new());
         let blob = Arc::new(InMemoryBlobStorage::new());
         let service = RateLimitedOplogService::new(
-            Arc::new(PrimaryOplogService::new(indexed, blob, 1, 1, 4096).await),
+            Arc::new(
+                PrimaryOplogService::new(
+                    indexed,
+                    blob,
+                    1,
+                    1,
+                    4096,
+                    golem_common::model::RetryConfig::default(),
+                )
+                .await,
+            ),
             resource_limits,
         );
 

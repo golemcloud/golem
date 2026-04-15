@@ -16,8 +16,7 @@ use super::TestContext;
 use crate::Tracing;
 use anyhow::anyhow;
 use assert2::let_assert;
-use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::AgentConfigEntry;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -53,41 +52,41 @@ async fn rpc_provided_config_overrides_defaults(
     let component = user
         .component(&env.id, ctx.test_component_file())
         .name(ctx.test_component_name())
-        .with_agent_config(vec![
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
+        .with_agent_config(
+            "LocalConfigAgent",
+            vec![
+                AgentConfigEntryDto {
+                    path: vec!["foo".to_string()],
+                    value: json!(1).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["bar".to_string()],
+                    value: json!("bar").into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["nested".to_string(), "a".to_string()],
+                    value: json!(true).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["nested".to_string(), "b".to_string()],
+                    value: json!([1, 2]).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec![
+                        ctx.case_config_path_segment("aliased-nested"),
+                        "c".to_string(),
+                    ],
+                    value: json!(3).into(),
+                },
+            ],
+        )
+        .with_agent_config(
+            "RpcLocalConfigAgent",
+            vec![AgentConfigEntryDto {
                 path: vec!["foo".to_string()],
-                value: json!(1),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
-                path: vec!["bar".to_string()],
-                value: json!("bar"),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
-                path: vec!["nested".to_string(), "a".to_string()],
-                value: json!(true),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
-                path: vec!["nested".to_string(), "b".to_string()],
-                value: json!([1, 2]),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
-                path: vec![
-                    ctx.case_config_path_segment("aliased-nested"),
-                    "c".to_string(),
-                ],
-                value: json!(3),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("RpcLocalConfigAgent".to_string()),
-                path: vec!["foo".to_string()],
-                value: json!(2),
-            },
-        ])
+                value: json!(2).into(),
+            }],
+        )
         .store()
         .await?;
 
@@ -140,36 +139,37 @@ async fn rpc_can_start_agent_by_providing_config_missing_in_defaults(
     let component = user
         .component(&env.id, ctx.test_component_file())
         .name(ctx.test_component_name())
-        .with_agent_config(vec![
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
-                path: vec!["bar".to_string()],
-                value: json!("bar"),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
-                path: vec!["nested".to_string(), "a".to_string()],
-                value: json!(true),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
-                path: vec!["nested".to_string(), "b".to_string()],
-                value: json!([1, 2]),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
-                path: vec![
-                    ctx.case_config_path_segment("aliased-nested"),
-                    "c".to_string(),
-                ],
-                value: json!(3),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("RpcLocalConfigAgent".to_string()),
+        .with_agent_config(
+            "LocalConfigAgent",
+            vec![
+                AgentConfigEntryDto {
+                    path: vec!["bar".to_string()],
+                    value: json!("bar").into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["nested".to_string(), "a".to_string()],
+                    value: json!(true).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["nested".to_string(), "b".to_string()],
+                    value: json!([1, 2]).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec![
+                        ctx.case_config_path_segment("aliased-nested"),
+                        "c".to_string(),
+                    ],
+                    value: json!(3).into(),
+                },
+            ],
+        )
+        .with_agent_config(
+            "RpcLocalConfigAgent",
+            vec![AgentConfigEntryDto {
                 path: vec!["foo".to_string()],
-                value: json!(2),
-            },
-        ])
+                value: json!(2).into(),
+            }],
+        )
         .store()
         .await?;
 
@@ -222,41 +222,41 @@ async fn rpc_does_not_override_values_of_existing_agent(
     let component = user
         .component(&env.id, ctx.test_component_file())
         .name(ctx.test_component_name())
-        .with_agent_config(vec![
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
+        .with_agent_config(
+            "LocalConfigAgent",
+            vec![
+                AgentConfigEntryDto {
+                    path: vec!["foo".to_string()],
+                    value: json!(1).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["bar".to_string()],
+                    value: json!("bar").into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["nested".to_string(), "a".to_string()],
+                    value: json!(true).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["nested".to_string(), "b".to_string()],
+                    value: json!([1, 2]).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec![
+                        ctx.case_config_path_segment("aliased-nested"),
+                        "c".to_string(),
+                    ],
+                    value: json!(3).into(),
+                },
+            ],
+        )
+        .with_agent_config(
+            "RpcLocalConfigAgent",
+            vec![AgentConfigEntryDto {
                 path: vec!["foo".to_string()],
-                value: json!(1),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
-                path: vec!["bar".to_string()],
-                value: json!("bar"),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
-                path: vec!["nested".to_string(), "a".to_string()],
-                value: json!(true),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
-                path: vec!["nested".to_string(), "b".to_string()],
-                value: json!([1, 2]),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("LocalConfigAgent".to_string()),
-                path: vec![
-                    ctx.case_config_path_segment("aliased-nested"),
-                    "c".to_string(),
-                ],
-                value: json!(3),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("RpcLocalConfigAgent".to_string()),
-                path: vec!["foo".to_string()],
-                value: json!(2),
-            },
-        ])
+                value: json!(2).into(),
+            }],
+        )
         .store()
         .await?;
 

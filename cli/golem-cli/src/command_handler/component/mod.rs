@@ -28,8 +28,8 @@ use crate::model::GuestLanguage;
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::{
-    ComponentDeployProperties, ComponentNameMatchKind, ComponentRevisionSelection, ComponentView,
-    SelectedComponents,
+    AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
+    ComponentRevisionSelection, ComponentView, SelectedComponents,
 };
 use crate::model::deploy::{DeployConfig, TryUpdateAllWorkersResult};
 use crate::model::environment::{
@@ -46,16 +46,16 @@ use futures_util::future::OptionFuture;
 use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
 use golem_common::cache::SimpleCache;
-use golem_common::model::agent::AgentType;
+use golem_common::model::agent::{AgentConfigSource, AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{
-    ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
+    AgentConfigEntryDto, ComponentId, ComponentName, ComponentRevision, ComponentUpdate,
 };
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
-use golem_common::model::diff::{self, VecDiffable};
+use golem_common::model::diff;
 use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -125,7 +125,7 @@ impl ComponentCommandHandler {
                         .golem_clients()
                         .await?
                         .component
-                        .get_deployment_components(
+                        .list_deployment_components(
                             &environment.environment_id.0,
                             current_deployment_revision.into(),
                         )
@@ -748,15 +748,84 @@ impl ComponentCommandHandler {
     pub async fn deployable_manifest_components(
         &self,
     ) -> anyhow::Result<BTreeMap<ComponentName, ComponentDeployProperties>> {
-        let component_names = {
+        let (component_names, declared_agents) = {
             let app_ctx = self.ctx.app_context_lock().await;
-            app_ctx.some_or_err()?.component_names()
+            let app = app_ctx.some_or_err()?;
+            (
+                app.component_names().into_iter().collect::<Vec<_>>(),
+                app.application()
+                    .agent_names()
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+            )
         };
 
         let mut components = BTreeMap::<ComponentName, ComponentDeployProperties>::new();
         for component_name in component_names {
             let properties = self.component_deploy_properties(&component_name).await?;
             components.insert(component_name, properties);
+        }
+
+        let mut exported_agents = HashMap::<AgentTypeName, Vec<ComponentName>>::new();
+        for (component_name, properties) in &components {
+            for agent_type in &properties.agent_types {
+                exported_agents
+                    .entry(agent_type.type_name.clone())
+                    .or_default()
+                    .push(component_name.clone());
+            }
+        }
+
+        let unknown_declared_agents: Vec<String> = declared_agents
+            .into_iter()
+            .filter(|declared_agent| !exported_agents.contains_key(declared_agent))
+            .map(|agent_name| agent_name.0)
+            .collect();
+
+        if !unknown_declared_agents.is_empty() {
+            // TODO: atl: validate against resolved ATL agent set after template/preset expansion,
+            // not only directly declared manifest agents.
+            for agent_name in &unknown_declared_agents {
+                log_error(format!(
+                    "Manifest declares agent {} but it is not exported by any component.",
+                    agent_name.log_color_highlight()
+                ));
+            }
+
+            logln("");
+            logln(
+                "Available agents by component:"
+                    .log_color_help_group()
+                    .to_string(),
+            );
+
+            for (component_name, properties) in &components {
+                let mut available_agents = properties
+                    .agent_types
+                    .iter()
+                    .map(|agent_type| agent_type.type_name.0.clone())
+                    .collect::<Vec<_>>();
+                available_agents.sort();
+
+                if available_agents.is_empty() {
+                    logln(format!(
+                        "- {}: {}",
+                        component_name.0.log_color_highlight(),
+                        "<none>".log_color_warn()
+                    ));
+                } else {
+                    logln(format!(
+                        "- {}: {}",
+                        component_name.0.log_color_highlight(),
+                        available_agents
+                            .iter()
+                            .map(|name| name.log_color_highlight())
+                            .join(", ")
+                    ));
+                }
+            }
+
+            bail!(NonSuccessfulExit);
         }
 
         Ok(components)
@@ -776,20 +845,66 @@ impl ComponentCommandHandler {
         .await?;
         let component = app_ctx.application().component(component_name);
         let wasm_path = component.final_wasm();
-        let files = component.files().clone();
-        let plugins = component.plugins().clone();
-        let env = resolve_env_vars(component_name, component.env())?;
-        let config_vars = component.config_vars().clone();
-        let agent_config = component.agent_config().clone();
+
+        let mapping = agent_types
+            .iter()
+            .map(|agent_type| (agent_type.type_name.clone(), component_name.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let resolved_agents = app_ctx.application().resolve_agents(&mapping);
+
+        let mut agent_type_configs =
+            BTreeMap::<AgentTypeName, AgentTypeManifestProvisionConfig>::new();
+        let mut unused_config_by_agent = BTreeMap::<AgentTypeName, Vec<String>>::new();
+
+        for agent_type in &agent_types {
+            let Some(resolved_agent) = resolved_agents.agent(&agent_type.type_name) else {
+                continue;
+            };
+
+            let unused_paths =
+                collect_unused_agent_config_paths(agent_type, resolved_agent.config());
+            if !unused_paths.is_empty() {
+                unused_config_by_agent.insert(agent_type.type_name.clone(), unused_paths);
+            }
+
+            agent_type_configs.insert(
+                agent_type.type_name.clone(),
+                AgentTypeManifestProvisionConfig {
+                    env: resolve_env_vars(component_name, resolved_agent.env())?,
+                    wasi_config: resolved_agent.wasi_config().clone(),
+                    config: materialize_agent_config_entries(agent_type, resolved_agent.config()),
+                    files_source: component.source().to_path_buf(),
+                    files: resolved_agent.files().to_vec(),
+                    plugins: resolved_agent.plugins().to_vec(),
+                },
+            );
+        }
+
+        if !unused_config_by_agent.is_empty() {
+            for (agent_name, unused_keys) in &unused_config_by_agent {
+                log_warn_action(
+                    "Ignoring unused config keys",
+                    format!(
+                        "for agent {}: {}",
+                        agent_name.0.log_color_highlight(),
+                        unused_keys.join(", ")
+                    ),
+                );
+            }
+
+            if !self
+                .ctx
+                .interactive_handler()
+                .confirm_ignore_unused_agent_config(&unused_config_by_agent)?
+            {
+                bail!(NonSuccessfulExit);
+            }
+        }
 
         Ok(ComponentDeployProperties {
             wasm_path,
             agent_types,
-            files,
-            plugins,
-            env,
-            config_vars,
-            agent_config,
+            agent_type_configs,
         })
     }
 
@@ -816,98 +931,111 @@ impl ComponentCommandHandler {
             component_hasher.finalize()
         };
 
-        // TODO: atomic: cache it with a TaskResultMarker (handling local vs http)?
-        let files_by_path: BTreeMap<String, diff::HashOf<diff::ComponentFile>> = {
-            IfsFileManager::new(self.ctx.file_download_client().clone())
-                .collect_file_hashes(component_name.as_str(), properties.files.as_slice())
-                .await?
+        let plugin_grants = self
+            .ctx
+            .environment_handler()
+            .plugin_grants(environment)
+            .await?;
+
+        let ifs_manager = IfsFileManager::new(self.ctx.file_download_client().clone());
+
+        let mut agent_type_provision_configs = BTreeMap::new();
+        for (agent_type_name, manifest_config) in &properties.agent_type_configs {
+            // Hash files for this agent type
+            let resolved_files: Vec<crate::model::app::InitialComponentFile> = manifest_config
+                .files
+                .iter()
+                .map(|f| {
+                    crate::model::app::InitialComponentFileSource::new(
+                        &f.source_path,
+                        &manifest_config.files_source,
+                    )
+                    .map_err(|err| {
+                        anyhow!(
+                            "Failed to resolve source path '{}' for component {} and agent {}: {}",
+                            f.source_path,
+                            component_name.0,
+                            agent_type_name.0,
+                            err
+                        )
+                    })
+                    .map(|source| crate::model::app::InitialComponentFile {
+                        source,
+                        target: crate::model::app::CanonicalFilePathWithPermissions {
+                            path: f.target_path.clone(),
+                            permissions: f.permissions.unwrap_or(
+                                golem_common::model::component::AgentFilePermissions::ReadOnly,
+                            ),
+                        },
+                    })
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+
+            let file_hashes = ifs_manager
+                .collect_file_hashes(
+                    &format!("{}:{}", component_name.0, agent_type_name.0),
+                    &resolved_files,
+                )
+                .await?;
+
+            let files_by_path = file_hashes
                 .into_iter()
                 .map(|file_hash| {
                     (
                         file_hash.target.path.to_abs_string(),
-                        diff::ComponentFile {
+                        diff::AgentFile {
                             hash: file_hash.hash.into(),
                             permissions: file_hash.target.permissions,
                         }
                         .into(),
                     )
                 })
-                .collect()
-        };
+                .collect();
 
-        let plugins_by_grant_id = {
-            if properties.plugins.is_empty() {
-                BTreeMap::new()
-            } else {
-                let plugin_grants = self
-                    .ctx
-                    .environment_handler()
-                    .plugin_grants(environment)
-                    .await?;
-
-                let mut plugins_by_grant_id = BTreeMap::new();
-
-                for (priority, plugin) in properties.plugins.iter().enumerate() {
-                    // TODO: atomic: cannot lookup by account email
-                    let Some(server_plugin) = plugin_grants.get(&PluginNameAndVersion {
-                        name: plugin.name.clone(),
-                        version: plugin.version.clone(),
-                    }) else {
-                        log_error(format!(
-                            "Plugin {}/{} for component {} not found.",
-                            plugin.name,
-                            plugin.version,
-                            component_name.0.log_color_highlight()
-                        ));
-                        logln("");
-                        logln(
-                            "Check if the plugin is registered and granted for the application environment!",
-                        );
-                        bail!(NonSuccessfulExit);
-                    };
-                    plugins_by_grant_id.insert(
-                        server_plugin.id.0,
+            // TODO: atomic: cannot lookup by account email
+            // Look up plugin grants
+            let plugins_by_grant_id = manifest_config
+                .plugins
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, p)| {
+                    let grant = plugin_grants.get(&PluginNameAndVersion {
+                        name: p.name.clone(),
+                        version: p.version.clone(),
+                    })?;
+                    Some((
+                        grant.id.0,
                         diff::PluginInstallation {
-                            priority: priority as i32,
-                            name: plugin.name.clone(),
-                            version: plugin.version.clone(),
-                            grant_id: server_plugin.id.0,
+                            priority: idx as i32,
+                            name: p.name.clone(),
+                            version: p.version.clone(),
+                            grant_id: grant.id.0,
                             parameters: Default::default(),
                         },
-                    );
-                }
+                    ))
+                })
+                .collect();
 
-                plugins_by_grant_id
-            }
-        };
+            let config = manifest_config
+                .config
+                .iter()
+                .map(|c| (c.path.join("."), c.value.clone()))
+                .collect();
+
+            let provision_config = diff::AgentTypeProvisionConfig {
+                env: manifest_config.env.clone(),
+                wasi_config: manifest_config.wasi_config.clone(),
+                config,
+                files_by_path,
+                plugins_by_grant_id,
+            };
+
+            agent_type_provision_configs.insert(agent_type_name.0.clone(), provision_config.into());
+        }
 
         Ok(diff::Component {
-            metadata: diff::ComponentMetadata {
-                env: properties
-                    .env
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-                config_vars: properties
-                    .config_vars
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-            }
-            .into(),
             wasm_hash: component_binary_hash.into(),
-            files_by_path,
-            plugins_by_grant_id,
-            ordered_agent_config: properties
-                .agent_config
-                .iter()
-                .map(|lac| diff::AgentConfigEntry {
-                    agent: lac.agent.0.clone(),
-                    path: lac.path.clone(),
-                    value: diff::into_normalized_json(lac.value.clone()),
-                })
-                .sorted_by(|v1, v2| v1.ordering_key().cmp(&v2.ordering_key()))
-                .collect(),
+            agent_type_provision_configs,
         })
     }
 
@@ -948,15 +1076,8 @@ impl ComponentCommandHandler {
                 &environment.environment_id.0,
                 &ComponentCreation {
                     component_name: component_name.clone(),
-                    file_options: files
-                        .as_ref()
-                        .map(|files| files.file_options.clone())
-                        .unwrap_or_default(),
-                    env: component_stager.env(),
-                    config_vars: component_stager.config_vars(),
-                    agent_config: component_stager.agent_config(),
                     agent_types,
-                    plugins: component_stager.plugins(),
+                    agent_type_provision_configs: component_stager.agent_type_provision_configs(),
                 },
                 wasm,
                 OptionFuture::from(files.as_ref().map(|files| files.open_archive()))
@@ -1046,13 +1167,9 @@ impl ComponentCommandHandler {
                 &component.id.0,
                 &ComponentUpdate {
                     current_revision: component.revision,
-                    removed_files: changed_files.removed.clone(),
-                    new_file_options: changed_files.merged_file_options(),
-                    config_vars: component_stager.config_vars_if_changed(),
-                    agent_config: component_stager.agent_config_if_changed(),
-                    env: component_stager.env_if_changed(),
                     agent_types,
-                    plugin_updates: component_stager.plugins_if_changed(),
+                    agent_type_provision_config_updates: component_stager
+                        .agent_type_provision_config_updates(&changed_files),
                 },
                 wasm,
                 changed_files.open_archive().await?,
@@ -1183,4 +1300,83 @@ fn resolve_env_vars(
         validation.build(resolved_env),
         None,
     )
+}
+
+fn config_value_at_path<'a>(
+    root: &'a serde_json::Value,
+    path: &[String],
+) -> Option<&'a serde_json::Value> {
+    let mut current = root;
+    for segment in path {
+        current = match current {
+            serde_json::Value::Object(map) => map.get(segment)?,
+            _ => return None,
+        };
+    }
+    Some(current)
+}
+
+fn materialize_agent_config_entries(
+    agent_type: &AgentType,
+    config_root: Option<&serde_json::Value>,
+) -> Vec<AgentConfigEntryDto> {
+    let Some(config_root) = config_root else {
+        return vec![];
+    };
+
+    agent_type
+        .config
+        .iter()
+        .filter(|decl| decl.source == AgentConfigSource::Local)
+        .filter_map(|decl| {
+            config_value_at_path(config_root, &decl.path).map(|value| AgentConfigEntryDto {
+                path: decl.path.clone(),
+                value: value.clone().into(),
+            })
+        })
+        .collect()
+}
+
+fn collect_config_leaf_paths(
+    value: &serde_json::Value,
+    prefix: &mut Vec<String>,
+    result: &mut Vec<Vec<String>>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, nested) in map {
+                prefix.push(key.clone());
+                collect_config_leaf_paths(nested, prefix, result);
+                prefix.pop();
+            }
+        }
+        _ => result.push(prefix.clone()),
+    }
+}
+
+fn collect_unused_agent_config_paths(
+    agent_type: &AgentType,
+    config_root: Option<&serde_json::Value>,
+) -> Vec<String> {
+    let Some(config_root) = config_root else {
+        return vec![];
+    };
+
+    let declared_paths = agent_type
+        .config
+        .iter()
+        .filter(|decl| decl.source == AgentConfigSource::Local)
+        .map(|decl| decl.path.clone())
+        .collect::<BTreeSet<_>>();
+
+    let mut leaf_paths = Vec::new();
+    collect_config_leaf_paths(config_root, &mut vec![], &mut leaf_paths);
+
+    let mut unused = leaf_paths
+        .into_iter()
+        .filter(|path| !declared_paths.contains(path))
+        .map(|path| path.join("."))
+        .collect::<Vec<_>>();
+    unused.sort();
+    unused
 }

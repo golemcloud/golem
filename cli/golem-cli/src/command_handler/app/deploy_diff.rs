@@ -769,18 +769,25 @@ fn normalized_diff_deployment(
                     component_name.clone(),
                     match component.as_value() {
                         Some(component) => diff::Component {
-                            metadata: match component.metadata.as_value() {
-                                Some(metadata) => diff::ComponentMetadata {
-                                    env: safe_env(&metadata.env),
-                                    config_vars: metadata.config_vars.clone(),
-                                }
-                                .into(),
-                                None => component.metadata.hash().into(),
-                            },
                             wasm_hash: component.wasm_hash,
-                            files_by_path: component.files_by_path.clone(),
-                            plugins_by_grant_id: component.plugins_by_grant_id.clone(),
-                            ordered_agent_config: component.ordered_agent_config.clone(),
+                            agent_type_provision_configs: component
+                                .agent_type_provision_configs
+                                .iter()
+                                .map(|(name, config_hash)| {
+                                    let masked = match config_hash.as_value() {
+                                        Some(config) => diff::AgentTypeProvisionConfig {
+                                            env: safe_env(&config.env),
+                                            wasi_config: config.wasi_config.clone(),
+                                            config: config.config.clone(),
+                                            files_by_path: config.files_by_path.clone(),
+                                            plugins_by_grant_id: config.plugins_by_grant_id.clone(),
+                                        }
+                                        .into(),
+                                        None => config_hash.clone(),
+                                    };
+                                    (name.clone(), masked)
+                                })
+                                .collect(),
                         }
                         .into(),
                         None => component.hash().into(),

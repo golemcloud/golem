@@ -12,10 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor};
+use super::{
+    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+    ScanCursor,
+};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::repo::RepoError;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -73,6 +77,14 @@ impl SqliteIndexedStorage {
         }
     }
 
+    fn classify_repo_error(err: RepoError) -> IndexedStorageError {
+        if err.is_transient() {
+            IndexedStorageError::Transient(err.to_string())
+        } else {
+            IndexedStorageError::Other(err.to_safe_string())
+        }
+    }
+
     fn to_like_prefix(prefix: &str) -> String {
         let mut result = String::with_capacity(prefix.len() + 1);
         for ch in prefix.chars() {
@@ -95,7 +107,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-    ) -> Result<u8, String> {
+    ) -> Result<u8, IndexedStorageError> {
         Ok(0)
     }
 
@@ -105,7 +117,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         _api_name: &'static str,
         _replicas: u8,
         _timeout: Duration,
-    ) -> Result<u8, String> {
+    ) -> Result<u8, IndexedStorageError> {
         Ok(0)
     }
 
@@ -115,7 +127,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, IndexedStorageError> {
         let query = sqlx::query_as::<_, (bool,)>(
             "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace = ? AND key = ?);",
         )
@@ -127,7 +139,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             .fetch_optional_as(query)
             .await
             .map(|row| row.unwrap_or((false,)).0)
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn scan(
@@ -138,7 +150,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), String> {
+    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
         let query = match prefix {
             Some(prefix) => {
                 let key = Self::to_like_prefix(prefix);
@@ -164,7 +176,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             .fetch_all_as::<(String,), _>(query)
             .await
             .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
-            .map_err(|err| err.to_safe_string())?;
+            .map_err(Self::classify_repo_error)?;
 
         let new_cursor = if keys.len() < count as usize {
             0
@@ -184,7 +196,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         let query = sqlx::query(
             r#"
                     INSERT INTO index_storage (namespace, key, id, value) VALUES (?,?,?,?);
@@ -200,7 +212,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn length(
@@ -209,7 +221,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, IndexedStorageError> {
         let query = sqlx::query_as::<_, (i64,)>(
             "SELECT COUNT(*) FROM index_storage WHERE namespace = ? AND key = ?;",
         )
@@ -221,7 +233,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             .fetch_optional_as(query)
             .await
             .map(|row| row.map(|r| r.0 as u64).unwrap_or(0))
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn delete(
@@ -230,7 +242,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         let query = sqlx::query("DELETE FROM index_storage WHERE namespace = ? AND key = ?;")
             .bind(Self::namespace(namespace))
             .bind(key);
@@ -240,7 +252,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn read(
@@ -252,7 +264,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
         let query = sqlx::query_as(
             "SELECT id, value FROM index_storage WHERE namespace = ? AND key = ? AND id BETWEEN ? AND ?;",
         )
@@ -266,7 +278,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             .fetch_all_as::<DBIdValue, _>(query)
             .await
             .map(|vec| vec.into_iter().map(|row| row.into_pair()).collect())
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn first(
@@ -276,7 +288,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         _entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         let query = sqlx::query_as(
                     "SELECT id, value FROM index_storage WHERE namespace = ? AND key = ? ORDER BY id ASC LIMIT 1;",
                 )
@@ -288,7 +300,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn last(
@@ -298,7 +310,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         _entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         let query = sqlx::query_as(
                     "SELECT id, value FROM index_storage WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT 1;",
                 )
@@ -310,7 +322,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn closest(
@@ -321,7 +333,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         let query = sqlx::query_as(
             "SELECT id, value FROM index_storage WHERE namespace = ? AND key = ? AND id >= ? ORDER BY id ASC LIMIT 1;",
         )
@@ -334,7 +346,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn drop_prefix(
@@ -344,7 +356,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         let query =
             sqlx::query("DELETE FROM index_storage WHERE namespace = ? AND key = ? AND id <= ?;")
                 .bind(Self::namespace(namespace))
@@ -356,7 +368,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 }
 

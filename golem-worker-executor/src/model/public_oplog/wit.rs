@@ -54,7 +54,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
-                config_vars,
+                config_vars: wasi_config,
                 local_agent_config,
                 original_phantom_id,
             }) => Self::Create(oplog::CreateParameters {
@@ -71,7 +71,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                     .into_iter()
                     .map(|pr| pr.into())
                     .collect(),
-                config_vars: config_vars.into_iter().collect(),
+                config_vars: wasi_config.into_iter().collect(),
                 local_agent_config: local_agent_config
                     .into_iter()
                     .map(|lac| oplog::LocalAgentConfigEntry {

@@ -14,7 +14,21 @@
 
 import { Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../../../newTypes/either';
-import { AnalysedType, bool, f64, field, record, s64, str, u32, u64 } from './analysedType';
+import {
+  AnalysedType,
+  bool,
+  case_,
+  f64,
+  field,
+  option,
+  record,
+  s64,
+  str,
+  u32,
+  u64,
+  unitCase,
+  variant,
+} from './analysedType';
 import { Ctx } from './ctx';
 import { handleUnion } from './union';
 import { handleTuple } from './tuple';
@@ -68,6 +82,7 @@ const handlers: { [K in TsType['kind']]: Handler<K> } = {
   'unresolved-type': handleUnresolved,
   array: handleArray,
   config: unsupported('Config'),
+  principal: handlePrincipal,
   'quota-token': handleQuotaToken,
 };
 
@@ -86,6 +101,45 @@ function handleQuotaToken(): Either.Either<AnalysedType, string> {
     field('lastCredit', s64(true)),
     field('lastCreditAt', datetimeType),
   ]);
+  return Either.right(analysedType);
+}
+
+function handlePrincipal(): Either.Either<AnalysedType, string> {
+  const uuidType = record('Uuid', [field('highBits', u64(true)), field('lowBits', u64(true))]);
+
+  const accountIdType = record('AccountId', [field('uuid', uuidType)]);
+
+  const componentIdType = record('ComponentId', [field('uuid', uuidType)]);
+
+  const agentIdType = record('AgentId', [
+    field('componentId', componentIdType),
+    field('agentId', str()),
+  ]);
+
+  const analysedType = variant(
+    'Principal',
+    [],
+    [
+      case_(
+        'oidc',
+        record('OidcPrincipal', [
+          field('sub', str()),
+          field('issuer', str()),
+          field('email', option(undefined, 'undefined', str())),
+          field('name', option(undefined, 'undefined', str())),
+          field('emailVerified', option(undefined, 'undefined', bool())),
+          field('givenName', option(undefined, 'undefined', str())),
+          field('familyName', option(undefined, 'undefined', str())),
+          field('picture', option(undefined, 'undefined', str())),
+          field('preferredUsername', option(undefined, 'undefined', str())),
+          field('claims', str()),
+        ]),
+      ),
+      case_('agent', record('AgentPrincipal', [field('agentId', agentIdType)])),
+      case_('golem-user', record('GolemUserPrincipal', [field('accountId', accountIdType)])),
+      unitCase('anonymous'),
+    ],
+  );
   return Either.right(analysedType);
 }
 

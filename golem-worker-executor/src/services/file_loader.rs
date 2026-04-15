@@ -15,10 +15,10 @@
 use anyhow::anyhow;
 use async_lock::Mutex;
 use futures::TryStreamExt;
-use golem_common::model::component::ComponentFileContentHash;
+use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Weak;
@@ -44,7 +44,7 @@ pub struct FileUseToken {
 /// This will hardlink to a temporary directory to avoid copying files between workers. Beware
 /// that hardlinking is only possible within the same filesystem.
 pub struct FileLoader {
-    initial_component_files_service: Arc<InitialComponentFilesService>,
+    initial_agent_files_service: Arc<InitialAgentFilesService>,
     cache_dir: TempDir,
     // Note: The cache is shared between accounts. One account no accessing data from another account
     // is implicitly done by the key being a hash of the content.
@@ -64,7 +64,7 @@ pub struct FileLoader {
 
 impl FileLoader {
     pub fn new(
-        initial_component_files_service: Arc<InitialComponentFilesService>,
+        initial_agent_files_service: Arc<InitialAgentFilesService>,
         filesystem_storage_semaphore: Option<Arc<FilesystemStorageSemaphore>>,
     ) -> Result<Self, anyhow::Error> {
         let cache_dir = tempfile::Builder::new()
@@ -72,7 +72,7 @@ impl FileLoader {
             .tempdir()?;
 
         Ok(Self {
-            initial_component_files_service,
+            initial_agent_files_service,
             cache: Mutex::new(HashMap::new()),
             cache_dir,
             item_counter: AtomicU64::new(0),
@@ -89,7 +89,7 @@ impl FileLoader {
     pub async fn get_read_only_to(
         &self,
         environment_id: EnvironmentId,
-        key: ComponentFileContentHash,
+        key: AgentFileContentHash,
         target: &PathBuf,
         file_size: u64,
     ) -> Result<FileUseToken, WorkerExecutorError> {
@@ -107,7 +107,7 @@ impl FileLoader {
     pub async fn get_read_write_to(
         &self,
         environment_id: EnvironmentId,
-        key: ComponentFileContentHash,
+        key: AgentFileContentHash,
         target: &PathBuf,
     ) -> Result<(), WorkerExecutorError> {
         self.get_read_write_to_impl(environment_id, key, target)
@@ -123,7 +123,7 @@ impl FileLoader {
     async fn get_read_only_to_impl(
         &self,
         environment_id: EnvironmentId,
-        key: ComponentFileContentHash,
+        key: AgentFileContentHash,
         target: &PathBuf,
         file_size: u64,
     ) -> Result<FileUseToken, anyhow::Error> {
@@ -161,7 +161,7 @@ impl FileLoader {
     async fn get_read_write_to_impl(
         &self,
         environment_id: EnvironmentId,
-        key: ComponentFileContentHash,
+        key: AgentFileContentHash,
         target: &PathBuf,
     ) -> Result<(), anyhow::Error> {
         if let Some(parent) = target.parent() {
@@ -208,7 +208,7 @@ impl FileLoader {
     async fn get_or_add_cache_entry(
         &self,
         environment_id: EnvironmentId,
-        key: ComponentFileContentHash,
+        key: AgentFileContentHash,
         file_size: u64,
     ) -> Result<Arc<CacheEntry>, anyhow::Error> {
         let cache_entry;
@@ -307,7 +307,7 @@ impl FileLoader {
         &self,
         environment_id: EnvironmentId,
         path: &Path,
-        key: ComponentFileContentHash,
+        key: AgentFileContentHash,
     ) -> Result<(), anyhow::Error> {
         self.download_file_to_path(environment_id, path, key)
             .await?;
@@ -319,12 +319,12 @@ impl FileLoader {
         &self,
         environment_id: EnvironmentId,
         path: &Path,
-        key: ComponentFileContentHash,
+        key: AgentFileContentHash,
     ) -> Result<(), anyhow::Error> {
         debug!("Downloading {} to {}", key, path.display());
 
         let mut data = self
-            .initial_component_files_service
+            .initial_agent_files_service
             .get(environment_id, key)
             .await
             .map_err(|e| anyhow!(e))?
@@ -357,7 +357,7 @@ impl FileLoader {
 // Mutex: The cache entry itself. This is used to ensure that no one is accessing the file while it is being downloaded.
 // Result: The result of the cache entry. This is used to store the file path and any errors that occurred while downloading the file.
 // InitializedCacheEntry: The cache entry itself. This is used to store the file path and ensure that the file is deleted when the cache entry is dropped.
-type Cache = Mutex<HashMap<ComponentFileContentHash, Weak<CacheEntry>>>;
+type Cache = Mutex<HashMap<AgentFileContentHash, Weak<CacheEntry>>>;
 
 type CacheEntry = Mutex<Result<InitializedCacheEntry, String>>;
 
@@ -408,7 +408,7 @@ mod tests {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::widen_infallible;
     use golem_service_base::replayable_stream::ReplayableStream as _;
-    use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+    use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use std::time::Duration;
     use test_r::test;
@@ -425,15 +425,15 @@ mod tests {
     ) -> (
         FileLoader,
         Arc<FilesystemStorageSemaphore>,
-        ComponentFileContentHash,
+        AgentFileContentHash,
         EnvironmentId,
     ) {
         let blob = Arc::new(InMemoryBlobStorage::new());
 
         // One service instance for uploading, one for the loader — both share
         // the same underlying blob store.
-        let upload_svc = Arc::new(InitialComponentFilesService::new(blob.clone()));
-        let loader_svc = Arc::new(InitialComponentFilesService::new(blob));
+        let upload_svc = Arc::new(InitialAgentFilesService::new(blob.clone()));
+        let loader_svc = Arc::new(InitialAgentFilesService::new(blob));
 
         let semaphore = Arc::new(FilesystemStorageSemaphore::new(
             pool_bytes,

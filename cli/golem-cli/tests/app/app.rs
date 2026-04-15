@@ -583,10 +583,13 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains_ordered([
-        "+      /Cargo.toml:",
-        "+        permissions: read-only",
-        "+      /src/lib.rs:",
-        "+        permissions: read-write",
+        "+    agentTypeProvisionConfigs:",
+        "+      CounterAgent:",
+        "+        filesByPath:",
+        "+          /Cargo.toml:",
+        "+            permissions: read-only",
+        "+          /src/lib.rs:",
+        "+            permissions: read-write",
         "Planning",
         "- create component test-app-name:rust-main",
     ]));
@@ -626,20 +629,22 @@ async fn basic_ifs_deploy(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains_ordered([
-        "     filesByPath:",
-        "-      /Cargo.toml:",
-        "+      /Cargo2.toml:",
-        "         permissions: read-only",
-        "       /src/lib.rs:",
-        "-        permissions: read-write",
-        "+        permissions: read-only",
+        "       CounterAgent:",
+        "         filesByPath:",
+        "-          /Cargo.toml:",
+        "+          /Cargo2.toml:",
+        "             permissions: read-only",
+        "           /src/lib.rs:",
+        "-            permissions: read-write",
+        "+            permissions: read-only",
         "Planning",
         "- update component test-app-name:rust-main, changes:",
-        "  - files",
-        "    - delete file /Cargo.toml",
-        "    - create file /Cargo2.toml",
-        "    - update file /src/lib.rs, changes:",
-        "      - permissions",
+        "  - provision configs",
+        "    - update agent type CounterAgent:",
+        "      - files",
+        "        - remove /Cargo.toml",
+        "        - add /Cargo2.toml",
+        "        - update /src/lib.rs (permissions)",
     ]));
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;

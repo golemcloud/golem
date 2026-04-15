@@ -117,6 +117,15 @@ impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
                     "Received resource definition changed event, ignoring"
                 );
             }
+            RegistryInvalidationEvent::AgentSecretChanged { environment_id, .. } => {
+                debug!(
+                    environment_id = %environment_id,
+                    "Received agent secret changed event, invalidating environment cache"
+                );
+                self.environment_state_service
+                    .invalidate_environment(*environment_id)
+                    .await;
+            }
         }
     }
 }

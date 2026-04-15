@@ -4,13 +4,13 @@ package golem.worker;
 
 import "wasm/rpc/value_and_type.proto";
 
-message AgentConfigEntry {
+message AgentConfigEntryDto {
   repeated string path = 1;
   // json encoded value
   string value = 2;
 }
 
-message ParsedAgentConfigEntry {
+message TypedAgentConfigEntry {
   repeated string path = 1;
   wasm.rpc.ValueAndType value = 2;
 }

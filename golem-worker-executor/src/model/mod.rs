@@ -24,7 +24,7 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{AgentError, AgentTerminatedByQuotaError, PersistenceLevel};
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::worker::ParsedWorkerAgentConfigEntry;
+use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
     AgentId, AgentInvocationOutput, OplogIndex, ShardAssignment, ShardId, Timestamp,
 };
@@ -69,8 +69,8 @@ pub struct AgentConfig {
     pub current_filesystem_storage_usage: u64,
     pub component_revision_for_replay: ComponentRevision,
     pub created_by: AccountId,
-    pub initial_config_vars: BTreeMap<String, String>,
-    pub initial_agent_config: Vec<ParsedWorkerAgentConfigEntry>,
+    pub initial_wasi_config: BTreeMap<String, String>,
+    pub initial_agent_config: Vec<TypedAgentConfigEntry>,
     pub last_snapshot_index: Option<OplogIndex>,
 }
 
@@ -81,8 +81,8 @@ impl AgentConfig {
         current_filesystem_storage_usage: u64,
         component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
-        initial_config_vars: BTreeMap<String, String>,
-        initial_agent_config: Vec<ParsedWorkerAgentConfigEntry>,
+        initial_wasi_config: BTreeMap<String, String>,
+        initial_agent_config: Vec<TypedAgentConfigEntry>,
         last_snapshot_index: Option<OplogIndex>,
     ) -> AgentConfig {
         AgentConfig {
@@ -91,7 +91,7 @@ impl AgentConfig {
             current_filesystem_storage_usage,
             component_revision_for_replay,
             created_by,
-            initial_config_vars,
+            initial_wasi_config,
             initial_agent_config,
             last_snapshot_index,
         }

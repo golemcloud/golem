@@ -20,7 +20,7 @@ use crate::model::format::Format;
 use crate::{APP_MANIFEST_JSON_SCHEMA, fs};
 use anyhow::{Context, anyhow};
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
+use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
@@ -106,6 +106,8 @@ pub struct Application {
     pub component_templates: IndexMap<String, ComponentTemplate>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub components: IndexMap<String, Component>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub agents: IndexMap<AgentTypeName, Agent>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -239,7 +241,7 @@ impl Application {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
@@ -250,7 +252,7 @@ pub struct ComponentTemplate {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct Component {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
@@ -263,12 +265,32 @@ pub struct Component {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ComponentPreset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Marker>,
     #[serde(flatten)]
     pub component_properties: ComponentLayerProperties,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Agent {
+    #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
+    pub templates: LenientTokenList,
+    #[serde(flatten)]
+    pub agent_properties: AgentLayerProperties,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub presets: IndexMap<String, AgentPreset>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPreset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Marker>,
+    #[serde(flatten)]
+    pub agent_properties: AgentLayerProperties,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -455,12 +477,12 @@ impl DeploymentOptions {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InitialComponentFile {
     pub source_path: String,
-    pub target_path: ComponentFilePath,
-    pub permissions: Option<ComponentFilePermissions>,
+    pub target_path: CanonicalFilePath,
+    pub permissions: Option<AgentFilePermissions>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ComponentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_wasm: Option<String>,
@@ -474,40 +496,31 @@ pub struct ComponentLayerProperties {
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
+    #[serde(flatten)]
+    pub agent_properties: AgentLayerProperties,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub files_merge_mode: Option<VecMergeMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub files: Option<Vec<InitialComponentFile>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugins_merge_mode: Option<VecMergeMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugins: Option<Vec<PluginInstallation>>,
+    pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_vars_merge_mode: Option<MapMergeMode>,
+    pub wasi_config_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_vars: Option<IndexMap<String, String>>,
+    pub wasi_config: Option<IndexMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agents_merge_mode: Option<MapMergeMode>,
-    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub agents: IndexMap<AgentTypeName, ComponentAgentProperties>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ComponentAgentProperties {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub config: Vec<AgentConfigEntry>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AgentConfigEntry {
-    pub path: Vec<String>,
-    pub value: serde_json::Value,
+    pub plugins_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<PluginInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<InitialComponentFile>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

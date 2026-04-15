@@ -1135,7 +1135,7 @@ pub struct AgentMetadataForGuests {
     pub agent_id: AgentId,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
-    pub config_vars: BTreeMap<String, String>,
+    pub wasi_config: BTreeMap<String, String>,
     pub status: AgentStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u64,
@@ -1148,7 +1148,7 @@ impl From<AgentMetadata> for AgentMetadataForGuests {
             agent_id: value.agent_id,
             args: vec![],
             env: value.env,
-            config_vars: value.config_vars,
+            wasi_config: value.wasi_config,
             status: value.last_known_status.status,
             component_revision: value.last_known_status.component_revision,
             retry_count: value

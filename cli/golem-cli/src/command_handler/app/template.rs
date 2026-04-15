@@ -1019,7 +1019,7 @@ impl TemplateHandler {
 
 /// Creates a `.claude` → `.agents` symlink in the application directory so that
 /// Claude Code can discover the same skills as Amp/Codex without duplicating files.
-fn create_claude_symlink(application_path: &Path) -> anyhow::Result<()> {
+pub(crate) fn create_claude_symlink(application_path: &Path) -> anyhow::Result<()> {
     let agents_dir = application_path.join(".agents");
     let claude_link = application_path.join(".claude");
 

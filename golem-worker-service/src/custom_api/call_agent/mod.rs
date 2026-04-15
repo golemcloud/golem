@@ -72,7 +72,7 @@ impl CallAgentHandler {
         let invocation_context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
             parent: None,
             env: Default::default(),
-            config_vars: Default::default(),
+            wasi_config: Default::default(),
             tracing: Some(request.invocation_context().into()),
         });
 

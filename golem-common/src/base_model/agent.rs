@@ -16,6 +16,7 @@ use crate::base_model::AgentId;
 use crate::base_model::account::AccountId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
+use crate::base_model::diff::Hash as DiffHash;
 use crate::base_model::environment::EnvironmentId;
 use crate::model::Empty;
 use async_trait::async_trait;
@@ -29,6 +30,39 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
+
+/// Content hash of an agent file. All files with identical content share the same hash.
+#[derive(Copy, Debug, Clone, PartialEq, Eq, std::hash::Hash, Serialize, Deserialize)]
+pub struct AgentFileContentHash(pub DiffHash);
+
+impl std::fmt::Display for AgentFileContentHash {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinarySerializer for AgentFileContentHash {
+    fn serialize<Output: desert_rust::BinaryOutput>(
+        &self,
+        context: &mut desert_rust::SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        let bytes: [u8; 32] = *self.0.as_blake3_hash().as_bytes();
+        desert_rust::BinarySerializer::serialize(&bytes, context)
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinaryDeserializer for AgentFileContentHash {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
+        let bytes = <[u8; 32] as desert_rust::BinaryDeserializer>::deserialize(context)?;
+        Ok(AgentFileContentHash(DiffHash::new(
+            blake3::Hash::from_bytes(bytes),
+        )))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
@@ -167,6 +201,11 @@ pub enum RegistryInvalidationEvent {
         resource_definition_id: crate::base_model::quota::ResourceDefinitionId,
         resource_name: crate::base_model::quota::ResourceName,
     },
+    /// An agent secret was created, updated, or deleted.
+    AgentSecretChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+    },
 }
 
 impl RegistryInvalidationEvent {
@@ -180,6 +219,7 @@ impl RegistryInvalidationEvent {
             Self::SecuritySchemeChanged { event_id, .. } => *event_id,
             Self::RetryPolicyChanged { event_id, .. } => *event_id,
             Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
+            Self::AgentSecretChanged { event_id, .. } => *event_id,
         }
     }
 }

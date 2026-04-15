@@ -79,7 +79,7 @@ use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use include_dir::include_dir;
@@ -155,8 +155,7 @@ impl Services {
 
         let blob_storage = make_blob_storage(&config.blob_storage).await?;
 
-        let initial_component_files =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let initial_agent_files = Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
         let component_object_store = Arc::new(ComponentObjectStore::new(blob_storage));
 
         let component_compilation_service =
@@ -277,7 +276,7 @@ impl Services {
             repos.component_repo,
             component_object_store,
             component_compilation_service.clone(),
-            initial_component_files,
+            initial_agent_files,
             account_usage_service.clone(),
             environment_service.clone(),
             environment_plugin_grant_service.clone(),
@@ -300,18 +299,11 @@ impl Services {
             component_service.clone(),
         ));
 
-        let domain_provisioner = crate::services::domain_registration::provisioner::configured(
-            &config.environment,
-            &config.workspace,
-            &config.domain_provisioner,
-        )
-        .await?;
-
         let domain_registration_service = Arc::new(DomainRegistrationService::new(
             repos.domain_registration_repo.clone(),
             environment_service.clone(),
-            domain_provisioner.clone(),
             registry_change_notifier.clone(),
+            config.domain_registration.clone(),
         ));
 
         let security_scheme_service = Arc::new(SecuritySchemeService::new(
@@ -344,6 +336,7 @@ impl Services {
         let agent_secret_service = Arc::new(AgentSecretService::new(
             repos.agent_secret_repo.clone(),
             environment_service.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let retry_policy_service = Arc::new(RetryPolicyService::new(

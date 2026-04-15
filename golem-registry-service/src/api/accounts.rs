@@ -16,15 +16,15 @@ use super::ApiResult;
 use crate::services::account::AccountService;
 use crate::services::auth::AuthService;
 use crate::services::plan::PlanService;
-use crate::services::plugin_registration::PluginRegistrationService;
+use crate::services::token::TokenService;
 use golem_common::model::Empty;
 use golem_common::model::Page;
 use golem_common::model::account::{
     Account, AccountCreation, AccountId, AccountRevision, AccountSetPlan, AccountSetRoles,
     AccountUpdate,
 };
+use golem_common::model::auth::{Token, TokenCreation, TokenWithSecret};
 use golem_common::model::plan::Plan;
-use golem_common::model::plugin_registration::{PluginRegistrationCreation, PluginRegistrationDto};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::AuthCtx;
@@ -38,8 +38,8 @@ use tracing::Instrument;
 pub struct AccountsApi {
     account_service: Arc<AccountService>,
     plan_service: Arc<PlanService>,
+    token_service: Arc<TokenService>,
     auth_service: Arc<AuthService>,
-    plugin_registration_service: Arc<PluginRegistrationService>,
 }
 
 #[OpenApi(
@@ -51,19 +51,17 @@ impl AccountsApi {
     pub fn new(
         account_service: Arc<AccountService>,
         plan_service: Arc<PlanService>,
+        token_service: Arc<TokenService>,
         auth_service: Arc<AuthService>,
-        plugin_registration_service: Arc<PluginRegistrationService>,
     ) -> Self {
         Self {
             account_service,
             plan_service,
+            token_service,
             auth_service,
-            plugin_registration_service,
         }
     }
 
-    /// Create account
-    ///
     /// Create a new account. The response is the created account data.
     #[oai(path = "/", method = "post", operation_id = "create_account")]
     async fn create_account(
@@ -92,8 +90,6 @@ impl AccountsApi {
         Ok(Json(result))
     }
 
-    /// Get account
-    ///
     /// Retrieve an account for a given Account ID
     #[oai(path = "/:account_id", method = "get", operation_id = "get_account")]
     async fn get_account(
@@ -123,7 +119,7 @@ impl AccountsApi {
         Ok(Json(result))
     }
 
-    /// Get account's plan
+    /// Get an account's plan
     #[oai(
         path = "/:account_id/plan",
         method = "get",
@@ -164,8 +160,12 @@ impl AccountsApi {
     ///
     /// Changing the planId is not allowed and the request will be rejected.
     /// The response is the updated account data.
-    #[oai(path = "/:account_id", method = "put", operation_id = "update_account")]
-    async fn put_account(
+    #[oai(
+        path = "/:account_id",
+        method = "patch",
+        operation_id = "update_account"
+    )]
+    async fn update_account(
         &self,
         account_id: Path<AccountId>,
         data: Json<AccountUpdate>,
@@ -177,14 +177,14 @@ impl AccountsApi {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .put_account_internal(account_id.0, data.0, auth)
+            .update_account_internal(account_id.0, data.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn put_account_internal(
+    async fn update_account_internal(
         &self,
         account_id: AccountId,
         data: AccountUpdate,
@@ -194,7 +194,7 @@ impl AccountsApi {
         Ok(Json(result))
     }
 
-    /// Update roles of an accout
+    /// Set the roles of an account
     #[oai(
         path = "/:account_id/roles",
         method = "put",
@@ -232,7 +232,7 @@ impl AccountsApi {
         Ok(Json(result))
     }
 
-    /// Update plan of an accout
+    /// Set the plan of an account
     #[oai(
         path = "/:account_id/plan",
         method = "put",
@@ -270,8 +270,94 @@ impl AccountsApi {
         Ok(Json(result))
     }
 
-    /// Delete account
+    /// List all tokens of an account.
+    /// The format of each element is the same as the data object in the oauth2 endpoint's response.
+    #[oai(
+        path = "/:account_id/tokens",
+        method = "get",
+        operation_id = "list_account_tokens",
+        tag = ApiTags::Token
+    )]
+    async fn list_account_tokens(
+        &self,
+        account_id: Path<AccountId>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<Page<Token>>> {
+        let record = recorded_http_api_request!(
+            "list_account_tokens",
+            account_id = account_id.0.to_string()
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .list_account_tokens_internal(account_id.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn list_account_tokens_internal(
+        &self,
+        account_id: AccountId,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<Page<Token>>> {
+        let tokens = self
+            .token_service
+            .list_in_account(account_id, &auth)
+            .await?;
+        Ok(Json(Page {
+            values: tokens.into_iter().map(|t| t.without_secret()).collect(),
+        }))
+    }
+
+    #[oai(
+        path = "/:account_id/tokens",
+        method = "post",
+        operation_id = "create_token",
+        tag = ApiTags::Token
+    )]
+
+    /// Create new token
     ///
+    /// Creates a new token with a given expiration date.
+    /// The response not only contains the token data but also the secret which can be passed as a bearer token to the Authorization header to the Golem Cloud REST API.
+    ///
+    // Note that this is the only time this secret is returned!
+    async fn create_token(
+        &self,
+        account_id: Path<AccountId>,
+        request: Json<TokenCreation>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<TokenWithSecret>> {
+        let record =
+            recorded_http_api_request!("create_token", account_id = account_id.0.to_string());
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .create_token_internal(account_id.0, request.0, auth)
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn create_token_internal(
+        &self,
+        account_id: AccountId,
+        request: TokenCreation,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<TokenWithSecret>> {
+        let result = self
+            .token_service
+            .create(account_id, request.expires_at, &auth)
+            .await?;
+
+        Ok(Json(result))
+    }
+
     /// Delete an account.
     #[oai(
         path = "/:account_id",
@@ -307,91 +393,5 @@ impl AccountsApi {
             .delete(account_id, current_revision, &auth)
             .await?;
         Ok(Json(Empty {}))
-    }
-
-    /// Register a new plugin
-    #[oai(
-        path = "/:account_id/plugins",
-        method = "post",
-        operation_id = "create_plugin",
-        tag = ApiTags::Plugin
-    )]
-    async fn create_plugin(
-        &self,
-        account_id: Path<AccountId>,
-        payload: Json<PluginRegistrationCreation>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<PluginRegistrationDto>> {
-        let record = recorded_http_api_request!(
-            "create_plugin",
-            plugin_name = payload.0.name,
-            plugin_version = payload.0.version
-        );
-
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let response = self
-            .create_plugin_internal(account_id.0, payload.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn create_plugin_internal(
-        &self,
-        account_id: AccountId,
-        metadata: PluginRegistrationCreation,
-        auth: AuthCtx,
-    ) -> ApiResult<Json<PluginRegistrationDto>> {
-        let plugin_registration = self
-            .plugin_registration_service
-            .register_plugin(account_id, metadata, &auth)
-            .await?;
-        Ok(Json(plugin_registration.into()))
-    }
-
-    /// Get all plugins registered in account
-    #[oai(
-        path = "/:account_id/plugins",
-        method = "get",
-        operation_id = "get_account_plugins",
-        tag = ApiTags::Plugin
-    )]
-    async fn get_account_plugins(
-        &self,
-        account_id: Path<AccountId>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<PluginRegistrationDto>>> {
-        let record = recorded_http_api_request!(
-            "get_account_plugins",
-            account_id = account_id.0.to_string(),
-        );
-
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let response = self
-            .get_account_plugins_internal(account_id.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn get_account_plugins_internal(
-        &self,
-        account_id: AccountId,
-        auth: AuthCtx,
-    ) -> ApiResult<Json<Page<PluginRegistrationDto>>> {
-        let plugin_registrations = self
-            .plugin_registration_service
-            .list_plugins_in_account(account_id, &auth)
-            .await?;
-        Ok(Json(Page {
-            values: plugin_registrations
-                .into_iter()
-                .map(|pr| pr.into())
-                .collect(),
-        }))
     }
 }

@@ -74,8 +74,8 @@ impl SqliteBlobStorage {
                 component_id,
                 level,
             } => format!("compressed_oplog-{environment_id}-{component_id}-{level}"),
-            BlobStorageNamespace::InitialComponentFiles { environment_id } => {
-                format!("initial_component_files-{environment_id}")
+            BlobStorageNamespace::InitialAgentFiles { environment_id } => {
+                format!("initial_agent_files-{environment_id}")
             }
             BlobStorageNamespace::Components { environment_id } => {
                 format!("components-{environment_id}")
