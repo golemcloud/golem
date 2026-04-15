@@ -21,12 +21,12 @@ use crate::custom_api::{
     SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
-use golem_common::model::agent::{AgentTypeName, HttpMethod};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
 use golem_wasm::analysis::TypeEnum;
 use http::HeaderName;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::ops::Deref;
 
 fn normalize_header_name(header_name: String) -> String {
@@ -215,16 +215,6 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                             })
                         })
                         .collect::<Result<Vec<_>, _>>()?,
-                    allowed_origins: cors_preflight
-                        .allowed_origins
-                        .into_iter()
-                        .map(OriginPattern)
-                        .collect(),
-                    allowed_methods: cors_preflight
-                        .allowed_methods
-                        .into_iter()
-                        .map(HttpMethod::try_from)
-                        .collect::<Result<BTreeSet<_>, _>>()?,
                 }))
             }
             Kind::WebhookCallback(webhook_callback) => {
@@ -273,16 +263,9 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
             },
             RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
                 method_policies,
-                allowed_origins,
-                allowed_methods,
             }) => Self {
                 kind: Some(Kind::CorsPreflight(
                     proto::golem::customapi::route_behaviour::CorsPreflight {
-                        allowed_origins: allowed_origins.into_iter().map(|ao| ao.0).collect(),
-                        allowed_methods: allowed_methods
-                            .into_iter()
-                            .map(proto::golem::component::HttpMethod::from)
-                            .collect(),
                         method_policies: method_policies
                             .into_iter()
                             .map(|method_policy| {

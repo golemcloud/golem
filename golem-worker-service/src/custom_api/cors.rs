@@ -17,9 +17,7 @@ use super::error::RequestHandlerError;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RouteExecutionResult};
 use golem_common::model::agent::HttpMethod;
-use golem_service_base::custom_api::{
-    CorsPreflightBehaviour, CorsPreflightMethodPolicy, OriginPattern,
-};
+use golem_service_base::custom_api::{CorsPreflightBehaviour, CorsPreflightMethodPolicy};
 use http::{HeaderName, Method, StatusCode};
 use std::collections::{BTreeSet, HashMap};
 use tracing::debug;
@@ -50,14 +48,17 @@ pub fn handle_cors_preflight_behaviour(
     };
 
     if !policy
-        .allowed_origins()
+        .allowed_origins
         .iter()
         .any(|pattern| pattern.matches(origin))
     {
         return Ok(forbidden_response(headers));
     }
 
-    if !policy.allows_headers(&requested_headers) {
+    if !requested_headers
+        .iter()
+        .all(|header_name| policy.allowed_headers.contains(header_name))
+    {
         return Ok(forbidden_response(headers));
     }
 
@@ -165,20 +166,10 @@ fn requested_preflight_headers(
 fn requested_method_policy<'a>(
     cors_preflight: &'a CorsPreflightBehaviour,
     requested_method: &Method,
-) -> Result<Option<ResolvedMethodPolicy<'a>>, RequestHandlerError> {
+) -> Result<Option<&'a CorsPreflightMethodPolicy>, RequestHandlerError> {
     for policy in &cors_preflight.method_policies {
         if method_matches(&policy.method, requested_method)? {
-            return Ok(Some(ResolvedMethodPolicy::MethodPolicy(policy)));
-        }
-    }
-
-    if cors_preflight.method_policies.is_empty() {
-        for method in &cors_preflight.allowed_methods {
-            if method_matches(method, requested_method)? {
-                return Ok(Some(ResolvedMethodPolicy::Legacy {
-                    allowed_origins: &cors_preflight.allowed_origins,
-                }));
-            }
+            return Ok(Some(policy));
         }
     }
 
@@ -228,31 +219,6 @@ fn merge_vary_header(headers: &mut HashMap<HeaderName, String>, values: &[&str])
     headers.insert(http::header::VARY, merged.join(", "));
 }
 
-enum ResolvedMethodPolicy<'a> {
-    MethodPolicy(&'a CorsPreflightMethodPolicy),
-    Legacy {
-        allowed_origins: &'a BTreeSet<OriginPattern>,
-    },
-}
-
-impl ResolvedMethodPolicy<'_> {
-    fn allowed_origins(&self) -> &BTreeSet<OriginPattern> {
-        match self {
-            Self::MethodPolicy(policy) => &policy.allowed_origins,
-            Self::Legacy { allowed_origins } => allowed_origins,
-        }
-    }
-
-    fn allows_headers(&self, requested_headers: &BTreeSet<String>) -> bool {
-        match self {
-            Self::MethodPolicy(policy) => requested_headers
-                .iter()
-                .all(|header_name| policy.allowed_headers.contains(header_name)),
-            Self::Legacy { .. } => true,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,7 +227,7 @@ mod tests {
     use golem_common::model::account::AccountId;
     use golem_common::model::environment::EnvironmentId;
     use golem_service_base::custom_api::{
-        CorsOptions, OpenApiSpecBehaviour, PathSegment, RequestBodySchema,
+        CorsOptions, OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema,
     };
     use poem::{Body, Request};
     use std::sync::Arc;
@@ -287,8 +253,6 @@ mod tests {
                     )]),
                     allowed_headers: BTreeSet::from(["content-type".to_string()]),
                 }],
-                allowed_origins: BTreeSet::new(),
-                allowed_methods: BTreeSet::new(),
             },
         )
         .unwrap();
@@ -341,8 +305,6 @@ mod tests {
                     )]),
                     allowed_headers: BTreeSet::from(["content-type".to_string()]),
                 }],
-                allowed_origins: BTreeSet::new(),
-                allowed_methods: BTreeSet::new(),
             },
         )
         .unwrap();
@@ -389,37 +351,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_preflight_policy_accepts_requested_headers_when_method_policies_are_missing() {
-        let request = Request::builder()
-            .method(Method::OPTIONS)
-            .header(http::header::ORIGIN, "https://frontend.example.com")
-            .header(http::header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
-            .header(http::header::ACCESS_CONTROL_REQUEST_HEADERS, "x-legacy")
-            .body(Body::empty());
-        let request = RichRequest::new(request);
-
-        let result = handle_cors_preflight_behaviour(
-            &request,
-            &CorsPreflightBehaviour {
-                method_policies: vec![],
-                allowed_origins: BTreeSet::from([OriginPattern(
-                    "https://frontend.example.com".to_string(),
-                )]),
-                allowed_methods: BTreeSet::from([HttpMethod::Post(Empty {})]),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(result.status, StatusCode::NO_CONTENT);
-        assert_eq!(
-            result
-                .headers
-                .get(&http::header::ACCESS_CONTROL_ALLOW_HEADERS),
-            Some(&"x-legacy".to_string())
-        );
-    }
-
-    #[test]
     fn preflight_uses_method_specific_origins() {
         let request = Request::builder()
             .method(Method::OPTIONS)
@@ -445,14 +376,6 @@ mod tests {
                         allowed_headers: BTreeSet::new(),
                     },
                 ],
-                allowed_origins: BTreeSet::from([
-                    OriginPattern("*".to_string()),
-                    OriginPattern("https://frontend.example.com".to_string()),
-                ]),
-                allowed_methods: BTreeSet::from([
-                    HttpMethod::Get(Empty {}),
-                    HttpMethod::Post(Empty {}),
-                ]),
             },
         )
         .unwrap();

@@ -206,11 +206,6 @@ pub fn add_cors_preflight_http_routes(
         let route_id = *current_route_id;
         *current_route_id = current_route_id.checked_add(1).unwrap();
 
-        let allowed_methods = method_policies.keys().cloned().collect::<BTreeSet<_>>();
-        let allowed_origins = method_policies
-            .values()
-            .flat_map(|policy| policy.allowed_origins.iter().cloned())
-            .collect::<BTreeSet<_>>();
         let method_policies = method_policies
             .into_iter()
             .map(|(method, policy)| CorsPreflightMethodPolicy {
@@ -228,8 +223,6 @@ pub fn add_cors_preflight_http_routes(
             body: RequestBodySchema::Unused,
             behaviour: RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
                 method_policies,
-                allowed_origins,
-                allowed_methods,
             }),
             security: UnboundRouteSecurity::None,
             cors: CorsOptions {
@@ -788,8 +781,6 @@ mod tests {
             panic!("expected preflight route");
         };
 
-        assert_eq!(preflight.allowed_methods.len(), 2);
-        assert_eq!(preflight.allowed_origins.len(), 2);
         assert_eq!(preflight.method_policies.len(), 2);
 
         let get_policy = preflight

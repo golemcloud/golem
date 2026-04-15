@@ -171,18 +171,11 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
                 string_schema.clone(),
             );
 
-            let allowed_methods = if cors_preflight_behaviour.method_policies.is_empty() {
-                cors_preflight_behaviour
-                    .allowed_methods
-                    .iter()
-                    .collect::<Vec<_>>()
-            } else {
-                cors_preflight_behaviour
-                    .method_policies
-                    .iter()
-                    .map(|policy| &policy.method)
-                    .collect::<Vec<_>>()
-            };
+            let allowed_methods: Vec<_> = cors_preflight_behaviour
+                .method_policies
+                .iter()
+                .map(|policy| &policy.method)
+                .collect();
 
             let allowed_methods_enum: Vec<Option<String>> = allowed_methods
                 .into_iter()
