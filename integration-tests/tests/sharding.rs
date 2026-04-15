@@ -44,7 +44,7 @@ mod tests {
     use std::collections::{BTreeMap, HashSet};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
-    use test_r::{flaky, test, test_dep, timeout};
+    use test_r::{flaky, non_flaky, test, test_dep, timeout};
     use tokio::sync::mpsc;
     use tokio::task::{JoinHandle, JoinSet};
     use tracing::{Instrument, error, info};
@@ -1265,7 +1265,7 @@ mod tests {
 
     #[test]
     #[timeout(240000)]
-    #[flaky(3)]
+    #[non_flaky(10)]
     async fn oplog_processor_locality_recovery(
         deps: &EnvBasedTestDependencies,
         _tracing: &Tracing,
@@ -1340,7 +1340,7 @@ mod tests {
 
         // Two-phase setup gate: wait for oplog persistence, then for callbacks
         wait_for_oplog_completions(&user, &worker_id, 4, Duration::from_secs(120), &received).await;
-        let _ = wait_for_invocations(&received, 4, Duration::from_secs(60)).await;
+        let _ = wait_for_invocations(&received, 4, Duration::from_secs(120)).await;
 
         deps.stop_random_worker_executors(2).await;
         // Give the shard manager time to detect executor loss and reassign shards
