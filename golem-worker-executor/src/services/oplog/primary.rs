@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::metrics::oplog::record_oplog_call;
+use crate::metrics::oplog::{record_oplog_call, record_oplog_storage_retry};
 use crate::metrics::storage::{
     STORAGE_TYPE_OPLOG, record_storage_bytes_written, record_storage_objects_deleted,
     record_storage_objects_written,
@@ -20,10 +20,12 @@ use crate::metrics::storage::{
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
 use crate::storage::indexed::{
-    IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+    IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
+    IndexedStorageNamespace,
 };
 use async_lock::Mutex;
 use async_trait::async_trait;
+use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -32,6 +34,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
+use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::cmp::{max, min};
@@ -40,7 +43,46 @@ use std::fmt::{Debug, Formatter};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::error;
+use tracing::{error, warn};
+
+async fn retry_storage_op<T, F, Fut>(
+    retry_config: &RetryConfig,
+    op_name: &str,
+    key: &str,
+    mut op: F,
+) -> T
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
+{
+    let mut attempts = 0u32;
+    loop {
+        attempts += 1;
+        match op().await {
+            Ok(val) => return val,
+            Err(IndexedStorageError::Transient(msg)) => {
+                if let Some(delay) = get_delay(retry_config, attempts) {
+                    record_oplog_storage_retry(op_name);
+                    warn!(
+                        op = op_name,
+                        key = key,
+                        attempt = attempts,
+                        delay_ms = delay.as_millis() as u64,
+                        "Transient indexed storage error, retrying: {msg}"
+                    );
+                    tokio::time::sleep(delay).await;
+                } else {
+                    panic!(
+                        "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: Transient storage error: {msg}"
+                    );
+                }
+            }
+            Err(err) => {
+                panic!("Indexed storage operation '{op_name}' failed for key '{key}': {err}");
+            }
+        }
+    }
+}
 
 /// The primary oplog service implementation, suitable for direct use (top level of a multi-layered setup).
 ///
@@ -54,6 +96,7 @@ pub struct PrimaryOplogService {
     max_operations_before_commit: u64,
     max_operations_before_commit_in_persist_nothing: u64,
     max_payload_size: usize,
+    retry_config: RetryConfig,
     oplogs: OpenOplogs,
 }
 
@@ -64,14 +107,13 @@ impl PrimaryOplogService {
         max_operations_before_commit: u64,
         max_operations_before_commit_in_persist_nothing: u64,
         max_payload_size: usize,
+        retry_config: RetryConfig,
     ) -> Self {
-        let replicas = indexed_storage
-            .with("oplog", "new")
-            .number_of_replicas()
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to get the number of replicas of the indexed storage: {err}")
-            });
+        let replicas = retry_storage_op(&retry_config, "number_of_replicas", "global", || {
+            let is = indexed_storage.clone();
+            async move { is.with("oplog", "new").number_of_replicas().await }
+        })
+        .await;
         Self {
             indexed_storage,
             blob_storage,
@@ -79,6 +121,7 @@ impl PrimaryOplogService {
             max_operations_before_commit,
             max_operations_before_commit_in_persist_nothing,
             max_payload_size,
+            retry_config,
             oplogs: OpenOplogs::new("primary oplog"),
         }
     }
@@ -94,23 +137,25 @@ impl PrimaryOplogService {
     async fn get_last_index_from_storage(
         indexed_storage: &(dyn IndexedStorage + Send + Sync),
         owned_agent_id: &OwnedAgentId,
+        retry_config: &RetryConfig,
     ) -> OplogIndex {
+        let key = Self::oplog_key(&owned_agent_id.agent_id);
+        let agent_id = owned_agent_id.agent_id();
         OplogIndex::from_u64(
-            indexed_storage
-                .with_entity("oplog", "get_last_index", "entry")
-                .last_id(
-                    IndexedStorageNamespace::OpLog {
-                        agent_id: owned_agent_id.agent_id(),
-                    },
-                    &Self::oplog_key(&owned_agent_id.agent_id),
-                )
-                .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to get last oplog index for agent {owned_agent_id} from indexed storage: {err}"
-                    )
-                })
-                .unwrap_or_default(),
+            retry_storage_op(retry_config, "get_last_index", &key, || {
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                };
+                let key = key.clone();
+                async move {
+                    indexed_storage
+                        .with_entity("oplog", "get_last_index", "entry")
+                        .last_id(ns, &key)
+                        .await
+                }
+            })
+            .await
+            .unwrap_or_default(),
         )
     }
 
@@ -195,28 +240,44 @@ impl OplogService for PrimaryOplogService {
         record_oplog_call("create");
 
         let key = Self::oplog_key(&owned_agent_id.agent_id);
-        let already_exists: bool = self
-            .indexed_storage
-            .with("oplog", "create")
-            .exists(IndexedStorageNamespace::OpLog { agent_id: owned_agent_id.agent_id() }, &key)
+        let already_exists: bool = {
+            let is = self.indexed_storage.clone();
+            let agent_id = owned_agent_id.agent_id();
+            let key = key.clone();
+            retry_storage_op(&self.retry_config, "create_exists", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                };
+                let key = key.clone();
+                async move { is.with("oplog", "create").exists(ns, &key).await }
+            })
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to check if oplog exists for worker {owned_agent_id} in indexed storage: {err}")
-            });
+        };
 
         if already_exists {
             panic!("oplog for worker {owned_agent_id} already exists in indexed storage")
         }
 
-        self.indexed_storage
-            .with_entity("oplog", "create", "entry")
-            .append(IndexedStorageNamespace::OpLog { agent_id: owned_agent_id.agent_id() }, &key, 1, &initial_entry)
-            .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to append initial oplog entry for worker {owned_agent_id} in indexed storage: {err}"
-                )
-            });
+        {
+            let is = self.indexed_storage.clone();
+            let agent_id = owned_agent_id.agent_id();
+            let key = key.clone();
+            retry_storage_op(&self.retry_config, "create_append", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                };
+                let key = key.clone();
+                let entry = initial_entry.clone();
+                async move {
+                    is.with_entity("oplog", "create", "entry")
+                        .append(ns, &key, 1, &entry)
+                        .await
+                }
+            })
+            .await;
+        }
 
         self.open(
             owned_agent_id,
@@ -250,6 +311,7 @@ impl OplogService for PrimaryOplogService {
                     self.max_operations_before_commit,
                     self.max_operations_before_commit_in_persist_nothing,
                     self.max_payload_size,
+                    self.retry_config.clone(),
                     key,
                     last_oplog_index,
                     owned_agent_id.clone(),
@@ -261,24 +323,31 @@ impl OplogService for PrimaryOplogService {
 
     async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
         record_oplog_call("get_last_index");
-        Self::get_last_index_from_storage(&*self.indexed_storage, owned_agent_id).await
+        Self::get_last_index_from_storage(
+            &*self.indexed_storage,
+            owned_agent_id,
+            &self.retry_config,
+        )
+        .await
     }
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId) {
         record_oplog_call("delete");
 
-        self.indexed_storage
-            .with("oplog", "delete")
-            .delete(
-                IndexedStorageNamespace::OpLog {
-                    agent_id: owned_agent_id.agent_id(),
-                },
-                &Self::oplog_key(&owned_agent_id.agent_id),
-            )
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to drop oplog for worker {owned_agent_id} in indexed storage: {err}")
-            });
+        {
+            let is = self.indexed_storage.clone();
+            let agent_id = owned_agent_id.agent_id();
+            let key = Self::oplog_key(&owned_agent_id.agent_id);
+            retry_storage_op(&self.retry_config, "delete", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                };
+                let key = key.clone();
+                async move { is.with("oplog", "delete").delete(ns, &key).await }
+            })
+            .await;
+        }
     }
 
     async fn read(
@@ -289,37 +358,48 @@ impl OplogService for PrimaryOplogService {
     ) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("read");
 
-        self.indexed_storage
-            .with_entity("oplog", "read", "entry")
-            .read(
-                IndexedStorageNamespace::OpLog {
-                    agent_id: owned_agent_id.agent_id(),
-                },
-                &Self::oplog_key(&owned_agent_id.agent_id),
-                idx.into(),
-                idx.range_end(n).into(),
-            )
-            .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to read oplog for worker {owned_agent_id} from indexed storage: {err}"
-                )
+        {
+            let is = self.indexed_storage.clone();
+            let agent_id = owned_agent_id.agent_id();
+            let key = Self::oplog_key(&owned_agent_id.agent_id);
+            let start: u64 = idx.into();
+            let end: u64 = idx.range_end(n).into();
+            retry_storage_op(&self.retry_config, "read", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                };
+                let key = key.clone();
+                async move {
+                    is.with_entity("oplog", "read", "entry")
+                        .read(ns, &key, start, end)
+                        .await
+                }
             })
+            .await
             .into_iter()
             .map(|(k, v): (u64, OplogEntry)| (OplogIndex::from_u64(k), v))
             .collect()
+        }
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool {
         record_oplog_call("exists");
 
-        self.indexed_storage
-            .with("oplog", "exists")
-            .exists(IndexedStorageNamespace::OpLog { agent_id: owned_agent_id.agent_id.clone() }, &Self::oplog_key(&owned_agent_id.agent_id))
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to check if oplog exists for worker {owned_agent_id} in indexed storage: {err}")
+        {
+            let is = self.indexed_storage.clone();
+            let agent_id = owned_agent_id.agent_id();
+            let key = Self::oplog_key(&owned_agent_id.agent_id);
+            retry_storage_op(&self.retry_config, "exists", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                };
+                let key = key.clone();
+                async move { is.with("oplog", "exists").exists(ns, &key).await }
             })
+            .await
+        }
     }
 
     async fn scan_for_component(
@@ -331,19 +411,26 @@ impl OplogService for PrimaryOplogService {
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         record_oplog_call("scan");
 
-        let (cursor, keys) = self
-            .indexed_storage
-            .with("oplog", "scan")
-            .scan(
-                IndexedStorageMetaNamespace::Oplog,
-                Some(&Self::key_prefix(component_id)),
-                cursor.cursor,
-                count,
-            )
+        let (cursor, keys) = {
+            let is = self.indexed_storage.clone();
+            let prefix = Self::key_prefix(component_id);
+            let cursor_val = cursor.cursor;
+            retry_storage_op(&self.retry_config, "scan", &prefix, || {
+                let is = is.clone();
+                let prefix = prefix.clone();
+                async move {
+                    is.with("oplog", "scan")
+                        .scan(
+                            IndexedStorageMetaNamespace::Oplog,
+                            Some(&prefix),
+                            cursor_val,
+                            count,
+                        )
+                        .await
+                }
+            })
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to scan for component {component_id} in indexed storage: {err}")
-            });
+        };
 
         Ok((
             ScanCursor { cursor, layer: 0 },
@@ -394,6 +481,7 @@ struct CreateOplogConstructor {
     max_operations_before_commit: u64,
     max_operations_before_commit_in_persist_nothing: u64,
     max_payload_size: usize,
+    retry_config: RetryConfig,
     key: String,
     last_oplog_idx: Option<OplogIndex>,
     owned_agent_id: OwnedAgentId,
@@ -409,6 +497,7 @@ impl CreateOplogConstructor {
         max_operations_before_commit: u64,
         max_operations_before_commit_in_persist_nothing: u64,
         max_payload_size: usize,
+        retry_config: RetryConfig,
         key: String,
         last_oplog_idx: Option<OplogIndex>,
         owned_agent_id: OwnedAgentId,
@@ -421,6 +510,7 @@ impl CreateOplogConstructor {
             max_operations_before_commit,
             max_operations_before_commit_in_persist_nothing,
             max_payload_size,
+            retry_config,
             key,
             last_oplog_idx,
             owned_agent_id,
@@ -438,6 +528,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 PrimaryOplogService::get_last_index_from_storage(
                     &*self.indexed_storage,
                     &self.owned_agent_id,
+                    &self.retry_config,
                 )
                 .await
             }
@@ -449,6 +540,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.max_operations_before_commit,
             self.max_operations_before_commit_in_persist_nothing,
             self.max_payload_size,
+            self.retry_config,
             self.key,
             last_oplog_idx,
             self.owned_agent_id,
@@ -481,6 +573,7 @@ impl PrimaryOplog {
         max_operations_before_commit: u64,
         max_operations_before_commit_in_persist_nothing: u64,
         max_payload_size: usize,
+        retry_config: RetryConfig,
         key: String,
         last_oplog_idx: OplogIndex,
         owned_agent_id: OwnedAgentId,
@@ -495,6 +588,7 @@ impl PrimaryOplog {
                 max_operations_before_commit,
                 max_operations_before_commit_in_persist_nothing,
                 max_payload_size,
+                retry_config,
                 key: key.clone(),
                 buffer: VecDeque::new(),
                 last_committed_idx: last_oplog_idx,
@@ -517,6 +611,7 @@ struct PrimaryOplogState {
     max_operations_before_commit: u64,
     max_operations_before_commit_in_persist_nothing: u64,
     max_payload_size: usize,
+    retry_config: RetryConfig,
     key: String,
     buffer: VecDeque<OplogEntry>,
     last_oplog_idx: OplogIndex,
@@ -540,23 +635,25 @@ impl PrimaryOplogState {
             last_idx = oplog_idx;
         }
         let pairs_ref: Vec<(u64, &OplogEntry)> = pairs.iter().map(|(id, e)| (*id, e)).collect();
-        let bytes_written = self
-            .indexed_storage
-            .with_entity("oplog", "append", "entry")
-            .append_many(
-                IndexedStorageNamespace::OpLog {
-                    agent_id: self.owned_agent_id.agent_id(),
-                },
-                &self.key,
-                &pairs_ref,
-            )
+        let bytes_written = {
+            let is = self.indexed_storage.clone();
+            let agent_id = self.owned_agent_id.agent_id();
+            let key = self.key.clone();
+            retry_storage_op(&self.retry_config, "append", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                };
+                let key = key.clone();
+                let pairs_ref = &pairs_ref;
+                async move {
+                    is.with_entity("oplog", "append", "entry")
+                        .append_many(ns, &key, pairs_ref)
+                        .await
+                }
+            })
             .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to append oplog entry for {} in indexed storage: {err}",
-                    self.key
-                )
-            });
+        };
 
         if entry_count > 0 {
             let account_id = self.account_id.to_string();
@@ -641,24 +738,25 @@ impl PrimaryOplogState {
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         record_oplog_call("read");
 
-        let entries: Vec<(u64, OplogEntry)> = self
-            .indexed_storage
-            .with_entity("oplog", "read", "entry")
-            .read(
-                IndexedStorageNamespace::OpLog {
-                    agent_id: self.owned_agent_id.agent_id(),
-                },
-                &self.key,
-                oplog_index.into(),
-                oplog_index.into(),
-            )
+        let entries: Vec<(u64, OplogEntry)> = {
+            let is = self.indexed_storage.clone();
+            let agent_id = self.owned_agent_id.agent_id();
+            let key = self.key.clone();
+            let idx: u64 = oplog_index.into();
+            retry_storage_op(&self.retry_config, "read", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                };
+                let key = key.clone();
+                async move {
+                    is.with_entity("oplog", "read", "entry")
+                        .read(ns, &key, idx, idx)
+                        .await
+                }
+            })
             .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to read oplog entry {oplog_index} from {} from indexed storage: {err}",
-                    self.key
-                )
-            });
+        };
 
         entries
             .into_iter()
@@ -676,22 +774,29 @@ impl PrimaryOplogState {
         record_oplog_call("read_many");
 
         let last_idx = oplog_index.range_end(n);
-        let mut result: BTreeMap<OplogIndex, OplogEntry> = self
-            .indexed_storage
-            .with_entity("oplog", "read", "entry")
-            .read(
-                IndexedStorageNamespace::OpLog { agent_id: self.owned_agent_id.agent_id() },
-                &self.key,
-                oplog_index.into(),
-                last_idx.into(),
-            )
+        let mut result: BTreeMap<OplogIndex, OplogEntry> = {
+            let is = self.indexed_storage.clone();
+            let agent_id = self.owned_agent_id.agent_id();
+            let key = self.key.clone();
+            let start: u64 = oplog_index.into();
+            let end: u64 = last_idx.into();
+            retry_storage_op(&self.retry_config, "read_many", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                };
+                let key = key.clone();
+                async move {
+                    is.with_entity("oplog", "read", "entry")
+                        .read(ns, &key, start, end)
+                        .await
+                }
+            })
             .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to read {n} oplog entries from index {oplog_index} from {} from indexed storage: {err}",
-                    self.key
-                )
-            }).into_iter().map(|(idx, entry)| (OplogIndex::from_u64(idx), entry)).collect();
+            .into_iter()
+            .map(|(idx, entry)| (OplogIndex::from_u64(idx), entry))
+            .collect()
+        };
 
         if last_idx < self.last_committed_idx {
             // The whole range is already committed, no further action needed
@@ -716,62 +821,63 @@ impl PrimaryOplogState {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         record_oplog_call("drop_prefix");
 
-        self.indexed_storage
-            .with("oplog", "drop_prefix")
-            .drop_prefix(
-                IndexedStorageNamespace::OpLog {
-                    agent_id: self.owned_agent_id.agent_id(),
-                },
-                &self.key,
-                last_dropped_id.into(),
-            )
-            .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to drop prefix for {} in indexed storage: {err}",
-                    self.key
-                )
-            });
+        {
+            let is = self.indexed_storage.clone();
+            let agent_id = self.owned_agent_id.agent_id();
+            let key = self.key.clone();
+            let dropped_id: u64 = last_dropped_id.into();
+            retry_storage_op(&self.retry_config, "drop_prefix", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                };
+                let key = key.clone();
+                async move {
+                    is.with("oplog", "drop_prefix")
+                        .drop_prefix(ns, &key, dropped_id)
+                        .await
+                }
+            })
+            .await;
+        }
     }
 
     async fn length(&self) -> u64 {
         record_oplog_call("length");
 
-        self.indexed_storage
-            .with("oplog", "length")
-            .length(
-                IndexedStorageNamespace::OpLog {
-                    agent_id: self.owned_agent_id.agent_id(),
-                },
-                &self.key,
-            )
-            .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to get the length of oplog for {} from indexed storage: {err}",
-                    self.key
-                )
+        {
+            let is = self.indexed_storage.clone();
+            let agent_id = self.owned_agent_id.agent_id();
+            let key = self.key.clone();
+            retry_storage_op(&self.retry_config, "length", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                };
+                let key = key.clone();
+                async move { is.with("oplog", "length").length(ns, &key).await }
             })
+            .await
+        }
     }
 
     async fn delete(&self) {
         record_oplog_call("delete");
 
-        self.indexed_storage
-            .with("oplog", "delete")
-            .delete(
-                IndexedStorageNamespace::OpLog {
-                    agent_id: self.owned_agent_id.agent_id(),
-                },
-                &self.key,
-            )
-            .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to delete oplog for {} from indexed storage: {err}",
-                    self.key
-                )
-            });
+        {
+            let is = self.indexed_storage.clone();
+            let agent_id = self.owned_agent_id.agent_id();
+            let key = self.key.clone();
+            retry_storage_op(&self.retry_config, "delete", &key, || {
+                let is = is.clone();
+                let ns = IndexedStorageNamespace::OpLog {
+                    agent_id: agent_id.clone(),
+                };
+                let key = key.clone();
+                async move { is.with("oplog", "delete").delete(ns, &key).await }
+            })
+            .await;
+        }
     }
 
     fn switch_persistence_level(&mut self, level: PersistenceLevel) {

@@ -37,6 +37,19 @@ impl RepoError {
     pub fn is_unique_violation(&self) -> bool {
         matches!(self, RepoError::UniqueViolation(_))
     }
+
+    pub fn is_transient(&self) -> bool {
+        match self {
+            RepoError::InternalError(err) => {
+                if let Some(sqlx_err) = err.downcast_ref::<sqlx::Error>() {
+                    matches!(sqlx_err, sqlx::Error::PoolTimedOut | sqlx::Error::Io(_))
+                } else {
+                    false
+                }
+            }
+            RepoError::UniqueViolation(_) => false,
+        }
+    }
 }
 
 error_forwarding!(RepoError);
