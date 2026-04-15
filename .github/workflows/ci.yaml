@@ -465,14 +465,16 @@ jobs:
       - uses: actions/checkout@v5
       - name: Setup MoonBit
         uses: hustcer/setup-moonbit@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Check SDK
         run: moon check --target wasm
         working-directory: sdks/moonbit/golem_sdk
       - name: Test SDK
-        run: moon test
+        run: moon test --target wasm
         working-directory: sdks/moonbit/golem_sdk
       - name: Install tools dependencies
-        run: moon install
+        run: moon update && moon install
         working-directory: sdks/moonbit/golem_sdk_tools
       - name: Check tools
         run: moon check
