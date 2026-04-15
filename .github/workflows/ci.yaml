@@ -471,6 +471,9 @@ jobs:
       - name: Test SDK
         run: moon test
         working-directory: sdks/moonbit/golem_sdk
+      - name: Install tools dependencies
+        run: moon install
+        working-directory: sdks/moonbit/golem_sdk_tools
       - name: Check tools
         run: moon check
         working-directory: sdks/moonbit/golem_sdk_tools
