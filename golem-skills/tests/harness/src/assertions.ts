@@ -8,18 +8,41 @@ const ResultJsonAssertionSchema = z.object({
   contains: z.string().optional(),
 });
 
-export const ExpectSchema = z.object({
-  exit_code: z.number().optional(),
-  stdout_contains: z.string().optional(),
-  stdout_not_contains: z.string().optional(),
-  stdout_matches: z.string().optional(),
-  status: z.number().optional(),
-  body_contains: z.string().optional(),
-  body_matches: z.string().optional(),
-  header_contains: z.record(z.string()).optional(),
-  body_json: z.array(ResultJsonAssertionSchema).optional(),
-  result_json: z.array(ResultJsonAssertionSchema).optional(),
-});
+function validateRegexPattern(pattern: string, field: string, ctx: z.RefinementCtx): void {
+  try {
+    new RegExp(pattern);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [field],
+      message: `invalid JavaScript regular expression: ${message}`,
+    });
+  }
+}
+
+export const ExpectSchema = z
+  .object({
+    exit_code: z.number().optional(),
+    stdout_contains: z.string().optional(),
+    stdout_not_contains: z.string().optional(),
+    stdout_matches: z.string().optional(),
+    status: z.number().optional(),
+    body_contains: z.string().optional(),
+    body_matches: z.string().optional(),
+    header_contains: z.record(z.string()).optional(),
+    body_json: z.array(ResultJsonAssertionSchema).optional(),
+    result_json: z.array(ResultJsonAssertionSchema).optional(),
+  })
+  .superRefine((expect, ctx) => {
+    if (expect.stdout_matches !== undefined) {
+      validateRegexPattern(expect.stdout_matches, "stdout_matches", ctx);
+    }
+
+    if (expect.body_matches !== undefined) {
+      validateRegexPattern(expect.body_matches, "body_matches", ctx);
+    }
+  });
 
 export type ExpectSpec = z.infer<typeof ExpectSchema>;
 

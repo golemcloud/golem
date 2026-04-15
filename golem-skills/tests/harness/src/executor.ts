@@ -1387,10 +1387,7 @@ export class ScenarioExecutor {
       return undefined;
     }
 
-    log.stepAction(
-      stepLabel,
-      `resolved env=${environmentId} deployment=${deploymentRevision}`,
-    );
+    log.stepAction(stepLabel, `resolved env=${environmentId} deployment=${deploymentRevision}`);
     return { environmentId, deploymentRevision };
   }
 

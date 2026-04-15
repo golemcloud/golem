@@ -431,6 +431,11 @@ Available assertion fields:
 | `body_matches` | http | Response body matches regex |
 | `result_json` | invoke_json | JSONPath assertions on parsed JSON result |
 
+Regex-based assertions use JavaScript `RegExp` syntax because the harness evaluates them with
+Node.js. `--dry-run` validates that `stdout_matches` and `body_matches` compile successfully.
+Use JavaScript-compatible patterns such as `\\d+`, `(?:...)`, and `[\\s\\S]*` for cross-line
+matches. Do not use PCRE-only inline flags such as `(?s)`.
+
 `result_json` entries support:
 - `path`: JSONPath expression (e.g., `$.name`, `$.items[0].id`)
 - `equals`: Exact match (deep equality)

@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { evaluate, type AssertionContext, type ExpectSpec } from "../src/assertions.js";
+import {
+  evaluate,
+  ExpectSchema,
+  type AssertionContext,
+  type ExpectSpec,
+} from "../src/assertions.js";
 
 function makeContext(overrides: Partial<AssertionContext> = {}): AssertionContext {
   return {
@@ -71,6 +76,12 @@ describe("Assertion Engine", () => {
         stdout_matches: "version \\d+\\.\\d+\\.\\d+",
       });
       assert.equal(results[0].passed, false);
+    });
+
+    it("rejects invalid JavaScript regex syntax during validation", () => {
+      const parsed = ExpectSchema.safeParse({ stdout_matches: "(?s).*" });
+      assert.equal(parsed.success, false);
+      assert.ok(parsed.error.issues[0]?.message.includes("invalid JavaScript regular expression"));
     });
   });
 
