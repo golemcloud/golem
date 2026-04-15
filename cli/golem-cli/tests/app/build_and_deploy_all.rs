@@ -120,6 +120,9 @@ async fn build_mixed_language_app() {
             GuestLanguage::Scala => {
                 vec!["scala"]
             }
+            GuestLanguage::MoonBit => {
+                vec!["moonbit"]
+            }
         })
         .collect::<Vec<_>>();
 

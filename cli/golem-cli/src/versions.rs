@@ -16,6 +16,7 @@ pub mod sdk {
     pub const RUST: &str = "2.0.0-dev.7";
     pub const TS: &str = "1.0.0-dev.5";
     pub const SCALA: &str = "1.5.0-M8";
+    pub const MOONBIT: &str = "0.5.0-dev.1";
     pub const MANIFEST: &str = "1.5.0";
 
     #[macro_export]
@@ -32,6 +33,7 @@ pub mod build_tool {
     pub const CARGO_MIN: &str = "1.94.0";
     pub const NODE_MIN: &str = "24.11.0";
     pub const NPM_MIN: &str = "11.6.2";
+    pub const MOON_MIN: &str = "0.1.20260409";
 }
 
 // Keep this aligned with the TS component template

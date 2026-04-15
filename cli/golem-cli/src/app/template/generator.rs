@@ -97,6 +97,7 @@ enum Transform {
     TsSdk,
     RustSdk,
     ScalaSdk,
+    MoonBitSdk,
     ApplicationName,
 }
 
@@ -288,6 +289,9 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                     (true, "build.sbt") => vec![Transform::ScalaSdk, Transform::ApplicationName],
                     (true, "plugins.sbt") => vec![Transform::ScalaSdk],
                     (true, "build.properties") => vec![Transform::ScalaSdk],
+                    (true, "moon.mod.json") => {
+                        vec![Transform::MoonBitSdk, Transform::ApplicationName]
+                    }
                     (true, _) => vec![],
                     (false, "golem.yaml") => {
                         vec![
@@ -444,6 +448,12 @@ fn transform(
                 replacements.insert(
                     "GOLEM_SCALA_SBT_VERSION",
                     versions::scala_dep::SBT_VERSION.to_string(),
+                );
+            }
+            Transform::MoonBitSdk => {
+                replacements.insert(
+                    "GOLEM_MOONBIT_SDK_VERSION",
+                    versions::sdk::MOONBIT.to_string(),
                 );
             }
             Transform::TsSdk => {

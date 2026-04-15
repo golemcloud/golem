@@ -1,0 +1,16 @@
+{
+  "name": "app-name",
+  "version": "0.1.0",
+  "readme": "README.md",
+  "repository": "",
+  "license": "",
+  "keywords": [],
+  "description": "",
+  "preferred-target": "wasm",
+  "deps": {
+    "golemcloud/golem_sdk": "GOLEM_MOONBIT_SDK_VERSION"
+  },
+  "bin-deps": {
+    "golemcloud/golem_sdk_tools": "GOLEM_MOONBIT_SDK_VERSION"
+  }
+}

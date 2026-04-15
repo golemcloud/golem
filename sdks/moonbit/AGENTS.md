@@ -468,49 +468,6 @@ The pattern for wrapping any side-effecting call:
   annotations on methods, validated at runtime via `schema_of_tag_with_options`. Nesting inside
   `Option`/`Array`/`Result`/`Tuple` is detected and rejected at runtime with clear error messages.
 
-## What Needs To Be Built
-
-### 1. Custom Data Types — Extended Support
-
-The current `#derive.golem_schema` supports structs (records), simple enums (all-unit), and
-variant enums (with payloads). Still needed:
-- Variant enums with multi-field (record-like) payloads
-- Tuple types
-- Nested custom types across packages (currently must be in the same package)
-
-### 2. Snapshot Support
-
-Implement `save` and `load` for agent state persistence. Requires a serialization format (JSON or
-binary) and the ability to serialize/deserialize the agent struct. Could leverage the same
-schema traits or MoonBit's `ToJson`/`FromJson`.
-
-### 3. Durability Wrapper
-
-A high-level `Durability` struct/module that wraps the low-level durability FFI calls into an
-ergonomic API, similar to Rust's `Durability<SOk, SErr>`.
-
-### 4. Host API Re-exports
-
-Provide ergonomic re-exports of commonly used host APIs (logging, key-value store, blob storage,
-config, LLM, etc.) so users import from `@golem_sdk` instead of deep WIT-generated paths.
-
-### 5. RPC Support
-
-Inter-component communication via the `golem:rpc` types (`WasmRpc`, etc.).
-
-### 6. Template Generalization
-
-Generalize the example directory as a reusable MoonBit Golem template with proper variable
-substitution.
-
-### 7. Golem 1.5 Update
-
-Update WIT definitions and SDK to Golem 1.5 when available.
-
-### 8. Code-First Endpoints & Config
-
-Support for defining REST endpoints and configuration schemas from code.
-
 ## Build & Test Commands
 
 ```sh
