@@ -24,11 +24,12 @@ use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
 use itertools::Itertools;
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::Duration;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, RwLock, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::{Instrument, info, info_span};
 use super::golem_config::QuotaServiceConfig;
+use std::pin::Pin;
 
 type ResourceKey = (EnvironmentId, ResourceName);
 
@@ -180,6 +181,8 @@ impl LeaseInterest {
 
 #[async_trait]
 pub trait QuotaService: Send + Sync {
+    async fn initialize(&mut self, _grpc_port: u16) { }
+
     /// Declare interest in a resource. If a lease already exists it is
     /// reused; otherwise one is acquired from the shard manager.
     ///
@@ -217,6 +220,78 @@ pub trait QuotaService: Send + Sync {
     /// Commit actual usage after a reservation.
     async fn commit(&self, interest: &mut LeaseInterest, reservation: Reservation, used: u64);
 }
+
+pub struct LazyQuotaService {
+    inner: RwLock<Option<Arc<dyn QuotaService>>>,
+    make_inner: Option<Box<dyn FnOnce(u16) -> Pin<Box<dyn Future<Output = Arc<dyn QuotaService>> + Send>> + Send + Sync>>
+}
+
+impl LazyQuotaService {
+    pub fn new<F, Fut>(f: F) -> Self
+    where
+        F: FnOnce(u16) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Arc<dyn QuotaService>> + Send
+    {
+        Self {
+            inner: RwLock::new(None),
+            make_inner: Some(Box::new(|port| Box::pin(async move { f(port).await })))
+        }
+    }
+}
+
+#[async_trait]
+impl QuotaService for LazyQuotaService {
+    async fn initialize(&mut self, port: u16) {
+        let make_inner = self.make_inner.take().expect("LazyQuotaService already initialized");
+        let inner = make_inner(port).await;
+        let _ = self.inner.write().await.insert(inner);
+    }
+
+    async fn acquire(
+        &self,
+        environment_id: EnvironmentId,
+        resource_name: ResourceName,
+        expected_use: u64,
+        previous_credit: i64,
+        previous_credit_at: Option<DateTime<Utc>>,
+    ) -> LeaseInterest {
+        let lock = self.inner.read().await;
+        lock.as_ref()
+            .expect("LazyQuotaService not initialized")
+            .acquire(
+                environment_id,
+                resource_name,
+                expected_use,
+                previous_credit,
+                previous_credit_at
+            )
+            .await
+    }
+
+    async fn try_reserve(&self, interest: &mut LeaseInterest, amount: u64) -> ReserveResult {
+        let lock = self.inner.read().await;
+        lock.as_ref()
+            .expect("LazyQuotaService not initialized")
+            .try_reserve(
+                interest,
+                amount
+            )
+            .await
+    }
+
+    async fn commit(&self, interest: &mut LeaseInterest, reservation: Reservation, used: u64) {
+        let lock = self.inner.read().await;
+        lock.as_ref()
+            .expect("LazyQuotaService not initialized")
+            .commit(
+                interest,
+                reservation,
+                used
+            )
+            .await
+    }
+}
+
 
 /// Outcome sent through the waiter channel.
 #[derive(Debug)]

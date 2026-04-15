@@ -34,7 +34,7 @@ use self::services::direct_invocation_auth::{
     DefaultDirectInvocationAuthService, DirectInvocationAuthService,
 };
 use self::services::environment_state::EnvironmentStateService;
-use self::services::golem_config::EnvironmentStateServiceConfig;
+use self::services::golem_config::{EnvironmentStateServiceConfig, QuotaServiceConfig};
 use self::services::promise::LazyPromiseService;
 use self::services::rdbms::RdbmsService;
 use self::services::resource_limits::ResourceLimits;
@@ -124,6 +124,7 @@ use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::{Instrument, info};
 use wasmtime::component::{HasSelf, Linker};
 use wasmtime::{Config, Engine, WasmBacktraceDetails};
+use self::services::quota::LazyQuotaService;
 
 pub struct RunDetails {
     pub http_port: u16,
@@ -164,15 +165,19 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     fn create_quota_service(
         &self,
         shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
-        golem_config: &GolemConfig,
+        config: &QuotaServiceConfig,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn QuotaService> {
-        crate::services::quota::GrpcQuotaService::new(
-            shard_manager_client,
-            golem_config.grpc.port,
-            golem_config.quota_service.clone(),
-            shutdown_token,
-        )
+        let config = config.clone();
+        Arc::new(LazyQuotaService::new(async move |port| {
+            let service: Arc<dyn QuotaService> = crate::services::quota::GrpcQuotaService::new(
+                shard_manager_client,
+                port,
+                config,
+                shutdown_token,
+            );
+            service
+        }))
     }
 
     fn create_environment_state_service(
@@ -764,8 +769,7 @@ pub async fn create_worker_executor_impl<
     let shard_manager_service =
         bootstrap.create_shard_manager_service(shard_manager_client.clone());
 
-    let quota_service =
-        bootstrap.create_quota_service(shard_manager_client, &golem_config, shutdown_token.clone());
+    let quota_service = bootstrap.create_quota_service(shard_manager_client, &golem_config.quota_service, shutdown_token.clone());
 
     let config = bootstrap.create_wasmtime_config(&golem_config.engine);
     let engine = Arc::new(Engine::new(&config)?);
