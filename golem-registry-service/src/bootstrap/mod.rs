@@ -336,6 +336,7 @@ impl Services {
         let agent_secret_service = Arc::new(AgentSecretService::new(
             repos.agent_secret_repo.clone(),
             environment_service.clone(),
+            registry_change_notifier.clone(),
         ));
 
         let retry_policy_service = Arc::new(RetryPolicyService::new(

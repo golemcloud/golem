@@ -15,6 +15,7 @@
 use crate::repo::registry_change::{
     ChangeEventId, RegistryChangeEvent, RegistryChangeRepo, RequiresNotificationSignal,
 };
+use golem_api_grpc::proto::golem::registry::v1::AgentSecretChangedEvent;
 use golem_api_grpc::proto::golem::registry::v1::{
     AccountTokensInvalidatedEvent, CursorExpiredEvent, DeploymentChangedEvent,
     DomainRegistrationChangedEvent, EnvironmentPermissionsChangedEvent, RegistryInvalidationEvent,
@@ -369,6 +370,15 @@ fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvali
                 environment_id: Some(EnvironmentId(*environment_id).into()),
                 resource_definition_id: Some(ResourceDefinitionId(*resource_definition_id).into()),
                 resource_name: resource_name.clone(),
+            }),
+        ),
+        RegistryChangeEvent::AgentSecretChanged {
+            event_id,
+            environment_id,
+        } => (
+            *event_id,
+            Payload::AgentSecretChanged(AgentSecretChangedEvent {
+                environment_id: Some(EnvironmentId(*environment_id).into()),
             }),
         ),
     };
