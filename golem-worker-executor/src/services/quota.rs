@@ -1404,7 +1404,7 @@ mod tests {
         GrpcQuotaService::new_inner(
             Arc::new(mock),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         )
     }
@@ -1498,8 +1498,8 @@ mod tests {
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
             9093,
-            Duration::from_millis(100),
-            Duration::from_secs(60),
+            Duration::from_millis(200),
+            Duration::from_millis(60),
         );
         let mut interest = svc
             .acquire(test_env_id(), test_resource_name(), 100, 0, None)
@@ -1562,7 +1562,7 @@ mod tests {
                     .with_renew_fn(move |_, _, _| Ok(slow_rate_lease_with_total(rid, 2, 0, 10))),
             ),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         );
         let interest = svc
@@ -1618,7 +1618,7 @@ mod tests {
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         );
 
@@ -1665,7 +1665,7 @@ mod tests {
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         );
 
@@ -1718,7 +1718,7 @@ mod tests {
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         );
 
@@ -1771,7 +1771,7 @@ mod tests {
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         );
 
@@ -1949,7 +1949,7 @@ mod tests {
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         );
 
@@ -2018,7 +2018,7 @@ mod tests {
                     }),
             ),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         );
 
@@ -2065,7 +2065,7 @@ mod tests {
                     .with_renew_fn(move |_, _, _| Ok(slow_rate_lease_with_total(rid, 2, 0, 5))),
             ),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         );
 
@@ -2098,7 +2098,7 @@ mod tests {
                     .with_renew_fn(move |_, _, _| Ok(capacity_lease_with_total(rid, 2, 0, 5))),
             ),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         );
 
@@ -2191,7 +2191,7 @@ mod tests {
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         );
 
@@ -2222,7 +2222,7 @@ mod tests {
         let svc = GrpcQuotaService::new_inner(
             mock.clone(),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         );
 
@@ -2279,7 +2279,7 @@ mod tests {
                     }),
             ),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         );
 
@@ -2319,7 +2319,7 @@ mod tests {
                     }),
             ),
             9093,
-            Duration::from_millis(100),
+            Duration::from_millis(200),
             Duration::from_secs(60),
         );
 
