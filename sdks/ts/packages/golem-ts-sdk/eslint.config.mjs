@@ -26,7 +26,7 @@ export default [
       'no-unreachable': 'error',
       'no-dupe-keys': 'error',
       'no-duplicate-case': 'error',
-      eqeqeq: ['error', 'always'],
+      eqeqeq: ['error', 'smart'],
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-misused-promises': 'error',
     },
