@@ -29,7 +29,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::task::JoinSet;
-use test_r::non_flaky;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);

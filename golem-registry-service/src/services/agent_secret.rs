@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::environment::{EnvironmentError, EnvironmentService};
+use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::agent_secret::AgentSecretRepo;
 use crate::repo::model::agent_secrets::{
     AgentSecretCreationRecord, AgentSecretRepoError, AgentSecretRevisionRecord,
@@ -30,8 +31,6 @@ use golem_service_base::model::auth::{AuthCtx, AuthorizationError, EnvironmentAc
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::sync::Arc;
-use futures::TryFutureExt;
-use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentSecretError {
@@ -82,7 +81,7 @@ impl AgentSecretService {
         Self {
             agent_secret_repo,
             environment_service,
-            registry_change_notifier
+            registry_change_notifier,
         }
     }
 
@@ -132,9 +131,11 @@ impl AgentSecretService {
             ))
             .await
             .map_err(|err| match err {
-                AgentSecretRepoError::SecretViolatesUniqueness => AgentSecretError::AgentSecretForPathAlreadyExists {
+                AgentSecretRepoError::SecretViolatesUniqueness => {
+                    AgentSecretError::AgentSecretForPathAlreadyExists {
                         path: agent_secret_path,
-                    },
+                    }
+                }
                 other => other.into(),
             })?
             .signal_new_events_available(&self.registry_change_notifier)
@@ -187,7 +188,9 @@ impl AgentSecretService {
             .update(AgentSecretRevisionRecord::from_model(agent_secret, audit))
             .await
             .map_err(|err| match err {
-                AgentSecretRepoError::ConcurrentModification => AgentSecretError::ConcurrentModification,
+                AgentSecretRepoError::ConcurrentModification => {
+                    AgentSecretError::ConcurrentModification
+                }
                 other => other.into(),
             })?
             .signal_new_events_available(&self.registry_change_notifier)
@@ -224,7 +227,9 @@ impl AgentSecretService {
             .delete(AgentSecretRevisionRecord::from_model(agent_secret, audit))
             .await
             .map_err(|err| match err {
-                AgentSecretRepoError::ConcurrentModification => AgentSecretError::ConcurrentModification,
+                AgentSecretRepoError::ConcurrentModification => {
+                    AgentSecretError::ConcurrentModification
+                }
                 other => other.into(),
             })?
             .signal_new_events_available(&self.registry_change_notifier)

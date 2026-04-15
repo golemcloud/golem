@@ -144,7 +144,7 @@ impl RegistryChangeEvent {
             Self::SecuritySchemeChanged { event_id, .. } => *event_id,
             Self::RetryPolicyChanged { event_id, .. } => *event_id,
             Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
-            Self::AgentSecretChanged { event_id, .. } => *event_id
+            Self::AgentSecretChanged { event_id, .. } => *event_id,
         }
     }
 }

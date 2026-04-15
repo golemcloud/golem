@@ -15,6 +15,7 @@
 use crate::repo::registry_change::{
     ChangeEventId, RegistryChangeEvent, RegistryChangeRepo, RequiresNotificationSignal,
 };
+use golem_api_grpc::proto::golem::registry::v1::AgentSecretChangedEvent;
 use golem_api_grpc::proto::golem::registry::v1::{
     AccountTokensInvalidatedEvent, CursorExpiredEvent, DeploymentChangedEvent,
     DomainRegistrationChangedEvent, EnvironmentPermissionsChangedEvent, RegistryInvalidationEvent,
@@ -26,7 +27,6 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::ResourceDefinitionId;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast, mpsc};
-use golem_api_grpc::proto::golem::registry::v1::AgentSecretChangedEvent;
 
 /// Manages registry change event broadcasting. Delivery is at-least-once;
 /// subscribers must deduplicate by event_id.

@@ -205,7 +205,7 @@ pub enum RegistryInvalidationEvent {
     AgentSecretChanged {
         event_id: u64,
         environment_id: EnvironmentId,
-    }
+    },
 }
 
 impl RegistryInvalidationEvent {

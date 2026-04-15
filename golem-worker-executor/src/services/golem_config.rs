@@ -1657,7 +1657,11 @@ impl SafeDisplay for QuotaServiceConfig {
         use std::fmt::Write;
         let mut result = String::new();
         let _ = writeln!(&mut result, "renewal interval: {:?}", self.renewal_interval);
-        let _ = writeln!(&mut result, "renewal threshold: {:?}", self.renewal_threshold);
+        let _ = writeln!(
+            &mut result,
+            "renewal threshold: {:?}",
+            self.renewal_threshold
+        );
         let _ = writeln!(
             &mut result,
             "inline wait threshold: {:?}",

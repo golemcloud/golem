@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::golem_config::QuotaServiceConfig;
 use async_trait::async_trait;
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::{
     EnforcementAction, LeaseEpoch, ResourceDefinitionId, ResourceLimit, ResourceName,
@@ -22,14 +23,13 @@ use golem_common::model::quota::{Reservation, ReserveResult};
 use golem_service_base::clients::shard_manager::{BatchRenewalEntry, QuotaError, ShardManager};
 use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
 use itertools::Itertools;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::{Instrument, info, info_span};
-use super::golem_config::QuotaServiceConfig;
-use std::pin::Pin;
 
 type ResourceKey = (EnvironmentId, ResourceName);
 
@@ -181,7 +181,7 @@ impl LeaseInterest {
 
 #[async_trait]
 pub trait QuotaService: Send + Sync {
-    async fn initialize(&self, _grpc_port: u16) { }
+    async fn initialize(&self, _grpc_port: u16) {}
 
     /// Declare interest in a resource. If a lease already exists it is
     /// reused; otherwise one is acquired from the shard manager.
@@ -223,18 +223,29 @@ pub trait QuotaService: Send + Sync {
 
 pub struct LazyQuotaService {
     inner: RwLock<Option<Arc<dyn QuotaService>>>,
-    make_inner: Mutex<Option<Box<dyn FnOnce(u16) -> Pin<Box<dyn Future<Output = Arc<dyn QuotaService>> + Send>> + Send + Sync>>>
+    #[allow(clippy::type_complexity)]
+    make_inner: Mutex<
+        Option<
+            Box<
+                dyn FnOnce(u16) -> Pin<Box<dyn Future<Output = Arc<dyn QuotaService>> + Send>>
+                    + Send
+                    + Sync,
+            >,
+        >,
+    >,
 }
 
 impl LazyQuotaService {
     pub fn new<F, Fut>(f: F) -> Self
     where
         F: FnOnce(u16) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Arc<dyn QuotaService>> + Send
+        Fut: Future<Output = Arc<dyn QuotaService>> + Send,
     {
         Self {
             inner: RwLock::new(None),
-            make_inner: Mutex::new(Some(Box::new(|port| Box::pin(async move { f(port).await }))))
+            make_inner: Mutex::new(Some(Box::new(|port| {
+                Box::pin(async move { f(port).await })
+            }))),
         }
     }
 }
@@ -242,7 +253,12 @@ impl LazyQuotaService {
 #[async_trait]
 impl QuotaService for LazyQuotaService {
     async fn initialize(&self, port: u16) {
-        let make_inner = self.make_inner.lock().await.take().expect("LazyQuotaService already initialized");
+        let make_inner = self
+            .make_inner
+            .lock()
+            .await
+            .take()
+            .expect("LazyQuotaService already initialized");
         let inner = make_inner(port).await;
         let _ = self.inner.write().await.insert(inner);
     }
@@ -263,7 +279,7 @@ impl QuotaService for LazyQuotaService {
                 resource_name,
                 expected_use,
                 previous_credit,
-                previous_credit_at
+                previous_credit_at,
             )
             .await
     }
@@ -272,10 +288,7 @@ impl QuotaService for LazyQuotaService {
         let lock = self.inner.read().await;
         lock.as_ref()
             .expect("LazyQuotaService not initialized")
-            .try_reserve(
-                interest,
-                amount
-            )
+            .try_reserve(interest, amount)
             .await
     }
 
@@ -283,15 +296,10 @@ impl QuotaService for LazyQuotaService {
         let lock = self.inner.read().await;
         lock.as_ref()
             .expect("LazyQuotaService not initialized")
-            .commit(
-                interest,
-                reservation,
-                used
-            )
+            .commit(interest, reservation, used)
             .await
     }
 }
-
 
 /// Outcome sent through the waiter channel.
 #[derive(Debug)]
@@ -432,7 +440,12 @@ impl GrpcQuotaService {
         config: QuotaServiceConfig,
         shutdown_token: CancellationToken,
     ) -> Arc<Self> {
-        let svc = Self::new_inner(client, port, config.renewal_threshold, config.inline_wait_threshold);
+        let svc = Self::new_inner(
+            client,
+            port,
+            config.renewal_threshold,
+            config.inline_wait_threshold,
+        );
         svc.start_renewal_loop(shutdown_token, config.renewal_interval);
         svc
     }
@@ -770,13 +783,17 @@ impl GrpcQuotaService {
             let slot = slot_mutex.inner.lock().await;
             match &slot.lease {
                 TrackedLease::Bounded(b) => {
-                    if (b.expires_at - Utc::now()).to_std().unwrap_or_default() >= self.renewal_threshold {
+                    if (b.expires_at - Utc::now()).to_std().unwrap_or_default()
+                        >= self.renewal_threshold
+                    {
                         continue; // Plenty of time left — skip until closer to expiry.
                     }
                     bounded_to_renew.push((key.clone(), slot_mutex.clone()));
                 }
                 TrackedLease::Unlimited(u) => {
-                    if (u.expires_at - Utc::now()).to_std().unwrap_or_default() >= self.renewal_threshold {
+                    if (u.expires_at - Utc::now()).to_std().unwrap_or_default()
+                        >= self.renewal_threshold
+                    {
                         continue;
                     }
                     unlimited_to_renew.push((key.clone(), slot_mutex.clone()));

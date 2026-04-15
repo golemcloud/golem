@@ -29,6 +29,7 @@ pub mod workerctx;
 test_r::enable!();
 
 use self::durable_host::{DurableWorkerCtx, DurableWorkerCtxView};
+use self::services::HasQuotaService;
 use self::services::agent_webhooks::AgentWebhooksService;
 use self::services::direct_invocation_auth::{
     DefaultDirectInvocationAuthService, DirectInvocationAuthService,
@@ -36,6 +37,7 @@ use self::services::direct_invocation_auth::{
 use self::services::environment_state::EnvironmentStateService;
 use self::services::golem_config::{EnvironmentStateServiceConfig, QuotaServiceConfig};
 use self::services::promise::LazyPromiseService;
+use self::services::quota::LazyQuotaService;
 use self::services::rdbms::RdbmsService;
 use self::services::resource_limits::ResourceLimits;
 use self::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
@@ -124,8 +126,6 @@ use tonic_tracing_opentelemetry::middleware::filters;
 use tracing::{Instrument, info};
 use wasmtime::component::{HasSelf, Linker};
 use wasmtime::{Config, Engine, WasmBacktraceDetails};
-use self::services::quota::LazyQuotaService;
-use self::services::HasQuotaService;
 
 pub struct RunDetails {
     pub http_port: u16,
@@ -770,7 +770,11 @@ pub async fn create_worker_executor_impl<
     let shard_manager_service =
         bootstrap.create_shard_manager_service(shard_manager_client.clone());
 
-    let quota_service = bootstrap.create_quota_service(shard_manager_client, &golem_config.quota_service, shutdown_token.clone());
+    let quota_service = bootstrap.create_quota_service(
+        shard_manager_client,
+        &golem_config.quota_service,
+        shutdown_token.clone(),
+    );
 
     let config = bootstrap.create_wasmtime_config(&golem_config.engine);
     let engine = Arc::new(Engine::new(&config)?);
@@ -1018,7 +1022,10 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
 
     let grpc_port = listener.local_addr()?.port();
 
-    service_dependencies.quota_service().initialize(grpc_port).await;
+    service_dependencies
+        .quota_service()
+        .initialize(grpc_port)
+        .await;
 
     let worker_impl = WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
         service_dependencies,

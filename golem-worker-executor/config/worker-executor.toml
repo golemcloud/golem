@@ -161,6 +161,7 @@ type = "Disabled"
 [quota_service]
 inline_wait_threshold = "1m"
 renewal_interval = "10s"
+renewal_threshold = "20s"
 
 [rdbms.pool]
 acquire_timeout = "3s"
@@ -467,6 +468,7 @@ without_time = false
 # [quota_service]
 # inline_wait_threshold = "1m"
 # renewal_interval = "10s"
+# renewal_threshold = "20s"
 # 
 # [rdbms.pool]
 # acquire_timeout = "3s"
@@ -743,6 +745,7 @@ without_time = false
 # [quota_service]
 # inline_wait_threshold = "1m"
 # renewal_interval = "10s"
+# renewal_threshold = "20s"
 # 
 # [rdbms.pool]
 # acquire_timeout = "3s"
