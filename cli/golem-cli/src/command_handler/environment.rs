@@ -29,7 +29,7 @@ use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::EnvironmentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
 use anyhow::{anyhow, bail};
-use golem_client::api::EnvironmentClient;
+use golem_client::api::{EnvironmentClient, MeClient};
 use golem_client::model::{EnvironmentCreation, EnvironmentPluginGrantWithDetails};
 use golem_common::cache::SimpleCache;
 use golem_common::model::application::ApplicationId;
@@ -78,7 +78,7 @@ impl EnvironmentCommandHandler {
             .ctx
             .golem_clients()
             .await?
-            .environment
+            .me
             .list_visible_environments(None, None, None)
             .await
             .map_service_error()?
@@ -120,7 +120,7 @@ impl EnvironmentCommandHandler {
                         .ctx
                         .golem_clients()
                         .await?
-                        .environment
+                        .me
                         .list_visible_environments(
                             Some(account),
                             Some(&env.application_name.0),
@@ -227,7 +227,7 @@ impl EnvironmentCommandHandler {
                     .ctx
                     .golem_clients()
                     .await?
-                    .environment
+                    .me
                     .list_visible_environments(
                         Some(account_email),
                         Some(&application_name.0),
@@ -439,7 +439,7 @@ impl EnvironmentCommandHandler {
             .ctx
             .golem_clients()
             .await?
-            .environment
+            .me
             .list_visible_environments(None, None, None)
             .await
             .map_service_error()?
@@ -476,7 +476,7 @@ impl EnvironmentCommandHandler {
                     ctx.golem_clients()
                         .await?
                         .environment
-                        .list_environment_plugin_grants(&environment.environment_id.0)
+                        .list_environment_environment_plugin_grants(&environment.environment_id.0)
                         .await
                         .map_service_error()
                         .map_err(Arc::new)

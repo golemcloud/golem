@@ -14,7 +14,7 @@
 
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateSecuritySchemeError,
-    RegistryServiceGetEnvironmentSecuritySchemesError, RegistryServiceGetSecuritySchemeError,
+    RegistryServiceGetSecuritySchemeError, RegistryServiceListEnvironmentSecuritySchemesError,
 };
 use golem_common::model::Empty;
 use golem_common::model::security_scheme::{
@@ -56,7 +56,7 @@ async fn create_and_fetch_security_scheme(deps: &EnvBasedTestDependencies) -> an
     }
 
     {
-        let result = client.get_environment_security_schemes(&env.id.0).await?;
+        let result = client.list_environment_security_schemes(&env.id.0).await?;
         assert_eq!(result.values, vec![security_scheme]);
     }
 
@@ -99,7 +99,7 @@ async fn delete_security_scheme(deps: &EnvBasedTestDependencies) -> anyhow::Resu
     }
 
     {
-        let result = client.get_environment_security_schemes(&env.id.0).await?;
+        let result = client.list_environment_security_schemes(&env.id.0).await?;
         assert!(result.values.is_empty())
     }
 
@@ -175,11 +175,11 @@ async fn other_users_cannot_see_security_scheme(
     }
 
     {
-        let result = client_2.get_environment_security_schemes(&env.id.0).await;
+        let result = client_2.list_environment_security_schemes(&env.id.0).await;
         assert!(matches!(
             result,
             Err(golem_client::Error::Item(
-                RegistryServiceGetEnvironmentSecuritySchemesError::Error404(_)
+                RegistryServiceListEnvironmentSecuritySchemesError::Error404(_)
             ))
         ));
     }

@@ -51,7 +51,7 @@ async fn find_otlp_plugin_grant(
     environment_id: &EnvironmentId,
 ) -> anyhow::Result<EnvironmentPluginGrantId> {
     let grants = client
-        .list_environment_plugin_grants(&environment_id.0)
+        .list_environment_environment_plugin_grants(&environment_id.0)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to list plugin grants: {e}"))?;
 

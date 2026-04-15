@@ -16,7 +16,6 @@ use super::ApiResult;
 use crate::services::auth::AuthService;
 use crate::services::resource_definition::ResourceDefinitionService;
 use golem_common::model::Page;
-use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::poem::NoContentResponse;
 use golem_common::model::quota::{
@@ -100,30 +99,30 @@ impl ResourceDefinitionsApi {
     #[oai(
         path = "/envs/:environment_id/resources",
         method = "get",
-        operation_id = "get_environment_resources",
+        operation_id = "list_environment_resources",
         tag = ApiTags::Environment
     )]
-    async fn get_environment_resources(
+    async fn list_environment_resources(
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<ResourceDefinition>>> {
         let record = recorded_http_api_request!(
-            "get_environment_resources",
+            "list_environment_resources",
             environment_id = environment_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_environment_resources_internal(environment_id.0, auth)
+            .list_environment_resources_internal(environment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_environment_resources_internal(
+    async fn list_environment_resources_internal(
         &self,
         environment_id: EnvironmentId,
         auth: AuthCtx,
@@ -177,92 +176,6 @@ impl ResourceDefinitionsApi {
             .await?;
 
         Ok(Json(result))
-    }
-
-    /// Get all resources in a specific deployment
-    #[oai(
-        path = "/envs/:environment_id/deployments/:deployment_revision/resources",
-        method = "get",
-        operation_id = "get_deployment_resources",
-        tag = ApiTags::Environment,
-        tag = ApiTags::Deployment
-    )]
-    async fn get_deployment_resources(
-        &self,
-        environment_id: Path<EnvironmentId>,
-        deployment_revision: Path<DeploymentRevision>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<ResourceDefinition>>> {
-        let record = recorded_http_api_request!(
-            "get_deployment_resources",
-            environment_id = environment_id.0.to_string(),
-            deployment_revision = deployment_revision.0.to_string(),
-        );
-
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let response = self
-            .get_deployment_resources_internal(environment_id.0, deployment_revision.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn get_deployment_resources_internal(
-        &self,
-        _environment_id: EnvironmentId,
-        _deployment_revision: DeploymentRevision,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<Page<ResourceDefinition>>> {
-        unimplemented!()
-    }
-
-    /// Get resource in a deployment by name
-    #[oai(
-        path = "/envs/:environment_id/deployments/:deployment_revision/resources/:resource_name",
-        method = "get",
-        operation_id = "get_deployment_resource",
-        tag = ApiTags::Environment,
-        tag = ApiTags::Deployment
-    )]
-    async fn get_deployment_resource(
-        &self,
-        environment_id: Path<EnvironmentId>,
-        deployment_revision: Path<DeploymentRevision>,
-        resource_name: Path<ResourceName>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<ResourceDefinition>> {
-        let record = recorded_http_api_request!(
-            "get_deployment_resource",
-            environment_id = environment_id.0.to_string(),
-            deployment_revision = deployment_revision.0.to_string(),
-            resource_name = resource_name.0.to_string()
-        );
-
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let response = self
-            .get_deployment_resource_internal(
-                environment_id.0,
-                deployment_revision.0,
-                resource_name.0,
-                auth,
-            )
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn get_deployment_resource_internal(
-        &self,
-        _environment_id: EnvironmentId,
-        _deployment_revision: DeploymentRevision,
-        _resource_name: ResourceName,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<ResourceDefinition>> {
-        unimplemented!()
     }
 
     /// Get a resource by id

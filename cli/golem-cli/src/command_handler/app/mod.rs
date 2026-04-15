@@ -1585,7 +1585,7 @@ impl AppCommandHandler {
             .await
             .map_err(PostDeployError::PrepareError)?
             .environment
-            .get_deployment_components(&environment_id.0, deployment_revision.into())
+            .list_deployment_components(&environment_id.0, deployment_revision.into())
             .await
             .map_service_error()
             .map_err(PostDeployError::PrepareError)?

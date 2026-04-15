@@ -61,7 +61,7 @@ async fn create_resource_definition(deps: &EnvBasedTestDependencies) -> anyhow::
     }
 
     {
-        let all_environment_resources = client.get_environment_resources(&env.id.0).await?;
+        let all_environment_resources = client.list_environment_resources(&env.id.0).await?;
         assert!(all_environment_resources.values.contains(&result));
     }
 
@@ -212,7 +212,7 @@ async fn delete_resource_definition(deps: &EnvBasedTestDependencies) -> anyhow::
     }
 
     {
-        let all_environment_resources = client.get_environment_resources(&env.id.0).await?;
+        let all_environment_resources = client.list_environment_resources(&env.id.0).await?;
         assert_eq!(all_environment_resources.values, Vec::new());
     }
 
@@ -404,7 +404,7 @@ async fn deployment_creates_resource_defaults(
     })
     .await?;
 
-    let resources = client.get_environment_resources(&env.id.0).await?;
+    let resources = client.list_environment_resources(&env.id.0).await?;
 
     assert!(resources.values.iter().any(|r| r.name == creation.name));
 

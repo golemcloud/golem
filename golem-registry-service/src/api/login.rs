@@ -15,27 +15,22 @@
 use super::ApiResult;
 use super::error::ApiError;
 use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
-use crate::services::token::{TokenError, TokenService};
 use golem_common::base_model::api;
 use golem_common::model::Empty;
-use golem_common::model::auth::{Token, TokenWithSecret};
+use golem_common::model::auth::TokenWithSecret;
 use golem_common::model::login::{
     EncodedOAuth2DeviceflowSession, OAuth2DeviceflowData, OAuth2DeviceflowStart, OAuth2Provider,
     OAuth2WebflowData, OAuth2WebflowStateId,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
-use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct LoginApi {
-    pub login_system: LoginSystem,
-    pub token_service: Arc<TokenService>,
+    login_system: LoginSystem,
 }
 
 #[OpenApi(
@@ -44,11 +39,8 @@ pub struct LoginApi {
     tag = ApiTags::Login
 )]
 impl LoginApi {
-    pub fn new(login_system: LoginSystem, token_service: Arc<TokenService>) -> Self {
-        Self {
-            login_system,
-            token_service,
-        }
+    pub fn new(login_system: LoginSystem) -> Self {
+        Self { login_system }
     }
 
     /// Acquire token with OAuth2 authorization
@@ -91,38 +83,6 @@ impl LoginApi {
             .await?;
 
         Ok(Json(result))
-    }
-
-    /// Get information about a token
-    ///
-    /// Gets information about a token that is selected by the secret key passed in the Authorization header.
-    /// The JSON is the same as the data object in the oauth2 endpoint's response.
-    #[oai(path = "/token", method = "get", operation_id = "current_login_token")]
-    async fn current_token(&self, token: GolemSecurityScheme) -> ApiResult<Json<Token>> {
-        let record = recorded_http_api_request!("current_login_token",);
-        let response = self
-            .current_token_internal(token)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn current_token_internal(&self, token: GolemSecurityScheme) -> ApiResult<Json<Token>> {
-        // This route is a bit special, get the token directly instead of doing the normal auth flow.
-        let token_info = self
-            .token_service
-            .get_by_secret(&token.secret(), &AuthCtx::system())
-            .await
-            .map_err(|err| match err {
-                TokenError::TokenBySecretNotFound => ApiError::unauthorized(
-                    api::error_code::AUTH_UNAUTHORIZED,
-                    "Token not found".to_string(),
-                ),
-                other => other.into(),
-            })?;
-
-        Ok(Json(token_info.without_secret()))
     }
 
     /// Start OAuth2 interactive flow

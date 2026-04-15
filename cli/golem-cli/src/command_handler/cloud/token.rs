@@ -19,7 +19,7 @@ use crate::error::service::AnyhowMapServiceError;
 use crate::log::{LogColorize, log_warn_action};
 use crate::model::text::token::{TokenListView, TokenNewView};
 use chrono::{DateTime, Utc};
-use golem_client::api::TokenClient;
+use golem_client::api::{AccountClient, TokenClient};
 use golem_client::model::TokenCreation;
 use golem_common::model::auth::TokenId;
 use std::sync::Arc;
@@ -45,8 +45,8 @@ impl CloudTokenCommandHandler {
         let clients = self.ctx.golem_clients().await?;
 
         let tokens = clients
-            .token
-            .get_account_tokens(&clients.account_id().0)
+            .account
+            .list_account_tokens(&clients.account_id().0)
             .await
             .map_service_error()?;
 
