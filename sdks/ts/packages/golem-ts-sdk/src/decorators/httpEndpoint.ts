@@ -193,7 +193,7 @@ export function endpoint(opts: EndpointDecoratorOptions) {
     );
 
     const authDetails: AuthDetails | undefined =
-      opts.auth !== undefined ? { required: opts.auth } : undefined;
+      opts.auth != undefined ? { required: opts.auth } : undefined;
 
     const corsOptions: CorsOptions = { allowedPatterns: opts.cors ?? [] };
 
