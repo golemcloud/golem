@@ -86,11 +86,13 @@ impl RedisIndexedStorage {
 
     fn parse_entry_id(id: &str) -> Result<u64, IndexedStorageError> {
         if let Some((id, _)) = id.split_once('-') {
-            id.parse::<u64>()
-                .map_err(|e| IndexedStorageError::Other(format!("Failed to parse {id} as u64: {e}")))
+            id.parse::<u64>().map_err(|e| {
+                IndexedStorageError::Other(format!("Failed to parse {id} as u64: {e}"))
+            })
         } else {
-            id.parse::<u64>()
-                .map_err(|e| IndexedStorageError::Other(format!("Failed to parse {id} as u64: {e}")))
+            id.parse::<u64>().map_err(|e| {
+                IndexedStorageError::Other(format!("Failed to parse {id} as u64: {e}"))
+            })
         }
     }
 

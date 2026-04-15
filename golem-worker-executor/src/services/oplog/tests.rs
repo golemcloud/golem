@@ -21,13 +21,13 @@ use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use assert2::check;
 use golem_common::config::RedisConfig;
-use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue, UntypedElementValue};
 use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{AgentError, LogLevel};
 use golem_common::model::regions::OplogRegion;
+use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::model::{AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId};
 use golem_common::redis::RedisPool;
 use golem_common::tracing::{TracingConfig, init_tracing};
@@ -78,7 +78,15 @@ fn default_execution_status(
 async fn open_add_and_read_back(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
-    let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 1, 100, RetryConfig::default()).await;
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId {
@@ -131,7 +139,15 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
 async fn open_add_and_read_back_many(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
-    let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 1, 100, RetryConfig::default()).await;
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId {
@@ -178,7 +194,15 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
-        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
         CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
@@ -245,7 +269,15 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
-        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
         CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
@@ -304,7 +336,15 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
 async fn entries_with_small_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
-    let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 1, 100, RetryConfig::default()).await;
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId {
@@ -482,7 +522,15 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
 async fn entries_with_large_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
-    let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 1, 100, RetryConfig::default()).await;
+    let oplog_service = PrimaryOplogService::new(
+        indexed_storage,
+        blob_storage,
+        1,
+        1,
+        100,
+        RetryConfig::default(),
+    )
+    .await;
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId {
@@ -709,7 +757,15 @@ async fn multilayer_transfers_entries_after_limit_reached(
 
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
-        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
@@ -841,7 +897,15 @@ async fn read_from_archive_impl(use_blob: bool) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
-        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
@@ -964,7 +1028,15 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
-        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
@@ -1110,7 +1182,15 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let mut primary_oplog_service = Arc::new(
-        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
@@ -1211,8 +1291,15 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     } else if reopen == Reopen::Full {
         drop(oplog);
         primary_oplog_service = Arc::new(
-            PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 1, 100, RetryConfig::default())
-                .await,
+            PrimaryOplogService::new(
+                indexed_storage.clone(),
+                blob_storage.clone(),
+                1,
+                1,
+                100,
+                RetryConfig::default(),
+            )
+            .await,
         );
         oplog_service = Arc::new(MultiLayerOplogService::new(
             primary_oplog_service.clone(),
@@ -1288,8 +1375,15 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     } else if reopen == Reopen::Full {
         drop(oplog);
         primary_oplog_service = Arc::new(
-            PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 1, 100, RetryConfig::default())
-                .await,
+            PrimaryOplogService::new(
+                indexed_storage.clone(),
+                blob_storage.clone(),
+                1,
+                1,
+                100,
+                RetryConfig::default(),
+            )
+            .await,
         );
         oplog_service = Arc::new(MultiLayerOplogService::new(
             primary_oplog_service.clone(),
@@ -1403,7 +1497,15 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
-        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
@@ -1520,7 +1622,15 @@ async fn scheduled_archive_impl(use_blob: bool) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
-        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary_layer: Arc<dyn OplogArchiveService> = if use_blob {
         Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
@@ -1671,7 +1781,15 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
-        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 1, 100, RetryConfig::default()).await,
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
     );
     let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
         CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
@@ -1827,8 +1945,17 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> =
         Arc::new(SqliteIndexedStorage::new(pool).await.unwrap());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
-    let oplog_service =
-        Arc::new(PrimaryOplogService::new(indexed_storage, blob_storage, 100, 100, 100, RetryConfig::default()).await);
+    let oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage,
+            blob_storage,
+            100,
+            100,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
 
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();

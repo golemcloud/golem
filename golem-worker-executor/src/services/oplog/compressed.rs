@@ -23,14 +23,14 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use desert_rust::BinaryCodec;
 use evicting_cache_map::EvictingCacheMap;
+use golem_common::model::RetryConfig;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId; // used in scan_for_component
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
+use golem_common::retries::get_delay;
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_common::model::RetryConfig;
-use golem_common::retries::get_delay;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -63,7 +63,9 @@ where
                     );
                     tokio::time::sleep(delay).await;
                 } else {
-                    panic!("Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: Transient storage error: {msg}");
+                    panic!(
+                        "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: Transient storage error: {msg}"
+                    );
                 }
             }
             Err(err) => {
@@ -120,7 +122,10 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         let key = Self::compressed_oplog_key(&owned_agent_id.agent_id);
         retry_storage_op(&self.retry_config, "compressed_delete", &key, || {
             let is = is.clone();
-            let ns = IndexedStorageNamespace::CompressedOpLog { agent_id: agent_id.clone(), level };
+            let ns = IndexedStorageNamespace::CompressedOpLog {
+                agent_id: agent_id.clone(),
+                level,
+            };
             let key = key.clone();
             async move { is.with("compressed_oplog", "delete").delete(ns, &key).await }
         })
@@ -144,7 +149,10 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         let key = Self::compressed_oplog_key(&owned_agent_id.agent_id);
         retry_storage_op(&self.retry_config, "compressed_exists", &key, || {
             let is = is.clone();
-            let ns = IndexedStorageNamespace::CompressedOpLog { agent_id: agent_id.clone(), level };
+            let ns = IndexedStorageNamespace::CompressedOpLog {
+                agent_id: agent_id.clone(),
+                level,
+            };
             let key = key.clone();
             async move { is.with("compressed_oplog", "exists").exists(ns, &key).await }
         })
@@ -197,16 +205,28 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         let agent_id = owned_agent_id.agent_id();
         let level = self.level;
         OplogIndex::from_u64(
-            retry_storage_op(&self.retry_config, "compressed_get_last_index", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::CompressedOpLog { agent_id: agent_id.clone(), level };
-                let key = key.clone();
-                async move {
-                    is.with_entity("compressed_oplog", "current_oplog_index", "compressed_entry")
+            retry_storage_op(
+                &self.retry_config,
+                "compressed_get_last_index",
+                &key,
+                || {
+                    let is = is.clone();
+                    let ns = IndexedStorageNamespace::CompressedOpLog {
+                        agent_id: agent_id.clone(),
+                        level,
+                    };
+                    let key = key.clone();
+                    async move {
+                        is.with_entity(
+                            "compressed_oplog",
+                            "current_oplog_index",
+                            "compressed_entry",
+                        )
                         .last_id(ns, &key)
                         .await
-                }
-            })
+                    }
+                },
+            )
             .await
             .unwrap_or_default(),
         )
@@ -388,7 +408,10 @@ impl OplogArchive for CompressedOplogArchive {
                 let last_id_val: u64 = last_id.into();
                 retry_storage_op(&self.retry_config, "compressed_append", &key, || {
                     let is = is.clone();
-                    let ns = IndexedStorageNamespace::CompressedOpLog { agent_id: agent_id_clone.clone(), level };
+                    let ns = IndexedStorageNamespace::CompressedOpLog {
+                        agent_id: agent_id_clone.clone(),
+                        level,
+                    };
                     let key = key.clone();
                     let chunk = compressed_chunk.clone();
                     async move {
@@ -410,16 +433,28 @@ impl OplogArchive for CompressedOplogArchive {
         let level = self.level;
         let key = self.key.clone();
         OplogIndex::from_u64(
-            retry_storage_op(&self.retry_config, "compressed_current_oplog_index", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::CompressedOpLog { agent_id: agent_id.clone(), level };
-                let key = key.clone();
-                async move {
-                    is.with_entity("compressed_oplog", "current_oplog_index", "compressed_entry")
+            retry_storage_op(
+                &self.retry_config,
+                "compressed_current_oplog_index",
+                &key,
+                || {
+                    let is = is.clone();
+                    let ns = IndexedStorageNamespace::CompressedOpLog {
+                        agent_id: agent_id.clone(),
+                        level,
+                    };
+                    let key = key.clone();
+                    async move {
+                        is.with_entity(
+                            "compressed_oplog",
+                            "current_oplog_index",
+                            "compressed_entry",
+                        )
                         .last_id(ns, &key)
                         .await
-                }
-            })
+                    }
+                },
+            )
             .await
             .unwrap_or_default(),
         )
@@ -435,7 +470,10 @@ impl OplogArchive for CompressedOplogArchive {
             let dropped_id: u64 = last_dropped_id.into();
             retry_storage_op(&self.retry_config, "compressed_drop_prefix", &key, || {
                 let is = is.clone();
-                let ns = IndexedStorageNamespace::CompressedOpLog { agent_id: agent_id.clone(), level };
+                let ns = IndexedStorageNamespace::CompressedOpLog {
+                    agent_id: agent_id.clone(),
+                    level,
+                };
                 let key = key.clone();
                 async move {
                     is.with("compressed_oplog", "drop_prefix")
@@ -453,7 +491,10 @@ impl OplogArchive for CompressedOplogArchive {
             let key = self.key.clone();
             retry_storage_op(&self.retry_config, "compressed_delete", &key, || {
                 let is = is.clone();
-                let ns = IndexedStorageNamespace::CompressedOpLog { agent_id: agent_id.clone(), level };
+                let ns = IndexedStorageNamespace::CompressedOpLog {
+                    agent_id: agent_id.clone(),
+                    level,
+                };
                 let key = key.clone();
                 async move {
                     is.with("compressed_oplog", "drop_prefix")
@@ -478,11 +519,7 @@ impl OplogArchive for CompressedOplogArchive {
                 level,
             };
             let key = key.clone();
-            async move {
-                is.with("compressed_oplog", "length")
-                    .length(ns, &key)
-                    .await
-            }
+            async move { is.with("compressed_oplog", "length").length(ns, &key).await }
         })
         .await
     }

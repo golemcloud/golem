@@ -25,6 +25,7 @@ use crate::storage::indexed::{
 };
 use async_lock::Mutex;
 use async_trait::async_trait;
+use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -33,6 +34,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
 use golem_common::read_only_lock;
+use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::cmp::{max, min};
@@ -41,8 +43,6 @@ use std::fmt::{Debug, Formatter};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use golem_common::model::RetryConfig;
-use golem_common::retries::get_delay;
 use tracing::{error, warn};
 
 async fn retry_storage_op<T, F, Fut>(
@@ -72,7 +72,9 @@ where
                     );
                     tokio::time::sleep(delay).await;
                 } else {
-                    panic!("Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: Transient storage error: {msg}");
+                    panic!(
+                        "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: Transient storage error: {msg}"
+                    );
                 }
             }
             Err(err) => {
@@ -321,7 +323,12 @@ impl OplogService for PrimaryOplogService {
 
     async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
         record_oplog_call("get_last_index");
-        Self::get_last_index_from_storage(&*self.indexed_storage, owned_agent_id, &self.retry_config).await
+        Self::get_last_index_from_storage(
+            &*self.indexed_storage,
+            owned_agent_id,
+            &self.retry_config,
+        )
+        .await
     }
 
     async fn delete(&self, owned_agent_id: &OwnedAgentId) {

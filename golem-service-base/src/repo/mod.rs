@@ -42,10 +42,7 @@ impl RepoError {
         match self {
             RepoError::InternalError(err) => {
                 if let Some(sqlx_err) = err.downcast_ref::<sqlx::Error>() {
-                    matches!(
-                        sqlx_err,
-                        sqlx::Error::PoolTimedOut | sqlx::Error::Io(_)
-                    )
+                    matches!(sqlx_err, sqlx::Error::PoolTimedOut | sqlx::Error::Io(_))
                 } else {
                     false
                 }

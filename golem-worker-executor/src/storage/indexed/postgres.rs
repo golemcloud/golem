@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor};
+use super::{
+    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+    ScanCursor,
+};
 use crate::services::golem_config::IndexedStoragePostgresConfig;
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -103,7 +106,9 @@ impl PostgresIndexedStorage {
 
     fn to_i64(value: u64, field_name: &'static str) -> Result<i64, IndexedStorageError> {
         i64::try_from(value).map_err(|_| {
-            IndexedStorageError::Other(format!("Postgres indexed storage cannot represent {field_name}={value} as i64"))
+            IndexedStorageError::Other(format!(
+                "Postgres indexed storage cannot represent {field_name}={value} as i64"
+            ))
         })
     }
 
@@ -117,12 +122,7 @@ impl PostgresIndexedStorage {
 
     async fn acquire_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
         match &self.semaphore {
-            Some(sem) => Some(
-                sem.clone()
-                    .acquire_owned()
-                    .await
-                    .expect("semaphore closed"),
-            ),
+            Some(sem) => Some(sem.clone().acquire_owned().await.expect("semaphore closed")),
             None => None,
         }
     }
@@ -227,9 +227,11 @@ impl IndexedStorage for PostgresIndexedStorage {
         let new_cursor = if keys.len() < count as usize {
             0
         } else {
-            cursor
-                .checked_add(count)
-                .ok_or_else(|| IndexedStorageError::Other("Postgres indexed storage scan cursor overflow".to_string()))?
+            cursor.checked_add(count).ok_or_else(|| {
+                IndexedStorageError::Other(
+                    "Postgres indexed storage scan cursor overflow".to_string(),
+                )
+            })?
         };
 
         Ok((new_cursor, keys))

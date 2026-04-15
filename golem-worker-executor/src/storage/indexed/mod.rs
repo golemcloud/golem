@@ -274,7 +274,11 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
             .await
     }
 
-    pub async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> Result<u8, IndexedStorageError> {
+    pub async fn wait_for_replicas(
+        &self,
+        replicas: u8,
+        timeout: Duration,
+    ) -> Result<u8, IndexedStorageError> {
         self.storage
             .wait_for_replicas(self.svc_name, self.api_name, replicas, timeout)
             .await
@@ -447,7 +451,8 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         start_id: u64,
         end_id: u64,
     ) -> Result<Vec<(u64, V)>, IndexedStorageError> {
-        let values = self.storage
+        let values = self
+            .storage
             .read(
                 self.svc_name,
                 self.api_name,
@@ -520,7 +525,10 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             )
             .await?
         {
-            Ok(Some((id, deserialize::<V>(&bytes).map_err(IndexedStorageError::Other)?)))
+            Ok(Some((
+                id,
+                deserialize::<V>(&bytes).map_err(IndexedStorageError::Other)?,
+            )))
         } else {
             Ok(None)
         }
@@ -569,7 +577,10 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             )
             .await?
         {
-            Ok(Some((id, deserialize::<V>(&bytes).map_err(IndexedStorageError::Other)?)))
+            Ok(Some((
+                id,
+                deserialize::<V>(&bytes).map_err(IndexedStorageError::Other)?,
+            )))
         } else {
             Ok(None)
         }
@@ -624,7 +635,10 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             )
             .await?
         {
-            Ok(Some((id, deserialize::<V>(&bytes).map_err(IndexedStorageError::Other)?)))
+            Ok(Some((
+                id,
+                deserialize::<V>(&bytes).map_err(IndexedStorageError::Other)?,
+            )))
         } else {
             Ok(None)
         }

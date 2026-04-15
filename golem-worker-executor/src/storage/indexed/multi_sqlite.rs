@@ -80,10 +80,12 @@ impl MultiSqliteIndexedStorage {
             max_connections,
             foreign_keys,
         };
-        let pool = SqlitePool::configured(&config)
+        let pool = SqlitePool::configured(&config).await.map_err(|e| {
+            IndexedStorageError::Other(format!("Failed to initialize sqlite database: {:?}", e))
+        })?;
+        SqliteIndexedStorage::new(pool)
             .await
-            .map_err(|e| IndexedStorageError::Other(format!("Failed to initialize sqlite database: {:?}", e)))?;
-        SqliteIndexedStorage::new(pool).await.map_err(IndexedStorageError::Other)
+            .map_err(IndexedStorageError::Other)
     }
 
     async fn storage_by_namespace(
@@ -94,7 +96,10 @@ impl MultiSqliteIndexedStorage {
         self.storage_by_db_name(db).await
     }
 
-    async fn storage_by_db_name(&self, db: String) -> Result<SqliteIndexedStorage, IndexedStorageError> {
+    async fn storage_by_db_name(
+        &self,
+        db: String,
+    ) -> Result<SqliteIndexedStorage, IndexedStorageError> {
         let max_connections = self.max_connections;
         let foreign_keys = self.foreign_keys;
         let db_path = self.root_dir.join(db.clone()).to_string_lossy().to_string();
@@ -197,7 +202,9 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
 
         // List all .db files matching the namespace prefix, sorted consistently
         let mut matching_files: Vec<_> = fs::read_dir(&self.root_dir)
-            .map_err(|e| IndexedStorageError::Other(format!("Failed to read root directory: {:?}", e)))?
+            .map_err(|e| {
+                IndexedStorageError::Other(format!("Failed to read root directory: {:?}", e))
+            })?
             .filter_map(|entry| {
                 entry.ok().and_then(|e| {
                     let path = e.path();

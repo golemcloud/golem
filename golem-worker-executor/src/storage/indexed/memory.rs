@@ -190,9 +190,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
             e.insert(value.to_vec());
             Ok(())
         } else {
-            Err(IndexedStorageError::Other(
-                "Key already exists".to_string(),
-            ))
+            Err(IndexedStorageError::Other("Key already exists".to_string()))
         }
     }
 
