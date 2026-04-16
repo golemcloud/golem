@@ -1,0 +1,59 @@
+name: "add-initial-files-basic"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-agent-with-files"
+    prompt: >
+      In the test-app project, do the following:
+
+      1. Create a file at `test-app/data/greeting.txt` containing exactly:
+         Hello from Golem!
+
+      2. Add a new durable agent type called `FileReaderAgent` identified by a single
+         constructor parameter for the instance name.
+
+      3. FileReaderAgent must expose a method called `read-greeting` that takes no arguments,
+         reads the file at `/data/greeting.txt` from the filesystem, and returns its content
+         as a string (trimmed of any trailing whitespace/newline).
+
+      4. In `golem.yaml`, configure the `files` section in the top-level `agents` map under
+         `FileReaderAgent` (note: `agents` is a top-level key in `golem.yaml`, not nested
+         under `components`) to provision the local file:
+         - sourcePath: data/greeting.txt
+         - targetPath: /data/greeting.txt
+         - permissions: readOnly
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      - "golem-add-initial-files"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-golem-yaml-files"
+    shell:
+      command: "cat"
+      args: ["test-app/golem.yaml"]
+    expect:
+      stdout_matches: "[\\s\\S]*files:[\\s\\S]*sourcePath:[\\s\\S]*greeting\\.txt[\\s\\S]*targetPath:[\\s\\S]*/data/greeting\\.txt[\\s\\S]*"
+
+  - id: "verify-source-file"
+    shell:
+      command: "cat"
+      args: ["test-app/data/greeting.txt"]
+    expect:
+      stdout_contains: "Hello from Golem!"
+
+  - id: "invoke-read-greeting"
+    invoke:
+      agent: 'FileReaderAgent("test")'
+      method:
+        rust: "read_greeting"
+        ts: "readGreeting"
+        scala: "readGreeting"
+    expect:
+      stdout_contains: "Hello from Golem!"

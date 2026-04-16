@@ -73,7 +73,7 @@ use golem_service_base::grpc::{
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -248,6 +248,62 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
+    /// Checks whether a create-worker request carries the same parameters that
+    /// an already-persisted worker was created with.  When this returns `true`
+    /// the request is treated as an idempotent duplicate and succeeds without
+    /// error.
+    ///
+    /// The stored `env` includes component-level default environment variables
+    /// that were merged in during the original creation.  The request only
+    /// carries per-worker overrides.  We therefore check that every request env
+    /// var is present in the stored env with the same value — extra entries in
+    /// the stored env are component-level defaults and are expected.
+    ///
+    /// For the `config` entries we compare only the *paths*, because the stored
+    /// representation (`TypedAgentConfigEntry`) uses a different value encoding
+    /// than the request (`AgentConfigEntryDto`).  Path equality is adequate
+    /// because for the same component the same path + JSON value will always be
+    /// parsed into the same typed value.
+    fn is_same_worker_creation_request(
+        existing: &AgentMetadata,
+        request_env: &[(String, String)],
+        request_wasi_config: &BTreeMap<String, String>,
+        request_config: &[AgentConfigEntryDto],
+    ) -> bool {
+        // env — the stored env is request env merged with component defaults.
+        // Verify that every request env var exists in the stored env with the
+        // same value; additional entries are component-level defaults.
+        let existing_env: HashMap<&str, &str> = existing
+            .env
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        for (k, v) in request_env {
+            match existing_env.get(k.as_str()) {
+                Some(existing_v) if *existing_v == v.as_str() => {}
+                _ => return false,
+            }
+        }
+
+        // wasi_config — both are BTreeMap, direct comparison
+        if existing.wasi_config != *request_wasi_config {
+            return false;
+        }
+
+        // config — compare paths (same path + same JSON value always yields
+        // the same TypedAgentConfigEntry for a given component revision)
+        if existing.config.len() != request_config.len() {
+            return false;
+        }
+        for (existing_entry, request_entry) in existing.config.iter().zip(request_config.iter()) {
+            if existing_entry.path != request_entry.path {
+                return false;
+            }
+        }
+
+        true
+    }
+
     async fn create_worker_internal(
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
@@ -259,22 +315,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let existing_worker = self.worker_service().get(&owned_agent_id).await;
-        if existing_worker.is_some() && !request.ignore_already_existing {
-            return Err(WorkerExecutorError::worker_already_exists(
-                owned_agent_id.agent_id(),
-            ));
-        }
-
         let principal = extract_principal(&request.principal);
 
-        let env = request
+        let env: Vec<(String, String)> = request
             .env
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        let wasi_config = request.wasi_config.into_iter().collect();
+        let wasi_config: BTreeMap<String, String> = request.wasi_config.into_iter().collect();
 
         let config = request
             .config
@@ -286,6 +335,25 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "Failed parsing local agent config: {err}"
                 ))
             })?;
+
+        let existing_worker = self.worker_service().get(&owned_agent_id).await;
+        if let Some(existing) = existing_worker {
+            if !request.ignore_already_existing {
+                if !Self::is_same_worker_creation_request(
+                    &existing.initial_worker_metadata,
+                    &env,
+                    &wasi_config,
+                    &config,
+                ) {
+                    return Err(WorkerExecutorError::worker_already_exists(
+                        owned_agent_id.agent_id(),
+                    ));
+                }
+
+                // Worker already exists with matching parameters — treat as idempotent success
+                return Ok(());
+            }
+        }
 
         let invocation_context = from_proto_invocation_context(&request.invocation_context);
 

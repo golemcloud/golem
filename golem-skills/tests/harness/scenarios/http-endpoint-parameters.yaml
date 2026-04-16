@@ -56,13 +56,6 @@ steps:
         - "golem-add-http-endpoint-ts"
       scala:
         - "golem-add-http-endpoint-scala"
-    allowedExtraSkills:
-      rust:
-        - "golem-http-params-rust"
-      ts:
-        - "golem-http-params-ts"
-      scala:
-        - "golem-http-params-scala"
     verify:
       build: true
       deploy: true

@@ -16,7 +16,9 @@ steps:
       with exactly two string fields: `app-mode` and `greeting-prefix`, containing the values
       of the corresponding environment variables.
 
-      In `golem.yaml`, define these environment variables under the agent's `env` section:
+      In `golem.yaml`, define these environment variables in the top-level `agents` map under
+      `ConfigAgent`'s `env` section (note: `agents` is a top-level key in `golem.yaml`, not
+      nested under `components`):
       - `APP_MODE` set to `production`
       - `GREETING_PREFIX` set to `Hello`
 
@@ -42,8 +44,21 @@ steps:
         ts: "getConfig"
         scala: "getConfig"
     expect:
-      result_json:
-        - path: "$.app-mode"
-          equals: "production"
-        - path: "$.greeting-prefix"
-          equals: "Hello"
+      rust:
+        result_json:
+          - path: "$.app_mode"
+            equals: "production"
+          - path: "$.greeting_prefix"
+            equals: "Hello"
+      ts:
+        result_json:
+          - path: "$.appMode"
+            equals: "production"
+          - path: "$.greetingPrefix"
+            equals: "Hello"
+      scala:
+        result_json:
+          - path: "$.appMode"
+            equals: "production"
+          - path: "$.greetingPrefix"
+            equals: "Hello"

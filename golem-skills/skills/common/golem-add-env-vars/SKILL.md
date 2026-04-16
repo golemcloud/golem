@@ -177,6 +177,19 @@ agents:
 
 If a referenced host variable is missing, deployment fails with a clear error listing the missing variables. The substitution engine uses strict mode — all referenced variables must be defined.
 
+## Reading Environment Variables in Agent Code
+
+**Rust and TypeScript** agents use the standard APIs to read environment variables (`std::env::var` in Rust, `process.env` in TypeScript).
+
+**Scala** agents must use `golem.wasi.Environment.getEnvironment()` which returns a `Map[String, String]` of all environment variables via the WASI `wasi:cli/environment@0.2.3` interface. Standard Scala `sys.env` does **not** work inside the WASM runtime. Example:
+
+```scala
+import golem.wasi.Environment
+
+val env = Environment.getEnvironment()
+val appMode = env.getOrElse("APP_MODE", "default")
+```
+
 ## Passing Env Vars to Individual Agent Instances via CLI
 
 When creating an agent instance directly (outside `golem deploy`), you can pass environment variables with the `--env` / `-e` flag:
