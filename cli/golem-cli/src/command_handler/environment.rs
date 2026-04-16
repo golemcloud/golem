@@ -383,7 +383,7 @@ impl EnvironmentCommandHandler {
         let diffable_manifest_options = manifest_options.to_diffable();
         let diffable_current_options = environment.server_environment.to_diffable();
 
-        let Some(_diff) = diffable_manifest_options.diff_with_current(&diffable_current_options)
+        let Some(_diff) = diffable_manifest_options.diff_with_current(&diffable_current_options)?
         else {
             return Ok(false);
         };
@@ -391,7 +391,7 @@ impl EnvironmentCommandHandler {
         let unified_diff = diffable_manifest_options.unified_yaml_diff_with_current(
             &diffable_current_options,
             diff::SerializeMode::ValueIfAvailable,
-        );
+        )?;
 
         log_warn_action("Detected", "environment deployment option changes");
         {
