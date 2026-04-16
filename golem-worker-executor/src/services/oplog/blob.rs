@@ -377,8 +377,7 @@ impl BlobOplogArchive {
 
         let mut collected = Vec::new();
 
-        for (current_idx, entry) in
-            (Into::<u64>::into(*last_idx) - chunk.count + 1..).zip(entries)
+        for (current_idx, entry) in (Into::<u64>::into(*last_idx) - chunk.count + 1..).zip(entries)
         {
             let oplog_index = OplogIndex::from_u64(current_idx);
 
