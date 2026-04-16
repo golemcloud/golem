@@ -24,6 +24,7 @@ mod resource_definition;
 mod ser;
 
 pub use crate::base_model::diff::DIFF_MODEL_VERSION;
+pub use crate::base_model::diff::DiffError;
 pub use agent::*;
 pub use component::*;
 pub use deployment::*;
@@ -42,38 +43,44 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 pub trait Diffable {
     type DiffResult: Serialize;
 
-    fn diff_with_new(&self, new: &Self) -> Option<Self::DiffResult> {
+    fn diff_with_new(&self, new: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         Self::diff(new, self)
     }
 
-    fn diff_with_current(&self, current: &Self) -> Option<Self::DiffResult> {
+    fn diff_with_current(&self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         Self::diff(self, current)
     }
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult>;
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError>;
 
-    fn unified_yaml_diff_with_new(&self, new: &Self, mode: SerializeMode) -> String
+    fn unified_yaml_diff_with_new(&self, new: &Self, mode: SerializeMode) -> Result<String, DiffError>
     where
         Self: Serialize,
     {
         Self::unified_yaml_diff(new, self, mode)
     }
 
-    fn unified_yaml_diff_with_current(&self, current: &Self, mode: SerializeMode) -> String
+    fn unified_yaml_diff_with_current(
+        &self,
+        current: &Self,
+        mode: SerializeMode,
+    ) -> Result<String, DiffError>
     where
         Self: Serialize,
     {
         Self::unified_yaml_diff(self, current, mode)
     }
 
-    fn unified_yaml_diff(new: &Self, current: &Self, mode: SerializeMode) -> String
+    fn unified_yaml_diff(new: &Self, current: &Self, mode: SerializeMode) -> Result<String, DiffError>
     where
         Self: Serialize,
     {
-        unified_diff(
-            to_yaml_with_mode(&current, mode).expect("failed to serialize current"),
-            to_yaml_with_mode(&new, mode).expect("failed to serialize current"),
-        )
+        Ok(unified_diff(
+            to_yaml_with_mode(&current, mode)
+                .map_err(|err| DiffError::serde_yaml("diff.render.serialize current as YAML", err))?,
+            to_yaml_with_mode(&new, mode)
+                .map_err(|err| DiffError::serde_yaml("diff.render.serialize new as YAML", err))?,
+        ))
     }
 }
 
@@ -120,7 +127,7 @@ where
 {
     type DiffResult = BTreeMapDiff<K, V>;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let mut diff = BTreeMap::new();
 
         let keys = new.keys().chain(current.keys()).collect::<BTreeSet<_>>();
@@ -128,7 +135,7 @@ where
         for key in keys {
             match (new.get(key), current.get(key)) {
                 (Some(new), Some(current)) => {
-                    if let Some(value_diff) = new.diff_with_current(current) {
+                    if let Some(value_diff) = new.diff_with_current(current)? {
                         diff.insert(key.clone(), BTreeMapDiffValue::Update(value_diff));
                     }
                 }
@@ -139,12 +146,14 @@ where
                     diff.insert(key.clone(), BTreeMapDiffValue::Delete);
                 }
                 (None, None) => {
-                    unreachable!("key must be present either in new or current");
+                    return Err(DiffError::MapStateInvariantViolation {
+                        phase: "btree map union key lookup",
+                    });
                 }
             }
         }
 
-        if diff.is_empty() { None } else { Some(diff) }
+        Ok(if diff.is_empty() { None } else { Some(diff) })
     }
 }
 
@@ -163,7 +172,7 @@ where
 {
     type DiffResult = BTreeSetDiff<K>;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let mut diff = BTreeMap::new();
 
         let keys = new.iter().chain(current.iter()).collect::<BTreeSet<_>>();
@@ -180,12 +189,14 @@ where
                     diff.insert(key.clone(), BTreeSetDiffValue::Delete);
                 }
                 (false, false) => {
-                    panic!("unreachable");
+                    return Err(DiffError::SetStateInvariantViolation {
+                        phase: "btree set union membership check",
+                    });
                 }
             }
         }
 
-        if diff.is_empty() { None } else { Some(diff) }
+        Ok(if diff.is_empty() { None } else { Some(diff) })
     }
 }
 
@@ -208,7 +219,7 @@ where
 {
     type DiffResult = VecDiff<V>;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let mut diff = Vec::new();
 
         let mut new: VecDeque<(V::OrderingKey, &V)> = new
@@ -217,7 +228,9 @@ where
             .collect::<Vec<_>>()
             .into();
 
-        assert!(new.iter().is_sorted_by_key(|(k, _)| k));
+        if !new.iter().is_sorted_by_key(|(k, _)| k) {
+            return Err(DiffError::VecInputNotSorted { side: "new" });
+        }
 
         let mut current: VecDeque<(V::OrderingKey, &V)> = current
             .iter()
@@ -225,41 +238,67 @@ where
             .collect::<Vec<_>>()
             .into();
 
-        assert!(current.iter().is_sorted_by_key(|(k, _)| k));
+        if !current.iter().is_sorted_by_key(|(k, _)| k) {
+            return Err(DiffError::VecInputNotSorted { side: "current" });
+        }
 
         while !new.is_empty() || !current.is_empty() {
             match (new.front(), current.front()) {
                 (Some((kn, _)), Some((kc, _))) => match kn.cmp(kc) {
                     std::cmp::Ordering::Equal => {
-                        let (kn, n) = new.pop_front().unwrap();
-                        let (_, c) = current.pop_front().unwrap();
+                        let Some((kn, n)) = new.pop_front() else {
+                            return Err(DiffError::VecStateInvariantViolation {
+                                phase: "vec diff equal branch pop from new",
+                            });
+                        };
+                        let Some((_, c)) = current.pop_front() else {
+                            return Err(DiffError::VecStateInvariantViolation {
+                                phase: "vec diff equal branch pop from current",
+                            });
+                        };
 
-                        if let Some(d) = n.diff_with_current(c) {
+                        if let Some(d) = n.diff_with_current(c)? {
                             diff.push(VecDiffValue::Update(kn, d));
                         }
                     }
                     std::cmp::Ordering::Less => {
-                        let (k, _) = new.pop_front().unwrap();
+                        let Some((k, _)) = new.pop_front() else {
+                            return Err(DiffError::VecStateInvariantViolation {
+                                phase: "vec diff less branch pop from new",
+                            });
+                        };
                         diff.push(VecDiffValue::Create(k));
                     }
                     std::cmp::Ordering::Greater => {
-                        let (k, _) = current.pop_front().unwrap();
+                        let Some((k, _)) = current.pop_front() else {
+                            return Err(DiffError::VecStateInvariantViolation {
+                                phase: "vec diff greater branch pop from current",
+                            });
+                        };
                         diff.push(VecDiffValue::Delete(k));
                     }
                 },
                 (Some(_), None) => {
-                    let (k, _) = new.pop_front().unwrap();
+                    let Some((k, _)) = new.pop_front() else {
+                        return Err(DiffError::VecStateInvariantViolation {
+                            phase: "vec diff new-only branch pop from new",
+                        });
+                    };
                     diff.push(VecDiffValue::Create(k));
                 }
                 (None, Some(_)) => {
-                    let (k, _) = current.pop_front().unwrap();
+                    let Some((k, _)) = current.pop_front() else {
+                        return Err(DiffError::VecStateInvariantViolation {
+                            phase: "vec diff current-only branch pop from current",
+                        });
+                    };
                     diff.push(VecDiffValue::Delete(k));
                 }
                 (None, None) => break,
             }
         }
 
-        if diff.is_empty() { None } else { Some(diff) }
+        Ok(if diff.is_empty() { None } else { Some(diff) })
     }
 }
 
@@ -267,12 +306,12 @@ where
 impl Diffable for crate::base_model::json::NormalizedJsonValue {
     type DiffResult = crate::base_model::json::NormalizedJsonValue;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
-        if new != current {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        Ok(if new != current {
             Some(new.clone())
         } else {
             None
-        }
+        })
     }
 }
 
@@ -280,12 +319,12 @@ impl Diffable for crate::base_model::json::NormalizedJsonValue {
 impl Diffable for String {
     type DiffResult = String;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
-        if new != current {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        Ok(if new != current {
             Some(new.clone())
         } else {
             None
-        }
+        })
     }
 }
 
@@ -359,7 +398,7 @@ Bump DIFF_MODEL_VERSION if the model change is breaking; otherwise update expect
 
     fn expected_diff_model_fingerprint(version: u32) -> Option<&'static str> {
         match version {
-            1 => Some("ba98c5062c5db3022d3687ce8c135c2a2326c7711955e3b90d0c8ed63a66af9c"),
+            1 => Some("345656775d9b31832eaf5542869a37df5187d6ff1efc4bb68aa67bfdea1c5f65"),
             _ => None,
         }
     }

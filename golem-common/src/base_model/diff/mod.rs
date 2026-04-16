@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod error;
 pub mod hash;
 
+pub use error::DiffError;
 pub use hash::Hash;
 
 pub const DIFF_MODEL_VERSION: u32 = 1;
