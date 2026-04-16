@@ -247,6 +247,27 @@ impl ErrorHandler {
                 logln("");
                 Ok(())
             }
+            HintError::DiffModelVersionMismatch {
+                expected_cli_diff_model_version,
+                server_diff_model_version,
+            } => {
+                if server_diff_model_version > expected_cli_diff_model_version {
+                    log_error("This server requires a newer CLI diff model version. Please update your CLI.");
+                } else {
+                    log_error("This server requires an older CLI diff model version. Please use an older compatible CLI.");
+                }
+                logln("");
+                logln(format!(
+                    "CLI diff model version: {}",
+                    expected_cli_diff_model_version
+                ));
+                logln(format!(
+                    "Server diff model version: {}",
+                    server_diff_model_version
+                ));
+                logln("");
+                Ok(())
+            }
             HintError::ShowClapHelp(help_target) => {
                 // TODO: we should print to STDERR to match normal help behaviour,
                 //       but 'print_long_help' is hardcoded to use STDOUT.

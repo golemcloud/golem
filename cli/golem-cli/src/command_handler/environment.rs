@@ -15,6 +15,7 @@
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
+use crate::error::HintError;
 use crate::error::HintError::NoApplicationManifestFound;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::AnyhowMapServiceError;
@@ -100,16 +101,35 @@ impl EnvironmentCommandHandler {
         &self,
         mode: EnvironmentResolveMode,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
-        match self.ctx.environment_reference() {
+        let resolved = match self.ctx.environment_reference() {
             Some(environment_reference) => {
                 self.resolve_environment_reference(mode, environment_reference)
                     .await
             }
             None => self.resolve_manifest_environment(mode).await,
-        }
+        }?;
+
+        self.ensure_diff_model_version_compatible(resolved)
     }
 
-    pub async fn resolve_manifest_environment(
+    fn ensure_diff_model_version_compatible(
+        &self,
+        resolved: ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
+        let expected_cli_diff_model_version = diff::DIFF_MODEL_VERSION;
+        let server_diff_model_version = resolved.server_environment.diff_model_version;
+
+        if server_diff_model_version != expected_cli_diff_model_version {
+            bail!(HintError::DiffModelVersionMismatch {
+                expected_cli_diff_model_version,
+                server_diff_model_version,
+            });
+        }
+
+        Ok(resolved)
+    }
+
+    async fn resolve_manifest_environment(
         &self,
         mode: EnvironmentResolveMode,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
@@ -180,7 +200,7 @@ impl EnvironmentCommandHandler {
         }
     }
 
-    pub async fn resolve_environment_reference(
+    async fn resolve_environment_reference(
         &self,
         mode: EnvironmentResolveMode,
         environment_reference: &EnvironmentReference,

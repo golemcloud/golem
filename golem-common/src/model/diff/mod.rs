@@ -24,6 +24,7 @@ mod resource_definition;
 mod ser;
 
 pub use agent::*;
+pub use crate::base_model::diff::DIFF_MODEL_VERSION;
 pub use component::*;
 pub use deployment::*;
 pub use environment::*;
@@ -285,5 +286,140 @@ impl Diffable for String {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DIFF_MODEL_VERSION;
+    use quote::ToTokens;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use test_r::test;
+
+    #[test]
+    fn diff_model_version_matches_diff_module_fingerprint() {
+        let expected = expected_diff_model_fingerprint(DIFF_MODEL_VERSION).unwrap_or_else(|| {
+            panic!(
+                "No expected diff model fingerprint configured for DIFF_MODEL_VERSION={DIFF_MODEL_VERSION}. Add one in expected_diff_model_fingerprint."
+            )
+        });
+
+        let actual = diff_module_fingerprint();
+
+        assert_eq!(
+            actual,
+            expected,
+            "Diff module fingerprint changed for DIFF_MODEL_VERSION={DIFF_MODEL_VERSION}. \
+Bump DIFF_MODEL_VERSION if the model change is breaking; otherwise update expected_diff_model_fingerprint."
+        );
+    }
+
+    fn diff_module_fingerprint() -> String {
+        let mut hasher = blake3::Hasher::new();
+
+        for path in diff_module_source_files() {
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("Failed to read {}: {err}", path.display()));
+
+            let syntax = syn::parse_file(&content)
+                .unwrap_or_else(|err| panic!("Failed to parse {}: {err}", path.display()));
+            let normalized = strip_test_only_items(syntax);
+
+            let relative_path = path
+                .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                .expect("diff source file path should be inside crate root");
+
+            hasher.update(relative_path.to_string_lossy().as_bytes());
+            hasher.update(&[0]);
+            hasher.update(normalized.into_token_stream().to_string().as_bytes());
+            hasher.update(&[0]);
+        }
+
+        hasher.finalize().to_hex().to_string()
+    }
+
+    fn diff_module_source_files() -> Vec<PathBuf> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+
+        for rel_dir in ["src/model/diff", "src/base_model/diff"] {
+            let dir = root.join(rel_dir);
+            let mut dir_files = fs::read_dir(&dir)
+                .unwrap_or_else(|err| panic!("Failed to list {}: {err}", dir.display()))
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+                .collect::<Vec<_>>();
+
+            files.append(&mut dir_files);
+        }
+
+        files.sort();
+        files
+    }
+
+    fn expected_diff_model_fingerprint(version: u32) -> Option<&'static str> {
+        match version {
+            1 => Some("ba98c5062c5db3022d3687ce8c135c2a2326c7711955e3b90d0c8ed63a66af9c"),
+            _ => None,
+        }
+    }
+
+    fn strip_test_only_items(file: syn::File) -> syn::File {
+        let attrs = file
+            .attrs
+            .into_iter()
+            .filter(|attr| !is_cfg_test_attr(attr))
+            .collect();
+
+        let items = file
+            .items
+            .into_iter()
+            .filter(|item| !item_attrs(item).iter().any(is_cfg_test_attr))
+            .collect();
+
+        syn::File {
+            shebang: file.shebang,
+            attrs,
+            items,
+        }
+    }
+
+    fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
+        match item {
+            syn::Item::Const(item) => &item.attrs,
+            syn::Item::Enum(item) => &item.attrs,
+            syn::Item::ExternCrate(item) => &item.attrs,
+            syn::Item::Fn(item) => &item.attrs,
+            syn::Item::ForeignMod(item) => &item.attrs,
+            syn::Item::Impl(item) => &item.attrs,
+            syn::Item::Macro(item) => &item.attrs,
+            syn::Item::Mod(item) => &item.attrs,
+            syn::Item::Static(item) => &item.attrs,
+            syn::Item::Struct(item) => &item.attrs,
+            syn::Item::Trait(item) => &item.attrs,
+            syn::Item::TraitAlias(item) => &item.attrs,
+            syn::Item::Type(item) => &item.attrs,
+            syn::Item::Union(item) => &item.attrs,
+            syn::Item::Use(item) => &item.attrs,
+            _ => &[],
+        }
+    }
+
+    fn is_cfg_test_attr(attr: &syn::Attribute) -> bool {
+        if !attr.path().is_ident("cfg") {
+            return false;
+        }
+
+        let mut found = false;
+
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("test") {
+                found = true;
+            }
+            Ok(())
+        });
+
+        found
     }
 }

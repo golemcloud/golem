@@ -21,6 +21,7 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::ApplicationSummary;
 use golem_common::model::application::{ApplicationId, ApplicationName};
 use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::diff::DIFF_MODEL_VERSION;
 use golem_common::model::diff::Hashable;
 use golem_common::model::diff::{self};
 use golem_common::model::environment::{
@@ -145,6 +146,7 @@ impl TryFrom<EnvironmentExtRevisionRecord> for Environment {
             revision: value.revision.revision_id.try_into()?,
             application_id: ApplicationId(value.application_id),
             name: EnvironmentName(value.revision.name),
+            diff_model_version: DIFF_MODEL_VERSION,
             compatibility_check: value.revision.compatibility_check,
             version_check: value.revision.version_check,
             security_overrides: value.revision.security_overrides,
@@ -283,6 +285,7 @@ impl TryFrom<EnvironmentWithDetailsRecord> for EnvironmentWithDetails {
                 id: EnvironmentId(value.environment_id),
                 revision: value.environment_revision_id.try_into()?,
                 name: EnvironmentName(value.environment_name),
+                diff_model_version: DIFF_MODEL_VERSION,
                 compatibility_check: value.environment_compatibility_check,
                 version_check: value.environment_version_check,
                 security_overrides: value.environment_security_overrides,
