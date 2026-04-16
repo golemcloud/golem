@@ -234,45 +234,69 @@ impl QuotaState {
         debug_assert!(active_count > 0);
         debug_assert!(min_executors > 0);
 
-        fn priority_weighted_demand(reservations: &[PendingReservation]) -> f64 {
+        let total_available = self.total_available_amount();
+
+        // Only consider allocations that are feasible (requested <= total_available_amount). Infeasible
+        // reservations will be rejected by the executors anyway, so there is no point giving the executors
+        // extra allocations for them
+
+        fn feasible_priority_weighted_demand(
+            reservations: &[PendingReservation],
+            total_available: u64,
+        ) -> f64 {
             reservations
                 .iter()
+                .filter(|r| r.amount <= total_available)
                 .map(|r| r.amount as f64 * r.priority.max(0.1))
                 .sum()
         }
 
-        fn total_pending_amount(reservations: &[PendingReservation]) -> u64 {
-            reservations.iter().map(|r| r.amount).sum()
+        fn feasible_pending_amount(
+            reservations: &[PendingReservation],
+            total_available: u64,
+        ) -> u64 {
+            reservations
+                .iter()
+                .filter(|r| r.amount <= total_available)
+                .map(|r| r.amount)
+                .sum()
         }
 
         let pod_lease = self.leases.get(pod);
 
         let pod_score: f64 = pod_lease
-            .map(|l| priority_weighted_demand(&l.pending_reservations))
+            .map(|l| feasible_priority_weighted_demand(&l.pending_reservations, total_available))
             .unwrap_or(0.0);
 
         let pod_pending_amount: u64 = pod_lease
-            .map(|l| total_pending_amount(&l.pending_reservations))
+            .map(|l| feasible_pending_amount(&l.pending_reservations, total_available))
             .unwrap_or(0);
 
-        let total_score: f64 = self
-            .leases
-            .values()
-            .map(|l| priority_weighted_demand(&l.pending_reservations))
-            .sum();
-
-        // even-split baseline — also the floor when there is no demand.
         let baseline = self.remaining / active_count.max(min_executors);
 
-        // proportional share; 0 when there is no demand (total_score=0).
-        let proportional =
-            (self.remaining as f64 * pod_score / total_score.max(f64::MIN_POSITIVE)) as u64;
-
-        // cap at pending_amount * OVERFETCH_FACTOR, but never below
-        // baseline so the cap is always a valid upper bound for clamp.
-        let cap = ((pod_pending_amount as f64 * OVERFETCH_FACTOR) as u64).max(baseline);
-
-        proportional.clamp(baseline, cap).min(self.remaining)
+        if pod_score > 0.0 {
+            let cap = (pod_pending_amount as f64 * OVERFETCH_FACTOR) as u64;
+            // Give the full cap to the highest-priority pod so it can make progress
+            let is_winner = self
+                .leases
+                .iter()
+                .filter(|(p, _)| *p != pod)
+                .all(|(other_pod, l)| {
+                    let other_score = feasible_priority_weighted_demand(&l.pending_reservations, total_available);
+                    match pod_score.total_cmp(&other_score) {
+                        std::cmp::Ordering::Greater => true,
+                        std::cmp::Ordering::Less => false,
+                        std::cmp::Ordering::Equal => pod >= other_pod,
+                    }
+                });
+            if is_winner {
+                cap.min(self.remaining)
+            } else {
+                baseline.min(cap)
+            }
+        } else {
+            baseline
+        }
     }
 
     /// Total capacity for this resource: remaining pool + all outstanding
