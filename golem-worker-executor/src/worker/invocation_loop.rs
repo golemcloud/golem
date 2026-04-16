@@ -187,8 +187,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     /// Create the worker instance and publish an event about it
     async fn create_instance(&self) -> Option<(Instance, Mutex<Store<Ctx>>)> {
+        warn!(
+            agent_id = %self.owned_agent_id.agent_id(),
+            "InnerInvocationLoop.create_instance.start"
+        );
         match RunningWorker::create_instance(self.parent.clone()).await {
             Ok((instance, store)) => {
+                warn!(
+                    agent_id = %self.owned_agent_id.agent_id(),
+                    "InnerInvocationLoop.create_instance.success"
+                );
                 self.parent.events().publish(Event::WorkerLoaded {
                     agent_id: self.owned_agent_id.agent_id(),
                     result: Ok(()),
@@ -196,7 +204,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 Some((instance, store))
             }
             Err(err) => {
-                warn!("Failed to start the worker: {err}");
+                warn!(
+                    agent_id = %self.owned_agent_id.agent_id(),
+                    error = %err,
+                    "InnerInvocationLoop.create_instance.error"
+                );
                 self.parent.events().publish(Event::WorkerLoaded {
                     agent_id: self.owned_agent_id.agent_id(),
                     result: Err(err.clone()),
