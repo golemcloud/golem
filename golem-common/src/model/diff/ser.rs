@@ -61,25 +61,23 @@ pub fn serialize_with_mode<S: Serializer, T: ToSerializableWithMode>(
 pub trait ToSerializableWithModeExt: ToSerializableWithMode {
     fn to_json_with_mode(&self, mode: SerializeMode) -> Result<String, DiffError> {
         with_mode(mode, || {
-            Ok(serde_json::to_string(&self.to_serializable(mode)?)
-                .map_err(|err| DiffError::serde_json("diff.serialize.to_json_with_mode", err))?)
+            serde_json::to_string(&self.to_serializable(mode)?)
+                .map_err(|err| DiffError::serde_json("diff.serialize.to_json_with_mode", err))
         })
     }
 
     fn to_pretty_json_with_mode(&self, mode: SerializeMode) -> Result<String, DiffError> {
         with_mode(mode, || {
-            Ok(
-                serde_json::to_string_pretty(&self.to_serializable(mode)?).map_err(|err| {
+            serde_json::to_string_pretty(&self.to_serializable(mode)?).map_err(|err| {
                     DiffError::serde_json("diff.serialize.to_pretty_json_with_mode", err)
-                })?,
-            )
+                })
         })
     }
 
     fn to_yaml_with_mode(&self, mode: SerializeMode) -> Result<String, DiffError> {
         with_mode(mode, || {
-            Ok(serde_yaml::to_string(&self.to_serializable(mode)?)
-                .map_err(|err| DiffError::serde_yaml("diff.serialize.to_yaml_with_mode", err))?)
+            serde_yaml::to_string(&self.to_serializable(mode)?)
+                .map_err(|err| DiffError::serde_yaml("diff.serialize.to_yaml_with_mode", err))
         })
     }
 }
