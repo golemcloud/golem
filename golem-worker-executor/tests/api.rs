@@ -49,7 +49,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use system_interface::fs::FileIoExt;
-use test_r::{inherit_test_dep, test, timeout};
+use test_r::{inherit_test_dep, non_flaky, test, timeout};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -3490,6 +3490,7 @@ async fn delete_worker_during_invocation(
 #[test]
 #[tracing::instrument]
 #[timeout("120s")]
+#[non_flaky(10)]
 async fn invoking_worker_while_its_getting_deleted_works(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -3509,6 +3510,8 @@ async fn invoking_worker_while_its_getting_deleted_works(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
+    info!(agent_id = %agent_id, worker_id = %worker_id, "delete-race-test.started");
+
     // Spawns a task that repeatedly invokes inc_global_by(1) and checks the counter.
     // Exits when either:
     // - the counter resets (worker was deleted and recreated), or
@@ -3519,7 +3522,10 @@ async fn invoking_worker_while_its_getting_deleted_works(
         let agent_id = agent_id.clone();
         tokio::spawn(async move {
             let mut expected_counter: u64 = 0;
+            let mut iteration: u64 = 0;
             loop {
+                iteration += 1;
+                debug!(iteration, expected_counter, "delete-race-test.inc.start");
                 match executor
                     .invoke_and_await_agent(
                         &component_clone,
@@ -3531,10 +3537,15 @@ async fn invoking_worker_while_its_getting_deleted_works(
                 {
                     Ok(_) => {
                         expected_counter += 1;
+                        debug!(iteration, expected_counter, "delete-race-test.inc.ok");
                     }
-                    Err(e) => break Err(e),
+                    Err(error) => {
+                        info!(iteration, expected_counter, error = %error, "delete-race-test.inc.err");
+                        break Err(error);
+                    }
                 }
 
+                debug!(iteration, expected_counter, "delete-race-test.get.start");
                 match executor
                     .invoke_and_await_agent(
                         &component_clone,
@@ -3546,14 +3557,34 @@ async fn invoking_worker_while_its_getting_deleted_works(
                 {
                     Ok(result) => {
                         let value = result.into_return_value();
-                        if let Some(Value::U64(v)) = value {
-                            if v < expected_counter {
-                                break Ok(());
+                        match value {
+                            Some(Value::U64(v)) => {
+                                debug!(
+                                    iteration,
+                                    expected_counter,
+                                    observed_counter = v,
+                                    "delete-race-test.get.ok"
+                                );
+                                if v < expected_counter {
+                                    info!(
+                                        iteration,
+                                        expected_counter,
+                                        observed_counter = v,
+                                        "delete-race-test.counter.reset"
+                                    );
+                                    break Ok(());
+                                }
+                                expected_counter = v;
                             }
-                            expected_counter = v;
+                            other => {
+                                debug!(iteration, expected_counter, value = ?other, "delete-race-test.get.unexpected-value");
+                            }
                         }
                     }
-                    Err(e) => break Err(e),
+                    Err(error) => {
+                        info!(iteration, expected_counter, error = %error, "delete-race-test.get.err");
+                        break Err(error);
+                    }
                 }
             }
         })
@@ -3566,10 +3597,20 @@ async fn invoking_worker_while_its_getting_deleted_works(
         let worker_id = worker_id.clone();
         let deleting_task_cancel_token = deleting_task_cancel_token.clone();
         tokio::spawn(async move {
+            let mut delete_attempt: u64 = 0;
             loop {
+                delete_attempt += 1;
                 tokio::select! {
-                    _ = deleting_task_cancel_token.cancelled() => { break },
-                    _ = executor.delete_worker(&worker_id) => { }
+                    _ = deleting_task_cancel_token.cancelled() => {
+                        debug!(delete_attempt, "delete-race-test.delete.cancelled");
+                        break
+                    },
+                    result = executor.delete_worker(&worker_id) => {
+                        match result {
+                            Ok(()) => debug!(delete_attempt, "delete-race-test.delete.ok"),
+                            Err(error) => info!(delete_attempt, error = %error, "delete-race-test.delete.err"),
+                        }
+                    }
                 }
             }
         })
@@ -3577,11 +3618,17 @@ async fn invoking_worker_while_its_getting_deleted_works(
 
     let invocation_result = invoking_task.await?;
     deleting_task_cancel_token.cancel();
+    info!(
+        invocation_succeeded = invocation_result.is_ok(),
+        "delete-race-test.invoking-task.finished"
+    );
 
     // Either the counter reset was detected (Ok) or the invocation failed (Err).
     // Both are valid outcomes of invoking while deleting.
     if let Err(e) = invocation_result {
-        info!("Invocation failed during deletion as expected: {e}");
+        info!(error = %e, "delete-race-test.invocation.failed-during-deletion");
+    } else {
+        info!("delete-race-test.invocation.detected-reset");
     }
 
     Ok(())

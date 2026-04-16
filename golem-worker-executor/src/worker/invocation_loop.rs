@@ -326,6 +326,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         self.waiting_for_command.store(true, Ordering::Release);
         self.release_concurrent_agent_permit();
         while let Some(cmd) = self.next_wakeup().await {
+            debug!(agent_id = %self.owned_agent_id.agent_id(), command = ?cmd, "InnerInvocationLoop.run.wakeup");
             // Waking from idle: re-acquire the concurrent-agent permit before
             // processing any commands.
             self.acquire_concurrent_agent_permit().await;
@@ -334,6 +335,11 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 WorkerCommand::Unblock => {
                     loop {
                         if let Some(kind) = self.interrupt_signal.lock().await.take() {
+                            debug!(
+                                agent_id = %self.owned_agent_id.agent_id(),
+                                interrupt_kind = ?kind,
+                                "InnerInvocationLoop.run.interrupt_received"
+                            );
                             break self.interrupt(kind).await;
                         }
 
@@ -442,6 +448,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         } else {
             self.receiver.recv().await
         };
+
+        if let Some(cmd) = &wakeup {
+            debug!(agent_id = %self.owned_agent_id.agent_id(), command = ?cmd, "InnerInvocationLoop.next_wakeup");
+        } else {
+            debug!(agent_id = %self.owned_agent_id.agent_id(), "InnerInvocationLoop.next_wakeup.receiver_closed");
+        }
 
         self.idle_snapshot_task = None;
         wakeup
