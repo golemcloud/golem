@@ -35,6 +35,7 @@ pub enum ApiTags {
     HealthCheck,
     /// The login endpoints are implementing an OAuth2 flow.
     Login,
+    Me,
     Plugin,
     Reports,
     RetryPolicies,

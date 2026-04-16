@@ -26,7 +26,9 @@ use colored::control::SHOULD_COLORIZE;
 pub use comfy_table::Table as ComfyTable;
 use comfy_table::{Cell, CellAlignment, ColumnConstraint, ContentArrangement};
 use golem_common::model::AgentStatus;
-use golem_common::model::component::{InitialComponentFile, InstalledPlugin};
+use golem_common::model::component::{InitialAgentFile, InstalledPlugin};
+use golem_common::model::worker::TypedAgentConfigEntry;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use itertools::Itertools;
 use regex::Regex;
 use serde::Serialize;
@@ -335,7 +337,7 @@ pub fn format_exports(exports: &[String]) -> String {
     exports.iter().map(|e| format_export(e.as_str())).join("\n")
 }
 
-pub fn format_files(files: &[InitialComponentFile]) -> String {
+pub fn format_files(files: &[InitialAgentFile]) -> String {
     files
         .iter()
         .map(|file| {
@@ -386,6 +388,27 @@ pub fn format_env(show_sensitive: bool, env: &BTreeMap<String, String>) -> Strin
             } else {
                 format!("{}={}", k, v.log_color_highlight())
             }
+        })
+        .join("\n")
+}
+
+pub fn format_wasi_config(vars: &BTreeMap<String, String>) -> String {
+    vars.iter()
+        .map(|(k, v)| format!("{}={}", k, v.log_color_highlight()))
+        .join("\n")
+}
+
+pub fn format_typed_config(config: &[TypedAgentConfigEntry]) -> String {
+    config
+        .iter()
+        .map(|entry| {
+            let key = entry.path.join(".");
+            let value = entry
+                .value
+                .to_json_value()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|_| "<invalid>".to_string());
+            format!("{}={}", key.log_color_highlight(), value)
         })
         .join("\n")
 }

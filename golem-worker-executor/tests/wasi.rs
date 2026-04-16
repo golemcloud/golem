@@ -20,8 +20,8 @@ use axum::{BoxError, Router};
 use bytes::Bytes;
 use futures::stream;
 use golem_common::agent_id;
-use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
-use golem_common::model::worker::{FlatComponentFileSystemNode, FlatComponentFileSystemNodeKind};
+use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
+use golem_common::model::worker::{AgentFileSystemNode, AgentFileSystemNodeKind};
 use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_test_framework::dsl::{TestDsl, drain_connection, stderr_events, stdout_events};
 use golem_test_framework::model::IFSEntry;
@@ -269,7 +269,10 @@ async fn file_write_read_delete(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("RUST_BACKTRACE".to_string(), "full".to_string())])
+        .with_env(
+            "FileSystem",
+            vec![("RUST_BACKTRACE".to_string(), "full".to_string())],
+        )
         .store()
         .await?;
     let agent_id = agent_id!("FileSystem", "file-write-read-delete-1");
@@ -318,18 +321,21 @@ async fn initial_file_read_write(
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
-        .with_files(&[
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadOnly,
-            },
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadWrite,
-            },
-        ])
+        .with_files(
+            "FileReadWrite",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
         .store()
         .await?;
 
@@ -384,23 +390,26 @@ async fn initial_file_listing_through_api(
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
-        .with_files(&[
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadOnly,
-            },
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadWrite,
-            },
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: ComponentFilePath::from_abs_str("/baz.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadWrite,
-            },
-        ])
+        .with_files(
+            "FileReadWrite",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
         .store()
         .await?;
 
@@ -411,7 +420,7 @@ async fn initial_file_listing_through_api(
 
     let mut result = result
         .into_iter()
-        .map(|e| FlatComponentFileSystemNode {
+        .map(|e| AgentFileSystemNode {
             last_modified: 0,
             ..e
         })
@@ -422,25 +431,25 @@ async fn initial_file_listing_through_api(
     assert_eq!(
         result,
         vec![
-            FlatComponentFileSystemNode {
+            AgentFileSystemNode {
                 name: "bar".to_string(),
                 last_modified: 0,
-                kind: FlatComponentFileSystemNodeKind::Directory,
+                kind: AgentFileSystemNodeKind::Directory,
                 permissions: None,
                 size: None
             },
-            FlatComponentFileSystemNode {
+            AgentFileSystemNode {
                 name: "baz.txt".to_string(),
                 last_modified: 0,
-                kind: FlatComponentFileSystemNodeKind::File,
-                permissions: Some(ComponentFilePermissions::ReadWrite),
+                kind: AgentFileSystemNodeKind::File,
+                permissions: Some(AgentFilePermissions::ReadWrite),
                 size: Some(4),
             },
-            FlatComponentFileSystemNode {
+            AgentFileSystemNode {
                 name: "foo.txt".to_string(),
                 last_modified: 0,
-                kind: FlatComponentFileSystemNodeKind::File,
-                permissions: Some(ComponentFilePermissions::ReadOnly),
+                kind: AgentFileSystemNodeKind::File,
+                permissions: Some(AgentFilePermissions::ReadOnly),
                 size: Some(4)
             },
         ]
@@ -450,7 +459,7 @@ async fn initial_file_listing_through_api(
 
     let mut result = result
         .into_iter()
-        .map(|e| FlatComponentFileSystemNode {
+        .map(|e| AgentFileSystemNode {
             last_modified: 0,
             ..e
         })
@@ -460,11 +469,11 @@ async fn initial_file_listing_through_api(
 
     assert_eq!(
         result,
-        vec![FlatComponentFileSystemNode {
+        vec![AgentFileSystemNode {
             name: "baz.txt".to_string(),
             last_modified: 0,
-            kind: FlatComponentFileSystemNodeKind::File,
-            permissions: Some(ComponentFilePermissions::ReadWrite),
+            kind: AgentFileSystemNodeKind::File,
+            permissions: Some(AgentFilePermissions::ReadWrite),
             size: Some(4),
         },]
     );
@@ -475,7 +484,7 @@ async fn initial_file_listing_through_api(
 
     let mut result = result
         .into_iter()
-        .map(|e| FlatComponentFileSystemNode {
+        .map(|e| AgentFileSystemNode {
             last_modified: 0,
             ..e
         })
@@ -485,11 +494,11 @@ async fn initial_file_listing_through_api(
 
     assert_eq!(
         result,
-        vec![FlatComponentFileSystemNode {
+        vec![AgentFileSystemNode {
             name: "baz.txt".to_string(),
             last_modified: 0,
-            kind: FlatComponentFileSystemNodeKind::File,
-            permissions: Some(ComponentFilePermissions::ReadWrite),
+            kind: AgentFileSystemNodeKind::File,
+            permissions: Some(AgentFilePermissions::ReadWrite),
             size: Some(4),
         },]
     );
@@ -515,18 +524,21 @@ async fn initial_file_reading_through_api(
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
-        .with_files(&[
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-                target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadOnly,
-            },
-            IFSEntry {
-                source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                target_path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
-                permissions: ComponentFilePermissions::ReadWrite,
-            },
-        ])
+        .with_files(
+            "FileReadWrite",
+            &[
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
+                },
+                IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/baz.txt"),
+                    target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadWrite,
+                },
+            ],
+        )
         .store()
         .await?;
 
@@ -786,11 +798,14 @@ async fn file_update_1(
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
-        .with_files(&[IFSEntry {
-            source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-            target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadOnly,
-        }])
+        .with_files(
+            "IfsUpdate",
+            &[IFSEntry {
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+            }],
+        )
         .store()
         .await?;
 
@@ -817,11 +832,12 @@ async fn file_update_1(
         let updated_component = executor
             .update_component_with_files(
                 &component.id,
+                "IfsUpdate",
                 "it_initial_file_system_release",
                 vec![IFSEntry {
                     source_path: PathBuf::from("initial-file-system/files/bar.txt"),
-                    target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-                    permissions: ComponentFilePermissions::ReadOnly,
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
                 }],
             )
             .await?;
@@ -883,11 +899,12 @@ async fn file_update_1(
         let updated_component = executor
             .update_component_with_files(
                 &component.id,
+                "IfsUpdate",
                 "it_initial_file_system_release",
                 vec![IFSEntry {
                     source_path: PathBuf::from("initial-file-system/files/baz.txt"),
-                    target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-                    permissions: ComponentFilePermissions::ReadOnly,
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
                 }],
             )
             .await?;
@@ -984,15 +1001,21 @@ async fn file_update_in_the_middle_of_exported_function(
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
         .unique()
-        .with_files(&[IFSEntry {
-            source_path: PathBuf::from("initial-file-system/files/foo.txt"),
-            target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-            permissions: ComponentFilePermissions::ReadOnly,
-        }])
-        .with_env(vec![
-            ("PORT".to_string(), host_http_port.to_string()),
-            ("RUST_BACKTRACE".to_string(), "full".to_string()),
-        ])
+        .with_files(
+            "IfsUpdateInsideExportedFunction",
+            &[IFSEntry {
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+            }],
+        )
+        .with_env(
+            "IfsUpdateInsideExportedFunction",
+            vec![
+                ("PORT".to_string(), host_http_port.to_string()),
+                ("RUST_BACKTRACE".to_string(), "full".to_string()),
+            ],
+        )
         .store()
         .await?;
 
@@ -1019,11 +1042,12 @@ async fn file_update_in_the_middle_of_exported_function(
         let updated_component = executor
             .update_component_with_files(
                 &component.id,
+                "IfsUpdateInsideExportedFunction",
                 "it_initial_file_system_release",
                 vec![IFSEntry {
                     source_path: PathBuf::from("initial-file-system/files/bar.txt"),
-                    target_path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
-                    permissions: ComponentFilePermissions::ReadOnly,
+                    target_path: CanonicalFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: AgentFilePermissions::ReadOnly,
                 }],
             )
             .await?;
@@ -1687,7 +1711,7 @@ async fn sleep_less_than_suspend_threshold_while_awaiting_response(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-service-4");
@@ -1738,7 +1762,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-service-5");
@@ -1789,7 +1813,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-service-6");
@@ -1841,7 +1865,7 @@ async fn sleep_and_awaiting_parallel_responses(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-service-7");
@@ -1904,7 +1928,7 @@ async fn sleep_below_threshold_between_http_responses(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-service-8");
@@ -1966,7 +1990,7 @@ async fn sleep_above_threshold_between_http_responses(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-service-9");
@@ -3120,10 +3144,13 @@ async fn wasi_config_component_update(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_config_vars(vec![
-            ("k1".to_string(), "v0".to_string()),
-            ("k3".to_string(), "v3".to_string()),
-        ])
+        .with_config_vars(
+            "WasiConfig",
+            vec![
+                ("k1".to_string(), "v0".to_string()),
+                ("k3".to_string(), "v3".to_string()),
+            ],
+        )
         .store()
         .await?;
 
@@ -3173,15 +3200,17 @@ async fn wasi_config_component_update(
             &component.id,
             component.revision,
             None,
-            Vec::new(),
-            Vec::new(),
-            None,
-            Some(BTreeMap::from_iter(vec![
-                ("k1".to_string(), "v2".to_string()),
-                ("k3".to_string(), "v4".to_string()),
-                ("k4".to_string(), "v4".to_string()),
-            ])),
-            None,
+            Some(BTreeMap::from([(
+                golem_common::model::agent::AgentTypeName("WasiConfig".to_string()),
+                golem_common::model::component::AgentTypeProvisionConfigUpdate {
+                    wasi_config: Some(BTreeMap::from_iter(vec![
+                        ("k1".to_string(), "v2".to_string()),
+                        ("k3".to_string(), "v4".to_string()),
+                        ("k4".to_string(), "v4".to_string()),
+                    ])),
+                    ..Default::default()
+                },
+            )])),
             Vec::new(),
         )
         .await?;
@@ -3252,7 +3281,7 @@ async fn oplog_replay_after_http_requests_with_suspend(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-oplog-replay-1");
@@ -3346,7 +3375,7 @@ async fn oplog_replay_after_parallel_http_requests(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_env(vec![("PORT".to_string(), port.to_string())])
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
     let agent_id = agent_id!("Clock", "clock-oplog-parallel-1");

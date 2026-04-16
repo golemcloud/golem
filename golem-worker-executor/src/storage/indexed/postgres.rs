@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor};
+use super::{
+    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+    ScanCursor,
+};
 use crate::services::golem_config::IndexedStoragePostgresConfig;
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -22,7 +25,9 @@ use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use include_dir::include_dir;
 use sqlx::{Postgres, QueryBuilder};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 
 static DB_MIGRATIONS: include_dir::Dir =
     include_dir!("$CARGO_MANIFEST_DIR/db/migration/postgres/indexed");
@@ -31,6 +36,7 @@ static DB_MIGRATIONS: include_dir::Dir =
 pub struct PostgresIndexedStorage {
     pool: PostgresPool,
     drop_prefix_delete_batch_size: u64,
+    semaphore: Option<Arc<Semaphore>>,
 }
 
 impl PostgresIndexedStorage {
@@ -58,9 +64,17 @@ impl PostgresIndexedStorage {
                 format!("Postgres indexed storage pool initialization failed: {err:?}")
             })?;
 
+        let semaphore = {
+            let max_ops = config
+                .max_concurrent_ops
+                .unwrap_or_else(|| config.postgres.max_connections.saturating_sub(2).max(1));
+            Some(Arc::new(Semaphore::new(max_ops as usize)))
+        };
+
         Ok(Self {
             pool,
             drop_prefix_delete_batch_size: config.drop_prefix_delete_batch_size,
+            semaphore,
         })
     }
 
@@ -68,6 +82,7 @@ impl PostgresIndexedStorage {
         Ok(Self {
             pool,
             drop_prefix_delete_batch_size: 1024,
+            semaphore: None,
         })
     }
 
@@ -89,10 +104,27 @@ impl PostgresIndexedStorage {
         }
     }
 
-    fn to_i64(value: u64, field_name: &'static str) -> Result<i64, String> {
+    fn to_i64(value: u64, field_name: &'static str) -> Result<i64, IndexedStorageError> {
         i64::try_from(value).map_err(|_| {
-            format!("Postgres indexed storage cannot represent {field_name}={value} as i64")
+            IndexedStorageError::Other(format!(
+                "Postgres indexed storage cannot represent {field_name}={value} as i64"
+            ))
         })
+    }
+
+    fn classify_repo_error(err: golem_service_base::repo::RepoError) -> IndexedStorageError {
+        if err.is_transient() {
+            IndexedStorageError::Transient(err.to_string())
+        } else {
+            IndexedStorageError::Other(err.to_safe_string())
+        }
+    }
+
+    async fn acquire_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        match &self.semaphore {
+            Some(sem) => Some(sem.clone().acquire_owned().await.expect("semaphore closed")),
+            None => None,
+        }
     }
 
     fn to_like_prefix(prefix: &str) -> String {
@@ -117,7 +149,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-    ) -> Result<u8, String> {
+    ) -> Result<u8, IndexedStorageError> {
         Ok(0)
     }
 
@@ -127,7 +159,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         _api_name: &'static str,
         _replicas: u8,
         _timeout: Duration,
-    ) -> Result<u8, String> {
+    ) -> Result<u8, IndexedStorageError> {
         Ok(0)
     }
 
@@ -137,7 +169,8 @@ impl IndexedStorage for PostgresIndexedStorage {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
         let query = sqlx::query_as::<_, (bool,)>(
             "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace = $1 AND key = $2);",
         )
@@ -149,7 +182,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_one_as(query)
             .await
             .map(|row| row.0)
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn scan(
@@ -160,7 +193,8 @@ impl IndexedStorage for PostgresIndexedStorage {
         prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), String> {
+    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
         let count_i64 = Self::to_i64(count, "count")?;
         let cursor_i64 = Self::to_i64(cursor, "cursor")?;
         let query = match prefix {
@@ -188,14 +222,16 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_all_as::<(String,), _>(query)
             .await
             .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
-            .map_err(|err| err.to_safe_string())?;
+            .map_err(Self::classify_repo_error)?;
 
         let new_cursor = if keys.len() < count as usize {
             0
         } else {
-            cursor
-                .checked_add(count)
-                .ok_or_else(|| "Postgres indexed storage scan cursor overflow".to_string())?
+            cursor.checked_add(count).ok_or_else(|| {
+                IndexedStorageError::Other(
+                    "Postgres indexed storage scan cursor overflow".to_string(),
+                )
+            })?
         };
 
         Ok((new_cursor, keys))
@@ -210,7 +246,8 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
         let id = Self::to_i64(id, "id")?;
         let query = sqlx::query(
             "INSERT INTO index_storage (namespace, key, id, value) VALUES ($1, $2, $3, $4);",
@@ -225,7 +262,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn append_many(
@@ -236,11 +273,12 @@ impl IndexedStorage for PostgresIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         pairs: Vec<(u64, Vec<u8>)>,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         if pairs.is_empty() {
             return Ok(());
         }
 
+        let _permit = self.acquire_permit().await;
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         let mut converted_pairs = Vec::with_capacity(pairs.len());
@@ -273,7 +311,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .boxed()
             })
             .await
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn length(
@@ -282,7 +320,8 @@ impl IndexedStorage for PostgresIndexedStorage {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
         let query = sqlx::query_as::<_, (i64,)>(
             "SELECT COUNT(*) FROM index_storage WHERE namespace = $1 AND key = $2;",
         )
@@ -294,7 +333,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_one_as(query)
             .await
             .map(|row| row.0 as u64)
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn delete(
@@ -303,7 +342,8 @@ impl IndexedStorage for PostgresIndexedStorage {
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
         let query = sqlx::query("DELETE FROM index_storage WHERE namespace = $1 AND key = $2;")
             .bind(Self::namespace(namespace))
             .bind(key);
@@ -313,7 +353,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn read(
@@ -325,7 +365,8 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
         let start_id = Self::to_i64(start_id, "start_id")?;
         let end_id = Self::to_i64(end_id, "end_id")?;
         let query = sqlx::query_as::<_, DBIdValue>(
@@ -341,7 +382,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_all_as::<DBIdValue, _>(query)
             .await
             .map(|vec| vec.into_iter().map(|row| row.into_pair()).collect())
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn first(
@@ -351,7 +392,8 @@ impl IndexedStorage for PostgresIndexedStorage {
         _entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
         let query = sqlx::query_as::<_, DBIdValue>(
             "SELECT id, value FROM index_storage WHERE namespace = $1 AND key = $2 ORDER BY id ASC LIMIT 1;",
         )
@@ -363,7 +405,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn last(
@@ -373,7 +415,8 @@ impl IndexedStorage for PostgresIndexedStorage {
         _entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
         let query = sqlx::query_as::<_, DBIdValue>(
             "SELECT id, value FROM index_storage WHERE namespace = $1 AND key = $2 ORDER BY id DESC LIMIT 1;",
         )
@@ -385,7 +428,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn closest(
@@ -396,7 +439,8 @@ impl IndexedStorage for PostgresIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
         let id = Self::to_i64(id, "id")?;
         let query = sqlx::query_as::<_, DBIdValue>(
             "SELECT id, value FROM index_storage WHERE namespace = $1 AND key = $2 AND id >= $3 ORDER BY id ASC LIMIT 1;",
@@ -410,7 +454,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 
     async fn drop_prefix(
@@ -420,7 +464,8 @@ impl IndexedStorage for PostgresIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         let last_dropped_id = Self::to_i64(last_dropped_id, "last_dropped_id")?;
@@ -451,7 +496,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .boxed()
             })
             .await
-            .map_err(|err| err.to_safe_string())
+            .map_err(Self::classify_repo_error)
     }
 }
 

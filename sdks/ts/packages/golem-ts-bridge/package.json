@@ -18,14 +18,11 @@
   "scripts": {
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
-    "build": "tsc --noEmit && rollup -c",
-    "test": "tsc --noEmit",
+    "build": "rollup --failAfterWarnings -c",
+    "prepare": "pnpm build",
     "dev": "rollup -c -w"
   },
   "keywords": [],
-  "sideEffects": [
-    "src/index.ts"
-  ],
   "author": "",
   "license": "SEE LICENSE IN LICENSE",
   "description": "",

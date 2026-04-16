@@ -18,12 +18,12 @@ pub use crate::base_model::worker::*;
 use crate::model::agent::AgentConfigSource;
 use golem_wasm::ValueAndType;
 
-impl UntypedWorkerAgentConfigEntry {
+impl UntypedAgentConfigEntry {
     pub fn enrich_with_type(
         self,
         component_metadata: &ComponentMetadata,
         agent_type_name: Option<&AgentTypeName>,
-    ) -> Result<ParsedWorkerAgentConfigEntry, String> {
+    ) -> Result<TypedAgentConfigEntry, String> {
         let agent_type_name = agent_type_name.ok_or_else(|| {
             "cannot enrich local agent config for non-agentic workers".to_string()
         })?;
@@ -44,7 +44,7 @@ impl UntypedWorkerAgentConfigEntry {
             })?
             .value_type;
 
-        Ok(ParsedWorkerAgentConfigEntry {
+        Ok(TypedAgentConfigEntry {
             path: self.path,
             value: ValueAndType::new(self.value, value_type),
         })
@@ -53,11 +53,11 @@ impl UntypedWorkerAgentConfigEntry {
 
 mod protobuf {
     use super::AgentMetadataDto;
-    use super::{AgentUpdateMode, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
     use super::{
-        ExportedResourceMetadata, FailedUpdate, ParsedWorkerAgentConfigEntry, PendingUpdate,
-        SuccessfulUpdate, UpdateRecord, WorkerAgentConfigEntry,
+        AgentConfigEntryDto, ExportedResourceMetadata, FailedUpdate, PendingUpdate,
+        SuccessfulUpdate, TypedAgentConfigEntry, UpdateRecord,
     };
+    use super::{AgentUpdateMode, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
     use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     use crate::model::oplog::AgentResourceId;
     use crate::model::regions::OplogRegion;
@@ -90,9 +90,9 @@ mod protobuf {
                     .try_into()?,
                 created_by: value.created_by.ok_or("Missing account_id")?.try_into()?,
                 env: value.env,
-                config_vars: value.config_vars.into_iter().collect(),
-                agent_config: value
-                    .agent_config
+                wasi_config: value.wasi_config.into_iter().collect(),
+                config: value
+                    .config
                     .into_iter()
                     .map(TryInto::try_into)
                     .collect::<Result<Vec<_>, _>>()?,
@@ -146,8 +146,8 @@ mod protobuf {
                 environment_id: Some(value.environment_id.into()),
                 created_by: Some(value.created_by.into()),
                 env: value.env,
-                config_vars: value.config_vars.into_iter().collect(),
-                agent_config: value.agent_config.into_iter().map(Into::into).collect(),
+                wasi_config: value.wasi_config.into_iter().collect(),
+                config: value.config.into_iter().map(Into::into).collect(),
                 status: value.status.into(),
                 component_revision: value.component_revision.into(),
                 retry_count: value.retry_count,
@@ -336,35 +336,35 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::worker::AgentConfigEntry> for WorkerAgentConfigEntry {
+    impl TryFrom<golem_api_grpc::proto::golem::worker::AgentConfigEntryDto> for AgentConfigEntryDto {
         type Error = String;
         fn try_from(
-            value: golem_api_grpc::proto::golem::worker::AgentConfigEntry,
+            value: golem_api_grpc::proto::golem::worker::AgentConfigEntryDto,
         ) -> Result<Self, Self::Error> {
             Ok(Self {
                 path: value.path,
                 value: serde_json::from_str::<serde_json::Value>(&value.value)
-                    .map_err(|e| e.to_string())?,
+                    .map_err(|e| e.to_string())?
+                    .into(),
             })
         }
     }
 
-    impl From<WorkerAgentConfigEntry> for golem_api_grpc::proto::golem::worker::AgentConfigEntry {
-        fn from(value: WorkerAgentConfigEntry) -> Self {
+    impl From<AgentConfigEntryDto> for golem_api_grpc::proto::golem::worker::AgentConfigEntryDto {
+        fn from(value: AgentConfigEntryDto) -> Self {
             Self {
                 path: value.path,
-                value: serde_json::to_string(&value.value)
-                    .expect("json value should be encodable to string"),
+                value: value.value.to_string(),
             }
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::worker::ParsedAgentConfigEntry>
-        for ParsedWorkerAgentConfigEntry
+    impl TryFrom<golem_api_grpc::proto::golem::worker::TypedAgentConfigEntry>
+        for TypedAgentConfigEntry
     {
         type Error = String;
         fn try_from(
-            value: golem_api_grpc::proto::golem::worker::ParsedAgentConfigEntry,
+            value: golem_api_grpc::proto::golem::worker::TypedAgentConfigEntry,
         ) -> Result<Self, Self::Error> {
             Ok(Self {
                 path: value.path,
@@ -376,10 +376,8 @@ mod protobuf {
         }
     }
 
-    impl From<ParsedWorkerAgentConfigEntry>
-        for golem_api_grpc::proto::golem::worker::ParsedAgentConfigEntry
-    {
-        fn from(value: ParsedWorkerAgentConfigEntry) -> Self {
+    impl From<TypedAgentConfigEntry> for golem_api_grpc::proto::golem::worker::TypedAgentConfigEntry {
+        fn from(value: TypedAgentConfigEntry) -> Self {
             Self {
                 path: value.path,
                 value: Some(value.value.into()),

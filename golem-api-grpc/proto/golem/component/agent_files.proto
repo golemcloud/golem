@@ -4,14 +4,14 @@ package golem.component;
 
 import "golem/common/hash.proto";
 
-enum ComponentFilePermissions {
+enum AgentFilePermissions {
   READ_ONLY = 0;
   READ_WRITE = 1;
 }
 
-message InitialComponentFile {
+message InitialAgentFile {
   golem.common.Hash content_hash = 1;
   string path = 2;
-  ComponentFilePermissions permissions = 3;
+  AgentFilePermissions permissions = 3;
   uint64 size = 4;
 }

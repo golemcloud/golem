@@ -18,6 +18,8 @@ package golem.codegen.autoregister
 
 import golem.codegen.discovery.SourceDiscovery
 
+import java.security.MessageDigest
+
 import scala.meta._
 import scala.meta.dialects.Scala213
 import scala.meta.parsers._
@@ -107,7 +109,12 @@ object AutoRegisterCodegen {
       val perPkgFiles: Seq[GeneratedFile] =
         byPkg.toSeq.sortBy(_._1).map { case (pkg, pkgImpls) =>
           val objSuffix = sanitizeSuffix(pkg)
-          val tree      = buildPerPkgSource(genBasePkg, objSuffix, pkgImpls)
+          val tree      = buildPerPkgSource(
+            genBasePkg,
+            objSuffix,
+            pkgImpls,
+            surfaceFingerprint(pkgImpls, discovered.traits)
+          )
           GeneratedFile(
             relativePath = packagePath(genBasePkg, s"__GolemAutoRegister_$objSuffix.scala"),
             content = tree.syntax
@@ -142,7 +149,8 @@ object AutoRegisterCodegen {
   private def buildPerPkgSource(
     genBasePkg: String,
     objSuffix: String,
-    pkgImpls: List[AgentImpl]
+    pkgImpls: List[AgentImpl],
+    surfaceFingerprint: String
   ): Source = {
     val pkgRef  = parseTermRef(genBasePkg)
     val objName = Term.Name(s"__GolemAutoRegister_$objSuffix")
@@ -159,6 +167,8 @@ object AutoRegisterCodegen {
 
         /** Generated. Do not edit. */
         private[golem] object $objName {
+          private val __golemSurfaceVersion = ${Lit.String(surfaceFingerprint)}
+
           def register(): Unit = {
             ..$registrations
             ()
@@ -227,6 +237,41 @@ object AutoRegisterCodegen {
   // ── Implementation details ─────────────────────────────────────────────────
 
   private final case class AgentImpl(pkg: String, implClass: String, traitType: String, ctorTypes: List[String])
+
+  private def surfaceFingerprint(
+    pkgImpls: List[AgentImpl],
+    traits: Seq[SourceDiscovery.AgentTrait]
+  ): String = {
+    val traitsByFqn  = traits.map(t => s"${t.pkg}.${t.name}" -> t).toMap
+    val traitsByName = traits.map(t => (t.pkg, t.name) -> t).toMap
+
+    val surface = pkgImpls.map { impl =>
+      val resolvedTrait =
+        traitsByName.get((impl.pkg, impl.traitType)).orElse(traitsByFqn.get(impl.traitType))
+
+      val traitSurface = resolvedTrait match {
+        case Some(agentTrait) =>
+          val constructor = agentTrait.constructorParams.map(param => s"${param.name}:${param.typeExpr}").mkString(",")
+          val methods     = agentTrait.methods.map { method =>
+            val params = method.params.map(param => s"${param.name}:${param.typeExpr}").mkString(",")
+            s"${method.name}($params)=>${method.returnTypeExpr}[${method.principalParams.mkString(",")}]"
+          }.mkString(";")
+
+          s"trait=${agentTrait.pkg}.${agentTrait.name}|typeName=${agentTrait.typeName.getOrElse(agentTrait.name)}|ctor=$constructor|methods=$methods|mode=${agentTrait.mode.getOrElse("durable")}|desc=${agentTrait.descriptionValue.getOrElse("")}"
+        case None =>
+          s"trait=${impl.traitType}"
+      }
+
+      s"impl=${impl.pkg}.${impl.implClass}|ctorTypes=${impl.ctorTypes.mkString(",")}|$traitSurface"
+    }.mkString("\n")
+
+    sha256Hex(surface)
+  }
+
+  private def sha256Hex(value: String): String = {
+    val digest = MessageDigest.getInstance("SHA-256")
+    digest.digest(value.getBytes("UTF-8")).map(b => f"$b%02x").mkString
+  }
 
   private def autoRegisterSuffix(basePackage: String): String =
     basePackage

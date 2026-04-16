@@ -4,7 +4,10 @@ package golem.component;
 
 import "golem/common/account_id.proto";
 import "golem/common/empty.proto";
+import "golem/component/agent_files.proto";
 import "golem/component/component_id.proto";
+import "golem/component/plugin.proto";
+import "golem/worker/agent_config.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation_context.proto";
 import "golem/worker/worker_id.proto";
@@ -51,6 +54,14 @@ message AgentType {
   optional Snapshotting snapshotting = 8;
   repeated AgentConfigDeclaration config = 9;
   string source_language = 10;
+}
+
+message AgentTypeProvisionConfig {
+  map<string, string> env = 1;
+  map<string, string> wasi_config = 2;
+  repeated golem.worker.TypedAgentConfigEntry config_values = 3;
+  repeated golem.component.PluginInstallation plugins = 4;
+  repeated golem.component.InitialAgentFile files = 5;
 }
 
 message BinaryDescriptor {

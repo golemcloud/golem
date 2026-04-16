@@ -21,16 +21,17 @@ use golem_api_grpc::proto::golem::worker::v1::{
     AgentError as GrpcAgentError, CancelInvocationRequest, CancelInvocationResponse,
     CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest, ForkWorkerResponse,
     InvokeAgentRequest, InvokeAgentResponse, InvokeAgentSuccess, LaunchNewWorkerRequest,
-    LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse, cancel_invocation_response, complete_promise_response,
-    fork_worker_response, invoke_agent_response, launch_new_worker_response,
-    resume_worker_response, revert_worker_response, update_worker_response,
+    LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ProcessOplogEntriesRequest,
+    ProcessOplogEntriesResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
+    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, cancel_invocation_response,
+    complete_promise_response, fork_worker_response, invoke_agent_response,
+    launch_new_worker_response, process_oplog_entries_response, resume_worker_response,
+    revert_worker_response, update_worker_response,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::proto_agent_id_string;
@@ -268,6 +269,33 @@ impl GrpcWorkerService for WorkerGrpcApi {
             result: Some(response),
         }))
     }
+
+    async fn process_oplog_entries(
+        &self,
+        request: Request<ProcessOplogEntriesRequest>,
+    ) -> Result<Response<ProcessOplogEntriesResponse>, Status> {
+        let (_, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "process_oplog_entries",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+
+        let response = match self
+            .process_oplog_entries_inner(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(()) => record.succeed(process_oplog_entries_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                process_oplog_entries_response::Result::Error(error.clone()),
+                &mut WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(ProcessOplogEntriesResponse {
+            result: Some(response),
+        }))
+    }
 }
 
 impl WorkerGrpcApi {
@@ -295,20 +323,20 @@ impl WorkerGrpcApi {
             agent_id: request.name,
         };
 
-        let agent_config = request
-            .agent_config
+        let config = request
+            .config
             .into_iter()
-            .map(WorkerAgentConfigEntry::try_from)
+            .map(AgentConfigEntryDto::try_from)
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| bad_request_error(format!("failed converting agent_config: {e}")))?;
+            .map_err(|e| bad_request_error(format!("failed converting config: {e}")))?;
 
         let latest_component_revision = self
             .worker_service
             .create(
                 &agent_id,
                 request.env,
-                request.config_vars.into_iter().collect(),
-                agent_config,
+                request.wasi_config.into_iter().collect(),
+                config,
                 request.ignore_already_existing,
                 auth,
                 request.context,
@@ -492,6 +520,62 @@ impl WorkerGrpcApi {
             component_revision: output.component_revision.map(|r| r.get()),
             status: proto_status,
         })
+    }
+
+    async fn process_oplog_entries_inner(
+        &self,
+        request: ProcessOplogEntriesRequest,
+    ) -> Result<(), GrpcAgentError> {
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or(bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+
+        let agent_id = validate_protobuf_agent_id(request.agent_id)?;
+
+        let environment_id = request
+            .environment_id
+            .ok_or_else(|| bad_request_error("Missing environment_id"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("invalid environment_id: {e}")))?;
+
+        let component_revision: ComponentRevision = request
+            .component_revision
+            .try_into()
+            .map_err(|e| bad_request_error(format!("invalid component_revision: {e}")))?;
+
+        let idempotency_key: IdempotencyKey = request
+            .idempotency_key
+            .ok_or_else(|| bad_request_error("Missing idempotency_key"))?
+            .into();
+
+        let account_id = request
+            .account_id
+            .ok_or_else(|| bad_request_error("Missing account_id"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("invalid account_id: {e}")))?;
+
+        let metadata = request
+            .metadata
+            .ok_or_else(|| bad_request_error("Missing metadata"))?;
+
+        self.worker_service
+            .process_oplog_entries(
+                &agent_id,
+                environment_id,
+                component_revision,
+                idempotency_key,
+                account_id,
+                request.config,
+                metadata,
+                OplogIndex::from_u64(request.first_entry_index),
+                request.entries,
+                auth,
+            )
+            .await?;
+
+        Ok(())
     }
 
     async fn cancel_invocation_inner(

@@ -15,7 +15,9 @@
 use crate::log::{LogColorize, logln};
 use crate::model::text::fmt::TextView;
 use colored::Colorize;
-use golem_common::model::diff::{BTreeMapDiffValue, DeploymentDiff, DiffForHashOf, VecDiffValue};
+use golem_common::model::diff::{
+    AgentTypeProvisionConfigDiff, BTreeMapDiffValue, DeploymentDiff, DiffForHashOf,
+};
 use std::path::Path;
 
 const DIFF_COLLAPSE_THRESHOLD: usize = 12;
@@ -58,93 +60,37 @@ impl TextView for DeploymentDiff {
                                 "update".yellow(),
                                 component_name.log_color_highlight()
                             ));
-                            if diff.metadata_changed {
-                                logln("    - metadata");
-                            }
                             if diff.wasm_changed {
                                 logln("    - binary");
                             }
-                            if !diff.file_changes.is_empty() {
-                                logln("    - files");
-                                for (path, file_diff) in &diff.file_changes {
-                                    match file_diff {
+                            if !diff.agent_type_provision_config_changes.is_empty() {
+                                logln("    - provision configs");
+                                for (agent_type, change) in
+                                    &diff.agent_type_provision_config_changes
+                                {
+                                    match change {
                                         BTreeMapDiffValue::Create => {
                                             logln(format!(
-                                                "      - {} file {}",
+                                                "      - {} agent type {}",
                                                 "create".green(),
-                                                path.log_color_highlight()
+                                                agent_type.log_color_highlight()
                                             ));
                                         }
                                         BTreeMapDiffValue::Delete => {
                                             logln(format!(
-                                                "      - {} file {}",
+                                                "      - {} agent type {}",
                                                 "delete".red(),
-                                                path.log_color_highlight()
+                                                agent_type.log_color_highlight()
                                             ));
                                         }
-                                        BTreeMapDiffValue::Update(diff) => match diff {
-                                            DiffForHashOf::HashDiff { .. } => {
-                                                logln(format!(
-                                                    "      - {} file {}",
-                                                    "update".yellow(),
-                                                    path.log_color_highlight()
-                                                ));
-                                            }
-                                            DiffForHashOf::ValueDiff { diff } => {
-                                                logln(format!(
-                                                    "      - {} file {}, changes:",
-                                                    "update".yellow(),
-                                                    path.log_color_highlight()
-                                                ));
-                                                if diff.content_changed {
-                                                    logln("        - content");
-                                                }
-                                                if diff.permissions_changed {
-                                                    logln("        - permissions");
-                                                }
-                                            }
-                                        },
-                                    }
-                                }
-                            }
-                            if !diff.plugin_changes.is_empty() {
-                                // TODO: atomic: detailed readable plan (requires id -> name, version mapping)
-                                logln("    - update plugins");
-                            }
-                            if !diff.agent_config_changes.is_empty() {
-                                logln("    - agent config");
-                                for agent_config_diff in &diff.agent_config_changes {
-                                    match agent_config_diff {
-                                        VecDiffValue::Create((agent_name, path)) => {
+                                        BTreeMapDiffValue::Update(inner) => {
                                             logln(format!(
-                                                "      - {} agent config for agent {} and path {}",
-                                                "create".green(),
-                                                agent_name.log_color_highlight(),
-                                                path.join(".").log_color_highlight()
-                                            ));
-                                        }
-                                        VecDiffValue::Delete((agent_name, path)) => {
-                                            logln(format!(
-                                                "      - {} agent config for agent {} and path {}",
-                                                "delete".red(),
-                                                agent_name.log_color_highlight(),
-                                                path.join(".").log_color_highlight()
-                                            ));
-                                        }
-                                        VecDiffValue::Update((agent_name, path), diff) => {
-                                            // structure of the vec diff should only produce update entries
-                                            // for values with the same ordering key
-                                            assert!(!diff.agent_changed);
-                                            assert!(!diff.path_changed);
-
-                                            logln(format!(
-                                                "      - {} agent config for agent {} and path {}:",
+                                                "      - {} agent type {}:",
                                                 "update".yellow(),
-                                                agent_name.log_color_highlight(),
-                                                path.join(".").log_color_highlight()
+                                                agent_type.log_color_highlight()
                                             ));
-                                            if diff.value_changed {
-                                                logln("        - value");
+                                            if let DiffForHashOf::ValueDiff { diff } = inner {
+                                                log_provision_config_diff(diff);
                                             }
                                         }
                                     }
@@ -259,6 +205,59 @@ impl TextView for DeploymentDiff {
             }
             logln("");
         }
+    }
+}
+
+fn log_provision_config_diff(diff: &AgentTypeProvisionConfigDiff) {
+    if !diff.env_changes.is_empty() {
+        logln("        - env");
+    }
+    if !diff.wasi_config_changes.is_empty() {
+        logln("        - wasi config");
+    }
+    if !diff.config_changes.is_empty() {
+        logln("        - agent config");
+    }
+    if !diff.file_changes.is_empty() {
+        logln("        - files");
+        for (path, file_diff) in &diff.file_changes {
+            match file_diff {
+                BTreeMapDiffValue::Create => logln(format!(
+                    "          - {} {}",
+                    "add".green(),
+                    path.log_color_highlight()
+                )),
+                BTreeMapDiffValue::Delete => logln(format!(
+                    "          - {} {}",
+                    "remove".red(),
+                    path.log_color_highlight()
+                )),
+                BTreeMapDiffValue::Update(inner) => {
+                    if let DiffForHashOf::ValueDiff { diff } = inner {
+                        let mut changes = vec![];
+                        if diff.content_changed {
+                            changes.push("content");
+                        }
+                        if diff.permissions_changed {
+                            changes.push("permissions");
+                        }
+                        logln(format!(
+                            "          - {} {} ({})",
+                            "update".yellow(),
+                            path.log_color_highlight(),
+                            changes.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if !diff.plugin_changes.is_empty() {
+        // TODO: show plugin name/version once grant ID → name mapping is available
+        logln(format!(
+            "        - plugins ({} change(s))",
+            diff.plugin_changes.len()
+        ));
     }
 }
 

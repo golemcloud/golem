@@ -14,5 +14,5 @@
 
 #[cfg(feature = "worker-executor")]
 pub mod compiled_component;
-pub mod initial_component_files;
+pub mod initial_agent_files;
 pub mod routing_table;

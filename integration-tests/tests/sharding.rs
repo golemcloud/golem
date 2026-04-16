@@ -1071,7 +1071,7 @@ mod tests {
         let component = user
             .component(&env.id, "it_agent_counters_release")
             .name("it:agent-counters")
-            .with_parametrized_plugin(&grant.id, 0, params)
+            .with_parametrized_plugin("Repository", &grant.id, 0, params)
             .store()
             .await
             .unwrap();
@@ -1195,7 +1195,7 @@ mod tests {
         let component = user
             .component(&env.id, "it_agent_counters_release")
             .name("it:agent-counters")
-            .with_parametrized_plugin(&grant.id, 0, params)
+            .with_parametrized_plugin("Repository", &grant.id, 0, params)
             .store()
             .await
             .unwrap();
@@ -1265,7 +1265,6 @@ mod tests {
 
     #[test]
     #[timeout(240000)]
-    #[flaky(3)]
     async fn oplog_processor_locality_recovery(
         deps: &EnvBasedTestDependencies,
         _tracing: &Tracing,
@@ -1316,7 +1315,7 @@ mod tests {
         let component = user
             .component(&env.id, "it_agent_counters_release")
             .name("it:agent-counters")
-            .with_parametrized_plugin(&grant.id, 0, params)
+            .with_parametrized_plugin("Repository", &grant.id, 0, params)
             .store()
             .await
             .unwrap();
@@ -1340,7 +1339,7 @@ mod tests {
 
         // Two-phase setup gate: wait for oplog persistence, then for callbacks
         wait_for_oplog_completions(&user, &worker_id, 4, Duration::from_secs(120), &received).await;
-        let _ = wait_for_invocations(&received, 4, Duration::from_secs(60)).await;
+        let _ = wait_for_invocations(&received, 4, Duration::from_secs(120)).await;
 
         deps.stop_random_worker_executors(2).await;
         // Give the shard manager time to detect executor loss and reassign shards
@@ -1438,7 +1437,7 @@ mod tests {
         let component = user
             .component(&env.id, "it_agent_counters_release")
             .name("it:agent-counters")
-            .with_parametrized_plugin(&grant.id, 0, params)
+            .with_parametrized_plugin("Repository", &grant.id, 0, params)
             .store()
             .await
             .unwrap();

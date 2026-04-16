@@ -62,6 +62,7 @@ pub enum RegistryEventType {
     SecuritySchemeChanged = 4,
     ResourceDefinitionChanged = 5,
     RetryPolicyChanged = 6,
+    AgentSecretChanged = 7,
 }
 
 impl TryFrom<i16> for RegistryEventType {
@@ -76,6 +77,7 @@ impl TryFrom<i16> for RegistryEventType {
             4 => Ok(RegistryEventType::SecuritySchemeChanged),
             5 => Ok(RegistryEventType::ResourceDefinitionChanged),
             6 => Ok(RegistryEventType::RetryPolicyChanged),
+            7 => Ok(RegistryEventType::AgentSecretChanged),
             other => Err(RepoError::InternalError(anyhow::anyhow!(
                 "Unknown registry event type: {other}"
             ))),
@@ -126,6 +128,10 @@ pub enum RegistryChangeEvent {
         resource_definition_id: Uuid,
         resource_name: String,
     },
+    AgentSecretChanged {
+        event_id: ChangeEventId,
+        environment_id: Uuid,
+    },
 }
 
 impl RegistryChangeEvent {
@@ -138,6 +144,7 @@ impl RegistryChangeEvent {
             Self::SecuritySchemeChanged { event_id, .. } => *event_id,
             Self::RetryPolicyChanged { event_id, .. } => *event_id,
             Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
+            Self::AgentSecretChanged { event_id, .. } => *event_id,
         }
     }
 }
@@ -268,6 +275,17 @@ impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
                     environment_id,
                     resource_definition_id,
                     resource_name,
+                })
+            }
+            RegistryEventType::AgentSecretChanged => {
+                let environment_id = row.environment_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "AgentSecretChanged event missing environment_id"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::AgentSecretChanged {
+                    event_id: row.event_id,
+                    environment_id,
                 })
             }
         }
@@ -415,6 +433,20 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: Some(resource_definition_id),
             resource_name: Some(resource_name),
+        }
+    }
+
+    pub fn agent_secret_changed(environment_id: Uuid) -> Self {
+        Self {
+            event_type: RegistryEventType::AgentSecretChanged,
+            environment_id: Some(environment_id),
+            deployment_revision_id: None,
+            current_deployment_revision_id: None,
+            account_id: None,
+            grantee_account_id: None,
+            domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
         }
     }
 }
@@ -834,6 +866,18 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: Some(resource_definition_id),
                 resource_name: Some("res-name".to_string()),
+            },
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::AgentSecretChanged,
+                environment_id: Some(environment_id),
+                deployment_revision_id: None,
+                current_deployment_revision_id: None,
+                account_id: None,
+                grantee_account_id: None,
+                domains: Vec::new(),
+                resource_definition_id: None,
+                resource_name: None,
             },
         ];
 

@@ -677,7 +677,7 @@ impl TypeScriptBridgeGenerator {
         writer.write_line(format!("agentTypeName: \"{agent_type_name}\","));
         writer.write_line("parameters,");
         writer.write_line("phantomId,");
-        writer.write_line(format!("agentConfig: {agent_config_expr},"));
+        writer.write_line(format!("config: {agent_config_expr},"));
         writer.unindent();
         writer.write_line("});");
     }
@@ -808,7 +808,7 @@ impl TypeScriptBridgeGenerator {
         writer: &mut TsFunctionWriter<'_>,
         local_configs: &[&AgentConfigDeclaration],
     ) {
-        writer.write_line("const agentConfig: base.WorkerAgentConfigEntry[] = [];");
+        writer.write_line("const agentConfig: base.AgentConfigEntryDto[] = [];");
         for config in local_configs {
             let param_name = format!(
                 "config{}",

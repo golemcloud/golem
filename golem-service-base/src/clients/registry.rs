@@ -1208,6 +1208,23 @@ fn proto_registry_event_to_model(
                 },
             )
         }
+        Some(Payload::AgentSecretChanged(rpc)) => {
+            let environment_id = rpc
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in AgentSecretChanged",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::AgentSecretChanged {
+                    event_id,
+                    environment_id,
+                },
+            )
+        }
         None => Err(RegistryServiceError::internal_client_error(
             "Missing payload in RegistryInvalidationEvent",
         )),

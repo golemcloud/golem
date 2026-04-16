@@ -85,7 +85,7 @@ impl SdkOverrides {
                 fs::path_to_str(&workspace_dir.join("sdks/ts/packages"))?.to_string(),
             ),
             ts_version: None,
-            scala_sdk_version: None,
+            scala_sdk_version: Some("0.0.0-SNAPSHOT".to_string()),
         }
         .to_env_vars())
     }

@@ -1039,9 +1039,9 @@ pub mod component {
 }
 
 pub mod worker {
+    use crate::args::parse_agent_config;
     use crate::args::parse_cursor;
     use crate::args::parse_key_val;
-    use crate::args::parse_worker_agent_config;
     use crate::command::shared_args::{
         AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
     };
@@ -1051,7 +1051,7 @@ pub mod worker {
     use golem_client::model::ScanCursor;
     use golem_common::model::IdempotencyKey;
     use golem_common::model::component::{ComponentName, ComponentRevision};
-    use golem_common::model::worker::WorkerAgentConfigEntry;
+    use golem_common::model::worker::AgentConfigEntryDto;
     use uuid::Uuid;
 
     #[derive(Debug, Subcommand)]
@@ -1063,16 +1063,16 @@ pub mod worker {
             /// Environment variables visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "ENV=VAL")]
             env: Vec<(String, String)>,
+            /// Configuration to be provided to the agent.
+            /// This parameter can be provided multiple times in the form --config ${DOT_SEPERATED_CONFIG_PATH}=${CONFIG_VALUE}.
+            /// Only configuration declared by the agent can be provided. If a given config path is not provided, the default from the manifest
+            /// (agents.*.config) is used. If neither value nor default is provided and the config is non-optional, creation
+            /// of the agent will fail.
+            #[arg(short, long, value_parser = parse_agent_config, verbatim_doc_comment)]
+            config: Vec<AgentConfigEntryDto>,
             /// wasi:config entries visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "VAR=VAL")]
-            config_vars: Vec<(String, String)>,
-            /// Configuration to be provided to the agent.
-            /// This parameter can be provided multiple times in the form --agent-config ${DOT_SEPERATED_CONFIG_PATH}=${CONFIG_VALUE}.
-            /// Only configuration declared by the agent can be provided. If a given config path is not provided, the default from the manifest
-            /// (components.*.agents.*.config) is used. If neither value nor default is provided and the config is non-optional, creation
-            /// of the agent will fail.
-            #[arg(short, long, value_parser = parse_worker_agent_config, verbatim_doc_comment)]
-            agent_config: Vec<WorkerAgentConfigEntry>,
+            wasi_config: Vec<(String, String)>,
         },
         // TODO: json args
         /// Invoke (or enqueue invocation for) agent

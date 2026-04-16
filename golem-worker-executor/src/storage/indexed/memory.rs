@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::storage::indexed::{
-    IndexedStorage, IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanCursor,
+    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+    ScanCursor,
 };
 use async_trait::async_trait;
 use golem_common::model::AgentId;
@@ -101,7 +102,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-    ) -> Result<u8, String> {
+    ) -> Result<u8, IndexedStorageError> {
         Ok(0)
     }
 
@@ -111,7 +112,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _api_name: &'static str,
         _replicas: u8,
         _timeout: Duration,
-    ) -> Result<u8, String> {
+    ) -> Result<u8, IndexedStorageError> {
         Ok(0)
     }
 
@@ -121,7 +122,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
         Ok(self.data.contains_async(&composite_key).await)
     }
@@ -134,7 +135,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         prefix: Option<&str>,
         cursor: ScanCursor,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), String> {
+    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
         let mut result = Vec::new();
         let matcher = Self::match_key(namespace, prefix);
         let mut idx = 0;
@@ -178,7 +179,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
         let mut entry = self
             .data
@@ -189,7 +190,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
             e.insert(value.to_vec());
             Ok(())
         } else {
-            Err("Key already exists".to_string())
+            Err(IndexedStorageError::Other("Key already exists".to_string()))
         }
     }
 
@@ -199,7 +200,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<u64, String> {
+    ) -> Result<u64, IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
         Ok(self
             .data
@@ -214,7 +215,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
         self.data.remove_async(&composite_key).await;
         Ok(())
@@ -229,7 +230,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         key: &str,
         start_id: u64,
         end_id: u64,
-    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
+    ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
         Ok(self
             .data
@@ -251,7 +252,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
         Ok(self
             .data
@@ -270,7 +271,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _entity_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
         Ok(self
             .data
@@ -290,7 +291,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         id: u64,
-    ) -> Result<Option<(u64, Vec<u8>)>, String> {
+    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
         Ok(self
             .data
@@ -311,7 +312,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
         self.data
             .update_async(&composite_key, |_, entry| {

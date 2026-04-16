@@ -1,0 +1,332 @@
+name: "http-endpoint-parameters"
+settings:
+  golem_server:
+    custom_request_port: 9006
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-catalog-agent"
+    prompt: >
+      In the test-app project, add a new durable agent type called `CatalogAgent` identified by
+      a single constructor parameter for the catalog name. Give it an HTTP mount under
+      `/catalogs/{catalog-name}` and make sure it is exposed through the app HTTP API on
+      `test-app.localhost:9006`.
+
+      CatalogAgent must store a list of products in agent state. Each product has the following
+      fields: `id` (string), `name` (string), `price` (f64 / number / Double), and `inStock`
+      (boolean). Use a record, object type, or case class named `Product` for this.
+
+      Expose these HTTP endpoints:
+
+      1. `POST /products` — accepts `name` (string), `price` (number), and `inStock` (boolean)
+         as JSON body fields. Creates a new Product with an auto-generated sequential id
+         (starting from "1"), stores it, and returns the created product as JSON.
+
+      2. `GET /products/{product-id}` — returns the product with the given id as JSON, or 404
+         if not found. Use `Option` / `undefined` / `Option` return type.
+
+      3. `GET /products/search?q={query}&min-price={minPrice}&in-stock-only={inStockOnly}` —
+         searches products. `query` filters by name (substring match, case-insensitive).
+         `minPrice` is an optional f64/number/Double that filters products with price >= that
+         value. `inStockOnly` is an optional boolean that when true only returns in-stock
+         products. Return the matching products as a JSON array.
+
+      4. `PUT /products/{product-id}` — accepts `name` (string), `price` (number), and
+         `inStock` (boolean) as JSON body fields. Updates the product with the given id and
+         returns the updated product, or 404 if not found. The id comes from the path, the
+         other fields from the body.
+
+      5. `DELETE /products/{product-id}` — deletes the product with the given id. Returns 204
+         (no content / unit) on success.
+
+      6. `POST /products/batch` — accepts a JSON body with a single field `products` which is
+         an array/list/vector of objects, each having `name` (string), `price` (number), and
+         `inStock` (boolean). Creates all of them with sequential ids continuing from the
+         current count, stores them, and returns the created products as a JSON array.
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-http-endpoint-rust"
+      ts:
+        - "golem-add-http-endpoint-ts"
+      scala:
+        - "golem-add-http-endpoint-scala"
+    allowedExtraSkills:
+      rust:
+        - "golem-http-params-rust"
+      ts:
+        - "golem-http-params-ts"
+      scala:
+        - "golem-http-params-scala"
+    verify:
+      build: true
+      deploy: true
+
+  # --- POST body mapping: multiple typed fields ---
+  # Rust uses snake_case parameter names in JSON body; TS/Scala use camelCase
+  - id: "create-product-1"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+      body:
+        rust: '{"name":"Laptop","price":999.99,"in_stock":true}'
+        ts: '{"name":"Laptop","price":999.99,"inStock":true}'
+        scala: '{"name":"Laptop","price":999.99,"inStock":true}'
+    expect:
+      rust:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Laptop"
+          - path: "$.price"
+            equals: 999.99
+          - path: "$.in_stock"
+            equals: true
+      ts:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Laptop"
+          - path: "$.price"
+            equals: 999.99
+          - path: "$.inStock"
+            equals: true
+      scala:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Laptop"
+          - path: "$.price"
+            equals: 999.99
+          - path: "$.inStock"
+            equals: true
+
+  - id: "create-product-2"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+      body:
+        rust: '{"name":"Mouse","price":25.50,"in_stock":true}'
+        ts: '{"name":"Mouse","price":25.50,"inStock":true}'
+        scala: '{"name":"Mouse","price":25.50,"inStock":true}'
+    expect:
+      status: 200
+      body_json:
+        - path: "$.name"
+          equals: "Mouse"
+
+  - id: "create-product-3"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+      body:
+        rust: '{"name":"Keyboard","price":75.00,"in_stock":false}'
+        ts: '{"name":"Keyboard","price":75.00,"inStock":false}'
+        scala: '{"name":"Keyboard","price":75.00,"inStock":false}'
+    expect:
+      rust:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Keyboard"
+          - path: "$.in_stock"
+            equals: false
+      ts:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Keyboard"
+          - path: "$.inStock"
+            equals: false
+      scala:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Keyboard"
+          - path: "$.inStock"
+            equals: false
+
+  # --- Path variable mapping on GET ---
+  - id: "get-product-by-id"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/1"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$.id"
+          equals: "1"
+        - path: "$.name"
+          equals: "Laptop"
+        - path: "$.price"
+          equals: 999.99
+
+  # --- Option/undefined return → 404 ---
+  - id: "get-product-not-found"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/999"
+      method: "GET"
+    expect:
+      status: 404
+
+  # --- Query parameter mapping: string + optional number + optional boolean ---
+  - id: "search-by-name"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=lap"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$[0].name"
+          equals: "Laptop"
+
+  - id: "search-with-min-price"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=&min-price=50"
+      method: "GET"
+    expect:
+      status: 200
+      body_contains: "Laptop"
+
+  - id: "search-with-min-price-excludes-cheap"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=mouse&min-price=50"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: []
+
+  - id: "search-in-stock-only"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=&in-stock-only=true"
+      method: "GET"
+    expect:
+      status: 200
+      body_contains: "Laptop"
+
+  - id: "search-in-stock-only-excludes-keyboard"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=keyboard&in-stock-only=true"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: []
+
+  - id: "search-combined-filters"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q=&min-price=50&in-stock-only=true"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$[0].name"
+          equals: "Laptop"
+
+  # --- PUT: path variable + body fields mixed ---
+  - id: "update-product"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/2"
+      method: "PUT"
+      headers:
+        Content-Type: "application/json"
+      body:
+        rust: '{"name":"Gaming Mouse","price":49.99,"in_stock":true}'
+        ts: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
+        scala: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
+    expect:
+      status: 200
+      body_json:
+        - path: "$.name"
+          equals: "Gaming Mouse"
+        - path: "$.price"
+          equals: 49.99
+
+  - id: "verify-update-persisted"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/2"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$.name"
+          equals: "Gaming Mouse"
+        - path: "$.price"
+          equals: 49.99
+
+  # --- PUT on nonexistent product → 404 ---
+  - id: "update-product-not-found"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/999"
+      method: "PUT"
+      headers:
+        Content-Type: "application/json"
+      body:
+        rust: '{"name":"Ghost","price":0,"in_stock":false}'
+        ts: '{"name":"Ghost","price":0,"inStock":false}'
+        scala: '{"name":"Ghost","price":0,"inStock":false}'
+    expect:
+      status: 404
+
+  # --- DELETE: path variable, unit/void return → 204 ---
+  - id: "delete-product"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/3"
+      method: "DELETE"
+    expect:
+      status: 204
+
+  - id: "verify-delete"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/3"
+      method: "GET"
+    expect:
+      status: 404
+
+  # --- POST with complex body (array of objects) ---
+  - id: "batch-create"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/batch"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+      body:
+        rust: '{"products":[{"name":"Monitor","price":299.99,"in_stock":true},{"name":"Webcam","price":59.99,"in_stock":false}]}'
+        ts: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
+        scala: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
+    expect:
+      status: 200
+      body_contains: "Monitor"
+
+  - id: "verify-batch-products-exist"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/electronics/products/search?q="
+      method: "GET"
+    expect:
+      status: 200
+      body_contains: "Webcam"
+
+  # --- Different agent instance (mount path variable as constructor param) ---
+  - id: "different-catalog-instance"
+    http:
+      url: "http://test-app.localhost:9006/catalogs/books/products/search?q="
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: []

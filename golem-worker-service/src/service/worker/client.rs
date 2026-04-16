@@ -27,19 +27,20 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::Wo
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
     CreateWorkerRequest, DeactivatePluginRequest, ForkWorkerRequest, InterruptWorkerRequest,
-    ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
+    ProcessOplogEntriesRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse,
+    UpdateWorkerRequest,
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::UntypedDataValue;
 use golem_common::model::component::{
-    ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
+    CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntryWithIndex};
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
@@ -63,8 +64,8 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
-        config_vars: BTreeMap<String, String>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        wasi_config: BTreeMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
@@ -164,7 +165,7 @@ pub trait WorkerClient: Send + Sync {
     async fn get_file_system_node(
         &self,
         agent_id: &AgentId,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
@@ -173,7 +174,7 @@ pub trait WorkerClient: Send + Sync {
     async fn get_file_contents(
         &self,
         agent_id: &AgentId,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
@@ -235,6 +236,20 @@ pub trait WorkerClient: Send + Sync {
         auth_ctx: AuthCtx,
         principal: golem_api_grpc::proto::golem::component::Principal,
     ) -> WorkerResult<AgentInvocationOutput>;
+
+    async fn process_oplog_entries(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        component_revision: ComponentRevision,
+        idempotency_key: IdempotencyKey,
+        account_id: AccountId,
+        config: std::collections::HashMap<String, String>,
+        metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
+        first_entry_index: OplogIndex,
+        entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<()>;
 }
 
 #[derive(Clone)]
@@ -403,8 +418,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
-        config_vars: BTreeMap<String, String>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        wasi_config: BTreeMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
@@ -423,11 +438,11 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     worker_executor_client.create_worker(CreateWorkerRequest {
                         agent_id: Some(agent_id.into()),
                         env: environment_variables.clone(),
-                        config_vars: config_vars.clone().into_iter().collect(),
-                        agent_config: agent_config
+                        wasi_config: wasi_config.clone().into_iter().collect(),
+                        config: config
                             .clone()
                             .into_iter()
-                            .map(golem_api_grpc::proto::golem::worker::AgentConfigEntry::from)
+                            .map(golem_api_grpc::proto::golem::worker::AgentConfigEntryDto::from)
                             .collect(),
                         component_owner_account_id: Some(account_id_clone.into()),
                         environment_id: Some(environment_id.into()),
@@ -914,7 +929,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn get_file_system_node(
         &self,
         agent_id: &AgentId,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
@@ -977,7 +992,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn get_file_contents(
         &self,
         agent_id: &AgentId,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
         auth_ctx: AuthCtx,
@@ -1350,6 +1365,64 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             .await?;
 
         Ok(result)
+    }
+
+    async fn process_oplog_entries(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        component_revision: ComponentRevision,
+        idempotency_key: IdempotencyKey,
+        account_id: AccountId,
+        config: std::collections::HashMap<String, String>,
+        metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
+        first_entry_index: OplogIndex,
+        entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<()> {
+        let target_agent_id = target_agent_id.clone();
+        self.call_worker_executor(
+            target_agent_id.clone(),
+            "process_oplog_entries",
+            move |worker_executor_client| {
+                let target_agent_id = target_agent_id.clone();
+                Box::pin(
+                    worker_executor_client
+                        .process_oplog_entries(ProcessOplogEntriesRequest {
+                            agent_id: Some(target_agent_id.into()),
+                            environment_id: Some(environment_id.into()),
+                            component_revision: component_revision.into(),
+                            idempotency_key: Some(idempotency_key.clone().into()),
+                            account_id: Some(account_id.into()),
+                            config: config.clone(),
+                            metadata: Some(metadata.clone()),
+                            first_entry_index: first_entry_index.into(),
+                            entries: entries.clone(),
+                            auth_ctx: Some(auth_ctx.clone().into()),
+                        }),
+                )
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::ProcessOplogEntriesResponse {
+                    result:
+                        Some(
+                            workerexecutor::v1::process_oplog_entries_response::Result::Success(_),
+                        ),
+                } => Ok(()),
+                workerexecutor::v1::ProcessOplogEntriesResponse {
+                    result:
+                        Some(
+                            workerexecutor::v1::process_oplog_entries_response::Result::Failure(err),
+                        ),
+                } => Err(err.into()),
+                workerexecutor::v1::ProcessOplogEntriesResponse { .. } => {
+                    Err("Empty response".into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await?;
+        Ok(())
     }
 }
 

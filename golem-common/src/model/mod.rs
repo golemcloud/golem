@@ -56,9 +56,9 @@ pub use retry_policy::{
 };
 
 use self::component::ComponentId;
-use self::component::{ComponentFilePermissions, ComponentRevision};
+use self::component::{AgentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
-use self::worker::ParsedWorkerAgentConfigEntry;
+use self::worker::TypedAgentConfigEntry;
 use crate::base_model::agent::ParsedAgentId;
 use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -513,8 +513,8 @@ pub struct AgentMetadata {
     pub env: Vec<(String, String)>,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
-    pub config_vars: BTreeMap<String, String>,
-    pub agent_config: Vec<ParsedWorkerAgentConfigEntry>,
+    pub wasi_config: BTreeMap<String, String>,
+    pub config: Vec<TypedAgentConfigEntry>,
     pub created_at: Timestamp,
     pub parent: Option<AgentId>,
     pub last_known_status: AgentStatusRecord,
@@ -532,8 +532,8 @@ impl AgentMetadata {
             env: vec![],
             environment_id,
             created_by,
-            config_vars: BTreeMap::new(),
-            agent_config: Vec::new(),
+            wasi_config: BTreeMap::new(),
+            config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: AgentStatusRecord::default(),
@@ -572,12 +572,12 @@ impl AgentFilter {
                 }
                 result
             }
-            AgentFilter::ConfigVars(AgentConfigVarsFilter {
+            AgentFilter::WasiConfig(AgentConfigVarsFilter {
                 name,
                 comparator,
                 value,
             }) => {
-                let env_value = metadata.config_vars.get(&name);
+                let env_value = metadata.wasi_config.get(&name);
                 env_value
                     .map(|ev| comparator.matches(ev, &value))
                     .unwrap_or(false)

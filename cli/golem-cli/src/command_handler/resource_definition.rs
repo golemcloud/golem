@@ -219,7 +219,7 @@ impl ResourceDefinitionCommandHandler {
         let clients = self.ctx.golem_clients().await?;
         let results = clients
             .resources
-            .get_environment_resources(&environment.environment_id.0)
+            .list_environment_resources(&environment.environment_id.0)
             .await
             .map_service_error()?
             .values;

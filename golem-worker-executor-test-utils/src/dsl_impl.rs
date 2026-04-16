@@ -29,16 +29,18 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     revert_worker_response, search_oplog_response, update_worker_response,
 };
 use golem_common::base_model::agent::{DataValue, ParsedAgentId, UntypedDataValue};
+use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::PromiseId;
+use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::component::{
-    AgentConfigEntry, ComponentDto, ComponentFilePath, ComponentId, ComponentName,
-    ComponentRevision, InitialComponentFile, PluginInstallation, PluginInstallationAction,
+    AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
+    ArchiveFilePath, ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{
-    AgentMetadataDto, FlatComponentFileSystemNode, RevertWorkerTarget, WorkerAgentConfigEntry,
+    AgentConfigEntryDto, AgentFileSystemNode, AgentMetadataDto, RevertWorkerTarget,
 };
 use golem_common::model::{AgentFilter, IdempotencyKey, ScanCursor};
 use golem_common::model::{AgentId, OplogIndex};
@@ -71,19 +73,21 @@ impl TestDsl for TestWorkerExecutor {
         name: &str,
         unique: bool,
         unverified: bool,
-        files: Vec<IFSEntry>,
-        env: BTreeMap<String, String>,
-        config_vars: BTreeMap<String, String>,
-        agent_config: Vec<AgentConfigEntry>,
-        plugins: Vec<PluginInstallation>,
+        agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
-        if !agent_config.is_empty() {
+        if agent_type_provision_configs
+            .values()
+            .any(|c| !c.config.is_empty())
+        {
             return Err(anyhow!(
                 "Agent config isn't supported in worker executor tests"
             ));
         }
-
-        if !plugins.is_empty() {
+        if agent_type_provision_configs
+            .values()
+            .any(|c| !c.plugin_installations.is_empty())
+        {
             return Err(anyhow!("Plugins aren't supported in worker executor tests"));
         }
 
@@ -111,27 +115,59 @@ impl TestDsl for TestWorkerExecutor {
             source_path
         };
 
-        let mut converted_files = Vec::new();
-        for entry in files {
-            let full_source_path = component_directory.join(entry.source_path);
-            let data = tokio::fs::read(full_source_path).await?;
+        let mut file_map: std::collections::HashMap<ArchiveFilePath, (AgentFileContentHash, u64)> =
+            std::collections::HashMap::new();
+        for ifs_entry in &files_for_archive {
+            let full_source_path = component_directory.join(&ifs_entry.source_path);
+            let data = tokio::fs::read(&full_source_path).await?;
             let size = data.len() as u64;
             let content_hash = self
                 .deps
-                .initial_component_files_service
+                .initial_agent_files_service
                 .put_if_not_exists(
                     environment_id,
                     data.map_error(widen_infallible::<anyhow::Error>)
                         .map_item(|i| i.map_err(widen_infallible::<anyhow::Error>)),
                 )
                 .await?;
-            converted_files.push(InitialComponentFile {
-                content_hash,
-                path: entry.target_path,
-                permissions: entry.permissions,
-                size,
-            });
+            file_map.insert(
+                ArchiveFilePath(ifs_entry.target_path.clone()),
+                (content_hash, size),
+            );
         }
+
+        let stored_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig> =
+            agent_type_provision_configs
+                .into_iter()
+                .map(|(agent_type_name, creation)| {
+                    let files: Vec<InitialAgentFile> = creation
+                        .files
+                        .iter()
+                        .filter_map(|(archive_path, options)| {
+                            file_map
+                                .get(archive_path)
+                                .map(|(hash, size)| InitialAgentFile {
+                                    content_hash: *hash,
+                                    path: options.target_path.clone(),
+                                    permissions: options.permissions,
+                                    size: *size,
+                                })
+                        })
+                        .collect();
+                    (
+                        agent_type_name,
+                        AgentTypeProvisionConfig {
+                            env: creation.env,
+                            wasi_config: creation.wasi_config,
+                            files,
+                            // config requires parse_with_type — not supported in executor tests
+                            config: vec![],
+                            // plugin grants cannot be resolved in executor tests
+                            plugins: vec![],
+                        },
+                    )
+                })
+                .collect();
 
         let component = {
             if unique {
@@ -140,10 +176,8 @@ impl TestDsl for TestWorkerExecutor {
                     .add_component(
                         &source_path,
                         &component_name.0,
-                        converted_files,
+                        stored_provision_configs,
                         unverified,
-                        env,
-                        config_vars,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
@@ -158,10 +192,8 @@ impl TestDsl for TestWorkerExecutor {
                     .get_or_add_component(
                         &source_path,
                         &component_name.0,
-                        converted_files,
+                        stored_provision_configs,
                         unverified,
-                        env,
-                        config_vars,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
@@ -208,17 +240,22 @@ impl TestDsl for TestWorkerExecutor {
         component_id: &ComponentId,
         previous_revision: ComponentRevision,
         wasm_name: Option<&str>,
-        new_files: Vec<IFSEntry>,
-        removed_files: Vec<ComponentFilePath>,
-        env: Option<BTreeMap<String, String>>,
-        config_vars: Option<BTreeMap<String, String>>,
-        agent_config: Option<Vec<AgentConfigEntry>>,
-        _plugin_updates: Vec<PluginInstallationAction>,
+        agent_type_provision_config_updates: Option<
+            BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>,
+        >,
+        files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
-        if agent_config.is_some() {
-            return Err(anyhow!(
-                "Agent config isn't supported in worker executor tests"
-            ));
+        if let Some(ref updates) = agent_type_provision_config_updates {
+            if updates.values().any(|u| u.config.is_some()) {
+                return Err(anyhow!(
+                    "Agent config isn't supported in worker executor tests"
+                ));
+            }
+            if updates.values().any(|u| !u.plugin_updates.is_empty()) {
+                return Err(anyhow!(
+                    "Plugin updates aren't supported in worker executor tests"
+                ));
+            }
         }
 
         let latest_revision = self
@@ -249,27 +286,78 @@ impl TestDsl for TestWorkerExecutor {
             (None, None)
         };
 
-        let mut converted_new_files = Vec::new();
-        for entry in new_files {
-            let full_source_path = component_dir.join(entry.source_path);
-            let data = tokio::fs::read(full_source_path).await?;
+        // Upload new files
+        let mut file_map: std::collections::HashMap<ArchiveFilePath, (AgentFileContentHash, u64)> =
+            std::collections::HashMap::new();
+        for ifs_entry in &files_for_archive {
+            let full_source_path = component_dir.join(&ifs_entry.source_path);
+            let data = tokio::fs::read(&full_source_path).await?;
             let size = data.len() as u64;
             let content_hash = self
                 .deps
-                .initial_component_files_service
+                .initial_agent_files_service
                 .put_if_not_exists(
                     latest_revision.environment_id,
                     data.map_error(widen_infallible::<anyhow::Error>)
                         .map_item(|i| i.map_err(widen_infallible::<anyhow::Error>)),
                 )
                 .await?;
-            converted_new_files.push(InitialComponentFile {
-                content_hash,
-                path: entry.target_path,
-                permissions: entry.permissions,
-                size,
-            });
+            file_map.insert(
+                ArchiveFilePath(ifs_entry.target_path.clone()),
+                (content_hash, size),
+            );
         }
+
+        // Merge updates into existing provision configs
+        let new_provision_configs = if let Some(updates) = agent_type_provision_config_updates {
+            let mut configs = latest_revision
+                .metadata
+                .agent_type_provision_configs()
+                .clone();
+            for (agent_type_name, update) in updates {
+                let existing = configs.get(&agent_type_name).cloned().unwrap_or_default();
+
+                let new_env = update.env.unwrap_or(existing.env);
+                let new_wasi_config = update.wasi_config.unwrap_or(existing.wasi_config);
+
+                let mut files: std::collections::HashMap<AgentFilePath, InitialAgentFile> =
+                    existing
+                        .files
+                        .into_iter()
+                        .map(|f| (f.path.clone(), f))
+                        .collect();
+                for path in &update.files_to_remove {
+                    files.remove(path);
+                }
+                for (archive_path, options) in &update.files_to_add_or_update {
+                    if let Some((hash, size)) = file_map.get(archive_path) {
+                        files.insert(
+                            options.target_path.clone(),
+                            InitialAgentFile {
+                                path: options.target_path.clone(),
+                                content_hash: *hash,
+                                permissions: options.permissions,
+                                size: *size,
+                            },
+                        );
+                    }
+                }
+
+                configs.insert(
+                    agent_type_name,
+                    AgentTypeProvisionConfig {
+                        env: new_env,
+                        wasi_config: new_wasi_config,
+                        files: files.into_values().collect(),
+                        config: existing.config,
+                        plugins: existing.plugins,
+                    },
+                );
+            }
+            Some(configs)
+        } else {
+            None
+        };
 
         let component = self
             .deps
@@ -277,10 +365,7 @@ impl TestDsl for TestWorkerExecutor {
             .update_component(
                 component_id,
                 source_path.as_deref(),
-                converted_new_files,
-                removed_files,
-                env,
-                config_vars,
+                new_provision_configs,
                 original_source_hash,
             )
             .await?;
@@ -294,8 +379,8 @@ impl TestDsl for TestWorkerExecutor {
         component_id: &ComponentId,
         id: ParsedAgentId,
         env: HashMap<String, String>,
-        config_vars: HashMap<String, String>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        wasi_config: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, WorkerExecutorError>> {
         let latest_revision = self.get_latest_component_revision(component_id).await?;
 
@@ -312,8 +397,8 @@ impl TestDsl for TestWorkerExecutor {
                 component_owner_account_id: Some(latest_revision.account_id.into()),
                 environment_id: Some(latest_revision.environment_id.into()),
                 env,
-                config_vars,
-                agent_config: agent_config.into_iter().map(|lac| lac.into()).collect(),
+                wasi_config,
+                config: config.into_iter().map(|lac| lac.into()).collect(),
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
@@ -953,7 +1038,7 @@ impl TestDsl for TestWorkerExecutor {
         &self,
         agent_id: &AgentId,
         path: &str,
-    ) -> anyhow::Result<Vec<FlatComponentFileSystemNode>> {
+    ) -> anyhow::Result<Vec<AgentFileSystemNode>> {
         let latest_version = self
             .get_latest_component_revision(&agent_id.component_id)
             .await?;

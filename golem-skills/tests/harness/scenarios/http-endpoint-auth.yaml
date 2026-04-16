@@ -1,0 +1,121 @@
+name: "http-endpoint-auth"
+settings:
+  golem_server:
+    custom_request_port: 9006
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-secure-agent"
+    prompt: >
+      In the test-app project, add a new durable agent type called `VaultAgent` identified by
+      a single constructor parameter for the vault name. Give it an HTTP mount under
+      `/vaults/{vault-name}` with authentication enabled at the mount level (auth = true),
+      and make sure it is exposed through the app HTTP API on `test-app.localhost:9006`.
+
+      VaultAgent must store a single string value called `secret` in agent state, initially
+      set to `"none"`.
+
+      Expose these HTTP endpoints:
+
+      1. `GET /health` — returns the string `"ok"`. This endpoint must have auth disabled
+         (auth = false) so it can be called without authentication.
+
+      2. `GET /secret` — returns the current stored secret string. This endpoint inherits
+         mount-level auth, so it requires authentication.
+
+      3. `POST /store` — accepts a `secret` (string) as a JSON body field, stores it in
+         agent state, and returns the stored value as a JSON object with a `secret` field.
+         This endpoint inherits mount-level auth.
+
+      For the deployment configuration in golem.yaml, use `testSessionHeaderName: X-Test-Auth`
+      for the VaultAgent so that authentication can be tested with a simple header in
+      development mode.
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-http-auth-rust"
+      ts:
+        - "golem-add-http-auth-ts"
+      scala:
+        - "golem-add-http-auth-scala"
+    verify:
+      build: true
+      deploy: true
+
+  # --- Public endpoint: auth=false override allows unauthenticated access ---
+  - id: "health-no-auth"
+    http:
+      url: "http://test-app.localhost:9006/vaults/main/health"
+      method: "GET"
+    expect:
+      status: 200
+      body_contains: "ok"
+
+  # --- Protected endpoints: no auth header → 401 ---
+  - id: "secret-no-auth-rejected"
+    http:
+      url: "http://test-app.localhost:9006/vaults/main/secret"
+      method: "GET"
+    expect:
+      status: 401
+
+  - id: "store-no-auth-rejected"
+    http:
+      url: "http://test-app.localhost:9006/vaults/main/store"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+      body: '{"secret":"should-fail"}'
+    expect:
+      status: 401
+
+  # --- Protected endpoints: with test auth header → success ---
+  - id: "secret-with-auth-default"
+    http:
+      url: "http://test-app.localhost:9006/vaults/main/secret"
+      method: "GET"
+      headers:
+        X-Test-Auth: '{"subject":"user1"}'
+    expect:
+      status: 200
+      body_contains: "none"
+
+  - id: "store-with-auth"
+    http:
+      url: "http://test-app.localhost:9006/vaults/main/store"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Test-Auth: '{"subject":"user1"}'
+      body: '{"secret":"top-secret-42"}'
+    expect:
+      status: 200
+      body_json:
+        - path: "$.secret"
+          equals: "top-secret-42"
+
+  - id: "secret-with-auth-after-store"
+    http:
+      url: "http://test-app.localhost:9006/vaults/main/secret"
+      method: "GET"
+      headers:
+        X-Test-Auth: '{"subject":"user1"}'
+    expect:
+      status: 200
+      body_contains: "top-secret-42"
+
+  # --- Different instance is isolated ---
+  - id: "different-instance-isolated"
+    http:
+      url: "http://test-app.localhost:9006/vaults/other/secret"
+      method: "GET"
+      headers:
+        X-Test-Auth: '{"subject":"user2"}'
+    expect:
+      status: 200
+      body_contains: "none"

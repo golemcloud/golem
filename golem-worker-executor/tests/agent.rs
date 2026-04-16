@@ -92,6 +92,8 @@ async fn agent_await_parallel_rpc_calls(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
+    executor.log_output(&worker_id).await?;
+
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "run", data_value!(20f64))
         .await;
@@ -115,10 +117,13 @@ async fn agent_env_inheritance(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc)
-        .with_env(vec![
-            ("ENV1".to_string(), "1".to_string()),
-            ("ENV2".to_string(), "2".to_string()),
-        ])
+        .with_env(
+            "TestAgent",
+            vec![
+                ("ENV1".to_string(), "1".to_string()),
+                ("ENV2".to_string(), "2".to_string()),
+            ],
+        )
         .store()
         .await?;
     let unique_id = context.redis_prefix();

@@ -64,10 +64,10 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{Instrument, error};
-use wasmtime::component::Resource;
+use wasmtime::component::{Resource, ResourceTableError};
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
-use golem_common::model::worker::WorkerAgentConfigEntry;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 
@@ -86,7 +86,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         agent_type_name: String,
         constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
         phantom_id: Option<golem_wasm::Uuid>,
-        agent_config: Vec<
+        config: Vec<
             golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
     ) -> anyhow::Result<Resource<WasmRpcEntry>> {
@@ -96,7 +96,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
-        let config_vars = self.state.config_vars.clone();
+        let wasi_config = self.state.wasi_config.clone();
 
         let agent_type = crate::preview2::golem::agent::host::Host::get_agent_type(
             self,
@@ -123,7 +123,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let remote_agent_id = golem_common::model::AgentId::from_agent_id(component_id, &agent_id)
             .map_err(|err| anyhow::anyhow!("{err}"))?;
 
-        let agent_config = agent_config
+        let config = config
             .into_iter()
             .map(|c| {
                 let value_and_type = ValueAndType::from(c.value);
@@ -131,14 +131,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     .to_json_value()
                     .map_err(|err| anyhow::anyhow!("Failed serializing agent config: {err}"))?;
 
-                Ok::<_, anyhow::Error>(WorkerAgentConfigEntry {
+                Ok::<_, anyhow::Error>(AgentConfigEntryDto {
                     path: c.path,
-                    value: encoded,
+                    value: encoded.into(),
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        construct_wasm_rpc_resource(self, remote_agent_id, &env, config_vars, agent_config).await
+        construct_wasm_rpc_resource(self, remote_agent_id, &env, wasi_config, config).await
     }
 
     async fn invoke_and_await(
@@ -153,7 +153,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
-        let config_vars = self.state.config_vars.clone();
+        let wasi_config = self.state.wasi_config.clone();
         let own_agent_id = self.owned_agent_id().clone();
 
         let entry = self.table().get(&self_)?;
@@ -231,7 +231,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         created_by,
                         &agent_id,
                         &env,
-                        config_vars.clone(),
+                        wasi_config.clone(),
                         stack,
                     ),
                     interrupt_signal,
@@ -296,7 +296,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
-        let config_vars = self.state.config_vars.clone();
+        let wasi_config = self.state.wasi_config.clone();
         let own_agent_id = self.owned_agent_id().clone();
 
         let entry = self.table().get(&self_)?;
@@ -362,7 +362,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         self.created_by(),
                         self.agent_id(),
                         &env,
-                        config_vars.clone(),
+                        wasi_config.clone(),
                         stack,
                     )
                     .await;
@@ -410,7 +410,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(self).await?;
         crate::model::AgentConfig::remove_dynamic_vars(&mut env);
 
-        let config_vars = self.state.config_vars.clone();
+        let wasi_config = self.state.wasi_config.clone();
         let own_agent_id = self.owned_agent_id().clone();
 
         let entry = self.table().get(&this)?;
@@ -508,7 +508,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 created_by,
                 agent_id,
                 env,
-                config_vars,
+                wasi_config,
                 stack,
                 retry_params,
             );
@@ -521,6 +521,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     begin_index,
                 }),
                 child_pollables: Vec::new(),
+                drop_pending: false,
             })?;
             Ok(fut)
         } else {
@@ -530,7 +531,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     self_agent_id: agent_id,
                     self_created_by: created_by,
                     env,
-                    wasi_config_vars: config_vars,
+                    wasi_config_vars: wasi_config,
                     method_name,
                     method_parameters: input_untyped,
                     idempotency_key,
@@ -538,6 +539,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     begin_index,
                 }),
                 child_pollables: Vec::new(),
+                drop_pending: false,
             })?;
             Ok(fut)
         };
@@ -679,6 +681,9 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let parent: Resource<FutureInvokeResult> = Resource::new_borrow(parent_rep);
         let entry = self.table().get_mut(&parent)?;
         entry.child_pollables.push(child_rep);
+        self.state
+            .rpc_pollable_to_parent
+            .insert(child_rep, parent_rep);
         Ok(pollable)
     }
 
@@ -1078,20 +1083,21 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
     async fn drop(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
         self.observe_function_call("golem::rpc::future-invoke-result", "drop");
+        let future_rep = this.rep();
 
-        let child_reps = {
-            let entry = self.table().get_mut(&this)?;
-            std::mem::take(&mut entry.child_pollables)
-        };
-
-        for rep in child_reps {
-            let child: Resource<golem_wasm::DynPollable> = Resource::new_own(rep);
-            if let Err(err) = self.table().delete(child) {
-                tracing::debug!(rep, err=%err, "Child pollable already dropped by guest");
+        match self.table().delete(this) {
+            Ok(entry) => {
+                for child_rep in &entry.child_pollables {
+                    self.state.rpc_pollable_to_parent.remove(child_rep);
+                }
             }
+            Err(ResourceTableError::HasChildren) => {
+                let parent: Resource<FutureInvokeResult> = Resource::new_borrow(future_rep);
+                self.table().get_mut(&parent)?.drop_pending = true;
+            }
+            Err(err) => return Err(err.into()),
         }
 
-        let _ = self.table().delete(this)?;
         Ok(())
     }
 }
@@ -1156,8 +1162,8 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     remote_agent_id: AgentId,
     env: &[(String, String)],
-    config: std::collections::BTreeMap<String, String>,
-    agent_config: Vec<WorkerAgentConfigEntry>,
+    wasi_config: std::collections::BTreeMap<String, String>,
+    config: Vec<AgentConfigEntryDto>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let span = create_rpc_connection_span(ctx, &remote_agent_id).await?;
 
@@ -1178,9 +1184,9 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
             ctx.created_by(),
             ctx.agent_id(),
             env,
-            config,
+            wasi_config,
             stack,
-            agent_config,
+            config,
         )
         .await?;
     let entry = ctx.table().push(WasmRpcEntry {
@@ -1215,7 +1221,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
     created_by: AccountId,
     agent_id: AgentId,
     env: Vec<(String, String)>,
-    config_vars: BTreeMap<String, String>,
+    wasi_config: BTreeMap<String, String>,
     stack: InvocationContextStack,
     retry_params: Option<TaskRetryParams<Ctx>>,
 ) -> AbortOnDropJoinHandle<Result<Result<UntypedDataValue, InternalRpcError>, Error>> {
@@ -1228,7 +1234,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         let created_by = created_by;
         let agent_id = agent_id.clone();
         let env = env.clone();
-        let config_vars = config_vars.clone();
+        let wasi_config = wasi_config.clone();
         let stack = stack.clone();
         async move {
             rpc.invoke_and_await(
@@ -1239,7 +1245,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                 created_by,
                 &agent_id,
                 &env,
-                config_vars,
+                wasi_config,
                 stack,
             )
             .await
@@ -1374,7 +1380,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         self_agent_id,
         self_created_by,
         env,
-        wasi_config_vars: config_vars,
+        wasi_config_vars: wasi_config,
         method_name,
         method_parameters,
         idempotency_key,
@@ -1428,7 +1434,7 @@ fn handle_deferred_rpc_dispatch<Ctx: WorkerCtx>(
         *self_created_by,
         self_agent_id.clone(),
         env.clone(),
-        config_vars.clone(),
+        wasi_config.clone(),
         stack,
         retry_params,
     );

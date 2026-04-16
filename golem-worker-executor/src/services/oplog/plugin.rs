@@ -29,7 +29,7 @@ use async_lock::Mutex;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::Principal;
+use golem_common::model::agent::{ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -261,23 +261,6 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             .resolve_plugin_worker(worker_metadata.environment_id, plugin)
             .await?;
 
-        // Use the explicitly provided target_agent_id for invocation
-        let target_owned = OwnedAgentId::new(worker_metadata.environment_id, target_agent_id);
-
-        let worker = self
-            .worker_activator
-            .get_or_create_running(
-                &target_owned,
-                None,
-                None,
-                Vec::new(),
-                Some(running_plugin.component_revision),
-                None,
-                &InvocationContextStack::fresh(),
-                Principal::anonymous(),
-            )
-            .await?;
-
         let batch_last_index = if entries.is_empty() {
             initial_oplog_index
         } else {
@@ -290,22 +273,127 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
             batch_last_index,
         );
 
-        let account_id = worker_metadata.created_by;
-        // Enqueue only — any Ok (Pending or Finished) counts as durable delivery
-        let _result = worker
-            .invoke(AgentInvocation::ProcessOplogEntries {
-                idempotency_key,
-                account_id,
-                config: running_plugin
-                    .configuration
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-                metadata: worker_metadata.into(),
-                first_entry_index: initial_oplog_index,
-                entries,
-            })
-            .await?;
+        let is_local = self.is_local(target_agent_id).await?;
+
+        if is_local {
+            // Local path: activate and invoke directly
+            let target_owned = OwnedAgentId::new(worker_metadata.environment_id, target_agent_id);
+
+            let worker = self
+                .worker_activator
+                .get_or_create_running(
+                    &target_owned,
+                    None,
+                    None,
+                    Vec::new(),
+                    Some(running_plugin.component_revision),
+                    None,
+                    &InvocationContextStack::fresh(),
+                    Principal::anonymous(),
+                )
+                .await?;
+
+            let account_id = worker_metadata.created_by;
+            let _result = worker
+                .invoke(AgentInvocation::ProcessOplogEntries {
+                    idempotency_key,
+                    account_id,
+                    config: running_plugin
+                        .configuration
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    metadata: worker_metadata.into(),
+                    first_entry_index: initial_oplog_index,
+                    entries,
+                })
+                .await?;
+        } else {
+            // Remote path: route through worker service to the executor
+            // that currently owns the recorded target worker
+            let proto_metadata = {
+                use std::collections::HashMap;
+                let latest_status = &worker_metadata.last_known_status;
+                golem_api_grpc::proto::golem::worker::AgentMetadata {
+                    agent_id: Some(worker_metadata.agent_id.clone().into()),
+                    environment_id: Some(worker_metadata.environment_id.into()),
+                    env: HashMap::from_iter(worker_metadata.env.iter().cloned()),
+                    wasi_config: worker_metadata.wasi_config.clone().into_iter().collect(),
+                    config: worker_metadata
+                        .config
+                        .clone()
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                    created_by: Some(worker_metadata.created_by.into()),
+                    component_revision: latest_status.component_revision.into(),
+                    status: Into::<golem_api_grpc::proto::golem::worker::AgentStatus>::into(
+                        latest_status.status.clone(),
+                    )
+                    .into(),
+                    retry_count: latest_status
+                        .current_retry_state
+                        .iter()
+                        .max_by_key(|(idx, _)| **idx)
+                        .map(|(_, state)| state.retry_count())
+                        .unwrap_or_default(),
+                    pending_invocation_count: latest_status.pending_invocations.len() as u64,
+                    updates: Vec::new(),
+                    created_at: Some(worker_metadata.created_at.into()),
+                    last_error: None,
+                    component_size: latest_status.component_size,
+                    total_linear_memory_size: latest_status.total_linear_memory_size,
+                    owned_resources: Vec::new(),
+                    active_plugins: latest_status
+                        .active_plugins
+                        .iter()
+                        .map(|id| (*id).into())
+                        .collect(),
+                    skipped_regions: latest_status
+                        .skipped_regions
+                        .regions()
+                        .map(|region| region.clone().into())
+                        .collect(),
+                    deleted_regions: latest_status
+                        .deleted_regions
+                        .regions()
+                        .map(|region| region.clone().into())
+                        .collect(),
+                }
+            };
+            let proto_entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry> = entries
+                .into_iter()
+                .map(golem_api_grpc::proto::golem::worker::RawOplogEntry::try_from)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| {
+                    WorkerExecutorError::unknown(format!(
+                        "Failed to convert oplog entries to proto: {e}"
+                    ))
+                })?;
+
+            self.worker_proxy
+                .process_oplog_entries(
+                    target_agent_id,
+                    running_plugin.owned_agent_id.environment_id,
+                    running_plugin.component_revision,
+                    idempotency_key,
+                    worker_metadata.created_by,
+                    running_plugin
+                        .configuration
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    proto_metadata,
+                    initial_oplog_index,
+                    proto_entries,
+                )
+                .await
+                .map_err(|e| {
+                    WorkerExecutorError::unknown(format!(
+                        "Remote oplog processor delivery failed: {e}"
+                    ))
+                })?;
+        }
 
         Ok(())
     }
@@ -985,11 +1073,17 @@ impl ForwardingOplogState {
             _ => return,
         };
 
-        let plugin = match component_metadata
-            .installed_plugins
-            .iter()
-            .find(|p| p.environment_plugin_grant_id == grant_id)
-        {
+        let agent_type =
+            ParsedAgentId::parse_agent_type_name(&self.initial_worker_metadata.agent_id.agent_id)
+                .ok();
+        let plugin = match agent_type
+            .as_ref()
+            .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
+            .and_then(|plugins| {
+                plugins
+                    .iter()
+                    .find(|p| p.environment_plugin_grant_id == grant_id)
+            }) {
             Some(p) => p.clone(),
             None => return,
         };
@@ -1037,6 +1131,14 @@ impl ForwardingOplogState {
                 }
             }
         };
+
+        // Capture locality before the send so error handling uses the
+        // same classification as the actual send path.
+        let target_is_local = self
+            .oplog_plugins
+            .is_local(&target_agent_id)
+            .await
+            .unwrap_or(true);
 
         if let Some(s) = self.plugin_state.get_mut(&grant_id) {
             s.send_in_progress = true;
@@ -1187,7 +1289,6 @@ impl ForwardingOplogState {
                 self.monitor_tasks.push(monitor);
             }
             Err(err) => {
-                // Pre-enqueue failure — permanent for this target instance
                 tracing::error!("Failed to enqueue oplog entries to plugin {grant_id}: {err}");
                 if let Some(event_service) = &self.worker_event_service {
                     event_service.emit_event(
@@ -1198,14 +1299,23 @@ impl ForwardingOplogState {
                         true,
                     );
                 }
-                // Invalidate target — next flush will create a fresh instance
-                self.oplog_plugins
-                    .invalidate_target(metadata.environment_id, &plugin)
-                    .await;
-                if let Some(s) = self.plugin_state.get_mut(&grant_id) {
-                    s.target_agent_id = None;
-                    s.send_in_progress = false;
-                    // Leave cursors unchanged — same batch retried on new target
+
+                if target_is_local {
+                    // Local failure: invalidate target so next flush creates a fresh instance
+                    self.oplog_plugins
+                        .invalidate_target(metadata.environment_id, &plugin)
+                        .await;
+                    if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                        s.target_agent_id = None;
+                        s.send_in_progress = false;
+                    }
+                } else {
+                    // Remote failure: keep the recorded target to avoid duplicating
+                    // delivery across two different plugin workers. The batch remains
+                    // pending and will be retried against the same recorded target.
+                    if let Some(s) = self.plugin_state.get_mut(&grant_id) {
+                        s.send_in_progress = false;
+                    }
                 }
             }
         }
@@ -1355,11 +1465,18 @@ impl ForwardingOplogState {
                 }
             }
 
-            let plugin = match component_metadata
-                .installed_plugins
-                .iter()
-                .find(|p| p.environment_plugin_grant_id == grant_id)
-            {
+            let agent_type = ParsedAgentId::parse_agent_type_name(
+                &self.initial_worker_metadata.agent_id.agent_id,
+            )
+            .ok();
+            let plugin = match agent_type
+                .as_ref()
+                .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
+                .and_then(|plugins| {
+                    plugins
+                        .iter()
+                        .find(|p| p.environment_plugin_grant_id == grant_id)
+                }) {
                 Some(p) => p.clone(),
                 None => continue,
             };
@@ -1535,7 +1652,7 @@ mod tests {
     fn deterministic_idempotency_key_same_inputs_produce_same_key() {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
-            agent_id: "test-worker".to_string(),
+            agent_id: "TestPlugin(test-worker)".to_string(),
         };
         let plugin_id = EnvironmentPluginGrantId::new();
         let first = OplogIndex::from_u64(10);
@@ -1554,7 +1671,7 @@ mod tests {
     fn deterministic_idempotency_key_different_batch_range_produces_different_key() {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
-            agent_id: "test-worker".to_string(),
+            agent_id: "TestPlugin(test-worker)".to_string(),
         };
         let plugin_id = EnvironmentPluginGrantId::new();
 
@@ -1602,7 +1719,7 @@ mod tests {
     fn deterministic_idempotency_key_different_plugin_produces_different_key() {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
-            agent_id: "test-worker".to_string(),
+            agent_id: "TestPlugin(test-worker)".to_string(),
         };
         let plugin_id1 = EnvironmentPluginGrantId::new();
         let plugin_id2 = EnvironmentPluginGrantId::new();
@@ -1762,6 +1879,22 @@ mod tests {
             component_id: ComponentId,
             _forced_revision: Option<ComponentRevision>,
         ) -> Result<Component, WorkerExecutorError> {
+            use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+            use golem_common::model::agent::AgentTypeName;
+            use std::collections::BTreeMap;
+
+            let provision_configs = if self.installed_plugins.is_empty() {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([(
+                    AgentTypeName("TestPlugin".to_string()),
+                    AgentTypeProvisionConfig {
+                        plugins: self.installed_plugins.clone(),
+                        ..Default::default()
+                    },
+                )])
+            };
+
             Ok(Component {
                 id: component_id,
                 revision: ComponentRevision::INITIAL,
@@ -1771,13 +1904,15 @@ mod tests {
                 application_id: ApplicationId::new(),
                 account_id: AccountId::new(),
                 component_size: 100,
-                metadata: ComponentMetadata::default(),
+                metadata: ComponentMetadata::from_parts(
+                    vec![],
+                    vec![],
+                    None,
+                    None,
+                    vec![],
+                    provision_configs,
+                ),
                 created_at: chrono::Utc::now(),
-                files: Vec::new(),
-                installed_plugins: self.installed_plugins.clone(),
-                env: BTreeMap::new(),
-                config_vars: BTreeMap::new(),
-                agent_config: Vec::new(),
                 wasm_hash: diff::Hash::empty(),
                 object_store_key: String::new(),
             })
@@ -1900,7 +2035,7 @@ mod tests {
     ) {
         let agent_id = AgentId {
             component_id: ComponentId::new(),
-            agent_id: "test-worker".to_string(),
+            agent_id: "TestPlugin(test-worker)".to_string(),
         };
         let environment_id = EnvironmentId::new();
         let account_id = AccountId::new();
@@ -1914,8 +2049,8 @@ mod tests {
             env: vec![],
             environment_id,
             created_by: account_id,
-            config_vars: BTreeMap::new(),
-            agent_config: Vec::new(),
+            wasi_config: BTreeMap::new(),
+            config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
             last_known_status: status.clone(),

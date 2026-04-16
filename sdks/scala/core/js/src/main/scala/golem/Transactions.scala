@@ -110,7 +110,8 @@ object Transactions {
             // so we throw and catch below
             throw RetrySignal
           case other =>
-            guard.drop()
+            // Do NOT drop — leave the atomic region open so the executor
+            // sees the trap inside the region and can retry from the begin marker.
             throw other
         }
       ).recoverWith { case RetrySignal =>
@@ -147,11 +148,12 @@ object Transactions {
           guard.drop()
           Left(failure)
         }.recover { case e =>
-          guard.drop()
+          // Do NOT drop — leave the atomic region open so the executor
+          // sees the trap inside the region and can retry from the begin marker.
           throw e
         }
     }.recover { case e =>
-      guard.drop()
+      // Do NOT drop — leave the atomic region open for retry.
       throw e
     }
   }

@@ -124,11 +124,30 @@ httpApi:
           testSessionHeaderName: X-Test-Auth
 ```
 
-Then pass identity in requests:
+Then pass identity in requests. The header value must be a **JSON object** representing an OIDC session. All fields have defaults, so only `subject` is needed to identify the caller:
 
 ```shell
-curl -H "X-Test-Auth: test-user-id" http://my-app.localhost:9006/secure/agent1/data
+curl -H 'X-Test-Auth: {"subject":"test-user-id"}' http://my-app.localhost:9006/secure/agent1/data
 ```
+
+Available fields (all optional, with defaults):
+
+| Field | Type | Default |
+|---|---|---|
+| `subject` | string | `"test-user"` |
+| `issuer` | string (URL) | `"http://test-idp.com"` |
+| `email` | string | `null` |
+| `name` | string | `null` |
+| `email_verified` | boolean | `null` |
+| `given_name` | string | `null` |
+| `family_name` | string | `null` |
+| `picture` | string (URL) | `null` |
+| `preferred_username` | string | `null` |
+| `scopes` | array of strings | `["openid"]` |
+| `issued_at` | ISO 8601 datetime | current time |
+| `expires_at` | ISO 8601 datetime | current time + 8 hours |
+
+> **⚠️ Important:** The header value must be valid JSON — a plain string like `"user1"` will be rejected with a 400 error.
 
 ## Multi-Environment Deployments
 
@@ -169,12 +188,12 @@ The `webhookUrl` is combined with the agent's `webhookSuffix` (defined in code) 
 
 ## Deploying
 
-After configuring `golem.yaml`, deploy:
+After configuring `golem.yaml`, deploy. Always use `--yes` to avoid interactive prompts:
 
 ```shell
-golem deploy                     # Deploy all components and HTTP API
-golem deploy --reset             # Deploy and delete all previously created agents
-golem deploy --try-update-agents # Deploy and update running agents
+golem deploy --yes                     # Deploy all components and HTTP API
+golem deploy --yes --reset             # Deploy and delete all previously created agents
+golem deploy --yes --try-update-agents # Deploy and update running agents
 ```
 
 ## Auto-Generated OpenAPI
@@ -215,4 +234,4 @@ httpApi:
 - Each agent entry can have at most one of `securityScheme` or `testSessionHeaderName`
 - Security schemes must be created via `golem api security-scheme create` before they can be referenced
 - The domain must be unique per environment
-- After changing `golem.yaml`, run `golem deploy` to apply changes
+- After changing `golem.yaml`, run `golem deploy --yes` to apply changes

@@ -19,7 +19,7 @@ message AgentFilter {
     AgentAndFilter and = 6;
     AgentOrFilter or = 7;
     AgentNotFilter not = 8;
-    AgentConfigVarsFilter config_vars = 9;
+    AgentConfigVarsFilter wasi_config = 9;
   }
 }
 

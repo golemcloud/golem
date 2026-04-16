@@ -57,11 +57,11 @@ object MethodBinding {
           HostPayload
             .decode[In](payload)
             .fold(
-              err => Future.failed(js.JavaScriptException(err)),
+              err => Future.failed(js.JavaScriptException(JsAgentError.invalidInput(err))),
               value =>
                 handler(instance, value, principal).flatMap { out =>
                   HostPayload.encode[Out](out) match {
-                    case Left(error) => Future.failed(js.JavaScriptException(error))
+                    case Left(error) => Future.failed(js.JavaScriptException(JsAgentError.invalidInput(error)))
                     case Right(data) => Future.successful(data)
                   }
                 }

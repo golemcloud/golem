@@ -30,7 +30,7 @@ use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
-use golem_common::model::component::{ComponentFilePath, ComponentRevision};
+use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
@@ -1073,7 +1073,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// that may modify them.
     async fn get_file_system_node(
         &self,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         sender: Sender<Result<GetFileSystemNodeResult, WorkerExecutorError>>,
     ) {
         let result = self.store.data().get_file_system_node(&path).await;
@@ -1086,7 +1086,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// that may modify them.
     async fn read_file(
         &self,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         sender: Sender<Result<ReadFileResult, WorkerExecutorError>>,
     ) {
         let result = self.store.data().read_file(&path).await;

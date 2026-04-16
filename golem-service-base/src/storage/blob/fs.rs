@@ -90,8 +90,8 @@ impl FileSystemBlobStorage {
                 result.push(component_id.to_string());
                 result.push(level.to_string());
             }
-            BlobStorageNamespace::InitialComponentFiles { environment_id } => {
-                result.push("initial_component_files");
+            BlobStorageNamespace::InitialAgentFiles { environment_id } => {
+                result.push("initial_agent_files");
                 result.push(environment_id.to_string());
             }
             BlobStorageNamespace::Components { environment_id } => {

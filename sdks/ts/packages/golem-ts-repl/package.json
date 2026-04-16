@@ -3,8 +3,7 @@
   "type": "module",
   "version": "0.0.0",
   "publishConfig": {
-    "access": "public",
-    "tag": "test"
+    "access": "public"
   },
   "files": [
     "types",
@@ -17,32 +16,17 @@
       "types": "./dist/index.d.mts"
     }
   },
-  "typesVersions": {
-    "*": {
-      "agentic-guest": [
-        "types/exports.d.ts"
-      ],
-      "golem:agent/common": [
-        "types/golem_agent_common.d.ts"
-      ],
-      "golem:agent/host": [
-        "types/golem_agent_host.d.ts"
-      ]
-    }
-  },
   "scripts": {
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "format": "prettier --write \"src/**/*\"",
     "format:check": "prettier --check \"src/**/*\"",
-    "build": "tsc --noEmit && rollup -c",
-    "test": "tsc --noEmit && vitest run",
+    "build": "rollup --failAfterWarnings -c",
+    "prepare": "pnpm build",
+    "test": "vitest run",
     "dev": "rollup -c -w"
   },
   "keywords": [],
-  "sideEffects": [
-    "src/index.ts"
-  ],
   "author": "",
   "license": "SEE LICENSE IN LICENSE",
   "description": "",

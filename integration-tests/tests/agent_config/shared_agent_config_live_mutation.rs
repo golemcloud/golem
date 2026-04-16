@@ -92,7 +92,7 @@ async fn agent_reads_updated_environment_secret(
 
     assert_eq!(parsed, json!({"secret": "foo"}));
 
-    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
     let secret = secrets
         .values
         .iter()
@@ -174,7 +174,7 @@ async fn agent_fails_on_deleted_environment_secret(
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
     assert_eq!(parsed, json!({"secret": "foo"}));
 
-    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
     let secret = secrets
         .values
         .iter()
@@ -239,7 +239,7 @@ async fn agent_reads_recreated_environment_secret(
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 
-    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
     let secret = secrets
         .values
         .iter()
@@ -316,7 +316,7 @@ async fn agent_reads_secret_after_canonicalized_update(
 
     user.start_agent(&component.id, agent_id.clone()).await?;
 
-    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
     let secret = secrets
         .values
         .iter()

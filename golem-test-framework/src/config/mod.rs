@@ -30,7 +30,7 @@ use golem_client::api::RegistryServiceClient;
 use golem_client::model::{AccountSetRoles, TokenCreation};
 use golem_common::model::account::{AccountCreation, AccountEmail};
 use golem_common::model::auth::AccountRole;
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use std::collections::HashMap;
 use std::path::Path;
@@ -53,7 +53,7 @@ pub trait TestDependencies: Send + Sync + Clone {
     fn component_compilation_service(&self) -> Arc<dyn ComponentCompilationService>;
     fn worker_service(&self) -> Arc<dyn WorkerService>;
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster>;
-    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService>;
+    fn initial_agent_files_service(&self) -> Arc<InitialAgentFilesService>;
     fn registry_service(&self) -> Arc<dyn RegistryService>;
 
     async fn admin(&self) -> TestUserContext<Self>

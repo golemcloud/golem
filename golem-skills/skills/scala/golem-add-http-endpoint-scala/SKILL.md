@@ -17,6 +17,7 @@ Golem agents can be exposed over HTTP using code-first route definitions. This i
 | Skill | When to Load |
 |---|---|
 | `golem-http-params-scala` | Path/query/header variable mapping, body mapping, supported types, response mapping |
+| `golem-make-http-request-scala` | Making outgoing HTTP requests from agent code, especially when calling other Golem agent endpoints (required for correct JSON body formatting) |
 | `golem-add-http-auth-scala` | Enabling authentication |
 | `golem-add-cors-scala` | Configuring CORS allowed origins |
 | `golem-configure-api-domain` | Setting up `httpApi` in `golem.yaml`, security schemes, domain deployments |
@@ -47,11 +48,25 @@ trait TaskAgent extends BaseAgent {
 
 ### Constructor Parameter Naming in Scala
 
-The path variable names must match the `class Id` parameter names:
+The path variable names must **exactly** match the `class Id` parameter names — do **not** use kebab-case in path variables. Use the same camelCase (or single-word) identifier that appears in the `class Id`:
 
 - **Single parameter**: `class Id(val name: String)` → use `{name}` in path
 - **Multiple parameters**: `class Id(val arg0: String, val arg1: Int)` → use `{arg0}`, `{arg1}` in path
 - **Custom Id class with `@id`**: use the parameter names from the annotated class
+
+```scala
+// ✅ Correct — path variable matches parameter name exactly
+@agentDefinition(mount = "/api/tasks/{taskName}")
+trait TaskAgent extends BaseAgent {
+  class Id(val taskName: String)
+}
+
+// ❌ Wrong — {task-name} does not match parameter name taskName
+@agentDefinition(mount = "/api/tasks/{task-name}")
+trait TaskAgent extends BaseAgent {
+  class Id(val taskName: String)
+}
+```
 
 ```scala
 // Named parameters with @id annotation
@@ -67,7 +82,7 @@ trait CatalogAgent extends BaseAgent {
 Rules:
 - Path must start with `/`
 - Every constructor parameter must appear as a `{variable}` in the mount path
-- Every `{variable}` must match a constructor parameter name
+- Every `{variable}` must exactly match a constructor parameter name (same casing)
 - Catch-all `{*rest}` variables are **not** allowed in mount paths
 
 ## Endpoint Annotation
@@ -76,7 +91,7 @@ The `@endpoint` annotation marks a method as an HTTP endpoint. Specify the HTTP 
 
 ```scala
 @endpoint(method = "GET", path = "/items")
-def listItems(): Future[Array[Item]]
+def listItems(): Future[List[Item]]
 
 @endpoint(method = "POST", path = "/items")
 def createItem(name: String, count: Int): Future[Item]
@@ -117,6 +132,8 @@ import zio.blocks.schema.Schema
 final case class Task(id: String, title: String, done: Boolean) derives Schema
 ```
 
+For collections, use `List[T]` instead of `Array[T]`. `Array` does not have automatic `Schema` derivation support.
+
 ## Complete Example
 
 ```scala
@@ -132,7 +149,7 @@ trait TaskAgent extends BaseAgent {
   class Id(val name: String)
 
   @endpoint(method = "GET", path = "/tasks")
-  def getTasks(): Future[Array[Task]]
+  def getTasks(): Future[List[Task]]
 
   @endpoint(method = "POST", path = "/tasks")
   def createTask(title: String): Future[Task]
@@ -151,9 +168,9 @@ import scala.concurrent.Future
 
 @agentImplementation()
 final class TaskAgentImpl(private val name: String) extends TaskAgent {
-  private var tasks: Array[Task] = Array.empty
+  private var tasks: List[Task] = Nil
 
-  override def getTasks(): Future[Array[Task]] =
+  override def getTasks(): Future[List[Task]] =
     Future.successful(tasks)
 
   override def createTask(title: String): Future[Task] = Future.successful {

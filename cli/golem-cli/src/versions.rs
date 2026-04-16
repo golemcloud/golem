@@ -13,15 +13,15 @@
 // limitations under the License.
 
 pub mod sdk {
-    pub const RUST: &str = "2.0.0-dev.4";
-    pub const TS: &str = "1.0.0-dev.3";
-    pub const SCALA: &str = "1.5.0-M7";
+    pub const RUST: &str = "2.0.0-dev.8";
+    pub const TS: &str = "1.0.0-dev.6";
+    pub const SCALA: &str = "1.5.0-M9";
     pub const MANIFEST: &str = "1.5.0";
 
     #[macro_export]
     macro_rules! manifest_schema_version {
         () => {
-            "1.5.0-dev.2"
+            "1.5.0-dev.3"
         };
     }
 }

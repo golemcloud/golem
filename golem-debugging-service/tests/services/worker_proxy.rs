@@ -12,7 +12,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, Principal, UntypedDataValue};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::worker::{RevertWorkerTarget, WorkerAgentConfigEntry};
+use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{AgentId, IdempotencyKey, InvocationStatus, OwnedAgentId, PromiseId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
@@ -73,7 +73,7 @@ impl WorkerProxy for TestWorkerProxy {
         _caller_config_vars: BTreeMap<String, String>,
         _caller_stack: InvocationContextStack,
         _caller_account_id: AccountId,
-        _agent_config: Vec<WorkerAgentConfigEntry>,
+        _agent_config: Vec<AgentConfigEntryDto>,
         _principal: Principal,
     ) -> Result<(), WorkerProxyError> {
         Err(WorkerProxyError::InternalError(
@@ -300,5 +300,20 @@ impl WorkerProxy for TestWorkerProxy {
         _environment_id: Option<golem_common::base_model::environment::EnvironmentId>,
     ) -> Result<InvocationStatus, WorkerProxyError> {
         Ok(InvocationStatus::Unknown)
+    }
+
+    async fn process_oplog_entries(
+        &self,
+        _target_agent_id: &AgentId,
+        _environment_id: golem_common::base_model::environment::EnvironmentId,
+        _component_revision: golem_common::base_model::component::ComponentRevision,
+        _idempotency_key: IdempotencyKey,
+        _account_id: AccountId,
+        _config: Vec<(String, String)>,
+        _metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
+        _first_entry_index: golem_common::base_model::OplogIndex,
+        _entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
+    ) -> Result<(), WorkerProxyError> {
+        unimplemented!()
     }
 }

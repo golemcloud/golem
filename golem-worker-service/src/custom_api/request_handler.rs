@@ -23,7 +23,6 @@ use super::webhoooks::WebhookCallbackHandler;
 use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
 use crate::custom_api::RichRequest;
 use anyhow::anyhow;
-use golem_service_base::custom_api::CorsPreflightBehaviour;
 use golem_service_base::custom_api::OpenApiSpecBehaviour;
 use golem_service_base::custom_api::PathSegment;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
@@ -116,10 +115,9 @@ impl RequestHandler {
                     .await
             }
 
-            RichRouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
-                allowed_origins,
-                allowed_methods,
-            }) => handle_cors_preflight_behaviour(request, allowed_origins, allowed_methods),
+            RichRouteBehaviour::CorsPreflight(cors_preflight) => {
+                handle_cors_preflight_behaviour(request, cors_preflight)
+            }
 
             RichRouteBehaviour::OidcCallback(OidcCallbackBehaviour { security_scheme }) => {
                 self.oidc_handler

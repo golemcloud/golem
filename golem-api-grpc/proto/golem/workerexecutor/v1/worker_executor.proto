@@ -21,6 +21,7 @@ import "golem/worker/log_event.proto";
 import "golem/worker/oplog_cursor.proto";
 import "golem/worker/promise_id.proto";
 import "golem/worker/public_oplog.proto";
+import "golem/worker/raw_oplog.proto";
 import "golem/worker/update_mode.proto";
 import "golem/worker/v1/worker_execution_error.proto";
 import "golem/worker/worker_filter.proto";
@@ -56,6 +57,8 @@ service WorkerExecutor {
   rpc DeactivatePlugin(DeactivatePluginRequest) returns (DeactivatePluginResponse);
 
   rpc InvokeAgent(InvokeAgentRequest) returns (InvokeAgentResponse);
+
+  rpc ProcessOplogEntries(ProcessOplogEntriesRequest) returns (ProcessOplogEntriesResponse);
 }
 
 message ForkWorkerRequest {
@@ -117,8 +120,8 @@ message InterruptWorkerResponse {
 message CreateWorkerRequest {
   golem.worker.AgentId agent_id = 1;
   map<string, string> env = 2;
-  map<string, string> config_vars = 3;
-  repeated golem.worker.AgentConfigEntry agent_config = 4;
+  map<string, string> wasi_config = 3;
+  repeated golem.worker.AgentConfigEntryDto config = 4;
   // Account the component belongs to
   golem.common.AccountId component_owner_account_id = 5;
   // Component's owner environment
@@ -449,4 +452,24 @@ message InvokeAgentSuccess {
   optional uint64 fuel_consumed = 2;
   optional uint64 component_revision = 3;
   optional golem.worker.InvocationStatus status = 4;
+}
+
+message ProcessOplogEntriesRequest {
+  golem.worker.AgentId agent_id = 1;
+  golem.common.EnvironmentId environment_id = 2;
+  uint64 component_revision = 3;
+  golem.worker.IdempotencyKey idempotency_key = 4;
+  golem.common.AccountId account_id = 5;
+  map<string, string> config = 6;
+  golem.worker.AgentMetadata metadata = 7;
+  uint64 first_entry_index = 8;
+  repeated golem.worker.RawOplogEntry entries = 9;
+  golem.auth.AuthCtx auth_ctx = 10;
+}
+
+message ProcessOplogEntriesResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
 }

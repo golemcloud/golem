@@ -16,10 +16,11 @@ use crate::additional_deps::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
+use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
-use golem_common::model::component::ComponentFilePath;
+use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
@@ -303,14 +304,14 @@ impl ResourceStore for DebugContext {
 impl FileSystemReading for DebugContext {
     async fn get_file_system_node(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.get_file_system_node(path).await
     }
 
     async fn read_file(
         &self,
-        path: &ComponentFilePath,
+        path: &CanonicalFilePath,
     ) -> Result<ReadFileResult, WorkerExecutorError> {
         self.durable_ctx.read_file(path).await
     }
@@ -353,12 +354,12 @@ impl HostWasmRpc for DebugContext {
         agent_type_name: String,
         constructor: golem_common::model::agent::bindings::golem::agent::common::DataValue,
         phantom_id: Option<golem_wasm::Uuid>,
-        agent_config: Vec<
+        config: Vec<
             golem_common::model::agent::bindings::golem::agent::common::TypedAgentConfigValue,
         >,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx
-            .new(agent_type_name, constructor, phantom_id, agent_config)
+            .new(agent_type_name, constructor, phantom_id, config)
             .await
     }
 
@@ -647,6 +648,10 @@ impl WorkerCtx for DebugContext {
 
     fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.durable_ctx.parsed_agent_id()
+    }
+
+    fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig> {
+        self.durable_ctx.agent_type_provision_config()
     }
 
     fn agent_mode(&self) -> AgentMode {

@@ -24,9 +24,9 @@ use golem_common::model::agent::{
     NamedElementSchema, NamedElementSchemas, RegisteredAgentTypeImplementer, Snapshotting,
 };
 use golem_common::model::base64::Base64;
-use golem_common::model::component::AgentConfigEntry;
 use golem_common::model::component::{
-    ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
+    AgentFileOptions, AgentFilePermissions, AgentTypeProvisionConfigCreation,
+    AgentTypeProvisionConfigUpdate, ArchiveFilePath, CanonicalFilePath, ComponentCreation,
     ComponentName, ComponentUpdate, PluginInstallation, PluginInstallationAction,
     PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
@@ -34,6 +34,7 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreatio
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
@@ -71,7 +72,7 @@ async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Re
     }
 
     {
-        let fetched_components = client.get_environment_components(&env.id.0).await?;
+        let fetched_components = client.list_environment_components(&env.id.0).await?;
         assert_eq!(fetched_components.values, vec![component]);
     }
 
@@ -94,10 +95,6 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             &component.id,
             component.revision,
             Some("it_agent_update_v2_release"),
-            vec![],
-            vec![],
-            None,
-            None,
             None,
             Vec::new(),
         )
@@ -119,7 +116,7 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     }
 
     {
-        let fetched_components = client.get_environment_components(&env.id.0).await?;
+        let fetched_components = client.list_environment_components(&env.id.0).await?;
         assert_eq!(fetched_components.values, vec![updated_component]);
     }
     Ok(())
@@ -133,12 +130,19 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
 
     let component = user
         .component(&env.id, "it_agent_update_v1_release")
-        .with_config_vars(vec![("var1".to_string(), "value1".to_string())])
+        .with_config_vars(
+            "CounterAgent",
+            vec![("var1".to_string(), "value1".to_string())],
+        )
         .store()
         .await?;
 
     assert_eq!(
-        component.config_vars,
+        component
+            .metadata
+            .agent_type_wasi_config(&AgentTypeName("CounterAgent".to_string()))
+            .cloned()
+            .unwrap_or_default(),
         BTreeMap::from_iter(vec![("var1".to_string(), "value1".to_string())])
     );
 
@@ -147,20 +151,26 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             &component.id,
             component.revision,
             None,
-            vec![],
-            vec![],
-            None,
-            Some(BTreeMap::from_iter(vec![
-                ("var1".to_string(), "value11".to_string()),
-                ("var2".to_string(), "value2".to_string()),
-            ])),
-            None,
+            Some(BTreeMap::from([(
+                AgentTypeName("CounterAgent".to_string()),
+                AgentTypeProvisionConfigUpdate {
+                    wasi_config: Some(BTreeMap::from_iter(vec![
+                        ("var1".to_string(), "value11".to_string()),
+                        ("var2".to_string(), "value2".to_string()),
+                    ])),
+                    ..Default::default()
+                },
+            )])),
             Vec::new(),
         )
         .await?;
 
     assert_eq!(
-        updated_component.config_vars,
+        updated_component
+            .metadata
+            .agent_type_wasi_config(&AgentTypeName("CounterAgent".to_string()))
+            .cloned()
+            .unwrap_or_default(),
         BTreeMap::from_iter(vec![
             ("var1".to_string(), "value11".to_string()),
             ("var2".to_string(), "value2".to_string())
@@ -188,13 +198,8 @@ async fn component_update_with_wrong_revision_is_rejected(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision.next()?,
-                removed_files: Vec::new(),
-                new_file_options: BTreeMap::new(),
-                env: None,
-                config_vars: None,
-                agent_config: None,
                 agent_types: None,
-                plugin_updates: Vec::new(),
+                agent_type_provision_config_updates: None,
             },
             None::<File>,
             None::<File>,
@@ -249,7 +254,7 @@ async fn delete_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     }
 
     {
-        let fetched_components = client.get_environment_components(&env.id.0).await?;
+        let fetched_components = client.list_environment_components(&env.id.0).await?;
         assert_eq!(fetched_components.values, vec![]);
     }
     Ok(())
@@ -299,13 +304,22 @@ async fn create_component_with_plugins_and_update_installations(
 
     let component = user
         .component(&env.id, "it_agent_counters_release")
-        .with_parametrized_plugin(&oplog_plugin_grant.id, 0, plugin_parameters.clone())
+        .with_parametrized_plugin(
+            "Repository",
+            &oplog_plugin_grant.id,
+            0,
+            plugin_parameters.clone(),
+        )
         .store()
         .await?;
 
-    assert_eq!(component.installed_plugins.len(), 1);
+    let all_plugins = component
+        .metadata
+        .agent_type_plugins(&AgentTypeName("Repository".to_string()))
+        .unwrap_or_default();
+    assert_eq!(all_plugins.len(), 1);
 
-    let installed_plugin = &component.installed_plugins[0];
+    let installed_plugin = &all_plugins[0];
     assert_eq!(installed_plugin.priority.0, 0);
     assert_eq!(installed_plugin.parameters, plugin_parameters);
 
@@ -315,26 +329,34 @@ async fn create_component_with_plugins_and_update_installations(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
-                removed_files: Vec::new(),
-                new_file_options: BTreeMap::new(),
-                env: None,
-                config_vars: None,
-                agent_config: None,
                 agent_types: None,
-                plugin_updates: vec![PluginInstallationAction::Update(PluginInstallationUpdate {
-                    environment_plugin_grant_id: installed_plugin.environment_plugin_grant_id,
-                    new_priority: Some(PluginPriority(1)),
-                    new_parameters: None,
-                })],
+                agent_type_provision_config_updates: Some(BTreeMap::from([(
+                    AgentTypeName("Repository".to_string()),
+                    AgentTypeProvisionConfigUpdate {
+                        plugin_updates: vec![PluginInstallationAction::Update(
+                            PluginInstallationUpdate {
+                                environment_plugin_grant_id: installed_plugin
+                                    .environment_plugin_grant_id,
+                                new_priority: Some(PluginPriority(1)),
+                                new_parameters: None,
+                            },
+                        )],
+                        ..Default::default()
+                    },
+                )])),
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,
         )
         .await?;
 
-    assert_eq!(component_v2.installed_plugins.len(), 1);
+    let all_plugins_v2 = component_v2
+        .metadata
+        .agent_type_plugins(&AgentTypeName("Repository".to_string()))
+        .unwrap_or_default();
+    assert_eq!(all_plugins_v2.len(), 1);
 
-    let installed_plugin = &component_v2.installed_plugins[0];
+    let installed_plugin = &all_plugins_v2[0];
     assert_eq!(installed_plugin.priority.0, 1);
     assert_eq!(installed_plugin.parameters, plugin_parameters);
 
@@ -344,22 +366,30 @@ async fn create_component_with_plugins_and_update_installations(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component_v2.revision,
-                removed_files: Vec::new(),
-                new_file_options: BTreeMap::new(),
-                env: None,
-                config_vars: None,
-                agent_config: None,
                 agent_types: None,
-                plugin_updates: vec![PluginInstallationAction::Uninstall(PluginUninstallation {
-                    environment_plugin_grant_id: installed_plugin.environment_plugin_grant_id,
-                })],
+                agent_type_provision_config_updates: Some(BTreeMap::from([(
+                    AgentTypeName("Repository".to_string()),
+                    AgentTypeProvisionConfigUpdate {
+                        plugin_updates: vec![PluginInstallationAction::Uninstall(
+                            PluginUninstallation {
+                                environment_plugin_grant_id: installed_plugin
+                                    .environment_plugin_grant_id,
+                            },
+                        )],
+                        ..Default::default()
+                    },
+                )])),
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,
         )
         .await?;
 
-    assert_eq!(component_v3.installed_plugins.len(), 0);
+    let all_plugins_v3 = component_v3
+        .metadata
+        .agent_type_plugins(&AgentTypeName("Repository".to_string()))
+        .unwrap_or_default();
+    assert_eq!(all_plugins_v3.len(), 0);
 
     Ok(())
 }
@@ -414,27 +444,34 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
-                removed_files: Vec::new(),
-                new_file_options: BTreeMap::new(),
-                env: None,
-                config_vars: None,
-                agent_config: None,
                 agent_types: None,
-                plugin_updates: vec![PluginInstallationAction::Install(PluginInstallation {
-                    environment_plugin_grant_id: oplog_plugin_grant.id,
-                    priority: PluginPriority(0),
-                    parameters: plugin_parameters.clone(),
-                })],
+                agent_type_provision_config_updates: Some(BTreeMap::from([(
+                    AgentTypeName("Repository".to_string()),
+                    AgentTypeProvisionConfigUpdate {
+                        plugin_updates: vec![PluginInstallationAction::Install(
+                            PluginInstallation {
+                                environment_plugin_grant_id: oplog_plugin_grant.id,
+                                priority: PluginPriority(0),
+                                parameters: plugin_parameters.clone(),
+                            },
+                        )],
+                        ..Default::default()
+                    },
+                )])),
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,
         )
         .await?;
 
-    assert_eq!(updated_component.installed_plugins.len(), 1);
+    let all_updated_plugins = updated_component
+        .metadata
+        .agent_type_plugins(&AgentTypeName("Repository".to_string()))
+        .unwrap_or_default();
+    assert_eq!(all_updated_plugins.len(), 1);
 
     {
-        let installed_plugin = &updated_component.installed_plugins[0];
+        let installed_plugin = &all_updated_plugins[0];
         assert_eq!(installed_plugin.priority.0, 0);
         assert_eq!(installed_plugin.parameters, plugin_parameters);
     }
@@ -454,17 +491,26 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
             &env.id.0,
             &ComponentCreation {
                 component_name: ComponentName("it:initial-file-system".to_string()),
-                file_options: BTreeMap::from_iter(vec![(
-                    ComponentFilePath::from_abs_str("/bar/baz.txt").map_err(|e| anyhow!(e))?,
-                    ComponentFileOptions {
-                        permissions: ComponentFilePermissions::ReadWrite,
+                agent_types: Vec::new(),
+                agent_type_provision_configs: BTreeMap::from([(
+                    AgentTypeName("FileReadWrite".to_string()),
+                    AgentTypeProvisionConfigCreation {
+                        files: BTreeMap::from([(
+                            ArchiveFilePath(
+                                CanonicalFilePath::from_abs_str("/bar/baz.txt")
+                                    .map_err(|e| anyhow!(e))?,
+                            ),
+                            AgentFileOptions {
+                                target_path: golem_common::model::component::AgentFilePath(
+                                    CanonicalFilePath::from_abs_str("/bar/baz.txt")
+                                        .map_err(|e| anyhow!(e))?,
+                                ),
+                                permissions: AgentFilePermissions::ReadWrite,
+                            },
+                        )]),
+                        ..Default::default()
                     },
                 )]),
-                env: BTreeMap::new(),
-                config_vars: BTreeMap::new(),
-                agent_config: Vec::new(),
-                agent_types: Vec::new(),
-                plugins: Vec::new(),
             },
             tokio::fs::File::open(
                 deps.component_directory()
@@ -481,12 +527,15 @@ async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> any
         )
         .await?;
 
-    assert_eq!(component.files.len(), 2);
+    let all_files = component
+        .metadata
+        .agent_type_files(&AgentTypeName("FileReadWrite".to_string()))
+        .unwrap_or_default();
+    assert_eq!(all_files.len(), 2);
     assert_eq!(
-        component
-            .files
+        all_files
             .iter()
-            .filter(|cf| cf.permissions == ComponentFilePermissions::ReadWrite)
+            .filter(|cf| cf.permissions == AgentFilePermissions::ReadWrite)
             .count(),
         1
     );
@@ -577,12 +626,8 @@ async fn list_agent_types(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
             &env.id.0,
             &ComponentCreation {
                 component_name: ComponentName("it:agent-counters".to_string()),
-                file_options: BTreeMap::new(),
-                env: BTreeMap::new(),
-                config_vars: BTreeMap::new(),
-                agent_config: Vec::new(),
                 agent_types: vec![agent_type.clone()],
-                plugins: Vec::new(),
+                agent_type_provision_configs: std::collections::BTreeMap::new(),
             },
             tokio::fs::File::open(
                 deps.component_directory()
@@ -690,23 +735,28 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
             &env.id.0,
             &ComponentCreation {
                 component_name: ComponentName("duplicate-priority".to_string()),
-                file_options: BTreeMap::new(),
-                env: BTreeMap::new(),
-                config_vars: BTreeMap::new(),
-                agent_config: Vec::new(),
                 agent_types: Vec::new(),
-                plugins: vec![
-                    PluginInstallation {
-                        environment_plugin_grant_id: grant_1.id,
-                        priority: PluginPriority(0),
-                        parameters: BTreeMap::new(),
+                agent_type_provision_configs: std::collections::BTreeMap::from([(
+                    "Repository".to_string(),
+                    AgentTypeProvisionConfigCreation {
+                        plugin_installations: vec![
+                            PluginInstallation {
+                                environment_plugin_grant_id: grant_1.id,
+                                priority: PluginPriority(0),
+                                parameters: BTreeMap::new(),
+                            },
+                            PluginInstallation {
+                                environment_plugin_grant_id: grant_2.id,
+                                priority: PluginPriority(0),
+                                parameters: BTreeMap::new(),
+                            },
+                        ],
+                        ..Default::default()
                     },
-                    PluginInstallation {
-                        environment_plugin_grant_id: grant_2.id,
-                        priority: PluginPriority(0),
-                        parameters: BTreeMap::new(),
-                    },
-                ],
+                )])
+                .into_iter()
+                .map(|(k, v)| (AgentTypeName(k), v))
+                .collect(),
             },
             tokio::fs::File::open(
                 deps.component_directory()
@@ -772,23 +822,28 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
             &env.id.0,
             &ComponentCreation {
                 component_name: ComponentName("duplicate-grant".to_string()),
-                file_options: BTreeMap::new(),
-                env: BTreeMap::new(),
-                config_vars: BTreeMap::new(),
-                agent_config: Vec::new(),
                 agent_types: Vec::new(),
-                plugins: vec![
-                    PluginInstallation {
-                        environment_plugin_grant_id: grant.id,
-                        priority: PluginPriority(0),
-                        parameters: BTreeMap::new(),
+                agent_type_provision_configs: std::collections::BTreeMap::from([(
+                    "Repository".to_string(),
+                    AgentTypeProvisionConfigCreation {
+                        plugin_installations: vec![
+                            PluginInstallation {
+                                environment_plugin_grant_id: grant.id,
+                                priority: PluginPriority(0),
+                                parameters: BTreeMap::new(),
+                            },
+                            PluginInstallation {
+                                environment_plugin_grant_id: grant.id,
+                                priority: PluginPriority(1),
+                                parameters: BTreeMap::new(),
+                            },
+                        ],
+                        ..Default::default()
                     },
-                    PluginInstallation {
-                        environment_plugin_grant_id: grant.id,
-                        priority: PluginPriority(1),
-                        parameters: BTreeMap::new(),
-                    },
-                ],
+                )])
+                .into_iter()
+                .map(|(k, v)| (AgentTypeName(k), v))
+                .collect(),
             },
             tokio::fs::File::open(
                 deps.component_directory()
@@ -885,24 +940,25 @@ async fn update_component_with_duplicate_plugin_priorities_fails(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
-                removed_files: Vec::new(),
-                new_file_options: BTreeMap::new(),
-                env: None,
-                config_vars: None,
-                agent_config: None,
                 agent_types: None,
-                plugin_updates: vec![
-                    PluginInstallationAction::Install(PluginInstallation {
-                        environment_plugin_grant_id: grant_1.id,
-                        priority: PluginPriority(0),
-                        parameters: BTreeMap::new(),
-                    }),
-                    PluginInstallationAction::Install(PluginInstallation {
-                        environment_plugin_grant_id: grant_2.id,
-                        priority: PluginPriority(0),
-                        parameters: BTreeMap::new(),
-                    }),
-                ],
+                agent_type_provision_config_updates: Some(BTreeMap::from([(
+                    AgentTypeName("Repository".to_string()),
+                    AgentTypeProvisionConfigUpdate {
+                        plugin_updates: vec![
+                            PluginInstallationAction::Install(PluginInstallation {
+                                environment_plugin_grant_id: grant_1.id,
+                                priority: PluginPriority(0),
+                                parameters: BTreeMap::new(),
+                            }),
+                            PluginInstallationAction::Install(PluginInstallation {
+                                environment_plugin_grant_id: grant_2.id,
+                                priority: PluginPriority(0),
+                                parameters: BTreeMap::new(),
+                            }),
+                        ],
+                        ..Default::default()
+                    },
+                )])),
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,
@@ -969,24 +1025,25 @@ async fn update_component_with_duplicate_plugin_grant_ids_fails(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
-                removed_files: Vec::new(),
-                new_file_options: BTreeMap::new(),
-                env: None,
-                config_vars: None,
-                agent_config: None,
                 agent_types: None,
-                plugin_updates: vec![
-                    PluginInstallationAction::Install(PluginInstallation {
-                        environment_plugin_grant_id: grant.id,
-                        priority: PluginPriority(0),
-                        parameters: BTreeMap::new(),
-                    }),
-                    PluginInstallationAction::Install(PluginInstallation {
-                        environment_plugin_grant_id: grant.id,
-                        priority: PluginPriority(1),
-                        parameters: BTreeMap::new(),
-                    }),
-                ],
+                agent_type_provision_config_updates: Some(BTreeMap::from([(
+                    AgentTypeName("Repository".to_string()),
+                    AgentTypeProvisionConfigUpdate {
+                        plugin_updates: vec![
+                            PluginInstallationAction::Install(PluginInstallation {
+                                environment_plugin_grant_id: grant.id,
+                                priority: PluginPriority(0),
+                                parameters: BTreeMap::new(),
+                            }),
+                            PluginInstallationAction::Install(PluginInstallation {
+                                environment_plugin_grant_id: grant.id,
+                                priority: PluginPriority(1),
+                                parameters: BTreeMap::new(),
+                            }),
+                        ],
+                        ..Default::default()
+                    },
+                )])),
             },
             None::<Vec<u8>>,
             None::<Vec<u8>>,
@@ -1011,18 +1068,19 @@ async fn create_with_agent_config(deps: &EnvBasedTestDependencies) -> anyhow::Re
 
     user.component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
-        .with_agent_config(vec![
-            AgentConfigEntry {
-                agent: AgentTypeName("ConfigAgent".to_string()),
-                path: vec!["foo".to_string()],
-                value: json!(1),
-            },
-            AgentConfigEntry {
-                agent: AgentTypeName("ConfigAgent".to_string()),
-                path: vec!["nested".to_string(), "a".to_string()],
-                value: json!(true),
-            },
-        ])
+        .with_agent_config(
+            "ConfigAgent",
+            vec![
+                AgentConfigEntryDto {
+                    path: vec!["foo".to_string()],
+                    value: json!(1).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["nested".to_string(), "a".to_string()],
+                    value: json!(true).into(),
+                },
+            ],
+        )
         .store()
         .await?;
 
@@ -1040,11 +1098,13 @@ async fn agent_config_with_invalid_type_fails_with_400(
     let result = user
         .component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
-        .with_agent_config(vec![AgentConfigEntry {
-            agent: AgentTypeName("ConfigAgent".to_string()),
-            path: vec!["foo".to_string()],
-            value: json!(true),
-        }])
+        .with_agent_config(
+            "ConfigAgent",
+            vec![AgentConfigEntryDto {
+                path: vec!["foo".to_string()],
+                value: json!(true).into(),
+            }],
+        )
         .store()
         .await;
 
@@ -1074,11 +1134,13 @@ async fn agent_config_with_undeclared_path_fails_with_409(
     let result = user
         .component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
-        .with_agent_config(vec![AgentConfigEntry {
-            agent: AgentTypeName("ConfigAgent".to_string()),
-            path: vec!["undeclared".to_string()],
-            value: json!(true),
-        }])
+        .with_agent_config(
+            "ConfigAgent",
+            vec![AgentConfigEntryDto {
+                path: vec!["undeclared".to_string()],
+                value: json!(true).into(),
+            }],
+        )
         .store()
         .await;
 
@@ -1108,11 +1170,13 @@ async fn add_new_agent_config_entry_during_update(
     let component = user
         .component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
-        .with_agent_config(vec![AgentConfigEntry {
-            agent: AgentTypeName("ConfigAgent".to_string()),
-            path: vec!["foo".to_string()],
-            value: json!(1),
-        }])
+        .with_agent_config(
+            "ConfigAgent",
+            vec![AgentConfigEntryDto {
+                path: vec!["foo".to_string()],
+                value: json!(1).into(),
+            }],
+        )
         .store()
         .await?;
 
@@ -1120,22 +1184,22 @@ async fn add_new_agent_config_entry_during_update(
         &component.id,
         component.revision,
         None,
-        Vec::new(),
-        Vec::new(),
-        None,
-        None,
-        Some(vec![
-            AgentConfigEntry {
-                agent: AgentTypeName("ConfigAgent".to_string()),
-                path: vec!["foo".to_string()],
-                value: json!(2),
+        Some(BTreeMap::from([(
+            AgentTypeName("ConfigAgent".to_string()),
+            AgentTypeProvisionConfigUpdate {
+                config: Some(vec![
+                    AgentConfigEntryDto {
+                        path: vec!["foo".to_string()],
+                        value: json!(2).into(),
+                    },
+                    AgentConfigEntryDto {
+                        path: vec!["bar".to_string()],
+                        value: json!("value").into(),
+                    },
+                ]),
+                ..Default::default()
             },
-            AgentConfigEntry {
-                agent: AgentTypeName("ConfigAgent".to_string()),
-                path: vec!["bar".to_string()],
-                value: json!("value"),
-            },
-        ]),
+        )])),
         Vec::new(),
     )
     .await?;
@@ -1154,11 +1218,13 @@ async fn updating_agent_with_invalid_config_entry_fails_with_409(
     let component = user
         .component(&env.id, "golem_it_agent_sdk_ts")
         .name("golem-it:agent-sdk-ts")
-        .with_agent_config(vec![AgentConfigEntry {
-            agent: AgentTypeName("ConfigAgent".to_string()),
-            path: vec!["foo".to_string()],
-            value: json!(1),
-        }])
+        .with_agent_config(
+            "ConfigAgent",
+            vec![AgentConfigEntryDto {
+                path: vec!["foo".to_string()],
+                value: json!(1).into(),
+            }],
+        )
         .store()
         .await?;
 
@@ -1167,22 +1233,22 @@ async fn updating_agent_with_invalid_config_entry_fails_with_409(
             &component.id,
             component.revision,
             None,
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-            Some(vec![
-                AgentConfigEntry {
-                    agent: AgentTypeName("ConfigAgent".to_string()),
-                    path: vec!["foo".to_string()],
-                    value: json!(2),
+            Some(BTreeMap::from([(
+                AgentTypeName("ConfigAgent".to_string()),
+                AgentTypeProvisionConfigUpdate {
+                    config: Some(vec![
+                        AgentConfigEntryDto {
+                            path: vec!["foo".to_string()],
+                            value: json!(2).into(),
+                        },
+                        AgentConfigEntryDto {
+                            path: vec!["bar".to_string()],
+                            value: json!(1).into(),
+                        },
+                    ]),
+                    ..Default::default()
                 },
-                AgentConfigEntry {
-                    agent: AgentTypeName("ConfigAgent".to_string()),
-                    path: vec!["bar".to_string()],
-                    value: json!(1),
-                },
-            ]),
+            )])),
             Vec::new(),
         )
         .await;

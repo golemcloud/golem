@@ -192,7 +192,8 @@ export function endpoint(opts: EndpointDecoratorOptions) {
       ([headerName, variableName]) => ({ headerName, variableName }),
     );
 
-    const authDetails: AuthDetails = { required: opts.auth ?? false };
+    const authDetails: AuthDetails | undefined =
+      opts.auth != null ? { required: opts.auth } : undefined;
 
     const corsOptions: CorsOptions = { allowedPatterns: opts.cors ?? [] };
 

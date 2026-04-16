@@ -93,34 +93,34 @@ impl AgentSecretsApi {
         Ok(Json(result.into()))
     }
 
-    /// Get all agent secrets of the environment
+    /// List all agent secrets of the environment
     #[oai(
         path = "/envs/:environment_id/agent-secrets",
         method = "get",
-        operation_id = "get_environment_agent_secrets",
+        operation_id = "list_environment_agent_secrets",
         tag = ApiTags::Environment
     )]
-    async fn get_environment_agent_secrets(
+    async fn list_environment_agent_secrets(
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<AgentSecretDto>>> {
         let record = recorded_http_api_request!(
-            "get_environment_agent_secrets",
+            "list_environment_agent_secrets",
             environment_id = environment_id.0.to_string(),
         );
 
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let response = self
-            .get_environment_agent_secrets_internal(environment_id.0, auth)
+            .list_environment_agent_secrets_internal(environment_id.0, auth)
             .instrument(record.span.clone())
             .await;
 
         record.result(response)
     }
 
-    async fn get_environment_agent_secrets_internal(
+    async fn list_environment_agent_secrets_internal(
         &self,
         environment_id: EnvironmentId,
         auth: AuthCtx,

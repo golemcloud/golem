@@ -86,7 +86,7 @@ impl ApiDeploymentCommandHandler {
                         .golem_clients()
                         .await?
                         .api_deployment
-                        .list_http_api_deployments_in_deployment(
+                        .list_deployment_http_api_deployments(
                             &environment.environment_id.0,
                             current_deployment_revision.into(),
                         )
@@ -115,7 +115,7 @@ impl ApiDeploymentCommandHandler {
 
                     let Some(deployment) = clients
                         .api_deployment
-                        .get_http_api_deployment_in_deployment(
+                        .get_deployment_http_api_deployment(
                             &environment.environment_id.0,
                             current_deployment_revision.get(),
                             &domain.0,

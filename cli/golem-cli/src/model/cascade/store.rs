@@ -85,3 +85,69 @@ impl<L: Layer> Store<L> {
         Ok(value)
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::Store;
+    use crate::model::cascade::layer::Layer;
+    use test_r::test;
+
+    #[derive(Debug, Clone, serde::Serialize)]
+    struct TestLayer {
+        id: String,
+        parents: Vec<String>,
+    }
+
+    impl Layer for TestLayer {
+        type Id = String;
+        type Value = Vec<String>;
+        type Selector = ();
+        type AppliedSelection = ();
+        type ApplyContext = ();
+        type ApplyError = ();
+
+        fn id(&self) -> &Self::Id {
+            &self.id
+        }
+
+        fn parent_layers(&self) -> &[Self::Id] {
+            &self.parents
+        }
+
+        fn apply_onto_parent(
+            &self,
+            _ctx: &Self::ApplyContext,
+            _selector: &Self::Selector,
+            value: &mut Self::Value,
+        ) -> Result<(), Self::ApplyError> {
+            value.push(self.id.clone());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn value_applies_parent_layers_before_target() {
+        let mut store = Store::<TestLayer>::new();
+        store
+            .add_layer(TestLayer {
+                id: "base".to_string(),
+                parents: vec![],
+            })
+            .unwrap();
+        store
+            .add_layer(TestLayer {
+                id: "mid".to_string(),
+                parents: vec!["base".to_string()],
+            })
+            .unwrap();
+        store
+            .add_layer(TestLayer {
+                id: "leaf".to_string(),
+                parents: vec!["mid".to_string()],
+            })
+            .unwrap();
+
+        let value = store.value(&"leaf".to_string(), &(), &()).unwrap();
+        assert_eq!(value, vec!["base", "mid", "leaf"]);
+    }
+}

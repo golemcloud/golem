@@ -28,7 +28,9 @@ use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
+use std::collections::HashMap;
 use std::sync::Arc;
+use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EnvironmentPluginGrantError {
@@ -252,6 +254,59 @@ impl EnvironmentPluginGrantService {
         })?;
 
         Ok(grant)
+    }
+
+    /// Resolves multiple plugin grants in a single DB query.
+    /// Returns a map keyed by grant ID for O(1) lookup at the call site.
+    pub async fn get_active_by_ids_for_environment(
+        &self,
+        grant_ids: impl IntoIterator<Item = EnvironmentPluginGrantId>,
+        environment: &Environment,
+        auth: &AuthCtx,
+    ) -> Result<
+        HashMap<EnvironmentPluginGrantId, EnvironmentPluginGrantWithDetails>,
+        EnvironmentPluginGrantError,
+    > {
+        let ids: Vec<Uuid> = grant_ids.into_iter().map(|id| id.0).collect();
+
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        auth.authorize_environment_action(
+            environment.owner_account_id,
+            &environment.roles_from_active_shares,
+            EnvironmentAction::ViewEnvironmentPluginGrant,
+        )?;
+
+        let records = self
+            .environment_plugin_grant_repo
+            .get_by_ids(&ids, false)
+            .await?;
+
+        // Build result map, verifying each grant belongs to this environment
+        let mut result = HashMap::with_capacity(records.len());
+        for record in records {
+            let grant: EnvironmentPluginGrantWithDetails = record.try_into()?;
+            if grant.environment_id != environment.id {
+                return Err(EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
+                    grant.id,
+                ));
+            }
+            result.insert(grant.id, grant);
+        }
+
+        // Verify every requested ID was found
+        for id in ids {
+            let grant_id = EnvironmentPluginGrantId(id);
+            if !result.contains_key(&grant_id) {
+                return Err(EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
+                    grant_id,
+                ));
+            }
+        }
+
+        Ok(result)
     }
 
     async fn get_by_id_with_environment(

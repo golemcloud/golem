@@ -121,4 +121,64 @@ class CodegenPipelineSpec extends munit.FunSuite {
     assert(content.contains("getPhantom"), s"ephemeral agent should have getPhantom:\n$content")
     assert(!content.contains("def get("), s"ephemeral agent should not have get:\n$content")
   }
+
+  test("auto-register source changes when agent trait surface changes") {
+    val original = SourceDiscovery.SourceInput(
+      "Counter.scala",
+      """|package example
+         |
+         |@agentDefinition()
+         |trait CounterAgent {
+         |  class Id(val value: String)
+         |  def increment(): Int
+         |}
+         |
+         |@agentImplementation()
+         |final class CounterAgentImpl(private val value: String) extends CounterAgent {
+         |  def increment(): Int = 1
+         |}
+         |""".stripMargin
+    )
+
+    val updated = SourceDiscovery.SourceInput(
+      "Counter.scala",
+      """|package example
+         |
+         |@agentDefinition()
+         |trait CounterAgent {
+         |  class Id(val value: String)
+         |  def increment(): Int
+         |  def recordMessageViaHttp(message: String): String
+         |}
+         |
+         |@agentImplementation()
+         |final class CounterAgentImpl(private val value: String) extends CounterAgent {
+         |  def increment(): Int = 1
+         |  def recordMessageViaHttp(message: String): String = message
+         |}
+         |""".stripMargin
+    )
+
+    val originalAutoRegister = CodegenPipeline
+      .run(discover(original), Some("example"), rpcEnabled = false)
+      .autoRegister
+      .get
+      .files
+      .find(_.relativePath.endsWith("__GolemAutoRegister_example.scala"))
+      .get
+      .content
+
+    val updatedAutoRegister = CodegenPipeline
+      .run(discover(updated), Some("example"), rpcEnabled = false)
+      .autoRegister
+      .get
+      .files
+      .find(_.relativePath.endsWith("__GolemAutoRegister_example.scala"))
+      .get
+      .content
+
+    assert(originalAutoRegister.contains("__golemSurfaceVersion"))
+    assert(updatedAutoRegister.contains("__golemSurfaceVersion"))
+    assertNotEquals(originalAutoRegister, updatedAutoRegister)
+  }
 }

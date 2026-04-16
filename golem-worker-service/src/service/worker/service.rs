@@ -26,18 +26,19 @@ use bytes::Bytes;
 use futures::Stream;
 use golem_api_grpc::proto::golem::worker::InvocationContext;
 use golem_common::model::AgentInvocationOutput;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     DataValue, GolemUserPrincipal, ParsedAgentId, Principal, UntypedDataValue,
 };
 use golem_common::model::component::{
-    ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
+    CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::worker::WorkerAgentConfigEntry;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
@@ -84,8 +85,8 @@ impl WorkerService {
         &self,
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
-        config_vars: BTreeMap<String, String>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        wasi_config: BTreeMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
@@ -100,8 +101,8 @@ impl WorkerService {
             agent_id,
             component,
             environment_variables,
-            config_vars,
-            agent_config,
+            wasi_config,
+            config,
             ignore_already_existing,
             auth_ctx,
             invocation_context,
@@ -116,8 +117,8 @@ impl WorkerService {
         agent_id: &AgentId,
         component: Component,
         environment_variables: HashMap<String, String>,
-        config_vars: BTreeMap<String, String>,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        wasi_config: BTreeMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
@@ -138,8 +139,8 @@ impl WorkerService {
             .create(
                 agent_id,
                 environment_variables,
-                config_vars,
-                agent_config,
+                wasi_config,
+                config,
                 ignore_already_existing,
                 environment_auth_details.account_id_owning_environment,
                 component.environment_id,
@@ -477,7 +478,7 @@ impl WorkerService {
     pub async fn get_file_system_node(
         &self,
         agent_id: &AgentId,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
         let component = self
@@ -511,7 +512,7 @@ impl WorkerService {
     pub async fn get_file_contents(
         &self,
         agent_id: &AgentId,
-        path: ComponentFilePath,
+        path: CanonicalFilePath,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
         let component = self
@@ -697,6 +698,44 @@ impl WorkerService {
         Ok(canceled)
     }
 
+    pub async fn process_oplog_entries(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        component_revision: ComponentRevision,
+        idempotency_key: IdempotencyKey,
+        _account_id: AccountId,
+        config: std::collections::HashMap<String, String>,
+        metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
+        first_entry_index: OplogIndex,
+        entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<()> {
+        let environment_auth_details = self
+            .auth_service
+            .authorize_environment_actions(
+                environment_id,
+                EnvironmentAction::UpdateWorker,
+                &auth_ctx,
+            )
+            .await?;
+
+        self.worker_client
+            .process_oplog_entries(
+                target_agent_id,
+                environment_id,
+                component_revision,
+                idempotency_key,
+                environment_auth_details.account_id_owning_environment,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+                auth_ctx,
+            )
+            .await
+    }
+
     pub async fn invoke_agent(
         &self,
         agent_id: &AgentId,
@@ -806,7 +845,7 @@ impl WorkerService {
                 component,
                 HashMap::new(),
                 BTreeMap::new(),
-                request.agent_config,
+                request.config,
                 true,
                 auth,
                 None,

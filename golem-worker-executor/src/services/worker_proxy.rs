@@ -20,11 +20,12 @@ use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServi
 use golem_api_grpc::proto::golem::worker::v1::{
     AgentError, CancelInvocationRequest, CancelInvocationResponse, CompletePromiseRequest,
     CompletePromiseResponse, ForkWorkerRequest, InvokeAgentRequest, InvokeAgentResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse,
-    RevertWorkerRequest, RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
-    agent_error, cancel_invocation_response, complete_promise_response, fork_worker_response,
-    invoke_agent_response, launch_new_worker_response, resume_worker_response,
-    revert_worker_response, update_worker_response,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, ProcessOplogEntriesRequest,
+    ProcessOplogEntriesResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
+    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, agent_error,
+    cancel_invocation_response, complete_promise_response, fork_worker_response,
+    invoke_agent_response, launch_new_worker_response, process_oplog_entries_response,
+    resume_worker_response, revert_worker_response, update_worker_response,
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, UpdateMode};
 use golem_common::model::account::AccountId;
@@ -33,7 +34,7 @@ use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::worker::{RevertWorkerTarget, WorkerAgentConfigEntry};
+use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{
     AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey, InvocationStatus,
     OwnedAgentId, PromiseId,
@@ -59,7 +60,7 @@ pub trait WorkerProxy: Send + Sync {
         caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        config: Vec<AgentConfigEntryDto>,
         principal: Principal,
     ) -> Result<(), WorkerProxyError>;
 
@@ -132,6 +133,19 @@ pub trait WorkerProxy: Send + Sync {
         idempotency_key: IdempotencyKey,
         caller_account_id: AccountId,
     ) -> Result<bool, WorkerProxyError>;
+
+    async fn process_oplog_entries(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        component_revision: ComponentRevision,
+        idempotency_key: IdempotencyKey,
+        account_id: AccountId,
+        config: Vec<(String, String)>,
+        metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
+        first_entry_index: OplogIndex,
+        entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
+    ) -> Result<(), WorkerProxyError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
@@ -258,7 +272,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
-        agent_config: Vec<WorkerAgentConfigEntry>,
+        config: Vec<AgentConfigEntryDto>,
         principal: Principal,
     ) -> Result<(), WorkerProxyError> {
         debug!(owned_agent_id=%owned_agent_id, "Starting remote worker");
@@ -274,14 +288,14 @@ impl WorkerProxy for RemoteWorkerProxy {
                     component_id: Some(owned_agent_id.component_id().into()),
                     name: owned_agent_id.agent_name(),
                     env: caller_env.clone(),
-                    config_vars: caller_config_vars.clone().into_iter().collect(),
-                    agent_config: agent_config.clone().into_iter().map(Into::into).collect(),
+                    wasi_config: caller_config_vars.clone().into_iter().collect(),
+                    config: config.clone().into_iter().map(Into::into).collect(),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_agent_id.clone().into()),
                         env: caller_env,
-                        config_vars: caller_config_vars.clone().into_iter().collect(),
+                        wasi_config: caller_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     principal: Some(principal.clone().into()),
@@ -346,7 +360,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_agent_id.clone().into()),
                         env: caller_env.clone(),
-                        config_vars: caller_config_vars.clone().into_iter().collect(),
+                        wasi_config: caller_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),
@@ -640,6 +654,50 @@ impl WorkerProxy for RemoteWorkerProxy {
         match response.result {
             Some(cancel_invocation_response::Result::Success(canceled)) => Ok(canceled),
             Some(cancel_invocation_response::Result::Error(error)) => Err(error.into()),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
+            )),
+        }
+    }
+
+    async fn process_oplog_entries(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        component_revision: ComponentRevision,
+        idempotency_key: IdempotencyKey,
+        account_id: AccountId,
+        config: Vec<(String, String)>,
+        metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
+        first_entry_index: OplogIndex,
+        entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
+    ) -> Result<(), WorkerProxyError> {
+        debug!(target_agent_id=%target_agent_id, "Processing oplog entries on remote agent");
+
+        let auth_ctx = self.get_auth_ctx(account_id);
+
+        let response: ProcessOplogEntriesResponse = self
+            .worker_service_client
+            .call("process_oplog_entries", move |client| {
+                Box::pin(client.process_oplog_entries(ProcessOplogEntriesRequest {
+                    agent_id: Some(target_agent_id.clone().into()),
+                    environment_id: Some(environment_id.into()),
+                    component_revision: component_revision.into(),
+                    idempotency_key: Some(idempotency_key.clone().into()),
+                    account_id: Some(account_id.into()),
+                    config: config.clone().into_iter().collect(),
+                    metadata: Some(metadata.clone()),
+                    first_entry_index: first_entry_index.into(),
+                    entries: entries.clone(),
+                    auth_ctx: Some(auth_ctx.clone().into()),
+                }))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(process_oplog_entries_response::Result::Success(_)) => Ok(()),
+            Some(process_oplog_entries_response::Result::Error(error)) => Err(error.into()),
             None => Err(WorkerProxyError::InternalError(
                 WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
             )),

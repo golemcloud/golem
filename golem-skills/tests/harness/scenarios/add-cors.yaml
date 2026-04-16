@@ -1,0 +1,115 @@
+name: "add-cors"
+settings:
+  golem_server:
+    custom_request_port: 9006
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-note-agent-with-http"
+    prompt: >
+      In the test-app project, add a new durable agent type called `NoteAgent` identified by
+      a single constructor parameter for the notebook name. Give it an HTTP mount under
+      `/notes/{notebook-name}` and make sure it is exposed through the app HTTP API on
+      `test-app.localhost:9006`.
+
+      NoteAgent must store a list of notes in agent state. Each note is a simple string.
+
+      Expose these HTTP endpoints:
+      - `POST /add` — accepts a `text` string in the JSON request body, appends it to the
+        stored list, and returns the added note as a JSON object with a `text` field.
+      - `GET /list` — returns all stored notes as a JSON array of objects, each with a `text`
+        field.
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-http-endpoint-rust"
+      ts:
+        - "golem-add-http-endpoint-ts"
+      scala:
+        - "golem-add-http-endpoint-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-cors"
+    prompt: >
+      Enable CORS on the NoteAgent. Configure mount-level CORS to allow the origin
+      `https://frontend.example.com`. Additionally, on the `GET /list` endpoint specifically,
+      add wildcard CORS (`*`) so that it allows all origins (in addition to the mount-level
+      origin).
+
+      Do not change the endpoint logic — only add CORS configuration.
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-cors-rust"
+      ts:
+        - "golem-add-cors-ts"
+      scala:
+        - "golem-add-cors-scala"
+    verify:
+      build: true
+      deploy: true
+
+  # Preflight on mount-level CORS endpoint — allowed origin
+  - id: "preflight-add-allowed"
+    http:
+      url: "http://test-app.localhost:9006/notes/work/add"
+      method: "OPTIONS"
+      headers:
+        Origin: "https://frontend.example.com"
+        Access-Control-Request-Method: "POST"
+        Access-Control-Request-Headers: "content-type"
+    expect:
+      status: 204
+      header_contains:
+        Access-Control-Allow-Origin: "https://frontend.example.com"
+        Access-Control-Allow-Headers: "content-type"
+
+  # Preflight on wildcard CORS endpoint — any origin should work
+  - id: "preflight-list-wildcard"
+    http:
+      url: "http://test-app.localhost:9006/notes/work/list"
+      method: "OPTIONS"
+      headers:
+        Origin: "https://other.example.com"
+        Access-Control-Request-Method: "GET"
+    expect:
+      status: 204
+      header_contains:
+        Access-Control-Allow-Origin: "https://other.example.com"
+
+  # Normal request to wildcard endpoint carries CORS header
+  - id: "get-list-cors-header"
+    http:
+      url: "http://test-app.localhost:9006/notes/work/list"
+      method: "GET"
+      headers:
+        Origin: "https://anywhere.example.com"
+    expect:
+      status: 200
+      header_contains:
+        Access-Control-Allow-Origin: "https://anywhere.example.com"
+
+  # Normal POST with allowed origin carries CORS header
+  - id: "post-add-cors-header"
+    http:
+      url: "http://test-app.localhost:9006/notes/work/add"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        Origin: "https://frontend.example.com"
+      body: '{"text":"hello"}'
+    expect:
+      status: 200
+      header_contains:
+        Access-Control-Allow-Origin: "https://frontend.example.com"
+      body_json:
+        - path: "$.text"
+          equals: "hello"

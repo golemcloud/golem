@@ -105,7 +105,7 @@ pub enum WorkerExecutorError {
         details: String,
     },
     ShardingNotReady,
-    InitialComponentFileDownloadFailed {
+    InitialAgentFileDownloadFailed {
         path: String,
         reason: String,
     },
@@ -156,7 +156,7 @@ impl WorkerExecutorError {
     }
 
     pub fn initial_file_download_failed(path: String, reason: String) -> Self {
-        Self::InitialComponentFileDownloadFailed { path, reason }
+        Self::InitialAgentFileDownloadFailed { path, reason }
     }
 
     pub fn invalid_request(details: impl Into<String>) -> Self {
@@ -239,7 +239,7 @@ impl Display for WorkerExecutorError {
                     "Failed to get latest version of component {component_id}: {reason}"
                 )
             }
-            Self::InitialComponentFileDownloadFailed { path, reason } => {
+            Self::InitialAgentFileDownloadFailed { path, reason } => {
                 write!(
                     f,
                     "Failed to download initial file for component to {path}: {reason}"
@@ -329,7 +329,7 @@ impl Error for WorkerExecutorError {
             Self::PromiseDropped { .. } => "Promise dropped",
             Self::PromiseAlreadyCompleted { .. } => "Promise already completed",
             Self::Interrupted { .. } => "Interrupted",
-            Self::InitialComponentFileDownloadFailed { .. } => "Failed to download initial file",
+            Self::InitialAgentFileDownloadFailed { .. } => "Failed to download initial file",
             Self::ParamTypeMismatch { .. } => "Parameter type mismatch",
             Self::NoValueInMessage => "No value in message",
             Self::ValueMismatch { .. } => "Value mismatch",
@@ -358,7 +358,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::ComponentDownloadFailed { .. } => "ComponentDownloadFailed",
             Self::ComponentParseFailed { .. } => "ComponentParseFailed",
             Self::GetLatestVersionOfComponentFailed { .. } => "GetLatestVersionOfComponentFailed",
-            Self::InitialComponentFileDownloadFailed { .. } => "InitialComponentFileDownloadFailed",
+            Self::InitialAgentFileDownloadFailed { .. } => "InitialAgentFileDownloadFailed",
             Self::PromiseNotFound { .. } => "PromiseNotFound",
             Self::PromiseDropped { .. } => "PromiseDropped",
             Self::PromiseAlreadyCompleted { .. } => "PromiseAlreadyCompleted",
@@ -394,7 +394,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::ComponentDownloadFailed { .. }
             | Self::ComponentParseFailed { .. }
             | Self::GetLatestVersionOfComponentFailed { .. }
-            | Self::InitialComponentFileDownloadFailed { .. }
+            | Self::InitialAgentFileDownloadFailed { .. }
             | Self::ParamTypeMismatch { .. }
             | Self::NoValueInMessage
             | Self::ValueMismatch { .. }
@@ -558,10 +558,10 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            WorkerExecutorError::InitialComponentFileDownloadFailed { path, reason } => Self {
+            WorkerExecutorError::InitialAgentFileDownloadFailed { path, reason } => Self {
                     error: Some(
-                        golem::worker::v1::worker_execution_error::Error::InitialComponentFileDownloadFailed(
-                            golem::worker::v1::InitialComponentFileDownloadFailed { path, reason },
+                        golem::worker::v1::worker_execution_error::Error::InitialAgentFileDownloadFailed(
+                            golem::worker::v1::InitialAgentFileDownloadFailed { path, reason },
                         ),
                     ),
                 },
@@ -851,8 +851,8 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                 inner,
             )) => Ok(Self::PreviousInvocationFailed {
                 error: inner.error.ok_or("no trap_cause field")?.try_into()?,
-                stderr: inner.stderr
-             }),
+                stderr: inner.stderr,
+            }),
             Some(golem::worker::v1::worker_execution_error::Error::PreviousInvocationExited(_)) => {
                 Ok(Self::PreviousInvocationExited)
             }
@@ -864,9 +864,11 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
             Some(golem::worker::v1::worker_execution_error::Error::ShardingNotReady(_)) => {
                 Ok(Self::ShardingNotReady)
             }
-            Some(golem::worker::v1::worker_execution_error::Error::InitialComponentFileDownloadFailed(
-                initial_file_download_failed,
-            )) => Ok(Self::InitialComponentFileDownloadFailed {
+            Some(
+                golem::worker::v1::worker_execution_error::Error::InitialAgentFileDownloadFailed(
+                    initial_file_download_failed,
+                ),
+            ) => Ok(Self::InitialAgentFileDownloadFailed {
                 path: initial_file_download_failed.path,
                 reason: initial_file_download_failed.reason,
             }),
@@ -876,12 +878,12 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                 path: file_system_error.path,
                 reason: file_system_error.reason,
             }),
-            Some(golem::worker::v1::worker_execution_error::Error::InvocationFailed(
-                inner,
-            )) => Ok(Self::InvocationFailed {
-                error: inner.error.ok_or("no trap_cause field")?.try_into()?,
-                stderr: inner.stderr
-             }),
+            Some(golem::worker::v1::worker_execution_error::Error::InvocationFailed(inner)) => {
+                Ok(Self::InvocationFailed {
+                    error: inner.error.ok_or("no trap_cause field")?.try_into()?,
+                    stderr: inner.stderr,
+                })
+            }
         }
     }
 }

@@ -80,7 +80,7 @@ async fn delete_domain(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
         )
         .await?;
 
-    client.delete_domain_registrations(&domain.id.0).await?;
+    client.delete_domain_registration(&domain.id.0).await?;
 
     {
         let result = client.get_domain_registration(&domain.id.0).await;
@@ -214,7 +214,7 @@ async fn domain_can_be_reused_after_deletion(
         .await?;
 
     client_1
-        .delete_domain_registrations(&domain_registration.id.0)
+        .delete_domain_registration(&domain_registration.id.0)
         .await?;
 
     let second_domain_registration = client_2

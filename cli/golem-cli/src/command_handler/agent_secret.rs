@@ -177,7 +177,7 @@ impl AgentSecretCommandHandler {
 
         let results = clients
             .agent_secrets
-            .get_environment_agent_secrets(&environment.environment_id.0)
+            .list_environment_agent_secrets(&environment.environment_id.0)
             .await
             .map_service_error()?
             .values;

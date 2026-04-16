@@ -106,7 +106,7 @@ impl RetryPolicyCommandHandler {
 
         let results = clients
             .retry_policies
-            .get_environment_retry_policies(&environment.environment_id.0)
+            .list_environment_retry_policies(&environment.environment_id.0)
             .await
             .map_service_error()?
             .values;

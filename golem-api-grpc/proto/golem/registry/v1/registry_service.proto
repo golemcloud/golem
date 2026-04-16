@@ -11,8 +11,8 @@ import "golem/common/environment.proto";
 import "golem/common/resource_limits.proto";
 import "golem/common/uuid.proto";
 import "golem/component/agent.proto";
+import "golem/component/agent_files.proto";
 import "golem/component/component.proto";
-import "golem/component/component_files.proto";
 import "golem/component/component_id.proto";
 import "golem/customapi/core.proto";
 import "golem/mcp/core.proto";
@@ -369,6 +369,7 @@ message RegistryInvalidationEvent {
     SecuritySchemeChangedEvent security_scheme_changed = 7;
     ResourceDefinitionChangedEvent resource_definition_changed = 8;
     RetryPolicyChangedEvent retry_policy_changed = 9;
+    AgentSecretChangedEvent agent_secret_changed = 10;
   }
 }
 
@@ -414,5 +415,10 @@ message ResourceDefinitionChangedEvent {
 
 // Sent when an environment retry policy is created, updated, or deleted.
 message RetryPolicyChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
+}
+
+// Sent when an environment agent secret is created, updated, or deleted.
+message AgentSecretChangedEvent {
   golem.common.EnvironmentId environment_id = 1;
 }
