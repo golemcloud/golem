@@ -53,7 +53,11 @@ pub trait Diffable {
 
     fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError>;
 
-    fn unified_yaml_diff_with_new(&self, new: &Self, mode: SerializeMode) -> Result<String, DiffError>
+    fn unified_yaml_diff_with_new(
+        &self,
+        new: &Self,
+        mode: SerializeMode,
+    ) -> Result<String, DiffError>
     where
         Self: Serialize,
     {
@@ -71,13 +75,18 @@ pub trait Diffable {
         Self::unified_yaml_diff(self, current, mode)
     }
 
-    fn unified_yaml_diff(new: &Self, current: &Self, mode: SerializeMode) -> Result<String, DiffError>
+    fn unified_yaml_diff(
+        new: &Self,
+        current: &Self,
+        mode: SerializeMode,
+    ) -> Result<String, DiffError>
     where
         Self: Serialize,
     {
         Ok(unified_diff(
-            to_yaml_with_mode(&current, mode)
-                .map_err(|err| DiffError::serde_yaml("diff.render.serialize current as YAML", err))?,
+            to_yaml_with_mode(&current, mode).map_err(|err| {
+                DiffError::serde_yaml("diff.render.serialize current as YAML", err)
+            })?,
             to_yaml_with_mode(&new, mode)
                 .map_err(|err| DiffError::serde_yaml("diff.render.serialize new as YAML", err))?,
         ))

@@ -69,8 +69,8 @@ pub trait ToSerializableWithModeExt: ToSerializableWithMode {
     fn to_pretty_json_with_mode(&self, mode: SerializeMode) -> Result<String, DiffError> {
         with_mode(mode, || {
             serde_json::to_string_pretty(&self.to_serializable(mode)?).map_err(|err| {
-                    DiffError::serde_json("diff.serialize.to_pretty_json_with_mode", err)
-                })
+                DiffError::serde_json("diff.serialize.to_pretty_json_with_mode", err)
+            })
         })
     }
 

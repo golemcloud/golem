@@ -13,8 +13,8 @@
 // limitations under the License.
 
 pub use crate::base_model::diff::hash::*;
-use crate::model::diff::{DiffError, Diffable};
 use crate::model::diff::ser::{SerializeMode, ToSerializableWithMode, to_json_with_mode};
+use crate::model::diff::{DiffError, Diffable};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use std::sync::OnceLock;
@@ -168,16 +168,14 @@ impl<V: Hashable + Serialize> ToSerializableWithMode for HashOf<V> {
 }
 
 pub fn hash_from_serialized_value<T: Serialize>(value: &T) -> Result<Hash, DiffError> {
-    Ok(
-        blake3::hash(
-            to_json_with_mode(value, SerializeMode::HashOnly)
-                .map_err(|err| {
-                    DiffError::serde_json("diff.hash.serialize value as JSON for hash", err)
-                })?
-                .as_bytes(),
-        )
-        .into(),
+    Ok(blake3::hash(
+        to_json_with_mode(value, SerializeMode::HashOnly)
+            .map_err(|err| {
+                DiffError::serde_json("diff.hash.serialize value as JSON for hash", err)
+            })?
+            .as_bytes(),
     )
+    .into())
 }
 
 mod poem {

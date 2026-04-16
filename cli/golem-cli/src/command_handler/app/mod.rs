@@ -964,17 +964,16 @@ impl AppCommandHandler {
 
         let staged_deployment_hash = diffable_staged_deployment.hash()?;
 
-        let Some(diff) =
-            diffable_current_deployment
-                .diff_with_new(&deploy_quick_diff.diffable_local_deployment)?
+        let Some(diff) = diffable_current_deployment
+            .diff_with_new(&deploy_quick_diff.diffable_local_deployment)?
         else {
             bail!(anyhow!(
                 "The environment was changed concurrently while diffing. Retry planning and deploying!"
             ))
         };
 
-        let diff_stage =
-            diffable_staged_deployment.diff_with_new(&deploy_quick_diff.diffable_local_deployment)?;
+        let diff_stage = diffable_staged_deployment
+            .diff_with_new(&deploy_quick_diff.diffable_local_deployment)?;
 
         Ok(DeployDiff {
             environment: deploy_quick_diff.environment,
@@ -1195,7 +1194,8 @@ impl AppCommandHandler {
         let diffable_target_deployment = quick_diff.target_deployment.to_diffable();
         let diffable_current_deployment = current_deployment.to_diffable();
 
-        let Some(diff) = diffable_target_deployment.diff_with_current(&diffable_current_deployment)?
+        let Some(diff) =
+            diffable_target_deployment.diff_with_current(&diffable_current_deployment)?
         else {
             bail!(
                 "Illegal state: empty diff between current and target deployment after fetching summaries"
