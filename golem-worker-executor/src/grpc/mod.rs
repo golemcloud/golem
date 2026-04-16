@@ -317,7 +317,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .await
             {
                 Ok(Ok(())) => Ok(()),
-                Ok(Err(error)) => Err(error),
+                Ok(Err(e)) => Err(e),
                 Err(RecvError::Closed) => {
                     Err(WorkerExecutorError::unknown("Events subscription closed"))
                 }
@@ -393,28 +393,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         )
         .await?;
 
-        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.worker_acquired");
-
-        let interrupt_waiter = worker
+        info!("Interrupting worker before deletion");
+        worker
             .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
             .await;
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            has_interrupt_waiter = interrupt_waiter.is_some(),
-            "WorkerExecutorImpl.delete_worker.interrupt_requested"
-        );
-
-        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.start_deleting");
+        info!("Marking worker for deletion");
         worker.start_deleting().await?;
-        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.start_deleting_done");
 
-        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.remove_persisted_state");
         self.worker_service().remove(&owned_agent_id).await;
-        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.remove_persisted_state_done");
-
-        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.remove_active_worker");
         self.active_workers().remove(&owned_agent_id.agent_id).await;
-        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.remove_active_worker_done");
 
         // ensure we are holding the worker while we are doing cleanup.
         drop(worker);

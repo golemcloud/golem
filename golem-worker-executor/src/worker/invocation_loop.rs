@@ -187,16 +187,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     /// Create the worker instance and publish an event about it
     async fn create_instance(&self) -> Option<(Instance, Mutex<Store<Ctx>>)> {
-        warn!(
-            agent_id = %self.owned_agent_id.agent_id(),
-            "InnerInvocationLoop.create_instance.start"
-        );
         match RunningWorker::create_instance(self.parent.clone()).await {
             Ok((instance, store)) => {
-                warn!(
-                    agent_id = %self.owned_agent_id.agent_id(),
-                    "InnerInvocationLoop.create_instance.success"
-                );
                 self.parent.events().publish(Event::WorkerLoaded {
                     agent_id: self.owned_agent_id.agent_id(),
                     result: Ok(()),
@@ -204,11 +196,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 Some((instance, store))
             }
             Err(err) => {
-                warn!(
-                    agent_id = %self.owned_agent_id.agent_id(),
-                    error = %err,
-                    "InnerInvocationLoop.create_instance.error"
-                );
+                warn!("Failed to start the worker: {err}");
                 self.parent.events().publish(Event::WorkerLoaded {
                     agent_id: self.owned_agent_id.agent_id(),
                     result: Err(err.clone()),
@@ -338,7 +326,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         self.waiting_for_command.store(true, Ordering::Release);
         self.release_concurrent_agent_permit();
         while let Some(cmd) = self.next_wakeup().await {
-            warn!(agent_id = %self.owned_agent_id.agent_id(), command = ?cmd, "InnerInvocationLoop.run.wakeup");
             // Waking from idle: re-acquire the concurrent-agent permit before
             // processing any commands.
             self.acquire_concurrent_agent_permit().await;
@@ -347,11 +334,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 WorkerCommand::Unblock => {
                     loop {
                         if let Some(kind) = self.interrupt_signal.lock().await.take() {
-                            warn!(
-                                agent_id = %self.owned_agent_id.agent_id(),
-                                interrupt_kind = ?kind,
-                                "InnerInvocationLoop.run.interrupt_received"
-                            );
                             break self.interrupt(kind).await;
                         }
 
@@ -460,12 +442,6 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         } else {
             self.receiver.recv().await
         };
-
-        if let Some(cmd) = &wakeup {
-            warn!(agent_id = %self.owned_agent_id.agent_id(), command = ?cmd, "InnerInvocationLoop.next_wakeup");
-        } else {
-            warn!(agent_id = %self.owned_agent_id.agent_id(), "InnerInvocationLoop.next_wakeup.receiver_closed");
-        }
 
         self.idle_snapshot_task = None;
         wakeup

@@ -408,12 +408,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(true)
             }
             WorkerInstance::WaitingForPermit(_) | WorkerInstance::Running(_) => Ok(false),
-            WorkerInstance::Deleting => {
-                warn!(agent_id = %this.owned_agent_id.agent_id(), "Worker.start_if_needed_internal.worker_deleting");
-                Err(WorkerExecutorError::invalid_request(
-                    "Worker is being deleted",
-                ))
-            }
+            WorkerInstance::Deleting => Err(WorkerExecutorError::invalid_request(
+                "Worker is being deleted",
+            )),
             WorkerInstance::Stopping(_) => panic!("impossible"),
         }
     }
@@ -1518,14 +1515,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         fail_pending_invocations: Option<WorkerExecutorError>,
         final_state: FinalWorkerState,
     ) {
-        warn!(
-            agent_id = %self.owned_agent_id.agent_id(),
-            called_from_invocation_loop,
-            fail_pending_invocations = fail_pending_invocations.is_some(),
-            final_state = ?final_state,
-            "Worker.stop_internal"
-        );
-
         let mut instance_guard = self.instance.lock().await;
 
         let stop_result = self
@@ -1560,15 +1549,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             },
         );
 
-        warn!(
-            agent_id = %self.owned_agent_id.agent_id(),
-            called_from_invocation_loop,
-            fail_pending_invocations = fail_pending_invocations.is_some(),
-            previous_state = ?previous_instance_state,
-            final_state = ?final_state,
-            "Worker.stop_internal_locked"
-        );
-
         match previous_instance_state {
             WorkerInstance::Unloaded { .. } | WorkerInstance::WaitingForPermit(_) => {
                 if let Some(ref error) = fail_pending_invocations {
@@ -1578,13 +1558,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 StopResult::Stopped
             }
             WorkerInstance::Deleting => {
-                warn!(agent_id = %self.owned_agent_id.agent_id(), "Worker.stop_internal_locked.already_deleting");
                 **instance_guard = previous_instance_state;
                 // Should we return an error here?
                 StopResult::Stopped
             }
             WorkerInstance::Stopping(_) if called_from_invocation_loop => {
-                warn!(agent_id = %self.owned_agent_id.agent_id(), "Worker.stop_internal_locked.invocation_loop_observed_stopping");
                 **instance_guard = previous_instance_state;
                 StopResult::Stopped
             }
@@ -1597,21 +1575,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                 }
                 let notify = stopping.notify.clone();
-                warn!(
-                    agent_id = %self.owned_agent_id.agent_id(),
-                    stopping_final_state = ?stopping.final_state,
-                    requested_final_state = ?final_state,
-                    "Worker.stop_internal_locked.already_stopping"
-                );
                 **instance_guard = WorkerInstance::Stopping(stopping);
                 StopResult::AlreadyStopping { notify }
             }
             WorkerInstance::Running(running) => {
-                warn!(
-                    agent_id = %self.owned_agent_id.agent_id(),
-                    called_from_invocation_loop,
-                    fail_pending_invocations = fail_pending_invocations.is_some(),
-                    "Worker.stop_internal_locked.stop_running"
+                debug!(
+                    "Stopping running worker ({called_from_invocation_loop}) ({})",
+                    fail_pending_invocations.is_some()
                 );
 
                 // TODO: fail pending invocations should be factored out of here and be guaranteed to run
@@ -1631,11 +1601,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // drop the running worker, this signals to the invocation loop to start exiting.
                     let run_loop_handle = running.stop();
                     let notify = OneShotEvent::new();
-                    warn!(
-                        agent_id = %self.owned_agent_id.agent_id(),
-                        final_state = ?final_state,
-                        "Worker.stop_internal_locked.wait_for_invocation_loop_exit"
-                    );
                     **instance_guard = WorkerInstance::Stopping(StoppingWorker {
                         notify: notify.clone(),
                         final_state,
@@ -1658,9 +1623,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 run_loop_handle,
                 notify,
             } => {
-                warn!(agent_id = %self.owned_agent_id.agent_id(), "Worker.handle_stop_result.waiting_for_invocation_loop_exit");
                 run_loop_handle.await.expect("Failed to join run loop");
-                warn!(agent_id = %self.owned_agent_id.agent_id(), "Worker.handle_stop_result.invocation_loop_exited");
 
                 let mut instance_guard = self.instance.lock().await;
                 let is_deleting = match &*instance_guard {
@@ -1674,7 +1637,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // unresolved invocations (e.g. the currently running one that was
                 // in progress when deletion was requested).
                 if is_deleting {
-                    warn!(agent_id = %self.owned_agent_id.agent_id(), "Worker.handle_stop_result.failing_pending_invocations_for_delete");
                     drop(instance_guard);
                     self.fail_pending_invocations(WorkerExecutorError::invalid_request(
                         "Worker is being deleted",
@@ -1690,11 +1652,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     },
                 ) {
                     WorkerInstance::Stopping(stopping) => {
-                        warn!(
-                            agent_id = %self.owned_agent_id.agent_id(),
-                            final_state = ?stopping.final_state,
-                            "Worker.handle_stop_result.finalize_state"
-                        );
                         *instance_guard = stopping.final_state.into_instance();
                     }
                     other => panic!("expected Stopping, got {other:?}"),
@@ -1702,14 +1659,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 drop(instance_guard);
 
                 notify.set();
-                warn!(agent_id = %self.owned_agent_id.agent_id(), "Worker.handle_stop_result.notified_waiters");
             }
         }
     }
 
     async fn fail_pending_invocations(&self, error: WorkerExecutorError) {
         let queued_items = self.queue.write().await.drain(..).collect::<VecDeque<_>>();
-        let drained_internal_queue_len = queued_items.len();
         let mut spans_map = self.external_invocation_spans.write().await;
 
         // Publishing the provided initialization error to all queued internal operations
@@ -1740,15 +1695,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             keys_to_fail.push(current_key.clone());
         }
-
-        warn!(
-            agent_id = %self.owned_agent_id.agent_id(),
-            drained_internal_queue_len,
-            keys_to_fail = keys_to_fail.len(),
-            current_idempotency_key = ?status.current_idempotency_key,
-            error = %error,
-            "Worker.fail_pending_invocations"
-        );
 
         let mut invocation_results = self.invocation_results.write().await;
         for idempotency_key in &keys_to_fail {
@@ -1786,20 +1732,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             match &*instance_guard {
                 WorkerInstance::Stopping(stopping) => {
-                    let is_deleting = matches!(&stopping.final_state, FinalWorkerState::Deleting);
                     let notify = stopping.notify.clone();
-                    warn!(
-                        agent_id = %self.owned_agent_id.agent_id(),
-                        is_deleting,
-                        "Worker.lock_non_stopping_worker.waiting_for_stop"
-                    );
                     drop(instance_guard);
                     notify.wait().await;
-                    warn!(
-                        agent_id = %self.owned_agent_id.agent_id(),
-                        is_deleting,
-                        "Worker.lock_non_stopping_worker.stop_finished"
-                    );
                 }
                 _ => return instance_guard,
             }
@@ -2543,6 +2478,7 @@ impl RunningWorker {
 
         // we might have detached the worker status during the last invocation loop. Make sure it's attached and we are fully up-to-date on the oplog
         parent.reattach_worker_status().await;
+
         let worker_metadata = parent.get_latest_worker_metadata().await;
         debug!("Creating instance with parent metadata {worker_metadata:?}");
 
@@ -2569,33 +2505,15 @@ impl RunningWorker {
                 },
             );
 
-            warn!(
-                agent_id = %parent.owned_agent_id.agent_id(),
-                component_revision = ?component_revision,
-                pending_update = pending_update.is_some(),
-                "RunningWorker.create_instance.component_service_get.start"
-            );
-
             match parent
                 .component_service()
                 .get(&parent.engine(), component_id, component_revision)
                 .await
             {
                 Ok((component, component_metadata)) => {
-                    warn!(
-                        agent_id = %parent.owned_agent_id.agent_id(),
-                        component_revision = ?component_revision,
-                        "RunningWorker.create_instance.component_service_get.done"
-                    );
                     Ok((pending_update, component, component_metadata))
                 }
                 Err(error) => {
-                    warn!(
-                        agent_id = %parent.owned_agent_id.agent_id(),
-                        component_revision = ?component_revision,
-                        error = %error,
-                        "RunningWorker.create_instance.component_service_get.error"
-                    );
                     if component_revision != worker_metadata.last_known_status.component_revision {
                         // An update was attempted but the targeted version does not exist
                         warn!(
@@ -2705,6 +2623,7 @@ impl RunningWorker {
             worker_metadata.original_phantom_id,
         )
         .await?;
+
         let engine = parent.engine();
         let mut store = Store::new(&engine, context);
 
@@ -2735,6 +2654,7 @@ impl RunningWorker {
         store.limiter_async(|ctx| ctx.resource_limiter());
 
         let linker = (*parent.linker()).clone(); // fresh linker
+
         let instance_pre = linker.instantiate_pre(&component).map_err(|e| {
             WorkerExecutorError::worker_creation_failed(
                 parent.owned_agent_id.agent_id(),
@@ -2744,6 +2664,7 @@ impl RunningWorker {
                 ),
             )
         })?;
+
         let instance = instance_pre
             .instantiate_async(&mut store)
             .await
