@@ -64,6 +64,7 @@ impl MyAgent for MyAgentImpl {
 ```
 
 - The `#[agent_config]` annotation is **required** on the `Config<T>` parameter.
+- Do not call `Config::new()` yourself in user code. `Config<T>` metadata is discovered from the `#[agent_config]` constructor parameter, and manual construction bypasses that registration path.
 - Config is loaded lazily when `.get()` is called.
 
 ## 3. Set Config in `golem.yaml`

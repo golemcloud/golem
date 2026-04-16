@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::model::text::fmt::*;
 
 use golem_common::model::agent_secret::AgentSecretDto;
@@ -105,8 +106,9 @@ fn agent_secret_view_fields(view: &AgentSecretDto, show_sensitive: bool) -> Vec<
         .fmt_field("Path", &view.path, format_main_id)
         .fmt_field("ID", &view.id, format_id)
         .fmt_field("Revision", &view.revision.get(), format_id)
-        // TODO: better analysed type rendering
-        .fmt_field("Secret Type", &view.secret_type, |st| format!("{:?}", st))
+        .fmt_field("Secret Type", &view.secret_type, |st| {
+            render_type_for_language(&SourceLanguage::default(), st, false)
+        })
         .fmt_field_option(
             "Secret Value",
             &view.secret_value,
@@ -154,7 +156,7 @@ impl TextView for AgentSecretListView {
                 secret.path.to_string(),
                 secret.id.to_string(),
                 secret.revision.get().to_string(),
-                format!("{:?}", secret.secret_type),
+                render_type_for_language(&SourceLanguage::default(), &secret.secret_type, false),
                 secret_value,
             ]);
         }

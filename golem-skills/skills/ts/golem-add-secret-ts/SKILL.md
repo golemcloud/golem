@@ -52,13 +52,13 @@ export class MyAgent extends BaseAgent {
 ## Managing Secrets via CLI
 
 ```shell
-# Create secrets (--secret-type uses JSON-encoded analysed types)
-golem agent-secret create apiKey --secret-type '{"type":"Str"}' --secret-value '"sk-abc123"'
-golem agent-secret create db.password --secret-type '{"type":"Str"}' --secret-value '"s3cret"'
+# Create secrets (--secret-type uses language-native type names)
+golem agent-secret create apiKey --secret-type string --secret-value "sk-abc123"
+golem agent-secret create db.password --secret-type string --secret-value "s3cret"
 
 # List, update, and delete
 golem agent-secret list
-golem agent-secret update-value apiKey --secret-value '"new-value"'
+golem agent-secret update-value apiKey --secret-value "new-value"
 golem agent-secret delete apiKey
 ```
 
@@ -83,4 +83,4 @@ secretDefaults:
 - Secret values are stored **per-environment**, not per-agent-instance.
 - Secrets are **not** stored in the `config` section of `golem.yaml` — use `secretDefaults` for dev environments only.
 - Missing required secrets cause agent creation to fail.
-- The `--secret-type` flag accepts JSON-encoded analysed types (e.g., `'{"type":"Str"}'`, `'{"type":"F64"}'`).
+- The `--secret-type` flag accepts TypeScript type names: `string`, `s32`, `boolean`, `string[]` (JSON-encoded analysed types like `'{"type":"Str"}'` are also supported as a fallback).

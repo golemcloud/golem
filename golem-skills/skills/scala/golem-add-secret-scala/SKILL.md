@@ -64,10 +64,10 @@ final class MyAgentImpl(input: String, config: Config[MyAppConfig]) extends MyAg
 Secret paths use camelCase, matching Scala field names:
 
 ```shell
-golem agent-secret create apiKey --secret-type '{"type":"Str"}' --secret-value '"sk-abc123"'
-golem agent-secret create db.password --secret-type '{"type":"Str"}' --secret-value '"s3cret"'
+golem agent-secret create apiKey --secret-type String --secret-value "sk-abc123"
+golem agent-secret create db.password --secret-type String --secret-value "s3cret"
 golem agent-secret list
-golem agent-secret update-value apiKey --secret-value '"new-value"'
+golem agent-secret update-value apiKey --secret-value "new-value"
 golem agent-secret delete apiKey
 ```
 
@@ -93,4 +93,5 @@ secretDefaults:
 - The `Secret[T]` companion provides an implicit `Schema` so `Schema.derived` works on parent case classes
 - Missing required secrets cause agent creation to fail
 - Secret paths use camelCase (matching Scala field names)
+- The `--secret-type` argument accepts Scala type names: `String`, `Int`, `Boolean`, `List[String]`, `Option[Int]` (JSON-encoded analysed types like `'{"type":"Str"}'` are also supported as a fallback)
 - Use `secretDefaults` in `golem.yaml` only for development; manage production secrets via CLI

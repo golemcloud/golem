@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::agent_id_display::{SourceLanguage, parse_type_for_language};
 use crate::command::api::agent_secret::AgentSecretSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::log_error;
+use crate::model::GuestLanguage;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::text::agent_secret::{
     AgentSecretCreateView, AgentSecretDeleteView, AgentSecretGetView, AgentSecretListView,
@@ -31,6 +33,9 @@ use golem_common::model::agent_secret::{
 };
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_wasm::analysis::AnalysedType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_wasm::parse_value_and_type;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 pub struct AgentSecretCommandHandler {
@@ -119,22 +124,34 @@ impl AgentSecretCommandHandler {
 
         let clients = self.ctx.golem_clients().await?;
 
-        let secret_type: AnalysedType = match serde_json::from_str(&secret_type) {
-            Ok(res) => res,
-            Err(err) => {
-                log_error(format!("Malformed secret type provided: {err}"));
-                bail!(NonSuccessfulExit);
-            }
-        };
-
-        let secret_value: Option<serde_json::Value> =
-            match secret_value.map(|sv| serde_json::from_str(&sv)).transpose() {
+        let source_language = self.guess_source_language().await;
+        let secret_type: AnalysedType =
+            match parse_type_for_language(&secret_type, &source_language) {
                 Ok(res) => res,
-                Err(err) => {
-                    log_error(format!("Secret value is not valid json: {err}"));
-                    bail!(NonSuccessfulExit);
+                Err(_) => {
+                    // If the detected language parser fails, try all other parsers
+                    match parse_type_for_language(
+                        &secret_type,
+                        &SourceLanguage::Other(String::new()),
+                    ) {
+                        Ok(res) => res,
+                        Err(_) => match serde_json::from_str(&secret_type) {
+                            Ok(res) => res,
+                            Err(json_err) => {
+                                log_error(format!(
+                                    "Malformed secret type provided: {json_err}"
+                                ));
+                                bail!(NonSuccessfulExit);
+                            }
+                        },
+                    }
                 }
             };
+
+        let secret_value: Option<serde_json::Value> = match secret_value {
+            Some(sv) => Some(self.parse_secret_value(&sv, &secret_type)?),
+            None => None,
+        };
 
         let result = clients
             .agent_secrets
@@ -186,14 +203,10 @@ impl AgentSecretCommandHandler {
 
         let clients = self.ctx.golem_clients().await?;
 
-        let secret_value: Option<serde_json::Value> =
-            match secret_value.map(|sv| serde_json::from_str(&sv)).transpose() {
-                Ok(res) => res,
-                Err(err) => {
-                    log_error(format!("Secret value is not valid json: {err}"));
-                    bail!(NonSuccessfulExit);
-                }
-            };
+        let secret_value: Option<serde_json::Value> = match secret_value {
+            Some(sv) => Some(self.parse_secret_value(&sv, &current.secret_type)?),
+            None => None,
+        };
 
         let result = clients
             .agent_secrets
@@ -240,6 +253,49 @@ impl AgentSecretCommandHandler {
             });
 
         Ok(())
+    }
+
+    async fn guess_source_language(&self) -> SourceLanguage {
+        let app_state = self.ctx.app_context_lock().await;
+        if let Ok(Some(app_ctx)) = app_state.opt() {
+            let app = app_ctx.application();
+            let mut languages: BTreeSet<GuestLanguage> = BTreeSet::new();
+            for name in app.component_names() {
+                if let Some(lang) = app.component(name).guess_language() {
+                    languages.insert(lang);
+                }
+            }
+            if languages.len() == 1 {
+                let lang = languages.into_iter().next().unwrap();
+                return match lang {
+                    GuestLanguage::Rust => SourceLanguage::Rust,
+                    GuestLanguage::TypeScript => SourceLanguage::TypeScript,
+                    GuestLanguage::Scala => SourceLanguage::Scala,
+                };
+            }
+        }
+        SourceLanguage::Other(String::new())
+    }
+
+    fn parse_secret_value(
+        &self,
+        input: &str,
+        secret_type: &AnalysedType,
+    ) -> anyhow::Result<serde_json::Value> {
+        // Try WAVE format first
+        if let Ok(vat) = parse_value_and_type(secret_type, input) {
+            if let Ok(json) = vat.to_json_value() {
+                return Ok(json);
+            }
+        }
+        // Fall back to raw JSON
+        match serde_json::from_str(input) {
+            Ok(json) => Ok(json),
+            Err(err) => {
+                log_error(format!("Secret value is not valid: {err}"));
+                bail!(NonSuccessfulExit);
+            }
+        }
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {

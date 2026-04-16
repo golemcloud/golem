@@ -1301,10 +1301,10 @@ pub mod api {
                 /// Path of the secret (dot-separated, e.g. "apiKey" or "db.password"). Casing is normalized during creation.
                 #[arg(value_parser = parse_agent_secret_path)]
                 path: AgentSecretPath,
-                /// Description of the agent type in json
+                /// Type of the secret, using the project's language syntax (e.g. "String" for Rust, "string" for TypeScript) or JSON format
                 #[arg(long)]
                 secret_type: String,
-                /// Value of the secret in json
+                /// Value of the secret (e.g. "my-key" for strings, 42 for numbers). Accepts WAVE format or JSON
                 #[arg(long)]
                 secret_value: Option<String>,
             },
@@ -1327,7 +1327,7 @@ pub mod api {
                 /// ID of the secret (alternative to path)
                 #[arg(long, required_unless_present = "path", conflicts_with = "path")]
                 id: Option<AgentSecretId>,
-                /// Value of the secret in json
+                /// Value of the secret (e.g. "my-key" for strings, 42 for numbers). Accepts WAVE format or JSON
                 #[arg(long)]
                 secret_value: Option<String>,
             },

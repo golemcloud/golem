@@ -118,7 +118,7 @@ const InvokeSchema = z.object({
 
 const ShellSchema = z.object({
   command: z.string(),
-  args: z.array(z.string()).optional(),
+  args: langConditional(z.array(z.string())).optional(),
   cwd: z.string().optional(),
 });
 
@@ -274,7 +274,8 @@ type InvokeSpec = {
   method: LangConditional<string>;
   args?: LangConditional<string>;
 };
-type ShellSpec = { command: string; args?: string[]; cwd?: string };
+type ShellSpec = { command: string; args?: LangConditional<string[]>; cwd?: string };
+type ResolvedShellSpec = { command: string; args?: string[]; cwd?: string };
 type TriggerSpec = {
   agent: string;
   method: LangConditional<string>;
@@ -550,6 +551,20 @@ export class ScenarioExecutor {
     const subLangStrOpt = (
       v: LangConditional<string> | undefined,
     ): LangConditional<string> | undefined => (v === undefined ? undefined : subLangStr(v));
+    const subLangArr = (
+      v: LangConditional<string[]>,
+    ): LangConditional<string[]> =>
+      Array.isArray(v)
+        ? v.map((s) => substituteVariables(s, variables))
+        : Object.fromEntries(
+            Object.entries(v).map(([k, arr]) => [
+              k,
+              arr.map((s: string) => substituteVariables(s, variables)),
+            ]),
+          );
+    const subLangArrOpt = (
+      v: LangConditional<string[]> | undefined,
+    ): LangConditional<string[]> | undefined => (v === undefined ? undefined : subLangArr(v));
 
     switch (step.tag) {
       case "prompt":
@@ -577,7 +592,7 @@ export class ScenarioExecutor {
           ...step,
           shell: {
             command: substituteVariables(step.shell.command, variables),
-            args: subArr(step.shell.args),
+            args: subLangArrOpt(step.shell.args),
             cwd: sub(step.shell.cwd),
           },
         };
@@ -695,6 +710,16 @@ export class ScenarioExecutor {
         },
       } as StepSpec;
     }
+    if (step.tag === "shell") {
+      return {
+        ...resolved,
+        tag: "shell",
+        shell: {
+          ...step.shell,
+          args: resolveByLanguage(step.shell.args, lang),
+        },
+      } as StepSpec;
+    }
     if (step.tag === "http") {
       return {
         ...resolved,
@@ -720,6 +745,16 @@ export class ScenarioExecutor {
       ...invoke,
       method: invoke.method,
       args: invoke.args as string | undefined,
+    };
+  }
+
+  private ensureResolvedShellSpec(shell: ShellSpec): ResolvedShellSpec {
+    if (shell.args !== undefined && !Array.isArray(shell.args)) {
+      throw new Error("Shell args must resolve to a string array for the current language");
+    }
+    return {
+      ...shell,
+      args: shell.args as string[] | undefined,
     };
   }
 
@@ -1044,7 +1079,7 @@ export class ScenarioExecutor {
       case "shell":
         await this.executeShell(
           stepLabel,
-          step.shell,
+          this.ensureResolvedShellSpec(step.shell),
           step.expect,
           stepTimeoutSeconds,
           commandEnv,
@@ -1246,7 +1281,7 @@ export class ScenarioExecutor {
 
   private async executeShell(
     stepLabel: string,
-    shell: ShellSpec,
+    shell: ResolvedShellSpec,
     expect: StepCommon["expect"],
     timeout: number,
     commandEnv: Record<string, string>,
