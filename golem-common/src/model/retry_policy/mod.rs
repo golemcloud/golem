@@ -860,7 +860,7 @@ impl NamedRetryPolicy {
         properties: &RetryProperties,
     ) -> Result<Option<&'a NamedRetryPolicy>, RetryEvaluationError> {
         let mut ordered = policies.iter().collect::<Vec<_>>();
-        ordered.sort_by(|left, right| right.priority.cmp(&left.priority));
+        ordered.sort_by_key(|right| std::cmp::Reverse(right.priority));
 
         for policy in ordered {
             if policy.predicate.matches(properties)? {
