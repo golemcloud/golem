@@ -23,8 +23,8 @@ mod plugin;
 mod resource_definition;
 mod ser;
 
-pub use agent::*;
 pub use crate::base_model::diff::DIFF_MODEL_VERSION;
+pub use agent::*;
 pub use component::*;
 pub use deployment::*;
 pub use environment::*;
@@ -308,8 +308,7 @@ mod tests {
         let actual = diff_module_fingerprint();
 
         assert_eq!(
-            actual,
-            expected,
+            actual, expected,
             "Diff module fingerprint changed for DIFF_MODEL_VERSION={DIFF_MODEL_VERSION}. \
 Bump DIFF_MODEL_VERSION if the model change is breaking; otherwise update expected_diff_model_fingerprint."
         );
