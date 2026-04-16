@@ -409,7 +409,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             WorkerInstance::WaitingForPermit(_) | WorkerInstance::Running(_) => Ok(false),
             WorkerInstance::Deleting => {
-                debug!(agent_id = %this.owned_agent_id.agent_id(), "Worker.start_if_needed_internal.worker_deleting");
+                warn!(agent_id = %this.owned_agent_id.agent_id(), "Worker.start_if_needed_internal.worker_deleting");
                 Err(WorkerExecutorError::invalid_request(
                     "Worker is being deleted",
                 ))
@@ -1518,7 +1518,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         fail_pending_invocations: Option<WorkerExecutorError>,
         final_state: FinalWorkerState,
     ) {
-        debug!(
+        warn!(
             agent_id = %self.owned_agent_id.agent_id(),
             called_from_invocation_loop,
             fail_pending_invocations = fail_pending_invocations.is_some(),
@@ -1560,7 +1560,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             },
         );
 
-        debug!(
+        warn!(
             agent_id = %self.owned_agent_id.agent_id(),
             called_from_invocation_loop,
             fail_pending_invocations = fail_pending_invocations.is_some(),
@@ -1578,13 +1578,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 StopResult::Stopped
             }
             WorkerInstance::Deleting => {
-                debug!(agent_id = %self.owned_agent_id.agent_id(), "Worker.stop_internal_locked.already_deleting");
+                warn!(agent_id = %self.owned_agent_id.agent_id(), "Worker.stop_internal_locked.already_deleting");
                 **instance_guard = previous_instance_state;
                 // Should we return an error here?
                 StopResult::Stopped
             }
             WorkerInstance::Stopping(_) if called_from_invocation_loop => {
-                debug!(agent_id = %self.owned_agent_id.agent_id(), "Worker.stop_internal_locked.invocation_loop_observed_stopping");
+                warn!(agent_id = %self.owned_agent_id.agent_id(), "Worker.stop_internal_locked.invocation_loop_observed_stopping");
                 **instance_guard = previous_instance_state;
                 StopResult::Stopped
             }
@@ -1597,7 +1597,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                 }
                 let notify = stopping.notify.clone();
-                debug!(
+                warn!(
                     agent_id = %self.owned_agent_id.agent_id(),
                     stopping_final_state = ?stopping.final_state,
                     requested_final_state = ?final_state,
@@ -1607,7 +1607,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 StopResult::AlreadyStopping { notify }
             }
             WorkerInstance::Running(running) => {
-                debug!(
+                warn!(
                     agent_id = %self.owned_agent_id.agent_id(),
                     called_from_invocation_loop,
                     fail_pending_invocations = fail_pending_invocations.is_some(),
@@ -1631,7 +1631,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // drop the running worker, this signals to the invocation loop to start exiting.
                     let run_loop_handle = running.stop();
                     let notify = OneShotEvent::new();
-                    debug!(
+                    warn!(
                         agent_id = %self.owned_agent_id.agent_id(),
                         final_state = ?final_state,
                         "Worker.stop_internal_locked.wait_for_invocation_loop_exit"
@@ -1658,9 +1658,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 run_loop_handle,
                 notify,
             } => {
-                debug!(agent_id = %self.owned_agent_id.agent_id(), "Worker.handle_stop_result.waiting_for_invocation_loop_exit");
+                warn!(agent_id = %self.owned_agent_id.agent_id(), "Worker.handle_stop_result.waiting_for_invocation_loop_exit");
                 run_loop_handle.await.expect("Failed to join run loop");
-                debug!(agent_id = %self.owned_agent_id.agent_id(), "Worker.handle_stop_result.invocation_loop_exited");
+                warn!(agent_id = %self.owned_agent_id.agent_id(), "Worker.handle_stop_result.invocation_loop_exited");
 
                 let mut instance_guard = self.instance.lock().await;
                 let is_deleting = match &*instance_guard {
@@ -1674,7 +1674,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // unresolved invocations (e.g. the currently running one that was
                 // in progress when deletion was requested).
                 if is_deleting {
-                    debug!(agent_id = %self.owned_agent_id.agent_id(), "Worker.handle_stop_result.failing_pending_invocations_for_delete");
+                    warn!(agent_id = %self.owned_agent_id.agent_id(), "Worker.handle_stop_result.failing_pending_invocations_for_delete");
                     drop(instance_guard);
                     self.fail_pending_invocations(WorkerExecutorError::invalid_request(
                         "Worker is being deleted",
@@ -1690,7 +1690,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     },
                 ) {
                     WorkerInstance::Stopping(stopping) => {
-                        debug!(
+                        warn!(
                             agent_id = %self.owned_agent_id.agent_id(),
                             final_state = ?stopping.final_state,
                             "Worker.handle_stop_result.finalize_state"
@@ -1702,7 +1702,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 drop(instance_guard);
 
                 notify.set();
-                debug!(agent_id = %self.owned_agent_id.agent_id(), "Worker.handle_stop_result.notified_waiters");
+                warn!(agent_id = %self.owned_agent_id.agent_id(), "Worker.handle_stop_result.notified_waiters");
             }
         }
     }
@@ -1741,7 +1741,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             keys_to_fail.push(current_key.clone());
         }
 
-        debug!(
+        warn!(
             agent_id = %self.owned_agent_id.agent_id(),
             drained_internal_queue_len,
             keys_to_fail = keys_to_fail.len(),
@@ -1788,14 +1788,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 WorkerInstance::Stopping(stopping) => {
                     let is_deleting = matches!(&stopping.final_state, FinalWorkerState::Deleting);
                     let notify = stopping.notify.clone();
-                    debug!(
+                    warn!(
                         agent_id = %self.owned_agent_id.agent_id(),
                         is_deleting,
                         "Worker.lock_non_stopping_worker.waiting_for_stop"
                     );
                     drop(instance_guard);
                     notify.wait().await;
-                    debug!(
+                    warn!(
                         agent_id = %self.owned_agent_id.agent_id(),
                         is_deleting,
                         "Worker.lock_non_stopping_worker.stop_finished"

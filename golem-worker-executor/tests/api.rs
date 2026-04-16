@@ -53,7 +53,7 @@ use test_r::{inherit_test_dep, non_flaky, test, timeout};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span, debug, info};
+use tracing::{Instrument, Span, debug, info, warn};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -3510,7 +3510,7 @@ async fn invoking_worker_while_its_getting_deleted_works(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    info!(agent_id = %agent_id, worker_id = %worker_id, "delete-race-test.started");
+    warn!(agent_id = %agent_id, worker_id = %worker_id, "delete-race-test.started");
 
     // Spawns a task that repeatedly invokes inc_global_by(1) and checks the counter.
     // Exits when either:
@@ -3525,7 +3525,7 @@ async fn invoking_worker_while_its_getting_deleted_works(
             let mut iteration: u64 = 0;
             loop {
                 iteration += 1;
-                debug!(iteration, expected_counter, "delete-race-test.inc.start");
+                warn!(iteration, expected_counter, "delete-race-test.inc.start");
                 match executor
                     .invoke_and_await_agent(
                         &component_clone,
@@ -3537,15 +3537,15 @@ async fn invoking_worker_while_its_getting_deleted_works(
                 {
                     Ok(_) => {
                         expected_counter += 1;
-                        debug!(iteration, expected_counter, "delete-race-test.inc.ok");
+                        warn!(iteration, expected_counter, "delete-race-test.inc.ok");
                     }
                     Err(error) => {
-                        info!(iteration, expected_counter, error = %error, "delete-race-test.inc.err");
+                        warn!(iteration, expected_counter, error = %error, "delete-race-test.inc.err");
                         break Err(error);
                     }
                 }
 
-                debug!(iteration, expected_counter, "delete-race-test.get.start");
+                warn!(iteration, expected_counter, "delete-race-test.get.start");
                 match executor
                     .invoke_and_await_agent(
                         &component_clone,
@@ -3559,14 +3559,14 @@ async fn invoking_worker_while_its_getting_deleted_works(
                         let value = result.into_return_value();
                         match value {
                             Some(Value::U64(v)) => {
-                                debug!(
+                                warn!(
                                     iteration,
                                     expected_counter,
                                     observed_counter = v,
                                     "delete-race-test.get.ok"
                                 );
                                 if v < expected_counter {
-                                    info!(
+                                    warn!(
                                         iteration,
                                         expected_counter,
                                         observed_counter = v,
@@ -3577,12 +3577,12 @@ async fn invoking_worker_while_its_getting_deleted_works(
                                 expected_counter = v;
                             }
                             other => {
-                                debug!(iteration, expected_counter, value = ?other, "delete-race-test.get.unexpected-value");
+                                warn!(iteration, expected_counter, value = ?other, "delete-race-test.get.unexpected-value");
                             }
                         }
                     }
                     Err(error) => {
-                        info!(iteration, expected_counter, error = %error, "delete-race-test.get.err");
+                        warn!(iteration, expected_counter, error = %error, "delete-race-test.get.err");
                         break Err(error);
                     }
                 }
@@ -3602,13 +3602,13 @@ async fn invoking_worker_while_its_getting_deleted_works(
                 delete_attempt += 1;
                 tokio::select! {
                     _ = deleting_task_cancel_token.cancelled() => {
-                        debug!(delete_attempt, "delete-race-test.delete.cancelled");
+                        warn!(delete_attempt, "delete-race-test.delete.cancelled");
                         break
                     },
                     result = executor.delete_worker(&worker_id) => {
                         match result {
-                            Ok(()) => debug!(delete_attempt, "delete-race-test.delete.ok"),
-                            Err(error) => info!(delete_attempt, error = %error, "delete-race-test.delete.err"),
+                            Ok(()) => warn!(delete_attempt, "delete-race-test.delete.ok"),
+                            Err(error) => warn!(delete_attempt, error = %error, "delete-race-test.delete.err"),
                         }
                     }
                 }
@@ -3618,7 +3618,7 @@ async fn invoking_worker_while_its_getting_deleted_works(
 
     let invocation_result = invoking_task.await?;
     deleting_task_cancel_token.cancel();
-    info!(
+    warn!(
         invocation_succeeded = invocation_result.is_ok(),
         "delete-race-test.invoking-task.finished"
     );
@@ -3626,9 +3626,9 @@ async fn invoking_worker_while_its_getting_deleted_works(
     // Either the counter reset was detected (Ok) or the invocation failed (Err).
     // Both are valid outcomes of invoking while deleting.
     if let Err(e) = invocation_result {
-        info!(error = %e, "delete-race-test.invocation.failed-during-deletion");
+        warn!(error = %e, "delete-race-test.invocation.failed-during-deletion");
     } else {
-        info!("delete-race-test.invocation.detected-reset");
+        warn!("delete-race-test.invocation.detected-reset");
     }
 
     Ok(())

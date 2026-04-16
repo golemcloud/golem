@@ -393,28 +393,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         )
         .await?;
 
-        debug!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.worker_acquired");
+        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.worker_acquired");
 
         let interrupt_waiter = worker
             .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
             .await;
-        info!(
+        warn!(
             agent_id = %owned_agent_id.agent_id(),
             has_interrupt_waiter = interrupt_waiter.is_some(),
             "WorkerExecutorImpl.delete_worker.interrupt_requested"
         );
 
-        info!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.start_deleting");
+        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.start_deleting");
         worker.start_deleting().await?;
-        info!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.start_deleting_done");
+        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.start_deleting_done");
 
-        debug!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.remove_persisted_state");
+        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.remove_persisted_state");
         self.worker_service().remove(&owned_agent_id).await;
-        debug!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.remove_persisted_state_done");
+        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.remove_persisted_state_done");
 
-        debug!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.remove_active_worker");
+        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.remove_active_worker");
         self.active_workers().remove(&owned_agent_id.agent_id).await;
-        debug!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.remove_active_worker_done");
+        warn!(agent_id = %owned_agent_id.agent_id(), "WorkerExecutorImpl.delete_worker.remove_active_worker_done");
 
         // ensure we are holding the worker while we are doing cleanup.
         drop(worker);
