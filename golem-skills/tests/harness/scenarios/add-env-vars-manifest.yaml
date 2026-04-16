@@ -1,0 +1,49 @@
+name: "add-env-vars-manifest"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-agent-with-env"
+    prompt: >
+      In the test-app project, add a new durable agent type called `ConfigAgent` identified by
+      a single constructor parameter for the instance name.
+
+      ConfigAgent must read two environment variables from the process environment: `APP_MODE`
+      and `GREETING_PREFIX`. It must expose a method called `get-config` that returns a record
+      with exactly two string fields: `app-mode` and `greeting-prefix`, containing the values
+      of the corresponding environment variables.
+
+      In `golem.yaml`, define these environment variables under the agent's `env` section:
+      - `APP_MODE` set to `production`
+      - `GREETING_PREFIX` set to `Hello`
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      - "golem-add-env-vars"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-golem-yaml-env"
+    shell:
+      command: "cat"
+      args: ["test-app/golem.yaml"]
+    expect:
+      stdout_matches: "[\\s\\S]*env:[\\s\\S]*APP_MODE:[\\s\\S]*production[\\s\\S]*"
+
+  - id: "invoke-get-config"
+    invoke_json:
+      agent: 'ConfigAgent("test")'
+      method:
+        rust: "get_config"
+        ts: "getConfig"
+        scala: "getConfig"
+    expect:
+      result_json:
+        - path: "$.app-mode"
+          equals: "production"
+        - path: "$.greeting-prefix"
+          equals: "Hello"
