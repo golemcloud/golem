@@ -104,7 +104,7 @@ impl AgentSecretCommandHandler {
                 .await
                 .map_service_error()?)
         } else {
-            log_error("Either path or id must be provided".to_string());
+            log_error("Either path or id must be provided");
             bail!(NonSuccessfulExit);
         }
     }
@@ -276,10 +276,10 @@ impl AgentSecretCommandHandler {
         source_language: &SourceLanguage,
     ) -> anyhow::Result<serde_json::Value> {
         // Try language-specific parser first
-        if let Ok(vat) = parse_value_for_language(input, secret_type, source_language) {
-            if let Ok(json) = vat.to_json_value() {
-                return Ok(json);
-            }
+        if let Ok(vat) = parse_value_for_language(input, secret_type, source_language)
+            && let Ok(json) = vat.to_json_value()
+        {
+            return Ok(json);
         }
         // Fall back to raw JSON
         match serde_json::from_str(input) {
