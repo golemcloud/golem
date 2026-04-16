@@ -25,12 +25,13 @@ test_r::enable!();
 #[cfg(feature = "export_golem_agentic")]
 mod bench {
     use golem_rust::agentic::{
-        AgentTypeName, EnrichedAgentMethod, EnrichedElementSchema, ExtendedAgentConstructor,
-        ExtendedAgentType, ExtendedDataSchema, get_constructor_parameter_type,
-        get_enriched_agent_type_by_name, get_method_parameter_type,
-        get_method_parameter_types_by_index, register_agent_type,
+        AgentTypeName, get_agent_type_by_name, get_constructor_parameter_type,
+        get_method_parameter_type, get_method_parameter_types_by_index, register_agent_type,
     };
-    use golem_rust::golem_agentic::golem::agent::common::{AgentMode, ElementSchema, Snapshotting};
+    use golem_rust::golem_agentic::golem::agent::common::{
+        AgentConstructor, AgentMethod, AgentMode, AgentType, DataSchema, ElementSchema,
+        Snapshotting,
+    };
     use golem_wasm::golem_core_1_5_x::types::{NamedWitTypeNode, WitType, WitTypeNode};
     use std::hint::black_box;
     use std::time::Instant;
@@ -46,52 +47,39 @@ mod bench {
         })
     }
 
-    fn make_method(name: &str, param_count: usize) -> EnrichedAgentMethod {
-        let params: Vec<(String, EnrichedElementSchema)> = (0..param_count)
-            .map(|i| {
-                (
-                    format!("param_{}", i),
-                    EnrichedElementSchema::ElementSchema(make_element_schema()),
-                )
-            })
+    fn make_method(name: &str, param_count: usize) -> AgentMethod {
+        let params: Vec<(String, ElementSchema)> = (0..param_count)
+            .map(|i| (format!("param_{}", i), make_element_schema()))
             .collect();
 
-        EnrichedAgentMethod {
+        AgentMethod {
             name: name.to_string(),
             description: format!("Method {}", name),
             http_endpoint: vec![],
             prompt_hint: Some("hint".to_string()),
-            input_schema: ExtendedDataSchema::Tuple(params),
-            output_schema: ExtendedDataSchema::Tuple(vec![(
-                "result".to_string(),
-                EnrichedElementSchema::ElementSchema(make_element_schema()),
-            )]),
+            input_schema: DataSchema::Tuple(params),
+            output_schema: DataSchema::Tuple(vec![("result".to_string(), make_element_schema())]),
         }
     }
 
     fn register_test_agent(name: &str, method_count: usize, params_per_method: usize) {
-        let methods: Vec<EnrichedAgentMethod> = (0..method_count)
+        let methods: Vec<AgentMethod> = (0..method_count)
             .map(|i| make_method(&format!("method_{}", i), params_per_method))
             .collect();
 
-        let constructor_params: Vec<(String, EnrichedElementSchema)> = (0..params_per_method)
-            .map(|i| {
-                (
-                    format!("ctor_param_{}", i),
-                    EnrichedElementSchema::ElementSchema(make_element_schema()),
-                )
-            })
+        let constructor_params: Vec<(String, ElementSchema)> = (0..params_per_method)
+            .map(|i| (format!("ctor_param_{}", i), make_element_schema()))
             .collect();
 
-        let agent_type = ExtendedAgentType {
+        let agent_type = AgentType {
             type_name: name.to_string(),
             description: "Benchmark test agent".to_string(),
             source_language: "rust".to_string(),
-            constructor: ExtendedAgentConstructor {
+            constructor: AgentConstructor {
                 name: Some("new".to_string()),
                 description: "Constructor".to_string(),
                 prompt_hint: None,
-                input_schema: ExtendedDataSchema::Tuple(constructor_params),
+                input_schema: DataSchema::Tuple(constructor_params),
             },
             methods,
             dependencies: vec![],
@@ -99,7 +87,6 @@ mod bench {
             http_mount: None,
             snapshotting: Snapshotting::Disabled,
             config: vec![],
-            sorted_method_indices: vec![],
         };
 
         register_agent_type(AgentTypeName(name.to_string()), agent_type);
@@ -211,10 +198,10 @@ mod bench {
         );
 
         // --- get_enriched_agent_type_by_name (full clone, for comparison) ---
-        println!("\n--- get_enriched_agent_type_by_name (full deep clone, for comparison) ---");
+        println!("\n--- get_agent_type_by_name (full deep clone, for comparison) ---");
 
-        bench_loop("full ExtendedAgentType clone", ITERATIONS, || {
-            black_box(get_enriched_agent_type_by_name(&agent_type_name));
+        bench_loop("full AgentType clone", ITERATIONS, || {
+            black_box(get_agent_type_by_name(&agent_type_name));
         });
 
         println!();

@@ -70,5 +70,4 @@ pub struct PreflightRequest {
 #[derive(Schema)]
 pub struct WebhookResponse {
     pub payload_length: u64,
-
 }

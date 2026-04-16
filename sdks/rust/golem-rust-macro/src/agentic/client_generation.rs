@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agentic::helpers::{FunctionOutputInfo, is_static_method};
+use crate::agentic::helpers::{FunctionOutputInfo, has_principal_attr, is_static_method};
 use crate::agentic::{generic_type_in_agent_method_error, generic_type_in_agent_return_type_error};
 use quote::{format_ident, quote};
 use syn::spanned::Spanned;
@@ -264,8 +264,8 @@ fn get_remote_agent_methods_info(
                 return Some(ts);
             }
 
-            let input_defs = collect_input_defs_without_principal(&method.sig);
-            let input_idents = collect_input_idents_without_principal(&method.sig);
+            let input_defs = collect_input_defs(&method.sig);
+            let input_idents = collect_input_idents(&method.sig);
 
             let method_name = &method.sig.ident;
             let trigger_name = format_ident!("trigger_{}", method_name);
@@ -346,32 +346,24 @@ fn validate_input_types(
     Ok(())
 }
 
-fn collect_input_defs_without_principal(sig: &syn::Signature) -> Vec<&syn::FnArg> {
-    sig.inputs.iter().filter(|arg| match arg {
-        FnArg::Receiver(_) => true,
-        FnArg::Typed(pat_type) => !matches!(
-            &*pat_type.ty,
-            Type::Path(type_path) if type_path.path.segments.last().map(|s| s.ident == "Principal").unwrap_or(false)
-        ),
-    }).collect()
+fn collect_input_defs(sig: &syn::Signature) -> Vec<&syn::FnArg> {
+    sig.inputs
+        .iter()
+        .filter(|arg| match arg {
+            FnArg::Receiver(_) => true,
+            FnArg::Typed(pat_type) => !has_principal_attr(pat_type),
+        })
+        .collect()
 }
 
-fn collect_input_idents_without_principal(sig: &syn::Signature) -> Vec<syn::Ident> {
+fn collect_input_idents(sig: &syn::Signature) -> Vec<syn::Ident> {
     sig.inputs
         .iter()
         .filter_map(|arg| {
             if let FnArg::Typed(pat_type) = arg
+                && !has_principal_attr(pat_type)
                 && let syn::Pat::Ident(pat_ident) = &*pat_type.pat
             {
-                if let Type::Path(type_path) = &*pat_type.ty
-                    && type_path
-                        .path
-                        .segments
-                        .last()
-                        .is_some_and(|seg| seg.ident == "Principal")
-                {
-                    return None;
-                }
                 return Some(pat_ident.ident.clone());
             }
             None

@@ -1,9 +1,10 @@
 use super::model::*;
 use golem_rust::{agent_definition, agent_implementation, endpoint, AllowedMimeTypes};
-use golem_rust::agentic::{create_webhook, UnstructuredBinary};
+use golem_rust::agentic::{create_webhook, UnstructuredBinary, Principal};
 use serde::Deserialize;
 use serde::Serialize;
 use wstd::http::{Body, Client, HeaderValue, Request};
+use golem_rust::Schema;
 
 #[agent_definition(mount = "/http-agents/{agent_name}")]
 pub trait HttpAgent {
@@ -337,6 +338,86 @@ impl WebhookAgent for WebhookAgentImpl {
 
         WebhookResponse {
             payload_length: data.len() as u64,
+        }
+    }
+}
+
+#[agent_definition(
+    mount = "/principal-agent/{agent_name}",
+)]
+pub trait PrincipalAgent {
+    fn new(agent_name: String) -> Self;
+
+    #[endpoint(get = "/echo-principal")]
+    fn echo_principal(&self, #[principal] principal: Principal) -> EchoPrincipalResponse;
+
+    #[endpoint(get = "/echo-principal-mid/{foo}/{bar}")]
+    fn echo_principal2(&self, foo: String, #[principal] principal: Principal, bar: u32) -> EchoPrincipal2Response;
+
+    #[endpoint(get = "/echo-principal-last/{foo}/{bar}")]
+    fn echo_principal3(&self, foo: String, bar: u32, #[principal] principal: Principal) -> EchoPrincipal3Response;
+
+    #[endpoint(get = "/authed-principal", auth = true)]
+    fn authed_principal(&self, #[principal] principal: Principal) -> AuthedPrincipalResponse;
+}
+
+#[derive(Schema)]
+pub struct EchoPrincipalResponse {
+    pub value: Principal
+}
+
+#[derive(Schema)]
+pub struct EchoPrincipal2Response {
+    pub value: Principal,
+    pub foo: String,
+    pub bar: u32
+}
+
+#[derive(Schema)]
+pub struct EchoPrincipal3Response {
+    pub value: Principal,
+    pub foo: String,
+    pub bar: u32
+}
+
+#[derive(Schema)]
+pub struct AuthedPrincipalResponse {
+    pub value: Principal,
+}
+
+pub struct PrincipalAgentImpl;
+
+#[agent_implementation]
+impl PrincipalAgent for PrincipalAgentImpl {
+    fn new(_agent_name: String) -> Self {
+        Self
+    }
+
+    fn echo_principal(&self, #[principal] principal: Principal) -> EchoPrincipalResponse {
+        EchoPrincipalResponse {
+            value: principal
+        }
+    }
+
+    fn echo_principal2(&self, foo: String, #[principal] principal: Principal, bar: u32) -> EchoPrincipal2Response {
+        EchoPrincipal2Response {
+            value: principal,
+            foo,
+            bar
+        }
+    }
+
+    fn echo_principal3(&self, foo: String, bar: u32, #[principal] principal: Principal) -> EchoPrincipal3Response {
+        EchoPrincipal3Response {
+            value: principal,
+            foo,
+            bar
+        }
+    }
+
+    fn authed_principal(&self, #[principal] principal: Principal) -> AuthedPrincipalResponse {
+        AuthedPrincipalResponse {
+            value: principal
         }
     }
 }
