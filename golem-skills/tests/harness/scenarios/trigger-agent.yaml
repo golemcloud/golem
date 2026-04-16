@@ -1,0 +1,34 @@
+name: "trigger-agent"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "trigger-via-agent"
+    prompt: >
+      I have the test-app project deployed with a CounterAgent that has a string constructor
+      parameter (the counter name) and an increment method. Use the CLI to trigger a
+      fire-and-forget invocation of the increment method for a counter named "c1" without
+      waiting for the result.
+    expectedSkills:
+      rust:
+        - "golem-trigger-agent-rust"
+      ts:
+        - "golem-trigger-agent-ts"
+      scala:
+        - "golem-trigger-agent-scala"
+
+  - id: "wait-for-trigger"
+    sleep: 2
+
+  - id: "verify-trigger-executed"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2

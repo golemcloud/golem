@@ -10,6 +10,9 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-new-project` | Creating a new Golem application project with `golem new` |
 | `golem-build` | Building a Golem application with `golem build` |
 | `golem-deploy` | Deploying a Golem application with `golem deploy` |
+| `golem-invoke-agent-scala` | Invoking a Golem agent method from the CLI |
+| `golem-trigger-agent-scala` | Triggering a fire-and-forget invocation on a Golem agent |
+| `golem-schedule-agent-scala` | Scheduling a future invocation on a Golem agent |
 | `golem-add-scala-dependency` | Adding a library dependency to the project |
 | `golem-add-agent-scala` | Adding a new agent type to a Scala Golem component |
 | `golem-configure-durability-scala` | Choosing between durable and ephemeral agents |
@@ -118,125 +121,12 @@ golem deploy --reset             # Deploy and delete all previously created agen
 
 After starting the server, components must be deployed with `golem deploy` before agents can be invoked. When iterating on code changes, use `golem deploy --reset` to delete all previously created agents — without this, existing agent instances continue running with the old component version. This is by design: Golem updates do not break existing running instances.
 
-To try out agents after deploying, use `golem agent invoke` for individual method calls, or write a Rib script and run it with `golem repl` for interactive testing. The Golem server must be running in a separate process before invoking or testing agents.
+To try out agents after deploying, load the `golem-invoke-agent-scala` skill for invoking agent methods from the CLI, or write a script and run it with `golem repl` for interactive testing. The Golem server must be running in a separate process before invoking or testing agents.
 
-## Name Mapping (Kebab-Case Convention)
-
-All Scala identifiers are converted to **kebab-case** when used externally (in CLI commands, Rib scripts, REPL, agent IDs, and WAVE values). This applies to:
-
-- **Agent type names**: `CounterAgent` → `counter-agent`
-- **Method names**: `getCount` → `get-count`, `increment` → `increment`
-- **Record/case class field names**: `fieldName` → `field-name`
-- **Variant/sealed trait case names**: `MyCase` → `my-case`
-
-This conversion is automatic and consistent across all external interfaces.
-
-## Testing Agents
-
-### Using the REPL
+## Testing Agents with the REPL
 
 ```shell
-golem repl                       # Interactive Rib scripting REPL
-```
-
-In the REPL, use kebab-case names and WAVE-encoded values:
-```rib
-let agent = counter-agent("my-counter")
-agent.increment()
-agent.increment()
-```
-
-### Using `golem agent invoke`
-
-Invoke agent methods directly from the CLI. The method name must be fully qualified:
-
-```shell
-# Method name format: <component-name>/<agent-type>.{method-name}
-# All names in kebab-case
-
-golem agent invoke 'counter-agent("my-counter")' \
-  'my:example/counter-agent.{increment}'
-
-# With arguments (WAVE-encoded)
-golem agent invoke 'my-agent("id")' \
-  'my:example/my-agent.{set-value}' '"hello world"'
-
-# With a record argument
-golem agent invoke 'my-agent("id")' \
-  'my:example/my-agent.{update}' '{field-name: "value", count: 42}'
-
-# Fire-and-forget (enqueue without waiting for result)
-golem agent invoke --enqueue 'counter-agent("c1")' \
-  'my:example/counter-agent.{increment}'
-
-# With idempotency key
-golem agent invoke --idempotency-key 'unique-key-123' \
-  'counter-agent("c1")' 'my:example/counter-agent.{increment}'
-```
-
-## WAVE Value Encoding
-
-All argument values passed to `golem agent invoke` and used in Rib scripts follow the [WAVE (WebAssembly Value Encoding)](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) format. See the full [type mapping reference](https://learn.golem.cloud/type-mapping).
-
-### Scala Type to WAVE Mapping
-
-| Scala Type | WIT Type | WAVE Example |
-|------------|----------|--------------|
-| `String` | `string` | `"hello world"` |
-| `Boolean` | `bool` | `true`, `false` |
-| `Int` | `s32` | `42` |
-| `Long` | `s64` | `100` |
-| `Float` | `f32` | `3.14` |
-| `Double` | `f64` | `1234.0` |
-| `List[T]` | `list<T>` | `[1, 2, 3]` |
-| `Option[T]` | `option<T>` | `some("value")`, `none` |
-| case class | `record { ... }` | `{field-name: "value", count: 42}` |
-| sealed trait / enum | `variant { ... }` | `my-case("data")` |
-| Tuple | `tuple<...>` | `("hello", 1234, true)` |
-
-### WAVE Encoding Rules
-
-**Strings**: double-quoted with escape sequences (`\"`, `\\`, `\n`, `\t`, `\r`, `\u{...}`)
-```
-"hello \"world\""
-```
-
-**Records**: field names in kebab-case, optional fields (`Option[T]`) can be omitted (defaults to `none`)
-```
-{required-field: "value", optional-field: some(42)}
-{required-field: "value"}
-```
-
-**Variants**: case name in kebab-case, with optional payload in parentheses
-```
-my-case
-my-case("payload")
-```
-
-**Options**: can use shorthand (bare value = `some`)
-```
-some(42)      // explicit
-42            // shorthand for some(42), only for non-option/non-result inner types
-none
-```
-
-**Results**: can use shorthand (bare value = `ok`)
-```
-ok("value")   // explicit ok
-err("oops")   // explicit err
-"value"       // shorthand for ok("value")
-```
-
-**Flags**: set of labels in curly braces
-```
-{read, write}
-{}
-```
-
-**Keywords as identifiers**: prefix with `%` if a name conflicts with `true`, `false`, `some`, `none`, `ok`, `err`, `inf`, `nan`
-```
-%true
-%none
+golem repl                       # Interactive scripting REPL
 ```
 
 ## Defining Agents
@@ -272,7 +162,7 @@ golem agent get '<agent-id>'                    # Check agent state
 golem agent stream '<agent-id>'                 # Stream live logs
 golem agent oplog '<agent-id>'                  # View operation log
 golem agent revert '<agent-id>' --number-of-invocations 1  # Revert last invocation
-golem agent invoke '<agent-id>' 'method' args   # Invoke method directly
+# To invoke agent methods, load the golem-invoke-agent-scala skill
 ```
 
 ## Key Constraints
