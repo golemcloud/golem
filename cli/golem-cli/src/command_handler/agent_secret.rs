@@ -19,11 +19,16 @@ use crate::error::NonSuccessfulExit;
 use crate::error::service::AnyhowMapServiceError;
 use crate::log::log_error;
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::text::agent_secret::AgentSecretCreateView;
+use crate::model::text::agent_secret::{
+    AgentSecretCreateView, AgentSecretDeleteView, AgentSecretGetView, AgentSecretListView,
+    AgentSecretUpdateView,
+};
 use anyhow::bail;
 use golem_client::api::AgentSecretsClient;
 use golem_client::model::AgentSecretUpdate;
-use golem_common::model::agent_secret::{AgentSecretCreation, AgentSecretId, AgentSecretPath};
+use golem_common::model::agent_secret::{
+    AgentSecretCreation, AgentSecretDto, AgentSecretId, AgentSecretPath, CanonicalAgentSecretPath,
+};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_wasm::analysis::AnalysedType;
 use std::sync::Arc;
@@ -44,11 +49,59 @@ impl AgentSecretCommandHandler {
                 secret_type,
                 secret_value,
             } => self.cmd_create(path, secret_type, secret_value).await,
-            AgentSecretSubcommand::UpdateValue { id, secret_value } => {
-                self.cmd_update_value(id, secret_value).await
-            }
-            AgentSecretSubcommand::Delete { id } => self.cmd_delete(id).await,
+            AgentSecretSubcommand::Get { path, id } => self.cmd_get(path, id).await,
+            AgentSecretSubcommand::UpdateValue {
+                path,
+                id,
+                secret_value,
+            } => self.cmd_update_value(path, id, secret_value).await,
+            AgentSecretSubcommand::Delete { path, id } => self.cmd_delete(path, id).await,
             AgentSecretSubcommand::List => self.cmd_list().await,
+        }
+    }
+
+    async fn resolve_secret(
+        &self,
+        path: Option<AgentSecretPath>,
+        id: Option<AgentSecretId>,
+    ) -> anyhow::Result<AgentSecretDto> {
+        let clients = self.ctx.golem_clients().await?;
+
+        if let Some(path) = path {
+            let environment = self
+                .ctx
+                .environment_handler()
+                .resolve_environment(EnvironmentResolveMode::Any)
+                .await?;
+
+            let canonical = CanonicalAgentSecretPath::from_path_in_unknown_casing(&path.0);
+
+            let secrets = clients
+                .agent_secrets
+                .list_environment_agent_secrets(&environment.environment_id.0)
+                .await
+                .map_service_error()?
+                .values;
+
+            match secrets.into_iter().find(|s| s.path == canonical) {
+                Some(secret) => Ok(secret),
+                None => {
+                    log_error(format!(
+                        "Agent secret with path '{}' not found in environment",
+                        canonical
+                    ));
+                    bail!(NonSuccessfulExit);
+                }
+            }
+        } else if let Some(id) = id {
+            Ok(clients
+                .agent_secrets
+                .get_agent_secret(&id.0)
+                .await
+                .map_service_error()?)
+        } else {
+            log_error("Either path or id must be provided".to_string());
+            bail!(NonSuccessfulExit);
         }
     }
 
@@ -98,23 +151,40 @@ impl AgentSecretCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&AgentSecretCreateView(result));
+            .log_view(&AgentSecretCreateView {
+                secret: result,
+                show_sensitive: self.ctx.show_sensitive(),
+            });
+
+        Ok(())
+    }
+
+    async fn cmd_get(
+        &self,
+        path: Option<AgentSecretPath>,
+        id: Option<AgentSecretId>,
+    ) -> anyhow::Result<()> {
+        let result = self.resolve_secret(path, id).await?;
+
+        self.ctx
+            .log_handler()
+            .log_view(&AgentSecretGetView {
+                secret: result,
+                show_sensitive: self.ctx.show_sensitive(),
+            });
 
         Ok(())
     }
 
     async fn cmd_update_value(
         &self,
-        id: AgentSecretId,
+        path: Option<AgentSecretPath>,
+        id: Option<AgentSecretId>,
         secret_value: Option<String>,
     ) -> anyhow::Result<()> {
-        let clients = self.ctx.golem_clients().await?;
+        let current = self.resolve_secret(path, id).await?;
 
-        let current = clients
-            .agent_secrets
-            .get_agent_secret(&id.0)
-            .await
-            .map_service_error()?;
+        let clients = self.ctx.golem_clients().await?;
 
         let secret_value: Option<serde_json::Value> =
             match secret_value.map(|sv| serde_json::from_str(&sv)).transpose() {
@@ -128,7 +198,7 @@ impl AgentSecretCommandHandler {
         let result = clients
             .agent_secrets
             .update_agent_secret(
-                &id.0,
+                &current.id.0,
                 &AgentSecretUpdate {
                     current_revision: current.revision,
                     secret_value: OptionalFieldUpdate::update_from_option(secret_value),
@@ -139,29 +209,35 @@ impl AgentSecretCommandHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&AgentSecretCreateView(result));
+            .log_view(&AgentSecretUpdateView {
+                secret: result,
+                show_sensitive: self.ctx.show_sensitive(),
+            });
 
         Ok(())
     }
 
-    async fn cmd_delete(&self, id: AgentSecretId) -> anyhow::Result<()> {
-        let clients = self.ctx.golem_clients().await?;
+    async fn cmd_delete(
+        &self,
+        path: Option<AgentSecretPath>,
+        id: Option<AgentSecretId>,
+    ) -> anyhow::Result<()> {
+        let current = self.resolve_secret(path, id).await?;
 
-        let current = clients
-            .agent_secrets
-            .get_agent_secret(&id.0)
-            .await
-            .map_service_error()?;
+        let clients = self.ctx.golem_clients().await?;
 
         let result = clients
             .agent_secrets
-            .delete_agent_secret(&id.0, current.revision.into())
+            .delete_agent_secret(&current.id.0, current.revision.into())
             .await
             .map_service_error()?;
 
         self.ctx
             .log_handler()
-            .log_view(&AgentSecretCreateView(result));
+            .log_view(&AgentSecretDeleteView {
+                secret: result,
+                show_sensitive: self.ctx.show_sensitive(),
+            });
 
         Ok(())
     }
@@ -182,7 +258,10 @@ impl AgentSecretCommandHandler {
             .map_service_error()?
             .values;
 
-        self.ctx.log_handler().log_view(&results);
+        self.ctx.log_handler().log_view(&AgentSecretListView {
+            show_sensitive: self.ctx.show_sensitive(),
+            secrets: results,
+        });
 
         Ok(())
     }

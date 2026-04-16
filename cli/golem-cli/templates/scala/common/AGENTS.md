@@ -26,6 +26,8 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-http-auth-scala` | Enabling authentication on HTTP endpoints |
 | `golem-add-cors-scala` | Configuring CORS allowed origins for HTTP endpoints |
 | `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
+| `golem-add-config-scala` | Adding typed configuration to Scala Golem agents |
+| `golem-add-secret-scala` | Adding secrets to Scala Golem agents |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
 | `golem-file-io-scala` | Reading and writing files from agent code |
