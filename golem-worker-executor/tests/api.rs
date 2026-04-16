@@ -1599,7 +1599,6 @@ async fn recovering_an_old_worker_after_updating_a_component(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
-        .unique()
         .store()
         .await?;
 
@@ -1661,7 +1660,6 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
-        .unique()
         .store()
         .await?;
 
@@ -3501,7 +3499,6 @@ async fn invoking_worker_while_its_getting_deleted_works(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .unique()
         .store()
         .await?;
 
@@ -3578,9 +3575,7 @@ async fn invoking_worker_while_its_getting_deleted_works(
         let worker_id = worker_id.clone();
         let deleting_task_cancel_token = deleting_task_cancel_token.clone();
         tokio::spawn(async move {
-            let mut delete_attempt: u64 = 0;
             loop {
-                delete_attempt += 1;
                 tokio::select! {
                     _ = deleting_task_cancel_token.cancelled() => {
                         break
