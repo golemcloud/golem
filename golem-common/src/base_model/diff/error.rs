@@ -34,6 +34,14 @@ pub enum DiffError {
     MapStateInvariantViolation { phase: &'static str },
     #[error("Set diff invariant violation at '{phase}'")]
     SetStateInvariantViolation { phase: &'static str },
+    #[error(
+        "Typed config entry JSON conversion failed during '{operation}' for '{path}': {reason}"
+    )]
+    TypedConfigJsonConversion {
+        operation: &'static str,
+        path: String,
+        reason: String,
+    },
 }
 
 impl DiffError {

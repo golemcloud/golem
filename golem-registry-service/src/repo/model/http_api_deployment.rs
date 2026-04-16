@@ -14,6 +14,7 @@
 
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use anyhow::anyhow;
 use desert_rust::BinaryCodec;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
@@ -94,7 +95,7 @@ impl HttpApiDeploymentRevisionRecord {
         webhooks_url: String,
         agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
         actor: AccountId,
-    ) -> Self {
+    ) -> Result<Self, HttpApiDeploymentRepoError> {
         let mut value = Self {
             http_api_deployment_id: http_api_deployment_id.0,
             revision_id: HttpApiDeploymentRevision::INITIAL.into(),
@@ -105,11 +106,14 @@ impl HttpApiDeploymentRevisionRecord {
                 agents,
             }),
         };
-        value.update_hash();
-        value
+        value.update_hash()?;
+        Ok(value)
     }
 
-    pub fn from_model(value: HttpApiDeployment, audit: DeletableRevisionAuditFields) -> Self {
+    pub fn from_model(
+        value: HttpApiDeployment,
+        audit: DeletableRevisionAuditFields,
+    ) -> Result<Self, HttpApiDeploymentRepoError> {
         let mut value = Self {
             http_api_deployment_id: value.id.0,
             revision_id: value.revision.into(),
@@ -120,16 +124,16 @@ impl HttpApiDeploymentRevisionRecord {
                 agents: value.agents,
             }),
         };
-        value.update_hash();
-        value
+        value.update_hash()?;
+        Ok(value)
     }
 
     pub fn deletion(
         created_by: Uuid,
         http_api_deployment_id: Uuid,
         current_revision_id: i64,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, HttpApiDeploymentRepoError> {
+        let mut value = Self {
             http_api_deployment_id,
             revision_id: current_revision_id,
             hash: SqlBlake3Hash::empty(),
@@ -138,7 +142,9 @@ impl HttpApiDeploymentRevisionRecord {
                 webhooks_url: "".to_string(),
                 agents: BTreeMap::new(),
             }),
-        }
+        };
+        value.update_hash()?;
+        Ok(value)
     }
 
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
@@ -154,13 +160,19 @@ impl HttpApiDeploymentRevisionRecord {
         }
     }
 
-    pub fn update_hash(&mut self) {
-        self.hash = self.to_diffable().hash().into_blake3().into();
+    pub fn update_hash(&mut self) -> Result<(), HttpApiDeploymentRepoError> {
+        self.hash = self
+            .to_diffable()
+            .hash()
+            .map_err(|err| HttpApiDeploymentRepoError::InternalError(anyhow!(err)))?
+            .into_blake3()
+            .into();
+        Ok(())
     }
 
-    pub fn with_updated_hash(mut self) -> Self {
-        self.update_hash();
-        self
+    pub fn with_updated_hash(mut self) -> Result<Self, HttpApiDeploymentRepoError> {
+        self.update_hash()?;
+        Ok(self)
     }
 }
 

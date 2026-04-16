@@ -15,6 +15,7 @@
 use super::environment_share::environment_roles_from_bit_vector;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use anyhow::anyhow;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountSummary;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -112,13 +113,19 @@ impl EnvironmentRevisionRecord {
         }
     }
 
-    pub fn update_hash(&mut self) {
-        self.hash = self.to_diffable().hash().into_blake3().into()
+    pub fn update_hash(&mut self) -> Result<(), EnvironmentRepoError> {
+        self.hash = self
+            .to_diffable()
+            .hash()
+            .map_err(|err| EnvironmentRepoError::InternalError(anyhow!(err)))?
+            .into_blake3()
+            .into();
+        Ok(())
     }
 
-    pub fn with_updated_hash(mut self) -> Self {
-        self.update_hash();
-        self
+    pub fn with_updated_hash(mut self) -> Result<Self, EnvironmentRepoError> {
+        self.update_hash()?;
+        Ok(self)
     }
 }
 

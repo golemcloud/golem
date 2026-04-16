@@ -61,8 +61,8 @@ impl ResourceDefinitionCreationArgs {
         unit: String,
         units: String,
         actor: AccountId,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ResourceDefinitionRepoError> {
+        Ok(Self {
             environment_id: environment_id.0,
             limit_type: LimitTypeEnum::for_resource_limit(limit),
             name: name.0,
@@ -76,8 +76,8 @@ impl ResourceDefinitionCreationArgs {
                 unit,
                 units,
             }
-            .with_updated_hash(),
-        }
+            .with_updated_hash()?,
+        })
     }
 }
 
@@ -110,7 +110,10 @@ pub struct ResourceDefinitionRevisionRecord {
 }
 
 impl ResourceDefinitionRevisionRecord {
-    pub fn from_model(value: ResourceDefinition, audit: DeletableRevisionAuditFields) -> Self {
+    pub fn from_model(
+        value: ResourceDefinition,
+        audit: DeletableRevisionAuditFields,
+    ) -> Result<Self, ResourceDefinitionRepoError> {
         let mut value = Self {
             resource_definition_id: value.id.0,
             revision_id: value.revision.into(),
@@ -121,8 +124,8 @@ impl ResourceDefinitionRevisionRecord {
             unit: value.unit,
             units: value.units,
         };
-        value.update_hash();
-        value
+        value.update_hash()?;
+        Ok(value)
     }
 
     pub fn to_diffable(&self) -> diff::ResourceDefinition {
@@ -134,13 +137,19 @@ impl ResourceDefinitionRevisionRecord {
         }
     }
 
-    pub fn update_hash(&mut self) {
-        self.hash = self.to_diffable().hash().into_blake3().into();
+    pub fn update_hash(&mut self) -> Result<(), ResourceDefinitionRepoError> {
+        self.hash = self
+            .to_diffable()
+            .hash()
+            .map_err(|err| ResourceDefinitionRepoError::InternalError(anyhow!(err)))?
+            .into_blake3()
+            .into();
+        Ok(())
     }
 
-    pub fn with_updated_hash(mut self) -> Self {
-        self.update_hash();
-        self
+    pub fn with_updated_hash(mut self) -> Result<Self, ResourceDefinitionRepoError> {
+        self.update_hash()?;
+        Ok(self)
     }
 }
 

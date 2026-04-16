@@ -140,7 +140,7 @@ impl HttpApiDeploymentService {
             data.webhooks_url,
             data.agents,
             auth.account_id(),
-        );
+        )?;
 
         let stored_http_api_deployment: HttpApiDeployment = self
             .http_api_deployment_repo
@@ -214,7 +214,7 @@ impl HttpApiDeploymentService {
         let record = HttpApiDeploymentRevisionRecord::from_model(
             http_api_deployment,
             DeletableRevisionAuditFields::new(auth.account_id().0),
-        );
+        )?;
 
         let stored_http_api_deployment: HttpApiDeployment = self
             .http_api_deployment_repo
