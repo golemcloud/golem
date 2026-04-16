@@ -1,0 +1,112 @@
+name: "view-agent-logs"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-logging"
+    prompt:
+      rust: >
+        In the test-app project, modify the CounterAgent's increment method to print the
+        current counter value to stdout each time it is called, using println!. For example,
+        print "counter value: {value}" where {value} is the counter value after incrementing.
+      ts: >
+        In the test-app project, modify the CounterAgent's increment method to print the
+        current counter value to stdout each time it is called, using console.log. For example,
+        print "counter value: {value}" where {value} is the counter value after incrementing.
+      scala: >
+        In the test-app project, modify the CounterAgent's increment method to print the
+        current counter value to stdout each time it is called, using println. For example,
+        print "counter value: {value}" where {value} is the counter value after incrementing.
+    verify:
+      build: true
+      deploy: true
+
+  - id: "invoke-no-stream"
+    prompt:
+      rust: >
+        I want to view the agent's stdout logs. First, invoke the CounterAgent's increment method
+        for a counter named "c1" with log streaming disabled (using --no-stream) to see what the
+        output looks like without streaming. Redirect the full CLI output (both stdout and stderr)
+        to a file called no-stream-output.txt in the test-app directory.
+      ts: >
+        I want to view the agent's stdout logs. First, invoke the CounterAgent's increment method
+        for a counter named "c1" with log streaming disabled (using --no-stream) to see what the
+        output looks like without streaming. Redirect the full CLI output (both stdout and stderr)
+        to a file called no-stream-output.txt in the test-app directory.
+      scala: >
+        I want to view the agent's stdout logs. First, invoke the CounterAgent's increment method
+        for a counter named "c1" with log streaming disabled (using --no-stream) to see what the
+        output looks like without streaming. Redirect the full CLI output (both stdout and stderr)
+        to a file called no-stream-output.txt in the test-app directory.
+    expectedSkills:
+      - "golem-view-agent-logs"
+
+  - id: "check-no-stream"
+    check_file:
+      path: "no-stream-output.txt"
+    expect:
+      stdout_not_contains: "counter value:"
+
+  - id: "invoke-with-stream"
+    prompt:
+      rust: >
+        Now invoke the CounterAgent's increment method for counter "c1" again, this time with
+        default streaming enabled (no --no-stream flag). Redirect the full CLI output (both
+        stdout and stderr) to a file called stream-output.txt in the test-app directory.
+      ts: >
+        Now invoke the CounterAgent's increment method for counter "c1" again, this time with
+        default streaming enabled (no --no-stream flag). Redirect the full CLI output (both
+        stdout and stderr) to a file called stream-output.txt in the test-app directory.
+      scala: >
+        Now invoke the CounterAgent's increment method for counter "c1" again, this time with
+        default streaming enabled (no --no-stream flag). Redirect the full CLI output (both
+        stdout and stderr) to a file called stream-output.txt in the test-app directory.
+    continueSession: true
+    expectedSkills:
+      - "golem-view-agent-logs"
+
+  - id: "check-with-stream"
+    check_file:
+      path: "stream-output.txt"
+    expect:
+      stdout_contains: "counter value:"
+
+  - id: "invoke-logs-only"
+    prompt:
+      rust: >
+        Now invoke the CounterAgent's increment method for counter "c1" again, this time with
+        --logs-only, --stream-no-timestamp, and --stream-no-log-level flags. Redirect the full
+        CLI output (both stdout and stderr) to a file called logs-only-output.txt in the
+        test-app directory.
+      ts: >
+        Now invoke the CounterAgent's increment method for counter "c1" again, this time with
+        --logs-only, --stream-no-timestamp, and --stream-no-log-level flags. Redirect the full
+        CLI output (both stdout and stderr) to a file called logs-only-output.txt in the
+        test-app directory.
+      scala: >
+        Now invoke the CounterAgent's increment method for counter "c1" again, this time with
+        --logs-only, --stream-no-timestamp, and --stream-no-log-level flags. Redirect the full
+        CLI output (both stdout and stderr) to a file called logs-only-output.txt in the
+        test-app directory.
+    continueSession: true
+    expectedSkills:
+      - "golem-view-agent-logs"
+
+  - id: "check-logs-only"
+    check_file:
+      path: "logs-only-output.txt"
+    expect:
+      stdout_not_contains: "Invocation started"
+
+  - id: "verify-counter"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 4

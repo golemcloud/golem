@@ -110,6 +110,10 @@ const GetAgentTypeSchema = z.object({
 
 const ListAgentTypesSchema = z.object({});
 
+const CheckFileSchema = z.object({
+  path: z.string(),
+});
+
 const InvokeSchema = z.object({
   agent: z.string(),
   method: langConditional(z.string()),
@@ -157,6 +161,7 @@ const ACTION_FIELDS = [
   "http",
   "get_agent_type",
   "list_agent_types",
+  "check_file",
 ] as const;
 
 // Language-conditional: accepts either T or { ts: T, rust: T, scala: T, ... }
@@ -197,6 +202,7 @@ const StepSpecSchema = z
     http: HttpSchema.optional(),
     get_agent_type: GetAgentTypeSchema.optional(),
     list_agent_types: ListAgentTypesSchema.optional(),
+    check_file: CheckFileSchema.optional(),
     retry: RetrySchema.optional(),
     only_if: StepConditionSchema.optional(),
     skip_if: StepConditionSchema.optional(),
@@ -316,6 +322,8 @@ type ListAgentTypesStep = StepCommon & {
   tag: "list_agent_types";
   list_agent_types: ListAgentTypesSpec;
 };
+type CheckFileSpec = { path: string };
+type CheckFileStep = StepCommon & { tag: "check_file"; check_file: CheckFileSpec };
 
 export type StepSpec =
   | PromptStep
@@ -329,7 +337,8 @@ export type StepSpec =
   | SleepStep
   | HttpStep
   | GetAgentTypeStep
-  | ListAgentTypesStep;
+  | ListAgentTypesStep
+  | CheckFileStep;
 
 export interface ScenarioSpec {
   name: string;
@@ -391,6 +400,8 @@ export function parseStep(raw: RawStepSpec): StepSpec {
       return { ...common, tag, get_agent_type: raw.get_agent_type! };
     case "list_agent_types":
       return { ...common, tag, list_agent_types: raw.list_agent_types ?? {} };
+    case "check_file":
+      return { ...common, tag, check_file: raw.check_file! };
   }
 }
 
@@ -540,7 +551,7 @@ export class ScenarioExecutor {
 
   private substituteStepVariables(step: StepSpec, variables: Record<string, string>): StepSpec {
     const sub = (s: string | undefined) => (s ? substituteVariables(s, variables) : s);
-    const subArr = (arr: string[] | undefined) =>
+    const _subArr = (arr: string[] | undefined) =>
       arr?.map((s) => substituteVariables(s, variables));
     const subLangStr = (v: LangConditional<string>): LangConditional<string> =>
       typeof v === "string"
@@ -551,9 +562,7 @@ export class ScenarioExecutor {
     const subLangStrOpt = (
       v: LangConditional<string> | undefined,
     ): LangConditional<string> | undefined => (v === undefined ? undefined : subLangStr(v));
-    const subLangArr = (
-      v: LangConditional<string[]>,
-    ): LangConditional<string[]> =>
+    const subLangArr = (v: LangConditional<string[]>): LangConditional<string[]> =>
       Array.isArray(v)
         ? v.map((s) => substituteVariables(s, variables))
         : Object.fromEntries(
@@ -652,6 +661,14 @@ export class ScenarioExecutor {
         };
       case "list_agent_types":
         return { ...step };
+      case "check_file":
+        return {
+          ...step,
+          check_file: {
+            ...step.check_file,
+            path: substituteVariables(step.check_file.path, variables),
+          },
+        };
     }
   }
 
@@ -1151,6 +1168,9 @@ export class ScenarioExecutor {
           fail,
         );
         break;
+      case "check_file":
+        await this.executeCheckFile(stepLabel, step.check_file, step.expect, fail);
+        break;
     }
 
     // Verify skills activation
@@ -1310,6 +1330,41 @@ export class ScenarioExecutor {
       );
     } else if (!result.success) {
       fail(`SHELL_FAILED: ${result.output}`);
+    }
+  }
+
+  private async executeCheckFile(
+    stepLabel: string,
+    spec: CheckFileSpec,
+    expect: StepCommon["expect"],
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    let baseDir: string;
+    try {
+      baseDir = await this.findGolemProjectDir();
+    } catch {
+      baseDir = this.workspace;
+    }
+    const resolvedPath = path.resolve(baseDir, spec.path);
+    log.stepAction(stepLabel, `checking file: ${resolvedPath}`);
+
+    let content: string;
+    try {
+      content = await fs.readFile(resolvedPath, "utf-8");
+    } catch (err) {
+      fail(`FILE_CHECK_FAILED: could not read file "${resolvedPath}": ${err}`);
+      return;
+    }
+
+    log.stepAction(stepLabel, `file size: ${content.length} bytes`);
+
+    if (expect) {
+      this.evaluateAssertions(
+        { stdout: content, stderr: "", exitCode: 0 },
+        expect,
+        fail,
+        stepLabel,
+      );
     }
   }
 

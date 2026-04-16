@@ -1,0 +1,38 @@
+name: "undo-agent-state"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "invoke-1"
+    invoke:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      stdout_contains: "1"
+
+  - id: "invoke-2"
+    invoke:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      stdout_contains: "2"
+
+  - id: "revert-last"
+    prompt: >
+      Revert the last invocation of CounterAgent "c1" so the counter goes back to its state
+      after just one increment.
+    expectedSkills:
+      - "golem-undo-agent-state"
+
+  - id: "verify-reverted"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2
