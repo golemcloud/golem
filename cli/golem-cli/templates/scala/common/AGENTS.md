@@ -36,6 +36,10 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-file-io-scala` | Reading and writing files from agent code |
 | `golem-js-runtime` | JavaScript runtime environment: available Web APIs, Node.js modules, and npm compatibility |
 | `golem-make-http-request-scala` | Making outgoing HTTP requests from agent code using fetch or ZIO HTTP |
+| `golem-view-agent-logs` | Viewing agent logs and output via streaming |
+| `golem-get-agent-metadata` | Checking agent metadata and status |
+| `golem-debug-agent-history` | Querying the operation log |
+| `golem-undo-agent-state` | Reverting agent state by undoing operations |
 
 # Golem Application Development Guide (Scala)
 
@@ -157,13 +161,7 @@ Libraries must be **Scala.js-compatible** — use the `%%%` operator in `build.s
 
 ## Debugging
 
-```shell
-golem agent get '<agent-id>'                    # Check agent state
-golem agent stream '<agent-id>'                 # Stream live logs
-golem agent oplog '<agent-id>'                  # View operation log
-golem agent revert '<agent-id>' --number-of-invocations 1  # Revert last invocation
-# To invoke agent methods, load the golem-invoke-agent-scala skill
-```
+Load the `golem-get-agent-metadata` skill for checking agent state. Load the `golem-view-agent-logs` skill for streaming agent stdout, stderr, and log channels. Load the `golem-debug-agent-history` skill for querying the operation log. Load the `golem-undo-agent-state` skill for reverting invocations. To invoke agent methods, load the `golem-invoke-agent-scala` skill.
 
 ## Key Constraints
 

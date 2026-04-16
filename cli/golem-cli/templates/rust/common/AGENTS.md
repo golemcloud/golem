@@ -35,6 +35,10 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
 | `golem-file-io-rust` | Reading and writing files from agent code |
 | `golem-make-http-request-rust` | Making outgoing HTTP requests from agent code using wstd |
+| `golem-view-agent-logs` | Viewing agent logs and output via streaming |
+| `golem-get-agent-metadata` | Checking agent metadata and status |
+| `golem-debug-agent-history` | Querying the operation log |
+| `golem-undo-agent-state` | Reverting agent state by undoing operations |
 
 # Golem Application Development Guide (Rust)
 
@@ -150,13 +154,7 @@ To enable AI features, add the relevant golem-ai provider crate as a dependency 
 
 ## Debugging
 
-```shell
-golem agent get '<agent-id>'                    # Check agent state
-golem agent stream '<agent-id>'                 # Stream live logs
-golem agent oplog '<agent-id>'                  # View operation log
-golem agent revert '<agent-id>' --number-of-invocations 1  # Revert last invocation
-# To invoke agent methods, load the golem-invoke-agent-rust skill
-```
+Load the `golem-get-agent-metadata` skill for checking agent state. Load the `golem-view-agent-logs` skill for streaming agent stdout, stderr, and log channels. Load the `golem-debug-agent-history` skill for querying the operation log. Load the `golem-undo-agent-state` skill for reverting invocations. To invoke agent methods, load the `golem-invoke-agent-rust` skill.
 
 ## Key Constraints
 
