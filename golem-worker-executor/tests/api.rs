@@ -53,7 +53,7 @@ use test_r::{inherit_test_dep, non_flaky, test, timeout};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span, debug, info, warn};
+use tracing::{Instrument, Span, debug, info};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -3558,7 +3558,9 @@ async fn invoking_worker_while_its_getting_deleted_works(
                                 }
                                 expected_counter = v;
                             }
-                            other => tracing::warn!(iteration, expected_counter, value = ?other, "Unexpected value while checking global counter"),
+                            other => {
+                                tracing::warn!(iteration, expected_counter, value = ?other, "Unexpected value while checking global counter")
+                            }
                         }
                     }
                     Err(error) => {
@@ -3591,7 +3593,7 @@ async fn invoking_worker_while_its_getting_deleted_works(
         })
     };
 
-    let invocation_result = invoking_task.await?;
+    let _invocation_result = invoking_task.await?;
     deleting_task_cancel_token.cancel();
 
     // Either the counter reset was detected (Ok) or the invocation failed (Err).

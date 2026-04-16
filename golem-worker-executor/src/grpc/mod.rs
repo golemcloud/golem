@@ -321,11 +321,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Err(RecvError::Closed) => {
                     Err(WorkerExecutorError::unknown("Events subscription closed"))
                 }
-                Err(RecvError::Lagged(_)) => {
-                    Err(WorkerExecutorError::unknown(
-                        "Worker executor is overloaded and could not wait for worker to load",
-                    ))
-                }
+                Err(RecvError::Lagged(_)) => Err(WorkerExecutorError::unknown(
+                    "Worker executor is overloaded and could not wait for worker to load",
+                )),
             }
         } else {
             Ok(())
