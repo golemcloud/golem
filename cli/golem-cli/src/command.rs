@@ -635,6 +635,11 @@ pub enum GolemCliSubcommand {
         /// temporary directories in the application's directory
         #[clap(long)]
         output_dir: Option<PathBuf>,
+        /// Derive rules for generated Rust types. Format: "REGEX=Derive1,Derive2".
+        /// Can be specified multiple times. Example: --derive-rule ".*=PartialEq"
+        /// --derive-rule "^Uuid$=Eq,Hash"
+        #[clap(long)]
+        derive_rule: Vec<String>,
     },
     /// Start REPL for a selected component
     Repl {

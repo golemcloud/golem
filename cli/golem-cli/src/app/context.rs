@@ -235,6 +235,7 @@ impl ApplicationContext {
             agent_type_names: Default::default(),
             target_language: Some(language),
             output_dir: Some(repl_root_bridge_sdk_dir.clone()),
+            derive_rules: Vec::new(),
         }
     }
 

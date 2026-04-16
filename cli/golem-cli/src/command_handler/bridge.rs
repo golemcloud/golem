@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::bridge_gen::DeriveRule;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::model::GuestLanguage;
@@ -36,7 +37,9 @@ impl BridgeCommandHandler {
         component_names: Vec<ComponentName>,
         agent_type_names: Vec<AgentTypeName>,
         output_dir: Option<PathBuf>,
+        derive_rules_raw: Vec<String>,
     ) -> anyhow::Result<()> {
+        let derive_rules = parse_derive_rules(derive_rules_raw)?;
         self.ctx
             .app_handler()
             .build(
@@ -44,10 +47,32 @@ impl BridgeCommandHandler {
                     agent_type_names: agent_type_names.into_iter().collect(),
                     target_language: language,
                     output_dir,
+                    derive_rules,
                 }),
                 component_names,
                 &ApplicationComponentSelectMode::CurrentDir,
             )
             .await
     }
+}
+
+/// Parses CLI `--derive-rule` values in the format `REGEX=Derive1,Derive2`.
+fn parse_derive_rules(raw: Vec<String>) -> anyhow::Result<Vec<DeriveRule>> {
+    raw.into_iter()
+        .map(|s| {
+            let (pattern, derives_str) = s.split_once('=').ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Invalid derive rule format: '{}'. Expected REGEX=Derive1,Derive2",
+                    s
+                )
+            })?;
+            Ok(DeriveRule {
+                pattern: pattern.to_string(),
+                derives: derives_str
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .collect(),
+            })
+        })
+        .collect()
 }

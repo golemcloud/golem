@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::http_api::{HttpApiDeploymentDeployProperties, McpDeploymentDeployProperties};
-use crate::bridge_gen::bridge_client_directory_name;
+use crate::bridge_gen::{DeriveRule, bridge_client_directory_name};
 use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_environments};
@@ -276,6 +276,7 @@ pub struct BridgeSdkTarget {
     pub agent_type: AgentType,
     pub target_language: GuestLanguage,
     pub output_dir: PathBuf,
+    pub derive_rules: Vec<DeriveRule>,
 }
 
 #[derive(Debug, Clone)]
@@ -283,6 +284,7 @@ pub struct CustomBridgeSdkTarget {
     pub agent_type_names: HashSet<AgentTypeName>,
     pub target_language: Option<GuestLanguage>,
     pub output_dir: Option<PathBuf>,
+    pub derive_rules: Vec<DeriveRule>,
 }
 
 pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
