@@ -617,12 +617,11 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 OplogEntry::PendingUpdate { description, .. } => {
                     pending_update_revisions.push(*description.target_revision());
                 }
-                OplogEntry::SuccessfulUpdate { .. } | OplogEntry::FailedUpdate { .. } => {
+                OplogEntry::SuccessfulUpdate { .. } | OplogEntry::FailedUpdate { .. }
                     // Pop front to match calculate_update_fields semantics
-                    if !pending_update_revisions.is_empty() {
+                    if !pending_update_revisions.is_empty() => {
                         pending_update_revisions.remove(0);
                     }
-                }
                 _ => {}
             }
         }

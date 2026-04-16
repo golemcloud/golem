@@ -493,7 +493,7 @@ impl OplogService for MultiLayerOplogService {
                     }
                 };
 
-                result.extend(partial_result.into_iter());
+                result.extend(partial_result);
 
                 if full_match {
                     break;
@@ -947,7 +947,7 @@ impl Oplog for MultiLayerOplog {
                     }
                 };
 
-                result.extend(partial_result.into_iter());
+                result.extend(partial_result);
 
                 if full_match {
                     break;
