@@ -6,19 +6,19 @@ componentTemplates:
       debug:
         default: true
         build:
-        - command: moon run -C .mooncakes/golemcloud/golem_sdk_tools cmd -- reexports .mooncakes/golemcloud/golem_sdk {{ component_name | to_snake_case }}
-        - command: moon run -C .mooncakes/golemcloud/golem_sdk_tools cmd -- agents .
+        - command: moon run -C GOLEM_MOONBIT_BUILD_TOOLS_PATH cmd -- reexports GOLEM_MOONBIT_BUILD_SDK_PATH {{ component_name | to_snake_case }}
+        - command: moon run -C GOLEM_MOONBIT_BUILD_TOOLS_PATH cmd -- agents .
         - command: moon build --target wasm
-        - command: wasm-tools component embed .mooncakes/golemcloud/golem_sdk/wit _build/wasm/release/build/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm --encoding utf16 --output _build/wasm/debug/{{ component_name | to_snake_case }}.embed.wasm
+        - command: wasm-tools component embed GOLEM_MOONBIT_BUILD_SDK_PATH/wit _build/wasm/release/build/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm --encoding utf16 --output _build/wasm/debug/{{ component_name | to_snake_case }}.embed.wasm
           mkdirs:
           - _build/wasm/debug
         - command: wasm-tools component new _build/wasm/debug/{{ component_name | to_snake_case }}.embed.wasm --output _build/wasm/debug/{{ component_name | to_snake_case }}.agent.wasm
         componentWasm: _build/wasm/debug/{{ component_name | to_snake_case }}.agent.wasm
       release:
         build:
-        - command: moon run -C .mooncakes/golemcloud/golem_sdk_tools cmd -- reexports .mooncakes/golemcloud/golem_sdk {{ component_name | to_snake_case }}
-        - command: moon run -C .mooncakes/golemcloud/golem_sdk_tools cmd -- agents .
+        - command: moon run -C GOLEM_MOONBIT_BUILD_TOOLS_PATH cmd -- reexports GOLEM_MOONBIT_BUILD_SDK_PATH {{ component_name | to_snake_case }}
+        - command: moon run -C GOLEM_MOONBIT_BUILD_TOOLS_PATH cmd -- agents .
         - command: moon build --target wasm --release
-        - command: wasm-tools component embed .mooncakes/golemcloud/golem_sdk/wit _build/wasm/release/build/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm --encoding utf16 --output _build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm
+        - command: wasm-tools component embed GOLEM_MOONBIT_BUILD_SDK_PATH/wit _build/wasm/release/build/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm --encoding utf16 --output _build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm
         - command: wasm-tools component new _build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm --output _build/wasm/release/{{ component_name | to_snake_case }}.agent.wasm
         componentWasm: _build/wasm/release/{{ component_name | to_snake_case }}.agent.wasm

@@ -135,6 +135,45 @@ impl SdkOverrides {
         }
     }
 
+    pub fn moonbit_sdk_tools_bin_deps(&self) -> String {
+        match &self.moonbit_sdk_path {
+            Some(_) => String::new(),
+            None => {
+                let version = self
+                    .moonbit_sdk_version
+                    .as_deref()
+                    .unwrap_or(versions::sdk::MOONBIT);
+                format!(
+                    r#",
+  "bin-deps": {{
+    "golemcloud/golem_sdk_tools": "{version}"
+  }}"#
+                )
+            }
+        }
+    }
+
+    pub fn moonbit_sdk_build_path(&self) -> String {
+        match &self.moonbit_sdk_path {
+            Some(path) => path.clone(),
+            None => ".mooncakes/golemcloud/golem_sdk".to_string(),
+        }
+    }
+
+    pub fn moonbit_sdk_tools_build_path(&self) -> String {
+        match &self.moonbit_sdk_path {
+            Some(path) => {
+                let sdk_path = Path::new(path);
+                sdk_path
+                    .parent()
+                    .map(|p| p.join("golem_sdk_tools"))
+                    .and_then(|p| p.to_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| ".mooncakes/golemcloud/golem_sdk_tools".to_string())
+            }
+            None => ".mooncakes/golemcloud/golem_sdk_tools".to_string(),
+        }
+    }
+
     pub fn golem_rust_dep(&self) -> anyhow::Result<String> {
         self.golem_rust_dependency().as_dep_string()
     }

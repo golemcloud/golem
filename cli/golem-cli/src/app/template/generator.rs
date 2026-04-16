@@ -282,7 +282,11 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                     name.as_str(),
                 ) {
                     (true, "golem.yaml") => {
-                        vec![Transform::ManifestHints, Transform::ApplicationName]
+                        vec![
+                            Transform::ManifestHints,
+                            Transform::ApplicationName,
+                            Transform::MoonBitSdk,
+                        ]
                     }
                     (true, "package.json") => vec![Transform::TsSdk],
                     (true, "Cargo.toml") => vec![Transform::RustSdk],
@@ -452,12 +456,24 @@ fn transform(
             }
             Transform::MoonBitSdk => {
                 replacements.insert(
-                    "GOLEM_MOONBIT_SDK_VERSION_OR_PATH",
+                    "GOLEM_MOONBIT_DEP_SDK_DEP",
                     sdk_overrides.moonbit_sdk_dep(),
                 );
                 replacements.insert(
-                    "GOLEM_MOONBIT_SDK_VERSION",
+                    "GOLEM_MOONBIT_DEP_SDK_VERSION",
                     versions::sdk::MOONBIT.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_MOONBIT_DEP_TOOLS_BIN_DEPS",
+                    sdk_overrides.moonbit_sdk_tools_bin_deps(),
+                );
+                replacements.insert(
+                    "GOLEM_MOONBIT_BUILD_TOOLS_PATH",
+                    sdk_overrides.moonbit_sdk_tools_build_path(),
+                );
+                replacements.insert(
+                    "GOLEM_MOONBIT_BUILD_SDK_PATH",
+                    sdk_overrides.moonbit_sdk_build_path(),
                 );
             }
             Transform::TsSdk => {

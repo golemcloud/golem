@@ -100,6 +100,25 @@ impl TaskResultMarkerHashSource for NpmInstallDepsMarkerHash<'_> {
     }
 }
 
+#[derive(Serialize)]
+pub struct MoonInstallDepsMarkerHash<'a> {
+    pub moon_mod_json_hash: &'a str,
+}
+
+impl TaskResultMarkerHashSource for MoonInstallDepsMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "MoonInstallDepsMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(Some("moon-install-deps".to_string()))
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(serde_json::to_string(self)?))
+    }
+}
+
 impl TaskResultMarkerHashSource for ResolvedExternalCommandMarkerHash<'_> {
     fn kind() -> &'static str {
         "ResolvedExternalCommandMarkerHash"
