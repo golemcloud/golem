@@ -202,18 +202,22 @@ impl Display for DeserializationError {
                     .to_string()
                     .log_color_error_highlight()
             )?;
-            writeln!(
-                f,
-                "  {}",
-                "Schema validation hint(s):".log_color_help_group()
-            )?;
-            for (path, errors) in &self.json_schema_validation_errors_by_path {
-                writeln!(f, "    path: {}", path.log_color_highlight())?;
-                for error in errors {
-                    writeln!(f, "      - schema: {}", error.schema)?;
-                    writeln!(f, "        error: {}", error.error.log_color_warn())?;
+
+            if !self.json_schema_validation_errors_by_path.is_empty() {
+                writeln!(
+                    f,
+                    "  {}",
+                    "Schema validation hint(s):".log_color_help_group()
+                )?;
+                for (path, errors) in &self.json_schema_validation_errors_by_path {
+                    writeln!(f, "    path: {}", path.log_color_highlight())?;
+                    for error in errors {
+                        writeln!(f, "      - schema: {}", error.schema)?;
+                        writeln!(f, "        error: {}", error.error.log_color_warn())?;
+                    }
                 }
             }
+
             Ok(())
         }
     }
@@ -223,7 +227,7 @@ impl Error for DeserializationError {}
 
 impl Application {
     pub fn from_yaml_str(yaml: &str) -> Result<Self, DeserializationError> {
-        match serde_yaml::from_str(yaml) {
+        match serde_yaml::from_str::<Self>(yaml) {
             Ok(app) => Ok(app),
             Err(err) => Err(DeserializationError::new(
                 err,
@@ -241,56 +245,276 @@ impl Application {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
-    #[serde(flatten)]
-    pub component_properties: ComponentLayerProperties,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub build: Vec<BuildCommand>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clean: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasi_config_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasi_config: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<PluginInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<InitialComponentFile>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, ComponentPreset>,
 }
 
+impl ComponentTemplate {
+    pub fn component_layer_properties(&self) -> ComponentLayerProperties {
+        ComponentLayerProperties {
+            component_wasm: self.component_wasm.clone(),
+            output_wasm: self.output_wasm.clone(),
+            build_merge_mode: self.build_merge_mode,
+            build: self.build.clone(),
+            custom_commands: self.custom_commands.clone(),
+            clean: self.clean.clone(),
+            agent_properties: AgentLayerProperties {
+                config: self.config.clone(),
+                env_merge_mode: self.env_merge_mode,
+                env: self.env.clone(),
+                wasi_config_merge_mode: self.wasi_config_merge_mode,
+                wasi_config: self.wasi_config.clone(),
+                plugins_merge_mode: self.plugins_merge_mode,
+                plugins: self.plugins.clone(),
+                files_merge_mode: self.files_merge_mode,
+                files: self.files.clone(),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Component {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dir: Option<String>,
-    #[serde(flatten)]
-    pub component_properties: ComponentLayerProperties,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub build: Vec<BuildCommand>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clean: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasi_config_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasi_config: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<PluginInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<InitialComponentFile>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, ComponentPreset>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ComponentPreset {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<Marker>,
-    #[serde(flatten)]
-    pub component_properties: ComponentLayerProperties,
+impl Component {
+    pub fn component_layer_properties(&self) -> ComponentLayerProperties {
+        ComponentLayerProperties {
+            component_wasm: self.component_wasm.clone(),
+            output_wasm: self.output_wasm.clone(),
+            build_merge_mode: self.build_merge_mode,
+            build: self.build.clone(),
+            custom_commands: self.custom_commands.clone(),
+            clean: self.clean.clone(),
+            agent_properties: AgentLayerProperties {
+                config: self.config.clone(),
+                env_merge_mode: self.env_merge_mode,
+                env: self.env.clone(),
+                wasi_config_merge_mode: self.wasi_config_merge_mode,
+                wasi_config: self.wasi_config.clone(),
+                plugins_merge_mode: self.plugins_merge_mode,
+                plugins: self.plugins.clone(),
+                files_merge_mode: self.files_merge_mode,
+                files: self.files.clone(),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ComponentPreset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Marker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_wasm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub build: Vec<BuildCommand>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clean: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasi_config_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasi_config: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<PluginInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<InitialComponentFile>>,
+}
+
+impl ComponentPreset {
+    pub fn into_component_layer_properties(self) -> ComponentLayerProperties {
+        ComponentLayerProperties {
+            component_wasm: self.component_wasm,
+            output_wasm: self.output_wasm,
+            build_merge_mode: self.build_merge_mode,
+            build: self.build,
+            custom_commands: self.custom_commands,
+            clean: self.clean,
+            agent_properties: AgentLayerProperties {
+                config: self.config,
+                env_merge_mode: self.env_merge_mode,
+                env: self.env,
+                wasi_config_merge_mode: self.wasi_config_merge_mode,
+                wasi_config: self.wasi_config,
+                plugins_merge_mode: self.plugins_merge_mode,
+                plugins: self.plugins,
+                files_merge_mode: self.files_merge_mode,
+                files: self.files,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Agent {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
-    #[serde(flatten)]
-    pub agent_properties: AgentLayerProperties,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasi_config_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasi_config: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<PluginInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<InitialComponentFile>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, AgentPreset>,
 }
 
+impl Agent {
+    pub fn agent_layer_properties(&self) -> AgentLayerProperties {
+        AgentLayerProperties {
+            config: self.config.clone(),
+            env_merge_mode: self.env_merge_mode,
+            env: self.env.clone(),
+            wasi_config_merge_mode: self.wasi_config_merge_mode,
+            wasi_config: self.wasi_config.clone(),
+            plugins_merge_mode: self.plugins_merge_mode,
+            plugins: self.plugins.clone(),
+            files_merge_mode: self.files_merge_mode,
+            files: self.files.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgentPreset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Marker>,
-    #[serde(flatten)]
-    pub agent_properties: AgentLayerProperties,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasi_config_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wasi_config: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<PluginInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_merge_mode: Option<VecMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<InitialComponentFile>>,
+}
+
+impl AgentPreset {
+    pub fn into_agent_layer_properties(self) -> AgentLayerProperties {
+        AgentLayerProperties {
+            config: self.config,
+            env_merge_mode: self.env_merge_mode,
+            env: self.env,
+            wasi_config_merge_mode: self.wasi_config_merge_mode,
+            wasi_config: self.wasi_config,
+            plugins_merge_mode: self.plugins_merge_mode,
+            plugins: self.plugins,
+            files_merge_mode: self.files_merge_mode,
+            files: self.files,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -342,7 +566,7 @@ pub struct McpDeployment {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpDeploymentAgentOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security_scheme: Option<String>,
@@ -481,26 +705,24 @@ pub struct InitialComponentFile {
     pub permissions: Option<AgentFilePermissions>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+// Common component-level fields merged from templates/components/presets.
+// This helper intentionally stays outside serde parsing: using flatten here would weaken
+// strict unknown-field checks on manifest-facing structs that use deny_unknown_fields.
+#[derive(Clone, Debug)]
 pub struct ComponentLayerProperties {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_wasm: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_wasm: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_merge_mode: Option<VecMergeMode>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub build: Vec<BuildCommand>,
-    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
-    #[serde(flatten)]
     pub agent_properties: AgentLayerProperties,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+// Common agent-level fields merged from templates/agents/presets.
+// This helper intentionally stays outside serde parsing: using flatten here would weaken
+// strict unknown-field checks on manifest-facing structs that use deny_unknown_fields.
+#[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]

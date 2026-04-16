@@ -419,6 +419,7 @@
     },
     "mcpDeploymentAgentOptions": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "securityScheme": {
           "type": "string"
