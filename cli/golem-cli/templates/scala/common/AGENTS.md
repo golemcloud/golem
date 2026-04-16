@@ -18,6 +18,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-call-another-agent-scala` | Calling another agent and awaiting the result (RPC) |
 | `golem-fire-and-forget-scala` | Triggering an agent invocation without waiting for the result |
 | `golem-schedule-future-call-scala` | Scheduling a future agent invocation |
+| `golem-multi-instance-agent-scala` | Creating multiple agent instances with the same constructor parameters using phantom agents |
 | `golem-atomic-block-scala` | Atomic blocks, persistence control, and oplog management |
 | `golem-add-transactions-scala` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-scala` | Exposing an agent over HTTP with mount paths and endpoint annotations |

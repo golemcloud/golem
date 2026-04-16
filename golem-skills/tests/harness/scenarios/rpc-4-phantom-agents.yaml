@@ -1,0 +1,99 @@
+name: "rpc-4-phantom-agents"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-collector-and-phantom-rpc"
+    prompt: >
+      In the test-app project, add a second agent type called `Collector` with a single
+      constructor parameter for its name. It must expose three externally invokable
+      methods: `add-value(value: u64)`, `get-values() -> list<u64>`, and
+      `get-total() -> u64`. `add-value` appends the value to the agent's durable state.
+      `get-values` returns all stored values in insertion order. `get-total` returns the
+      sum of all stored values.
+
+      Then modify the existing `CounterAgent` so it has three new externally invokable
+      methods:
+
+      1. `spawn-and-fill-phantom` — creates a **new phantom** instance of the `Collector`
+         agent using the counter's own name as the constructor parameter (use the phantom
+         agent / `new_phantom` / `newPhantom` API), calls `add-value(10)` and then
+         `add-value(20)` on it, and returns the phantom collector's total (should be 30).
+
+      2. `spawn-two-phantoms` — creates **two** new phantom `Collector` instances (both
+         using the counter's own name as the constructor parameter). Calls `add-value(1)`
+         on the first phantom and `add-value(2)` on the second phantom. Then returns the
+         total from each as a two-element list: `[total_of_first, total_of_second]`.
+
+      3. `read-non-phantom-collector` — gets the **non-phantom** `Collector` agent with
+         the counter's own name (using the regular `get` constructor, not `new_phantom`
+         or `get_phantom`) and returns its total.
+
+      Make sure the project builds successfully.
+    expectedSkills:
+      rust:
+        - "golem-multi-instance-agent-rust"
+      ts:
+        - "golem-multi-instance-agent-ts"
+      scala:
+        - "golem-multi-instance-agent-scala"
+    verify:
+      build: true
+      deploy: true
+
+  # Spawning a phantom, adding two values, and reading back the total
+  - id: "spawn-and-fill-phantom"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method:
+        rust: "spawn_and_fill_phantom"
+        ts: "spawnAndFillPhantom"
+        scala: "spawnAndFillPhantom"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 30
+
+  # Spawning two independent phantoms with the same constructor params
+  - id: "spawn-two-phantoms"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method:
+        rust: "spawn_two_phantoms"
+        ts: "spawnTwoPhantoms"
+        scala: "spawnTwoPhantoms"
+    expect:
+      result_json:
+        - path: "$[0]"
+          equals: 1
+        - path: "$[1]"
+          equals: 2
+
+  # The non-phantom Collector("c1") must be untouched by all phantom operations
+  - id: "non-phantom-collector-untouched"
+    invoke_json:
+      agent: 'Collector("c1")'
+      method:
+        rust: "get_total"
+        ts: "getTotal"
+        scala: "getTotal"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 0
+
+  # Double-check via the counter's own helper method
+  - id: "read-non-phantom-via-counter"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method:
+        rust: "read_non_phantom_collector"
+        ts: "readNonPhantomCollector"
+        scala: "readNonPhantomCollector"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 0
