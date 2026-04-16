@@ -95,3 +95,4 @@ secretDefaults:
 - Secret paths use camelCase (matching Scala field names)
 - The `--secret-type` argument accepts Scala type names: `String`, `Int`, `Boolean`, `List[String]`, `Option[Int]` (JSON-encoded analysed types like `'{"type":"Str"}'` are also supported as a fallback)
 - Use `secretDefaults` in `golem.yaml` only for development; manage production secrets via CLI
+- If the agent also needs non-secret typed config guidance, use `golem-add-config-scala` alongside this skill

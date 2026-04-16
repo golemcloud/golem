@@ -114,3 +114,4 @@ Config values follow the same cascade as environment variables:
 
 - Values in `golem.yaml` act as defaults.
 - Values passed via `golem agent new --config` or RPC `get_with_config` override those defaults.
+- If the config includes `Secret<T>` fields, also use `golem-add-secret-rust` for secret-specific declaration and CLI guidance.

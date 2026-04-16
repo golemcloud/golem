@@ -61,7 +61,7 @@ impl AgentSecretCommandHandler {
                 secret_value,
             } => self.cmd_update_value(path, id, secret_value).await,
             AgentSecretSubcommand::Delete { path, id } => self.cmd_delete(path, id).await,
-            AgentSecretSubcommand::List => self.cmd_list().await,
+            AgentSecretSubcommand::List { ids } => self.cmd_list(ids).await,
         }
     }
 
@@ -138,9 +138,7 @@ impl AgentSecretCommandHandler {
                         Err(_) => match serde_json::from_str(&secret_type) {
                             Ok(res) => res,
                             Err(json_err) => {
-                                log_error(format!(
-                                    "Malformed secret type provided: {json_err}"
-                                ));
+                                log_error(format!("Malformed secret type provided: {json_err}"));
                                 bail!(NonSuccessfulExit);
                             }
                         },
@@ -166,12 +164,10 @@ impl AgentSecretCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx
-            .log_handler()
-            .log_view(&AgentSecretCreateView {
-                secret: result,
-                show_sensitive: self.ctx.show_sensitive(),
-            });
+        self.ctx.log_handler().log_view(&AgentSecretCreateView {
+            secret: result,
+            show_sensitive: self.ctx.show_sensitive(),
+        });
 
         Ok(())
     }
@@ -183,12 +179,10 @@ impl AgentSecretCommandHandler {
     ) -> anyhow::Result<()> {
         let result = self.resolve_secret(path, id).await?;
 
-        self.ctx
-            .log_handler()
-            .log_view(&AgentSecretGetView {
-                secret: result,
-                show_sensitive: self.ctx.show_sensitive(),
-            });
+        self.ctx.log_handler().log_view(&AgentSecretGetView {
+            secret: result,
+            show_sensitive: self.ctx.show_sensitive(),
+        });
 
         Ok(())
     }
@@ -220,12 +214,10 @@ impl AgentSecretCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx
-            .log_handler()
-            .log_view(&AgentSecretUpdateView {
-                secret: result,
-                show_sensitive: self.ctx.show_sensitive(),
-            });
+        self.ctx.log_handler().log_view(&AgentSecretUpdateView {
+            secret: result,
+            show_sensitive: self.ctx.show_sensitive(),
+        });
 
         Ok(())
     }
@@ -245,12 +237,10 @@ impl AgentSecretCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx
-            .log_handler()
-            .log_view(&AgentSecretDeleteView {
-                secret: result,
-                show_sensitive: self.ctx.show_sensitive(),
-            });
+        self.ctx.log_handler().log_view(&AgentSecretDeleteView {
+            secret: result,
+            show_sensitive: self.ctx.show_sensitive(),
+        });
 
         Ok(())
     }
@@ -298,7 +288,7 @@ impl AgentSecretCommandHandler {
         }
     }
 
-    async fn cmd_list(&self) -> anyhow::Result<()> {
+    async fn cmd_list(&self, show_ids: bool) -> anyhow::Result<()> {
         let environment = self
             .ctx
             .environment_handler()
@@ -316,6 +306,8 @@ impl AgentSecretCommandHandler {
 
         self.ctx.log_handler().log_view(&AgentSecretListView {
             show_sensitive: self.ctx.show_sensitive(),
+            environment_name: environment.environment_name.0,
+            show_ids,
             secrets: results,
         });
 

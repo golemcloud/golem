@@ -145,10 +145,7 @@ impl RetryPolicyCommandHandler {
                 .into_iter()
                 .find(|p| p.name == name)
             else {
-                log_error(format!(
-                    "Retry policy '{}' not found in environment",
-                    name
-                ));
+                log_error(format!("Retry policy '{}' not found in environment", name));
                 bail!(NonSuccessfulExit);
             };
 
@@ -168,11 +165,7 @@ impl RetryPolicyCommandHandler {
         }
     }
 
-    async fn cmd_get(
-        &self,
-        name: Option<String>,
-        id: Option<RetryPolicyId>,
-    ) -> anyhow::Result<()> {
+    async fn cmd_get(&self, name: Option<String>, id: Option<RetryPolicyId>) -> anyhow::Result<()> {
         let result = self.resolve_retry_policy(name, id).await?;
 
         self.ctx.log_handler().log_view(&RetryPolicyGetView(result));

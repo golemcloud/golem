@@ -1343,7 +1343,11 @@ pub mod api {
             },
 
             /// List Agent Secrets
-            List,
+            List {
+                /// Include environment ID and secret ID columns in text output
+                #[arg(long)]
+                ids: bool,
+            },
         }
     }
 
@@ -1868,12 +1872,14 @@ pub fn help_target_to_command(target: ShowClapHelpTarget) -> Command {
 
 #[cfg(test)]
 mod test {
+    use crate::command::api::agent_secret::AgentSecretSubcommand;
     use crate::command::{
-        GolemCliCommand, builtin_exec_subcommands, help_target_to_subcommand_names,
+        GolemCliCommand, GolemCliSubcommand, builtin_exec_subcommands,
+        help_target_to_subcommand_names,
     };
     use crate::error::ShowClapHelpTarget;
     use clap::builder::StyledStr;
-    use clap::{Command, CommandFactory};
+    use clap::{Command, CommandFactory, Parser};
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet};
     use strum::IntoEnumIterator;
@@ -1882,6 +1888,21 @@ mod test {
     #[test]
     fn command_debug_assert() {
         GolemCliCommand::command().debug_assert();
+    }
+
+    #[test]
+    fn agent_secret_list_accepts_ids_flag() {
+        let command = GolemCliCommand::try_parse_from(["golem", "agent-secret", "list", "--ids"])
+            .expect("command should parse");
+
+        let GolemCliSubcommand::AgentSecret { subcommand } = command.subcommand else {
+            panic!("expected agent-secret subcommand");
+        };
+
+        assert!(matches!(
+            subcommand,
+            AgentSecretSubcommand::List { ids: true }
+        ));
     }
 
     #[test]

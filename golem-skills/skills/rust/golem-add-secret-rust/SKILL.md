@@ -128,6 +128,7 @@ secretDefaults:
 ## Key Points
 
 - Secrets use the same `Config<T>` constructor injection mechanism as regular typed config
+- If the agent also needs non-secret typed config guidance, use `golem-add-config-rust` alongside this skill
 - Secret paths use **camelCase** — Rust `snake_case` fields are converted automatically (e.g., `api_key` → `apiKey`)
 - The `--secret-type` argument accepts Rust type names: `String`, `i32`, `bool`, `Vec<String>`, `Option<i32>` (JSON-encoded analysed types like `'{"type":"Str"}'` are also supported as a fallback)
 - Secrets are stored **per-environment**, not per-agent-instance

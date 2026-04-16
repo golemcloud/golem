@@ -93,3 +93,4 @@ Values set closer to the agent override those set at broader scopes.
 - Optional fields use `?` syntax (e.g., `timeout?: number`)
 - Config is loaded when `.value` is accessed
 - Config keys in `golem.yaml` use camelCase matching the TypeScript property names
+- If the config includes `Secret<T>` fields, also use `golem-add-secret-ts` for secret-specific declaration and CLI guidance

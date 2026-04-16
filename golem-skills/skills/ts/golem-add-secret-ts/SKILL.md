@@ -84,3 +84,4 @@ secretDefaults:
 - Secrets are **not** stored in the `config` section of `golem.yaml` — use `secretDefaults` for dev environments only.
 - Missing required secrets cause agent creation to fail.
 - The `--secret-type` flag accepts TypeScript type names: `string`, `s32`, `boolean`, `string[]` (JSON-encoded analysed types like `'{"type":"Str"}'` are also supported as a fallback).
+- If the agent also needs non-secret typed config guidance, use `golem-add-config-ts` alongside this skill.

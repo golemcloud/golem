@@ -118,3 +118,4 @@ val client = MyAgentClient.getWithConfig(
 - Config is loaded lazily when `.value` is accessed
 - Config values in `golem.yaml` use camelCase keys matching Scala field names
 - Config cascade order: `componentTemplates` → `components` → `agents` → `presets`
+- If the config includes `Secret[T]` fields, also use `golem-add-secret-scala` for secret-specific declaration and CLI guidance

@@ -73,9 +73,7 @@ impl ResourceDefinitionCommandHandler {
                 )
                 .await
             }
-            ResourceDefinitionSubcommand::Delete { name, id } => {
-                self.cmd_delete(name, id).await
-            }
+            ResourceDefinitionSubcommand::Delete { name, id } => self.cmd_delete(name, id).await,
             ResourceDefinitionSubcommand::Get { name, id } => self.cmd_get(name, id).await,
             ResourceDefinitionSubcommand::List => self.cmd_list().await,
         }

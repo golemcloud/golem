@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::parse_common::ParseError;
-use golem_wasm::analysis::analysed_type;
 use golem_wasm::analysis::AnalysedType;
+use golem_wasm::analysis::analysed_type;
 
 pub(super) fn parse_type_scala(input: &str) -> Result<AnalysedType, ParseError> {
     let result = parse_type_inner(input.trim())?;
