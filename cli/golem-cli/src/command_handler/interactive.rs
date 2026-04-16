@@ -456,19 +456,28 @@ impl InteractiveHandler {
             })
             .collect::<Vec<_>>();
 
-        let Some(selected) = MultiSelect::new("Select templates:", template_options)
-            .prompt()
-            .none_if_not_interactive_logged()?
-        else {
-            return Ok(None);
-        };
+        loop {
+            let Some(selected) = MultiSelect::new("Select templates:", template_options.clone())
+                .with_help_message("Use Space to select templates, then Enter to confirm")
+                .prompt()
+                .none_if_not_interactive_logged()?
+            else {
+                return Ok(None);
+            };
 
-        Ok(Some(
-            selected
-                .into_iter()
-                .map(|template| template.template_name)
-                .collect(),
-        ))
+            if selected.is_empty() {
+                log_warn("Please select at least one template using Space before pressing Enter");
+                logln("");
+                continue;
+            }
+
+            return Ok(Some(
+                selected
+                    .into_iter()
+                    .map(|template| template.template_name)
+                    .collect(),
+            ));
+        }
     }
 
     pub fn select_component_for_template(
