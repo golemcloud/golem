@@ -837,7 +837,7 @@ impl GrpcQuotaService {
 
             match rpc_result {
                 Ok(results) => {
-                    for ((key, mut slot), result) in locked.into_iter().zip(results.into_iter()) {
+                    for ((key, mut slot), result) in locked.into_iter().zip(results) {
                         let (expires_at, resource_definition_id) =
                             if let TrackedLease::Bounded(b) = &slot.lease {
                                 (b.expires_at, b.resource_definition_id)

@@ -146,8 +146,8 @@ impl DeployDiff {
             .map(|diff_stage| {
                 diff_stage
                     .components
-                    .iter()
-                    .filter_map(|(component_name, _)| {
+                    .keys()
+                    .filter_map(|component_name| {
                         self.staged_agent_types
                             .get(component_name)
                             .map(|agent_types| {
@@ -170,8 +170,8 @@ impl DeployDiff {
         let current_agents = self
             .diff
             .components
-            .iter()
-            .filter_map(|(component_name, _)| {
+            .keys()
+            .filter_map(|component_name| {
                 self.current_agent_types
                     .get(component_name)
                     .map(|agent_types| {
@@ -649,8 +649,8 @@ impl RollbackDiff {
         let target_agents = self
             .diff
             .components
-            .iter()
-            .filter_map(|(component_name, _)| {
+            .keys()
+            .filter_map(|component_name| {
                 self.target_agent_types
                     .get(component_name)
                     .map(|agent_types| {
@@ -662,8 +662,8 @@ impl RollbackDiff {
         let current_agents = self
             .diff
             .components
-            .iter()
-            .filter_map(|(component_name, _)| {
+            .keys()
+            .filter_map(|component_name| {
                 self.current_agent_types
                     .get(component_name)
                     .map(|agent_types| {

@@ -236,7 +236,6 @@ async fn get_oplog_with_api_changing_updates(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -299,7 +298,6 @@ async fn get_oplog_starting_with_updated_component(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
-        .unique()
         .store()
         .await?;
     let updated_component = executor

@@ -269,7 +269,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             "Worker {} starting replay from component revision {}",
             owned_agent_id.agent_id, worker_config.component_revision_for_replay
         );
-
         let component_metadata = component_service
             .get_metadata(
                 owned_agent_id.component_id(),
@@ -284,7 +283,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .get(&agent_id.agent_type)
                 .cloned()
         });
-
         let files = prepare_filesystem(
             &file_loader,
             owned_agent_id.environment_id,
@@ -346,7 +344,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(tokio::io::stdout());
         let stderr = ManagedStdErr::from_stderr(tokio::io::stderr());
-
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
             worker_dir.path().to_path_buf(),
@@ -3311,25 +3308,24 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                     context,
                     ..
                 },
-            )) if level == &LogLevel::Warn
+            )) if (level == &LogLevel::Warn
                 || level == &LogLevel::Error
                 || level == &LogLevel::Critical
-                || level == &LogLevel::Stderr =>
+                || level == &LogLevel::Stderr)
+                && collected_count < max_count =>
             {
-                if collected_count < max_count {
-                    if level == &LogLevel::Stderr {
-                        current_stderr_entries_batch.push(message.clone());
-                    } else {
-                        let line = format!(
-                            "[{}] [{}] {}\n",
-                            format!("{level:?}").to_uppercase(),
-                            context,
-                            message
-                        );
-                        current_stderr_entries_batch.push(line);
-                    }
-                    collected_count += 1;
+                if level == &LogLevel::Stderr {
+                    current_stderr_entries_batch.push(message.clone());
+                } else {
+                    let line = format!(
+                        "[{}] [{}] {}\n",
+                        format!("{level:?}").to_uppercase(),
+                        context,
+                        message
+                    );
+                    current_stderr_entries_batch.push(line);
                 }
+                collected_count += 1;
             }
             Some((
                 _,
@@ -3691,7 +3687,6 @@ impl PrivateDurableWorkerState {
         } else {
             deleted_regions
         };
-
         let replay_state =
             ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await;
         let invocation_context = InvocationContext::new(None);
