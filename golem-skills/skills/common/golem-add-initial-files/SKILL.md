@@ -15,7 +15,7 @@ Each file entry has three fields:
 files:
   - sourcePath: ./data/config.json       # local path (relative to golem.yaml) or URL
     targetPath: /etc/app/config.json      # absolute path inside the agent filesystem
-    permissions: readOnly                 # optional: readOnly (default) or readWrite
+    permissions: read-only                # optional: read-only (default) or read-write
 ```
 
 - **`sourcePath`** — the source of the file content. Can be:
@@ -24,7 +24,7 @@ files:
   - An **HTTP/HTTPS URL** to download the file from a remote server
   - A **local directory** — all files in the directory are recursively included, preserving the directory structure under `targetPath`
 - **`targetPath`** — the absolute path where the file appears inside the agent's WASI filesystem. Must start with `/`.
-- **`permissions`** — optional. Either `readOnly` (default) or `readWrite`.
+- **`permissions`** — optional. Either `read-only` (default) or `read-write`.
 
 ## Cascade Hierarchy (Most General → Most Specific)
 
@@ -73,7 +73,7 @@ agents:
     files:
       - sourcePath: ./agent-config/settings.toml
         targetPath: /etc/agent/settings.toml
-        permissions: readWrite
+        permissions: read-write
 ```
 
 ## 4. Preset Level (Component and Agent)
@@ -140,7 +140,7 @@ agents:
     files:
       - sourcePath: ./agent-config/
         targetPath: /etc/agent/config/
-        permissions: readWrite
+        permissions: read-write
     presets:
       debug:
         default: {}
@@ -229,17 +229,17 @@ Remote sources are downloaded and hashed during `golem deploy`. Only single file
 
 ## File Permissions
 
-Each file can be marked as `readOnly` (default) or `readWrite`:
+Each file can be marked as `read-only` (default) or `read-write`:
 
 ```yaml
 files:
   - sourcePath: ./config.json
     targetPath: /etc/app/config.json
-    permissions: readOnly           # agent can only read this file
+    permissions: read-only          # agent can only read this file
 
   - sourcePath: ./scratch/workspace
     targetPath: /tmp/workspace
-    permissions: readWrite          # agent can read and write this file
+    permissions: read-write         # agent can read and write this file
 ```
 
 When a directory source is used, the permission setting applies to all files within that directory.

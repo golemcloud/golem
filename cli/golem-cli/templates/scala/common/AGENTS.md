@@ -13,6 +13,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-scala-dependency` | Adding a library dependency to the project |
 | `golem-add-agent-scala` | Adding a new agent type to a Scala Golem component |
 | `golem-configure-durability-scala` | Choosing between durable and ephemeral agents |
+| `golem-stateless-agent-scala` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
 | `golem-annotate-agent-scala` | Adding prompt and description annotations to agent methods |
 | `golem-call-another-agent-scala` | Calling another agent and awaiting the result (RPC) |
 | `golem-fire-and-forget-scala` | Triggering an agent invocation without waiting for the result |
@@ -26,6 +27,8 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
+| `golem-file-io-scala` | Reading and writing files from agent code |
+| `golem-js-runtime` | JavaScript runtime environment: available Web APIs, Node.js modules, and npm compatibility |
 | `golem-make-http-request-scala` | Making outgoing HTTP requests from agent code using fetch or ZIO HTTP |
 
 # Golem Application Development Guide (Scala)

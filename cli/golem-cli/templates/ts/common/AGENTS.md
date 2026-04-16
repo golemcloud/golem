@@ -13,6 +13,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-npm-package` | Adding an npm package dependency to the project |
 | `golem-add-agent-ts` | Adding a new agent type to a TypeScript Golem component |
 | `golem-configure-durability-ts` | Choosing between durable and ephemeral agents |
+| `golem-stateless-agent-ts` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
 | `golem-annotate-agent-ts` | Adding prompt and description annotations to agent methods |
 | `golem-call-another-agent-ts` | Calling another agent and awaiting the result (RPC) |
 | `golem-fire-and-forget-ts` | Triggering an agent invocation without waiting for the result |
@@ -26,6 +27,8 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
+| `golem-file-io-ts` | Reading and writing files from agent code |
+| `golem-js-runtime` | JavaScript runtime environment: available Web APIs, Node.js modules, and npm compatibility |
 | `golem-make-http-request-ts` | Making outgoing HTTP requests from agent code using fetch |
 
 # Golem Application Development Guide (TypeScript)

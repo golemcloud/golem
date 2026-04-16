@@ -13,6 +13,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-rust-crate` | Adding a Rust crate dependency to the project |
 | `golem-add-agent-rust` | Adding a new agent type to a Rust Golem component |
 | `golem-configure-durability-rust` | Choosing between durable and ephemeral agents |
+| `golem-stateless-agent-rust` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
 | `golem-annotate-agent-rust` | Adding prompt and description annotations to agent methods |
 | `golem-call-another-agent-rust` | Calling another agent and awaiting the result (RPC) |
 | `golem-fire-and-forget-rust` | Triggering an agent invocation without waiting for the result |
@@ -26,6 +27,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
+| `golem-file-io-rust` | Reading and writing files from agent code |
 | `golem-make-http-request-rust` | Making outgoing HTTP requests from agent code using wstd |
 
 # Golem Application Development Guide (Rust)
