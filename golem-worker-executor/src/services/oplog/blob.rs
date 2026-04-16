@@ -375,10 +375,10 @@ impl BlobOplogArchive {
         let entries = chunk.decompress()?;
         let mut cache = self.cache.write().await;
 
-        let start_idx = Into::<u64>::into(*last_idx) - chunk.count + 1;
         let mut collected = Vec::new();
 
-        for (current_idx, entry) in (start_idx..).zip(entries) {
+        for (current_idx, entry) in (Into::<u64>::into(*last_idx) - chunk.count + 1..).zip(entries)
+        {
             let oplog_index = OplogIndex::from_u64(current_idx);
 
             cache.insert(oplog_index, entry.clone());
