@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::agent_id_display::{SourceLanguage, parse_type_for_language};
+use crate::agent_id_display::{SourceLanguage, parse_type_for_language, parse_value_for_language};
 use crate::command::api::agent_secret::AgentSecretSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
@@ -34,7 +34,6 @@ use golem_common::model::agent_secret::{
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
-use golem_wasm::parse_value_and_type;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -147,7 +146,7 @@ impl AgentSecretCommandHandler {
             };
 
         let secret_value: Option<serde_json::Value> = match secret_value {
-            Some(sv) => Some(self.parse_secret_value(&sv, &secret_type)?),
+            Some(sv) => Some(self.parse_secret_value(&sv, &secret_type, &source_language)?),
             None => None,
         };
 
@@ -194,11 +193,14 @@ impl AgentSecretCommandHandler {
         secret_value: Option<String>,
     ) -> anyhow::Result<()> {
         let current = self.resolve_secret(path, id).await?;
+        let source_language = self.guess_source_language().await;
 
         let clients = self.ctx.golem_clients().await?;
 
         let secret_value: Option<serde_json::Value> = match secret_value {
-            Some(sv) => Some(self.parse_secret_value(&sv, &current.secret_type)?),
+            Some(sv) => {
+                Some(self.parse_secret_value(&sv, &current.secret_type, &source_language)?)
+            }
             None => None,
         };
 
@@ -271,9 +273,10 @@ impl AgentSecretCommandHandler {
         &self,
         input: &str,
         secret_type: &AnalysedType,
+        source_language: &SourceLanguage,
     ) -> anyhow::Result<serde_json::Value> {
-        // Try WAVE format first
-        if let Ok(vat) = parse_value_and_type(secret_type, input) {
+        // Try language-specific parser first
+        if let Ok(vat) = parse_value_for_language(input, secret_type, source_language) {
             if let Ok(json) = vat.to_json_value() {
                 return Ok(json);
             }

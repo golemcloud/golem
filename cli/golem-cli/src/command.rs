@@ -1304,7 +1304,7 @@ pub mod api {
                 /// Type of the secret, using the project's language syntax (e.g. "String" for Rust, "string" for TypeScript) or JSON format
                 #[arg(long)]
                 secret_type: String,
-                /// Value of the secret (e.g. "my-key" for strings, 42 for numbers). Accepts WAVE format or JSON
+                /// Value of the secret (e.g. "my-key" for strings, 42 for numbers). Uses the project's language syntax or JSON
                 #[arg(long)]
                 secret_value: Option<String>,
             },
@@ -1327,7 +1327,7 @@ pub mod api {
                 /// ID of the secret (alternative to path)
                 #[arg(long, required_unless_present = "path", conflicts_with = "path")]
                 id: Option<AgentSecretId>,
-                /// Value of the secret (e.g. "my-key" for strings, 42 for numbers). Accepts WAVE format or JSON
+                /// Value of the secret (e.g. "my-key" for strings, 42 for numbers). Uses the project's language syntax or JSON
                 #[arg(long)]
                 secret_value: Option<String>,
             },

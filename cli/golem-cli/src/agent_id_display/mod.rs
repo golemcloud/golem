@@ -172,6 +172,46 @@ pub fn parse_type_for_language(
     }
 }
 
+/// Parses a single component-model value using language-specific syntax.
+///
+/// For known source languages, attempts language-specific parsing first.
+/// For unknown languages, tries each known parser in turn.
+/// Falls back to the structural parser if all language-specific parsers fail.
+pub fn parse_value_for_language(
+    input: &str,
+    typ: &golem_wasm::analysis::AnalysedType,
+    source_language: &SourceLanguage,
+) -> Result<ValueAndType, ParseError> {
+    fn try_parse<D: parse_common::Dialect>(
+        input: &str,
+        typ: &golem_wasm::analysis::AnalysedType,
+    ) -> Result<ValueAndType, ParseError> {
+        let mut lexer = lexer::Lexer::new(input);
+        let result = parse_common::parse_cm_value::<D>(&mut lexer, typ)?;
+        let (tok, pos, _) = lexer.next_token()?;
+        if tok != lexer::Token::Eof {
+            return Err(ParseError {
+                position: pos,
+                message: format!("expected end of input, got {tok:?}"),
+            });
+        }
+        Ok(result)
+    }
+
+    match source_language {
+        SourceLanguage::Rust => try_parse::<parse_rust::RustDialect>(input, typ),
+        SourceLanguage::TypeScript => try_parse::<parse_ts::TsDialect>(input, typ),
+        SourceLanguage::Scala => try_parse::<parse_scala::ScalaDialect>(input, typ),
+        SourceLanguage::Other(_) => try_parse::<parse_ts::TsDialect>(input, typ)
+            .or_else(|_| try_parse::<parse_rust::RustDialect>(input, typ))
+            .or_else(|_| try_parse::<parse_scala::ScalaDialect>(input, typ))
+            .map_err(|_| ParseError {
+                position: 0,
+                message: format!("could not parse value '{input}'"),
+            }),
+    }
+}
+
 /// Parses the parameter portion of an agent ID string into a [`DataValue`].
 ///
 /// For known source languages (Rust, TypeScript), first attempts language-specific
