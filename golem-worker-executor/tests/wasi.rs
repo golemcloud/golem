@@ -320,7 +320,6 @@ async fn initial_file_read_write(
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
-        .unique()
         .with_files(
             "FileReadWrite",
             &[
@@ -389,7 +388,6 @@ async fn initial_file_listing_through_api(
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
-        .unique()
         .with_files(
             "FileReadWrite",
             &[
@@ -523,7 +521,6 @@ async fn initial_file_reading_through_api(
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
-        .unique()
         .with_files(
             "FileReadWrite",
             &[
@@ -797,7 +794,6 @@ async fn file_update_1(
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
-        .unique()
         .with_files(
             "IfsUpdate",
             &[IFSEntry {
@@ -1000,7 +996,6 @@ async fn file_update_in_the_middle_of_exported_function(
 
     let component = executor
         .component_dep(&context.default_environment_id, initial_file_system)
-        .unique()
         .with_files(
             "IfsUpdateInsideExportedFunction",
             &[IFSEntry {

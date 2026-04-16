@@ -165,7 +165,6 @@ async fn auto_update_on_running(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -250,7 +249,6 @@ async fn auto_update_on_idle(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -307,7 +305,6 @@ async fn failing_auto_update_on_idle(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -374,7 +371,6 @@ async fn auto_update_on_idle_with_non_diverging_history(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -441,7 +437,6 @@ async fn failing_auto_update_on_running(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -536,7 +531,6 @@ async fn manual_update_on_idle(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v2)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -611,7 +605,6 @@ async fn manual_update_on_idle_without_save_snapshot(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -682,7 +675,6 @@ async fn auto_update_on_running_followed_by_manual(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -788,7 +780,6 @@ async fn manual_update_on_idle_with_failing_load(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v2)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -858,7 +849,6 @@ async fn manual_update_on_idle_using_v11(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v2)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -933,7 +923,6 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v2)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -1004,7 +993,6 @@ async fn auto_update_on_idle_to_non_existing(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -1069,7 +1057,6 @@ async fn update_component_revision_environment_variable(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("RevisionEnvAgent");
@@ -1175,7 +1162,6 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
-        .unique()
         .store()
         .await?;
     let agent_id = agent_id!("UpdateTest");
@@ -1274,7 +1260,6 @@ async fn agent_can_be_invoked_after_manual_snapshot_update_and_restart(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v2)
-        .unique()
         .store()
         .await?;
 
