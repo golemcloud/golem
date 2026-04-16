@@ -282,7 +282,8 @@ impl QuotaState {
                 .iter()
                 .filter(|(p, _)| *p != pod)
                 .all(|(other_pod, l)| {
-                    let other_score = feasible_priority_weighted_demand(&l.pending_reservations, total_available);
+                    let other_score =
+                        feasible_priority_weighted_demand(&l.pending_reservations, total_available);
                     match pod_score.total_cmp(&other_score) {
                         std::cmp::Ordering::Greater => true,
                         std::cmp::Ordering::Less => false,
