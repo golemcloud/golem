@@ -101,11 +101,20 @@ pub fn has_agent_config_attr(pat_type: &syn::PatType) -> bool {
         .any(|a| a.path().is_ident("agent_config"))
 }
 
-pub struct AgentConfigAttrRemover;
-impl VisitMut for AgentConfigAttrRemover {
+pub fn has_principal_attr(pat_type: &syn::PatType) -> bool {
+    pat_type
+        .attrs
+        .iter()
+        .any(|a| a.path().is_ident("principal"))
+}
+
+pub struct GolemAgentAttrsRemover;
+impl VisitMut for GolemAgentAttrsRemover {
     fn visit_fn_arg_mut(&mut self, i: &mut syn::FnArg) {
         if let syn::FnArg::Typed(arg) = i {
-            arg.attrs.retain(|att| !att.path().is_ident("agent_config"));
+            arg.attrs.retain(|att| {
+                !att.path().is_ident("agent_config") && !att.path().is_ident("principal")
+            });
         }
         syn::visit_mut::visit_fn_arg_mut(self, i);
     }

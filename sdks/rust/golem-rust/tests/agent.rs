@@ -799,20 +799,20 @@ mod tests {
     // Principal last parameter
     #[agent_definition]
     pub trait AgentWithPrincipalAutoInjection1 {
-        fn new(name: String, principal: Principal) -> Self;
+        fn new(name: String, #[principal] principal: Principal) -> Self;
 
-        fn foo(&self, name: String, principal: Principal) -> String;
+        fn foo(&self, name: String, #[principal] principal: Principal) -> String;
     }
 
     pub struct AgentWithPrincipalAutoInjection1Impl;
 
     #[agent_implementation]
     impl AgentWithPrincipalAutoInjection1 for AgentWithPrincipalAutoInjection1Impl {
-        fn new(_name: String, _principal: Principal) -> Self {
+        fn new(_name: String, #[principal] _principal: Principal) -> Self {
             Self
         }
 
-        fn foo(&self, name: String, _principal: Principal) -> String {
+        fn foo(&self, name: String, #[principal] _principal: Principal) -> String {
             name
         }
     }
@@ -820,33 +820,55 @@ mod tests {
     // Auto Injected Principal Compilation Tests
     #[agent_definition]
     pub trait AgentWithPrincipalAutoInjection2 {
-        fn new(name: String, text1: u64, principal: Principal, text: String) -> Self;
+        fn new(name: String, text1: u64, #[principal] principal: Principal, text: String) -> Self;
 
-        fn foo(&self, name: String, num: u64, principal: Principal, text: String) -> String;
+        fn foo(
+            &self,
+            name: String,
+            num: u64,
+            #[principal] principal: Principal,
+            text: String,
+        ) -> String;
     }
 
     pub struct AgentWithPrincipalAutoInjection2Impl;
 
     #[agent_implementation]
     impl AgentWithPrincipalAutoInjection2 for AgentWithPrincipalAutoInjection2Impl {
-        fn new(_name: String, _text1: u64, _principal: Principal, _text: String) -> Self {
+        fn new(
+            _name: String,
+            _text1: u64,
+            #[principal] _principal: Principal,
+            _text: String,
+        ) -> Self {
             Self
         }
 
-        fn foo(&self, name: String, _num: u64, _principal: Principal, _text: String) -> String {
+        fn foo(
+            &self,
+            name: String,
+            _num: u64,
+            #[principal] _principal: Principal,
+            _text: String,
+        ) -> String {
             name
         }
     }
 
     #[agent_definition]
     pub trait AgentWithPrincipalAutoInjection3 {
-        fn new(name: String, text1: u64, principal: Principal, text: Option<String>) -> Self;
+        fn new(
+            name: String,
+            text1: u64,
+            #[principal] principal: Principal,
+            text: Option<String>,
+        ) -> Self;
 
         fn foo(
             &self,
             name: String,
             text1: u64,
-            principal: Principal,
+            #[principal] principal: Principal,
             text: Option<String>,
         ) -> String;
 
@@ -867,7 +889,12 @@ mod tests {
 
     #[agent_implementation]
     impl AgentWithPrincipalAutoInjection3 for AgentWithPrincipalAutoInjection5Impl {
-        fn new(_name: String, _text1: u64, _principal: Principal, _text: Option<String>) -> Self {
+        fn new(
+            _name: String,
+            _text1: u64,
+            #[principal] _principal: Principal,
+            _text: Option<String>,
+        ) -> Self {
             Self
         }
 
@@ -875,7 +902,7 @@ mod tests {
             &self,
             name: String,
             _text1: u64,
-            _principal: Principal,
+            #[principal] _principal: Principal,
             _text: Option<String>,
         ) -> String {
             name
@@ -920,7 +947,7 @@ mod tests {
 
     #[agent_definition]
     pub trait RemoteAgentWithPrincipal {
-        fn new(name: String, principal: Principal) -> Self;
+        fn new(name: String, #[principal] principal: Principal) -> Self;
         async fn foo(&self, name: String) -> String;
     }
 
@@ -928,7 +955,7 @@ mod tests {
 
     #[agent_implementation]
     impl RemoteAgentWithPrincipal for RemoteAgentWithPrincipalImpl {
-        fn new(_name: String, _principal: Principal) -> Self {
+        fn new(_name: String, #[principal] _principal: Principal) -> Self {
             Self
         }
 

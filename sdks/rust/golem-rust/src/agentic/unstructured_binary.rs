@@ -68,9 +68,6 @@ impl<T: AllowedMimeTypes> Schema for UnstructuredBinary<T> {
             StructuredValue::Multimodal(_) => {
                 Err("type mismatch. expected default value, found multimodal")
             }
-            StructuredValue::AutoInjected(_) => {
-                Err("type mismatch. expected default value, found auto-injected")
-            }
         }?;
 
         match element_value {
