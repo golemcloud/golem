@@ -3510,8 +3510,6 @@ async fn invoking_worker_while_its_getting_deleted_works(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    warn!(agent_id = %agent_id, worker_id = %worker_id, "delete-race-test.started");
-
     // Spawns a task that repeatedly invokes inc_global_by(1) and checks the counter.
     // Exits when either:
     // - the counter resets (worker was deleted and recreated), or
@@ -3525,7 +3523,6 @@ async fn invoking_worker_while_its_getting_deleted_works(
             let mut iteration: u64 = 0;
             loop {
                 iteration += 1;
-                warn!(iteration, expected_counter, "delete-race-test.inc.start");
                 match executor
                     .invoke_and_await_agent(
                         &component_clone,
@@ -3537,15 +3534,12 @@ async fn invoking_worker_while_its_getting_deleted_works(
                 {
                     Ok(_) => {
                         expected_counter += 1;
-                        warn!(iteration, expected_counter, "delete-race-test.inc.ok");
                     }
                     Err(error) => {
-                        warn!(iteration, expected_counter, error = %error, "delete-race-test.inc.err");
                         break Err(error);
                     }
                 }
 
-                warn!(iteration, expected_counter, "delete-race-test.get.start");
                 match executor
                     .invoke_and_await_agent(
                         &component_clone,
@@ -3559,30 +3553,15 @@ async fn invoking_worker_while_its_getting_deleted_works(
                         let value = result.into_return_value();
                         match value {
                             Some(Value::U64(v)) => {
-                                warn!(
-                                    iteration,
-                                    expected_counter,
-                                    observed_counter = v,
-                                    "delete-race-test.get.ok"
-                                );
                                 if v < expected_counter {
-                                    warn!(
-                                        iteration,
-                                        expected_counter,
-                                        observed_counter = v,
-                                        "delete-race-test.counter.reset"
-                                    );
                                     break Ok(());
                                 }
                                 expected_counter = v;
                             }
-                            other => {
-                                warn!(iteration, expected_counter, value = ?other, "delete-race-test.get.unexpected-value");
-                            }
+                            other => tracing::warn!(iteration, expected_counter, value = ?other, "Unexpected value while checking global counter"),
                         }
                     }
                     Err(error) => {
-                        warn!(iteration, expected_counter, error = %error, "delete-race-test.get.err");
                         break Err(error);
                     }
                 }
@@ -3602,14 +3581,10 @@ async fn invoking_worker_while_its_getting_deleted_works(
                 delete_attempt += 1;
                 tokio::select! {
                     _ = deleting_task_cancel_token.cancelled() => {
-                        warn!(delete_attempt, "delete-race-test.delete.cancelled");
                         break
                     },
                     result = executor.delete_worker(&worker_id) => {
-                        match result {
-                            Ok(()) => warn!(delete_attempt, "delete-race-test.delete.ok"),
-                            Err(error) => warn!(delete_attempt, error = %error, "delete-race-test.delete.err"),
-                        }
+                        let _ = result;
                     }
                 }
             }
@@ -3618,19 +3593,9 @@ async fn invoking_worker_while_its_getting_deleted_works(
 
     let invocation_result = invoking_task.await?;
     deleting_task_cancel_token.cancel();
-    warn!(
-        invocation_succeeded = invocation_result.is_ok(),
-        "delete-race-test.invoking-task.finished"
-    );
 
     // Either the counter reset was detected (Ok) or the invocation failed (Err).
     // Both are valid outcomes of invoking while deleting.
-    if let Err(e) = invocation_result {
-        warn!(error = %e, "delete-race-test.invocation.failed-during-deletion");
-    } else {
-        warn!("delete-race-test.invocation.detected-reset");
-    }
-
     Ok(())
 }
 

@@ -289,10 +289,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let invocation_context = from_proto_invocation_context(&request.invocation_context);
 
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            "WorkerExecutorImpl.create_worker.get_or_create_suspended"
-        );
         let worker = Worker::get_or_create_suspended(
             self,
             &owned_agent_id,
@@ -305,34 +301,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             principal,
         )
         .await?;
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            "WorkerExecutorImpl.create_worker.get_or_create_suspended_done"
-        );
 
         let mut subscription = self.events().subscribe();
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            "WorkerExecutorImpl.create_worker.start_if_needed"
-        );
-        let started = Worker::start_if_needed(worker.clone()).await?;
-        let is_loading = worker.is_loading();
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            started,
-            is_loading,
-            "WorkerExecutorImpl.create_worker.start_if_needed_done"
-        );
-        if is_loading {
-            let load_timeout = std::time::Duration::from_secs(30);
-            warn!(
-                agent_id = %owned_agent_id.agent_id(),
-                timeout_secs = load_timeout.as_secs(),
-                "WorkerExecutorImpl.create_worker.waiting_for_worker_loaded"
-            );
-            match tokio::time::timeout(
-                load_timeout,
-                subscription
+        Worker::start_if_needed(worker.clone()).await?;
+        if worker.is_loading() {
+            match subscription
                 .wait_for(|event| match event {
                     Event::WorkerLoaded { agent_id, result }
                         if agent_id == &owned_agent_id.agent_id =>
@@ -340,59 +313,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         Some(result.clone())
                     }
                     _ => None,
-                }),
-            )
-            .await
+                })
+                .await
             {
-                Ok(Ok(Ok(()))) => {
-                    warn!(
-                        agent_id = %owned_agent_id.agent_id(),
-                        "WorkerExecutorImpl.create_worker.worker_loaded"
-                    );
-                    Ok(())
-                }
-                Ok(Ok(Err(error))) => {
-                    warn!(
-                        agent_id = %owned_agent_id.agent_id(),
-                        error = %error,
-                        "WorkerExecutorImpl.create_worker.worker_loaded_failed"
-                    );
-                    Err(error)
-                }
-                Ok(Err(RecvError::Closed)) => {
-                    warn!(
-                        agent_id = %owned_agent_id.agent_id(),
-                        "WorkerExecutorImpl.create_worker.worker_loaded_subscription_closed"
-                    );
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(error)) => Err(error),
+                Err(RecvError::Closed) => {
                     Err(WorkerExecutorError::unknown("Events subscription closed"))
                 }
-                Ok(Err(RecvError::Lagged(skipped))) => {
-                    warn!(
-                        agent_id = %owned_agent_id.agent_id(),
-                        skipped,
-                        "WorkerExecutorImpl.create_worker.worker_loaded_subscription_lagged"
-                    );
+                Err(RecvError::Lagged(_)) => {
                     Err(WorkerExecutorError::unknown(
                         "Worker executor is overloaded and could not wait for worker to load",
                     ))
                 }
-                Err(_) => {
-                    warn!(
-                        agent_id = %owned_agent_id.agent_id(),
-                        timeout_secs = load_timeout.as_secs(),
-                        "WorkerExecutorImpl.create_worker.worker_loaded_timed_out"
-                    );
-                    Err(WorkerExecutorError::unknown(format!(
-                        "Timed out waiting for worker to load: {}",
-                        owned_agent_id.agent_id()
-                    )))
-                }
             }
         } else {
-            warn!(
-                agent_id = %owned_agent_id.agent_id(),
-                "WorkerExecutorImpl.create_worker.no_wait_for_worker_loaded"
-            );
             Ok(())
         }
     }

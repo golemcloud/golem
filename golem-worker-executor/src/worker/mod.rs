@@ -2541,36 +2541,9 @@ impl RunningWorker {
     ) -> Result<(Instance, async_lock::Mutex<Store<Ctx>>), WorkerExecutorError> {
         let component_id = parent.owned_agent_id.component_id();
 
-        warn!(
-            agent_id = %parent.owned_agent_id.agent_id(),
-            component_id = ?component_id,
-            "RunningWorker.create_instance.start"
-        );
-
         // we might have detached the worker status during the last invocation loop. Make sure it's attached and we are fully up-to-date on the oplog
-        warn!(
-            agent_id = %parent.owned_agent_id.agent_id(),
-            "RunningWorker.create_instance.reattach_worker_status.start"
-        );
         parent.reattach_worker_status().await;
-
-        warn!(
-            agent_id = %parent.owned_agent_id.agent_id(),
-            "RunningWorker.create_instance.reattach_worker_status.done"
-        );
-
-        warn!(
-            agent_id = %parent.owned_agent_id.agent_id(),
-            "RunningWorker.create_instance.get_latest_worker_metadata.start"
-        );
         let worker_metadata = parent.get_latest_worker_metadata().await;
-
-        warn!(
-            agent_id = %parent.owned_agent_id.agent_id(),
-            component_revision = ?worker_metadata.last_known_status.component_revision,
-            pending_updates = worker_metadata.last_known_status.pending_updates.len(),
-            "RunningWorker.create_instance.get_latest_worker_metadata.done"
-        );
         debug!("Creating instance with parent metadata {worker_metadata:?}");
 
         let (pending_update, component, _component_metadata) = {
@@ -2684,14 +2657,6 @@ impl RunningWorker {
             last_snapshot_index = Some(snapshot_idx);
         }
 
-        warn!(
-            agent_id = %parent.owned_agent_id.agent_id(),
-            component_version_for_replay = ?component_version_for_replay,
-            last_snapshot_index = ?last_snapshot_index,
-            pending_update = pending_update.is_some(),
-            "RunningWorker.create_instance.worker_context_create.start"
-        );
-
         let context = Ctx::create(
             worker_metadata.created_by,
             OwnedAgentId::new(worker_metadata.environment_id, &worker_metadata.agent_id),
@@ -2740,16 +2705,6 @@ impl RunningWorker {
             worker_metadata.original_phantom_id,
         )
         .await?;
-
-        warn!(
-            agent_id = %parent.owned_agent_id.agent_id(),
-            "RunningWorker.create_instance.worker_context_create.done"
-        );
-
-        warn!(
-            agent_id = %parent.owned_agent_id.agent_id(),
-            "RunningWorker.create_instance.store_setup.start"
-        );
         let engine = parent.engine();
         let mut store = Store::new(&engine, context);
 
@@ -2779,17 +2734,7 @@ impl RunningWorker {
 
         store.limiter_async(|ctx| ctx.resource_limiter());
 
-        warn!(
-            agent_id = %parent.owned_agent_id.agent_id(),
-            "RunningWorker.create_instance.store_setup.done"
-        );
-
         let linker = (*parent.linker()).clone(); // fresh linker
-
-        warn!(
-            agent_id = %parent.owned_agent_id.agent_id(),
-            "RunningWorker.create_instance.instantiate_pre.start"
-        );
         let instance_pre = linker.instantiate_pre(&component).map_err(|e| {
             WorkerExecutorError::worker_creation_failed(
                 parent.owned_agent_id.agent_id(),
@@ -2799,16 +2744,6 @@ impl RunningWorker {
                 ),
             )
         })?;
-
-        warn!(
-            agent_id = %parent.owned_agent_id.agent_id(),
-            "RunningWorker.create_instance.instantiate_pre.done"
-        );
-
-        warn!(
-            agent_id = %parent.owned_agent_id.agent_id(),
-            "RunningWorker.create_instance.instantiate_async.start"
-        );
         let instance = instance_pre
             .instantiate_async(&mut store)
             .await
@@ -2821,11 +2756,6 @@ impl RunningWorker {
                     ),
                 )
             })?;
-
-        warn!(
-            agent_id = %parent.owned_agent_id.agent_id(),
-            "RunningWorker.create_instance.instantiate_async.done"
-        );
         let store = async_lock::Mutex::new(store);
         Ok((instance, store))
     }

@@ -235,12 +235,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
     ) -> Result<Self, WorkerExecutorError> {
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            component_revision_for_replay = ?worker_config.component_revision_for_replay,
-            pending_update = pending_update.is_some(),
-            "DurableWorkerCtx.create.start"
-        );
         let worker_dir = Arc::new(
             if let Some(root) = &config.filesystem_storage.deterministic_root_dir {
                 let dir = root
@@ -275,24 +269,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             "Worker {} starting replay from component revision {}",
             owned_agent_id.agent_id, worker_config.component_revision_for_replay
         );
-
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            component_revision_for_replay = ?worker_config.component_revision_for_replay,
-            "DurableWorkerCtx.create.get_metadata.start"
-        );
         let component_metadata = component_service
             .get_metadata(
                 owned_agent_id.component_id(),
                 Some(worker_config.component_revision_for_replay),
             )
             .await?;
-
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            component_revision_for_replay = ?worker_config.component_revision_for_replay,
-            "DurableWorkerCtx.create.get_metadata.done"
-        );
 
         let agent_type_provision_configs = agent_id.as_ref().and_then(|agent_id| {
             component_metadata
@@ -301,15 +283,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .get(&agent_id.agent_type)
                 .cloned()
         });
-
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            provisioned_files = agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.files.len())
-                .unwrap_or(0),
-            "DurableWorkerCtx.create.prepare_filesystem.start"
-        );
         let files = prepare_filesystem(
             &file_loader,
             owned_agent_id.environment_id,
@@ -320,12 +293,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .unwrap_or_default(),
         )
         .await?;
-
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            prepared_files = files.len(),
-            "DurableWorkerCtx.create.prepare_filesystem.done"
-        );
 
         // Acquire storage semaphore permits for read-write initial component files.
         //
@@ -347,21 +314,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .map(|f| f.size)
                 .sum();
             if rw_bytes > 0 {
-                warn!(
-                    agent_id = %owned_agent_id.agent_id(),
-                    rw_bytes,
-                    "DurableWorkerCtx.create.acquire_initial_filesystem_storage.start"
-                );
                 worker
                     .acquire_initial_filesystem_storage(rw_bytes)
                     .await
                     .map_err(|trap| WorkerExecutorError::runtime(trap.to_string()))?;
-
-                warn!(
-                    agent_id = %owned_agent_id.agent_id(),
-                    rw_bytes,
-                    "DurableWorkerCtx.create.acquire_initial_filesystem_storage.done"
-                );
             }
         }
 
@@ -388,11 +344,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(tokio::io::stdout());
         let stderr = ManagedStdErr::from_stderr(tokio::io::stderr());
-
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            "DurableWorkerCtx.create.wasi_host_create_context.start"
-        );
         let (wasi, io_ctx, table) = wasi_host::create_context(
             &[] as &[&str],
             worker_dir.path().to_path_buf(),
@@ -403,65 +354,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             config.suspend.suspend_after,
         )
         .map_err(|e| WorkerExecutorError::runtime(format!("Could not create WASI context: {e}")))?;
-
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            "DurableWorkerCtx.create.wasi_host_create_context.done"
-        );
         let mut wasi_http = WasiHttpCtx::new();
         wasi_http.connection_pool = http_connection_pool;
-
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            "DurableWorkerCtx.create.private_state_new.start"
-        );
-        let state = PrivateDurableWorkerState::new(
-            agent_id,
-            oplog_service,
-            oplog.clone(),
-            promise_service.clone(),
-            scheduler_service,
-            worker_service,
-            worker_enumeration_service,
-            key_value_service,
-            blob_store_service,
-            rdbms_service,
-            quota_service,
-            component_service,
-            agent_types_service,
-            environment_state_service,
-            agent_webhooks_service,
-            config.clone(),
-            owned_agent_id.clone(),
-            rpc,
-            worker_proxy,
-            worker_config.deleted_regions.clone(),
-            component_metadata,
-            worker_config.total_linear_memory_size,
-            worker_config.current_filesystem_storage_usage,
-            worker_fork,
-            RwLock::new(compute_read_only_paths(&files)),
-            TRwLock::new(files),
-            file_loader,
-            worker_config.created_by,
-            worker_config.initial_wasi_config,
-            wasi_config,
-            worker_config.initial_agent_config,
-            agent_config,
-            shard_service,
-            pending_update,
-            original_phantom_id,
-            worker_config.last_snapshot_index,
-            per_invocation_http_call_limit,
-            per_invocation_rpc_call_limit,
-            resource_limits.clone(),
-        )
-        .await;
-
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            "DurableWorkerCtx.create.private_state_new.done"
-        );
         Ok(DurableWorkerCtx {
             table: Arc::new(Mutex::new(table)),
             wasi: Arc::new(Mutex::new(wasi)),
@@ -475,7 +369,48 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 invocation_queue,
                 oplog: oplog.clone(),
             },
-            state,
+            state: PrivateDurableWorkerState::new(
+                agent_id,
+                oplog_service,
+                oplog,
+                promise_service,
+                scheduler_service,
+                worker_service,
+                worker_enumeration_service,
+                key_value_service,
+                blob_store_service,
+                rdbms_service,
+                quota_service,
+                component_service,
+                agent_types_service,
+                environment_state_service,
+                agent_webhooks_service,
+                config.clone(),
+                owned_agent_id.clone(),
+                rpc,
+                worker_proxy,
+                worker_config.deleted_regions.clone(),
+                component_metadata,
+                worker_config.total_linear_memory_size,
+                worker_config.current_filesystem_storage_usage,
+                worker_fork,
+                RwLock::new(compute_read_only_paths(&files)),
+                TRwLock::new(files),
+                file_loader,
+                worker_config.created_by,
+                worker_config.initial_wasi_config,
+                wasi_config,
+                worker_config.initial_agent_config,
+                agent_config,
+                shard_service,
+                pending_update,
+                original_phantom_id,
+                worker_config.last_snapshot_index,
+                per_invocation_http_call_limit,
+                per_invocation_rpc_call_limit,
+                resource_limits.clone(),
+            )
+            .await,
             worker_dir,
             execution_status,
             resource_limits,
@@ -3753,19 +3688,8 @@ impl PrivateDurableWorkerState {
         } else {
             deleted_regions
         };
-
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            last_snapshot_index = ?last_snapshot_index,
-            "PrivateDurableWorkerState.new.replay_state.start"
-        );
         let replay_state =
             ReplayState::new(owned_agent_id.clone(), oplog.clone(), deleted_regions).await;
-
-        warn!(
-            agent_id = %owned_agent_id.agent_id(),
-            "PrivateDurableWorkerState.new.replay_state.done"
-        );
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         Self {
