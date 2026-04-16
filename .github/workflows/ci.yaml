@@ -467,6 +467,8 @@ jobs:
         uses: hustcer/setup-moonbit@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout formatter submodule
+        run: git submodule update --init sdks/moonbit/moonbit-formatter
       - name: Check SDK
         run: moon check --target wasm
         working-directory: sdks/moonbit/golem_sdk
