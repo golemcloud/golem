@@ -6,8 +6,10 @@ componentTemplates:
       debug:
         default: true
         build:
-        - command: moon run -C GOLEM_MOONBIT_BUILD_TOOLS_PATH cmd -- reexports GOLEM_MOONBIT_BUILD_SDK_PATH {{ component_name | to_snake_case }}
-        - command: moon run -C GOLEM_MOONBIT_BUILD_TOOLS_PATH cmd -- agents .
+        - command: moon run cmd -- reexports GOLEM_MOONBIT_BUILD_SDK_PATH {{ component_name | to_snake_case }}
+          dir: GOLEM_MOONBIT_BUILD_TOOLS_PATH
+        - command: moon run cmd -- agents .
+          dir: GOLEM_MOONBIT_BUILD_TOOLS_PATH
         - command: moon build --target wasm
         - command: wasm-tools component embed GOLEM_MOONBIT_BUILD_SDK_PATH/wit _build/wasm/release/build/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm --encoding utf16 --output _build/wasm/debug/{{ component_name | to_snake_case }}.embed.wasm
           mkdirs:
@@ -16,8 +18,10 @@ componentTemplates:
         componentWasm: _build/wasm/debug/{{ component_name | to_snake_case }}.agent.wasm
       release:
         build:
-        - command: moon run -C GOLEM_MOONBIT_BUILD_TOOLS_PATH cmd -- reexports GOLEM_MOONBIT_BUILD_SDK_PATH {{ component_name | to_snake_case }}
-        - command: moon run -C GOLEM_MOONBIT_BUILD_TOOLS_PATH cmd -- agents .
+        - command: moon run cmd -- reexports GOLEM_MOONBIT_BUILD_SDK_PATH {{ component_name | to_snake_case }}
+          dir: GOLEM_MOONBIT_BUILD_TOOLS_PATH
+        - command: moon run cmd -- agents .
+          dir: GOLEM_MOONBIT_BUILD_TOOLS_PATH
         - command: moon build --target wasm --release
         - command: wasm-tools component embed GOLEM_MOONBIT_BUILD_SDK_PATH/wit _build/wasm/release/build/{{ component_name | to_snake_case }}/{{ component_name | to_snake_case }}.wasm --encoding utf16 --output _build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm
         - command: wasm-tools component new _build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm --output _build/wasm/release/{{ component_name | to_snake_case }}.agent.wasm

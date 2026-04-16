@@ -1,3 +1,6 @@
+<!-- golem-managed:guide:moonbit:start -->
+<!-- Golem manages this section. Do not edit manually. -->
+
 # Golem Application Development Guide (MoonBit)
 
 ## Overview
@@ -439,3 +442,4 @@ golem agent invoke -L '<agent-id>' 'method' args   # Invoke method directly
 - Golem docs: https://learn.golem.cloud
 - MoonBit docs: https://docs.moonbitlang.com
 - App manifest reference: https://learn.golem.cloud/app-manifest
+<!-- golem-managed:guide:moonbit:end -->
