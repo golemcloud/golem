@@ -75,7 +75,7 @@ use golem_wasm::{Uri, WitType};
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::{Arc, Weak};
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
@@ -778,7 +778,21 @@ impl WorkerCtx for Context {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
     ) -> Result<Self, WorkerExecutorError> {
+        warn!(
+            agent_id = %owned_agent_id.agent_id(),
+            account_id = ?account_id,
+            "Context.create.initialize_account.start"
+        );
         let account_resource_limits = resource_limits.initialize_account(account_id).await?;
+        warn!(
+            agent_id = %owned_agent_id.agent_id(),
+            account_id = ?account_id,
+            "Context.create.initialize_account.done"
+        );
+        warn!(
+            agent_id = %owned_agent_id.agent_id(),
+            "Context.create.durable_worker_ctx_create.start"
+        );
         let golem_ctx = DurableWorkerCtx::create(
             owned_agent_id.clone(),
             agent_id,
@@ -815,6 +829,10 @@ impl WorkerCtx for Context {
             account_resource_limits.per_invocation_rpc_call_limit(),
         )
         .await?;
+        warn!(
+            agent_id = %owned_agent_id.agent_id(),
+            "Context.create.durable_worker_ctx_create.done"
+        );
         Ok(Self::new(golem_ctx, config, account_resource_limits))
     }
 
