@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_agentic::golem::agent::common::{
-    DataValue, ElementSchema, ElementValue,
-};
+use crate::golem_agentic::golem::agent::common::{DataValue, ElementSchema, ElementValue};
 use crate::value_and_type::FromValueAndType;
 use crate::value_and_type::IntoValue;
 use golem_wasm::golem_core_1_5_x::types::ValueAndType;

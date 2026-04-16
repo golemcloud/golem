@@ -333,7 +333,7 @@ mod tests {
     };
     use golem_rust_macro::AllowedMimeTypes;
     use golem_wasm::agentic::unstructured_binary::UnstructuredBinary;
-    
+
     use test_r::test;
 
     fn constructor_with_params(params: Vec<(&str, StructuredSchema)>) -> AgentConstructor {

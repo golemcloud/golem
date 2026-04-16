@@ -15,12 +15,12 @@
 use crate::golem_agentic::golem::agent::common::{
     AgentPrincipal, GolemUserPrincipal, OidcPrincipal, Principal,
 };
+use crate::value_and_type::{FromValueAndType, IntoValue, TypeNodeBuilder};
 use golem_wasm::golem_core_1_5_x::types::{AccountId, AgentId, ComponentId, Uuid};
+use golem_wasm::{NodeBuilder, WitValueExtractor};
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use crate::value_and_type::{FromValueAndType, IntoValue, TypeNodeBuilder};
-use golem_wasm::{NodeBuilder, WitValueExtractor};
 
 fn uuid_to_string(uuid: &Uuid) -> String {
     uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits).to_string()
@@ -327,7 +327,7 @@ impl FromValueAndType for OidcPrincipal {
             family_name,
             picture,
             preferred_username,
-            claims
+            claims,
         })
     }
 }
@@ -359,9 +359,7 @@ impl FromValueAndType for AgentPrincipal {
                 .ok_or_else(|| "Missing agent_id field".to_string())?,
         )?;
 
-        Ok(Self {
-            agent_id
-        })
+        Ok(Self { agent_id })
     }
 }
 
@@ -392,9 +390,7 @@ impl FromValueAndType for GolemUserPrincipal {
                 .ok_or_else(|| "Missing account_id field".to_string())?,
         )?;
 
-        Ok(Self {
-            account_id
-        })
+        Ok(Self { account_id })
     }
 }
 
@@ -413,9 +409,7 @@ impl IntoValue for Principal {
                 let builder = builder.variant(2u32);
                 inner.add_to_builder(builder).finish()
             }
-            Principal::Anonymous => {
-                builder.variant_unit(3u32)
-            }
+            Principal::Anonymous => builder.variant_unit(3u32),
         }
     }
 
@@ -458,13 +452,8 @@ impl FromValueAndType for Principal {
                 )?;
                 Ok(Principal::GolemUser(value))
             }
-            3 => {
-                Ok(Principal::Anonymous)
-            }
-            _ => Err(format!(
-                "Invalid Principal variant index: {}",
-                idx
-            ))
+            3 => Ok(Principal::Anonymous),
+            _ => Err(format!("Invalid Principal variant index: {}", idx)),
         }
     }
 }
