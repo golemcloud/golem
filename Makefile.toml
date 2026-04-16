@@ -298,7 +298,7 @@ args = [
 description = "Builds the TypeScript SDK if dist or agent_guest.wasm doesn't exist"
 cwd = "./sdks/ts"
 script_runner = "@duckscript"
-env = { PNPM_BIN = "pnpm" }
+env = { NPX_BIN = "npx" }
 script = '''
 dist_exists = is_path_exists packages/golem-ts-sdk/dist
 agent_wasm_exists = is_path_exists packages/golem-ts-sdk/wasm/agent_guest.wasm
@@ -311,29 +311,29 @@ if ${dist_exists}
 end
 
 if ${build_required}
-    exec --fail-on-error %{PNPM_BIN} clean
-    exec --fail-on-error %{PNPM_BIN} install
-    exec --fail-on-error %{PNPM_BIN} run build
-    exec --fail-on-error %{PNPM_BIN} run build-agent-template
+    exec --fail-on-error %{NPX_BIN} pnpm clean
+    exec --fail-on-error %{NPX_BIN} pnpm install
+    exec --fail-on-error %{NPX_BIN} pnpm run build
+    exec --fail-on-error %{NPX_BIN} pnpm run build-agent-template
 else
     echo "TypeScript SDK already built, skipping"
 end
 '''
 
 [tasks.build-sdk-ts.windows]
-env = { PNPM_BIN = "pnpm.cmd" }
+env = { NPX_BIN = "npx.cmd" }
 
 [tasks.clean-sdk-ts]
 description = "Cleans the TypeScript SDK"
 cwd = "./sdks/ts"
 script_runner = "@duckscript"
-env = { PNPM_BIN = "pnpm" }
+env = { NPX_BIN = "npx" }
 script = '''
-exec --fail-on-error %{PNPM_BIN} clean
+exec --fail-on-error %{NPX_BIN} pnpm clean
 '''
 
 [tasks.clean-sdk-ts.windows]
-env = { PNPM_BIN = "pnpm.cmd" }
+env = { NPX_BIN = "npx.cmd" }
 
 [tasks.build-sdk-scala]
 description = "Publishes the Scala SDK to local Ivy/Maven cache as 0.0.0-SNAPSHOT"
