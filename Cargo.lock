@@ -4002,6 +4002,7 @@ dependencies = [
  "fred",
  "futures",
  "glob-match",
+ "goldenfile",
  "golem-api-grpc",
  "golem-wasm",
  "golem-wasm-derive",

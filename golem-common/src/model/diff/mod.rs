@@ -341,26 +341,27 @@ impl Diffable for String {
 #[cfg(test)]
 mod tests {
     use super::DIFF_MODEL_VERSION;
+    use goldenfile::Mint;
     use quote::ToTokens;
     use std::fs;
+    use std::io::Write;
     use std::path::{Path, PathBuf};
     use test_r::test;
 
     #[test]
     fn diff_model_version_matches_diff_module_fingerprint() {
-        let expected = expected_diff_model_fingerprint(DIFF_MODEL_VERSION).unwrap_or_else(|| {
-            panic!(
-                "No expected diff model fingerprint configured for DIFF_MODEL_VERSION={DIFF_MODEL_VERSION}. Add one in expected_diff_model_fingerprint."
-            )
-        });
-
         let actual = diff_module_fingerprint();
+        let mut mint = Mint::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldenfiles"));
+        let mut goldenfile = mint
+            .new_goldenfile(format!("diff_model_fingerprint_v{DIFF_MODEL_VERSION}.txt"))
+            .expect("failed to create goldenfile handle for diff model fingerprint");
 
-        assert_eq!(
-            actual, expected,
-            "Diff module fingerprint changed for DIFF_MODEL_VERSION={DIFF_MODEL_VERSION}. \
-Bump DIFF_MODEL_VERSION if the model change is breaking; otherwise update expected_diff_model_fingerprint."
-        );
+        goldenfile
+            .write_all(actual.as_bytes())
+            .expect("failed to write diff model fingerprint goldenfile");
+        goldenfile
+            .write_all(b"\n")
+            .expect("failed to finalize diff model fingerprint goldenfile");
     }
 
     fn diff_module_fingerprint() -> String {
@@ -404,13 +405,6 @@ Bump DIFF_MODEL_VERSION if the model change is breaking; otherwise update expect
 
         files.sort();
         files
-    }
-
-    fn expected_diff_model_fingerprint(version: u32) -> Option<&'static str> {
-        match version {
-            1 => Some("9fc77f8071b1e5a89a72a498ecc74d3656031b36bd18561920b52fbb1c63a018"),
-            _ => None,
-        }
     }
 
     fn strip_test_only_items(file: syn::File) -> syn::File {
