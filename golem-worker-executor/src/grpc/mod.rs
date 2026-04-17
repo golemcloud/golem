@@ -336,23 +336,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ))
             })?;
 
+        // NOTE: to return creation (limit) errors, we still "get_or_create",
+        //       even if the worker already exists with ignore_already_existing requested
         let existing_worker = self.worker_service().get(&owned_agent_id).await;
         if let Some(existing) = existing_worker
             && !request.ignore_already_existing
-        {
-            if !Self::is_same_worker_creation_request(
+            && !Self::is_same_worker_creation_request(
                 &existing.initial_worker_metadata,
                 &env,
                 &wasi_config,
                 &config,
-            ) {
-                return Err(WorkerExecutorError::worker_already_exists(
-                    owned_agent_id.agent_id(),
-                ));
-            }
-
-            // Worker already exists with matching parameters — treat as idempotent success
-            return Ok(());
+            )
+        {
+            return Err(WorkerExecutorError::worker_already_exists(
+                owned_agent_id.agent_id(),
+            ));
         }
 
         let invocation_context = from_proto_invocation_context(&request.invocation_context);
