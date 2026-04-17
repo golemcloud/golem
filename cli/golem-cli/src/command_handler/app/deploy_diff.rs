@@ -99,30 +99,30 @@ impl DeployDiff {
         self.staged_deployment_hash == self.current_deployment_hash
     }
 
-    pub fn unified_diffs(&self, show_sensitive: bool) -> DeployUnifiedDiffs {
+    pub fn unified_diffs(&self, show_sensitive: bool) -> anyhow::Result<DeployUnifiedDiffs> {
         let local_for_stage = normalized_diff_deployment(
             show_sensitive,
             &self.diffable_local_deployment,
             self.diff_stage.as_ref(),
-        );
+        )?;
 
         let staged_deployment = normalized_diff_deployment(
             show_sensitive,
             &self.diffable_staged_deployment,
             self.diff_stage.as_ref(),
-        );
+        )?;
 
         let local_for_current = normalized_diff_deployment(
             show_sensitive,
             &self.diffable_local_deployment,
             Some(&self.diff),
-        );
+        )?;
 
         let current_deployment = normalized_diff_deployment(
             show_sensitive,
             &self.diffable_current_deployment,
             Some(&self.diff),
-        );
+        )?;
 
         let local_agents_for_stage = self
             .diff_stage
@@ -180,13 +180,17 @@ impl DeployDiff {
             })
             .join("\n");
 
-        DeployUnifiedDiffs {
-            deployment_diff_stage: self.diff_stage.is_some().then(|| {
-                staged_deployment.unified_yaml_diff_with_new(
-                    &local_for_stage,
-                    diff::SerializeMode::ValueIfAvailable,
-                )
-            }),
+        Ok(DeployUnifiedDiffs {
+            deployment_diff_stage: self
+                .diff_stage
+                .is_some()
+                .then(|| {
+                    staged_deployment.unified_yaml_diff_with_new(
+                        &local_for_stage,
+                        diff::SerializeMode::ValueIfAvailable,
+                    )
+                })
+                .transpose()?,
             agent_diff_stage: {
                 let diff = diff::unified_diff(staged_agents, local_agents_for_stage);
                 (!diff.is_empty()).then_some(diff)
@@ -194,12 +198,12 @@ impl DeployDiff {
             deployment_diff: current_deployment.unified_yaml_diff_with_new(
                 &local_for_current,
                 diff::SerializeMode::ValueIfAvailable,
-            ),
+            )?,
             agent_diff: {
                 let diff = diff::unified_diff(current_agents, local_agents_for_current);
                 (!diff.is_empty()).then_some(diff)
             },
-        }
+        })
     }
 
     pub fn deployable_manifest_component(
@@ -367,7 +371,7 @@ impl DeployDiff {
         details: DeployDetails,
     ) -> anyhow::Result<()> {
         for (component_name, component) in details.component {
-            self.add_component_details(kind, component_name, component);
+            self.add_component_details(kind, component_name, component)?;
         }
 
         for (domain, http_api_deployment) in details.http_api_deployment {
@@ -378,12 +382,12 @@ impl DeployDiff {
             DeployDiffKind::Stage => {
                 self.diff_stage = self
                     .diffable_staged_deployment
-                    .diff_with_new(&self.diffable_local_deployment);
+                    .diff_with_new(&self.diffable_local_deployment)?;
             }
             DeployDiffKind::Current => {
                 match self
                     .diffable_current_deployment
-                    .diff_with_new(&self.diffable_local_deployment)
+                    .diff_with_new(&self.diffable_local_deployment)?
                 {
                     Some(diff) => self.diff = diff,
                     None => {
@@ -403,23 +407,25 @@ impl DeployDiff {
         kind: DeployDiffKind,
         component_name: ComponentName,
         component: ComponentDto,
-    ) {
+    ) -> anyhow::Result<()> {
         match kind {
             DeployDiffKind::Stage => {
                 self.diffable_staged_deployment
                     .components
-                    .insert(component_name.0.clone(), component.to_diffable().into());
+                    .insert(component_name.0.clone(), component.to_diffable()?.into());
                 self.staged_agent_types
                     .insert(component_name.0, component.metadata.agent_types().to_vec());
             }
             DeployDiffKind::Current => {
                 self.diffable_current_deployment
                     .components
-                    .insert(component_name.0.clone(), component.to_diffable().into());
+                    .insert(component_name.0.clone(), component.to_diffable()?.into());
                 self.current_agent_types
                     .insert(component_name.0, component.metadata.agent_types().to_vec());
             }
         }
+
+        Ok(())
     }
 
     fn add_http_api_deployment_details(
@@ -564,11 +570,11 @@ impl RollbackDiff {
     fn add_component_details(
         &mut self,
         component_details: RollbackEntityDetails<ComponentName, ComponentDto>,
-    ) {
+    ) -> anyhow::Result<()> {
         if let Some(component) = component_details.new {
             self.diffable_target_deployment.components.insert(
                 component_details.name.0.clone(),
-                component.to_diffable().into(),
+                component.to_diffable()?.into(),
             );
             self.target_agent_types.insert(
                 component_details.name.0.clone(),
@@ -578,13 +584,15 @@ impl RollbackDiff {
         if let Some(component) = component_details.current {
             self.diffable_current_deployment.components.insert(
                 component_details.name.0.clone(),
-                component.to_diffable().into(),
+                component.to_diffable()?.into(),
             );
             self.current_agent_types.insert(
                 component_details.name.0.clone(),
                 component.metadata.agent_types().to_vec(),
             );
         }
+
+        Ok(())
     }
 
     fn add_http_api_deployment_details(
@@ -609,7 +617,7 @@ impl RollbackDiff {
 
     pub fn add_details(&mut self, details: RollbackDetails) -> anyhow::Result<()> {
         for component_details in details.component {
-            self.add_component_details(component_details);
+            self.add_component_details(component_details)?;
         }
 
         for http_api_deployment_details in details.http_api_deployment {
@@ -618,7 +626,7 @@ impl RollbackDiff {
 
         match self
             .diffable_target_deployment
-            .diff_with_current(&self.diffable_current_deployment)
+            .diff_with_current(&self.diffable_current_deployment)?
         {
             Some(diff) => {
                 self.diff = diff;
@@ -633,18 +641,18 @@ impl RollbackDiff {
         Ok(())
     }
 
-    pub fn unified_diffs(&self, show_sensitive: bool) -> RollbackUnifiedDiffs {
+    pub fn unified_diffs(&self, show_sensitive: bool) -> anyhow::Result<RollbackUnifiedDiffs> {
         let target_deployment = normalized_diff_deployment(
             show_sensitive,
             &self.diffable_target_deployment,
             Some(&self.diff),
-        );
+        )?;
 
         let current_deployment = normalized_diff_deployment(
             show_sensitive,
             &self.diffable_current_deployment,
             Some(&self.diff),
-        );
+        )?;
 
         let target_agents = self
             .diff
@@ -672,16 +680,16 @@ impl RollbackDiff {
             })
             .join("\n");
 
-        RollbackUnifiedDiffs {
+        Ok(RollbackUnifiedDiffs {
             deployment_diff: target_deployment.unified_yaml_diff_with_current(
                 &current_deployment,
                 diff::SerializeMode::ValueIfAvailable,
-            ),
+            )?,
             agent_diff: {
                 let diff = diff::unified_diff(current_agents, target_agents);
                 (!diff.is_empty()).then_some(diff)
             },
-        }
+        })
     }
 }
 
@@ -737,9 +745,9 @@ fn normalized_diff_deployment(
     show_sensitive: bool,
     deployment: &diff::Deployment,
     diff: Option<&diff::DeploymentDiff>,
-) -> diff::Deployment {
+) -> anyhow::Result<diff::Deployment> {
     if show_sensitive {
-        return deployment.clone();
+        return Ok(deployment.clone());
     }
 
     let safe_env = |env: &BTreeMap<String, String>| -> BTreeMap<String, String> {
@@ -757,7 +765,7 @@ fn normalized_diff_deployment(
             .collect()
     };
 
-    diff::Deployment {
+    Ok(diff::Deployment {
         components: deployment
             .components
             .iter()
@@ -765,7 +773,7 @@ fn normalized_diff_deployment(
                 diff.is_some_and(|diff| diff.components.contains_key(*component_name))
             })
             .map(|(component_name, component)| {
-                (
+                Ok((
                     component_name.clone(),
                     match component.as_value() {
                         Some(component) => diff::Component {
@@ -790,11 +798,11 @@ fn normalized_diff_deployment(
                                 .collect(),
                         }
                         .into(),
-                        None => component.hash().into(),
+                        None => component.hash()?.into(),
                     },
-                )
+                ))
             })
-            .collect(),
+            .collect::<Result<_, diff::DiffError>>()?,
         http_api_deployments: deployment
             .http_api_deployments
             .iter()
@@ -811,7 +819,7 @@ fn normalized_diff_deployment(
             })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
-    }
+    })
 }
 
 fn format_component_agents_for_diff(

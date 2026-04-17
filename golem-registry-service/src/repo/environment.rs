@@ -1000,7 +1000,7 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
         tx: &mut Self::Tx,
         revision: EnvironmentRevisionRecord,
     ) -> Result<EnvironmentRevisionRecord, EnvironmentRepoError> {
-        let revision = revision.with_updated_hash();
+        let revision = revision.with_updated_hash()?;
 
         let revision = tx.fetch_one_as(sqlx::query_as(indoc! { r#"
             INSERT INTO environment_revisions

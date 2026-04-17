@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::{HttpApiDeployment, McpDeployment};
+use crate::model::diff::DiffError;
 use crate::model::diff::component::Component;
 use crate::model::diff::hash::{Hash, HashOf, Hashable, hash_from_serialized_value};
 use crate::model::diff::ser::serialize_with_mode;
@@ -20,7 +21,7 @@ use crate::model::diff::{BTreeMapDiff, Diffable};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Deployment {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -34,7 +35,7 @@ pub struct Deployment {
     pub mcp_deployments: BTreeMap<String, HashOf<McpDeployment>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentDiff {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -48,29 +49,31 @@ pub struct DeploymentDiff {
 impl Diffable for Deployment {
     type DiffResult = DeploymentDiff;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
-        let components = new.components.diff_with_current(&current.components);
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        let components = new.components.diff_with_current(&current.components)?;
         let http_api_deployments = new
             .http_api_deployments
-            .diff_with_current(&current.http_api_deployments);
+            .diff_with_current(&current.http_api_deployments)?;
         let mcp_deployments = new
             .mcp_deployments
-            .diff_with_current(&current.mcp_deployments);
+            .diff_with_current(&current.mcp_deployments)?;
 
-        if components.is_some() || http_api_deployments.is_some() || mcp_deployments.is_some() {
-            Some(DeploymentDiff {
-                components: components.unwrap_or_default(),
-                http_api_deployments: http_api_deployments.unwrap_or_default(),
-                mcp_deployments: mcp_deployments.unwrap_or_default(),
-            })
-        } else {
-            None
-        }
+        Ok(
+            if components.is_some() || http_api_deployments.is_some() || mcp_deployments.is_some() {
+                Some(DeploymentDiff {
+                    components: components.unwrap_or_default(),
+                    http_api_deployments: http_api_deployments.unwrap_or_default(),
+                    mcp_deployments: mcp_deployments.unwrap_or_default(),
+                })
+            } else {
+                None
+            },
+        )
     }
 }
 
 impl Hashable for Deployment {
-    fn hash(&self) -> Hash {
+    fn hash(&self) -> Result<Hash, DiffError> {
         hash_from_serialized_value(self)
     }
 }

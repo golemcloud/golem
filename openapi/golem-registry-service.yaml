@@ -9915,6 +9915,7 @@ components:
       - revision
       - applicationId
       - name
+      - diffModelVersion
       - compatibilityCheck
       - versionCheck
       - securityOverrides
@@ -9932,6 +9933,9 @@ components:
           format: uuid
         name:
           type: string
+        diffModelVersion:
+          type: integer
+          format: uint32
         compatibilityCheck:
           type: boolean
         versionCheck:
@@ -10099,6 +10103,7 @@ components:
       - id
       - revision
       - name
+      - diffModelVersion
       - compatibilityCheck
       - versionCheck
       - securityOverrides
@@ -10112,6 +10117,9 @@ components:
           format: uint64
         name:
           type: string
+        diffModelVersion:
+          type: integer
+          format: uint32
         compatibilityCheck:
           type: boolean
         versionCheck:
