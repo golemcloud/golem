@@ -116,6 +116,11 @@ trait ApiAgent extends BaseAgent {
 }
 ```
 
+## Related Skills
+
+- Load `golem-js-runtime` for details on the QuickJS runtime environment, available Web/Node.js APIs, and npm compatibility
+- Load `golem-file-io-scala` for reading and writing files from agent code
+
 ## Key Constraints
 
 - All agent traits must extend `BaseAgent` and be annotated with `@agentDefinition`

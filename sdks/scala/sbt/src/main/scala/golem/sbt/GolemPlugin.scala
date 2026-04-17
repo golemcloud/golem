@@ -76,10 +76,10 @@ object GolemPlugin extends AutoPlugin {
       .map(module => outDir / module.jsFileName)
       .getOrElse(sys.error("[golem] No public Scala.js modules were linked."))
 
-  private def ensureFreshLinkedJs(jsFile: File, newestInputModified: Long): Unit =
-    if (!jsFile.exists() || jsFile.lastModified() < newestInputModified) {
+  private def ensureLinkedJsExists(jsFile: File): Unit =
+    if (!jsFile.exists()) {
       sys.error(
-        s"[golem] Scala.js linker output is stale at ${jsFile.getAbsolutePath}; refusing to copy it. Try running the build again or clean fullLinkJS first."
+        s"[golem] Scala.js linker output not found at ${jsFile.getAbsolutePath}; try running 'clean' then build again."
       )
     }
 
@@ -236,32 +236,26 @@ object GolemPlugin extends AutoPlugin {
             newestLinkedOutput > 0L && newestLinkedOutput < newestInputModified
           }
 
+          // Delete stale linker output here in the taskDyn body, BEFORE fullLinkJS
+          // is scheduled as a dependency of the inner Def.task. Deleting inside the
+          // Def.task body would run AFTER fullLinkJS (since .value dependencies are
+          // resolved first), destroying the freshly-linked output.
           if (staleLinkerOutputs) {
-            Def.task {
-              log.warn(
-                s"[golem] Detected stale Scala.js linker output in ${outDir.getAbsolutePath}; deleting it before relinking."
-              )
-              IO.delete(outDir)
-              log.info(s"[golem] Building Scala.js bundle for $component ...")
-              val report = (Compile / ScalaJSPlugin.autoImport.fullLinkJS).value.data
-              val jsFile = linkedJsFile(report, outDir)
-              ensureFreshLinkedJs(jsFile, newestInputModified)
-              IO.createDirectory(out.getParentFile)
-              IO.copyFile(jsFile, out, preserveLastModified = true)
-              log.info(s"[golem] Wrote Scala.js bundle to ${out.getAbsolutePath}")
-              out
-            }
-          } else {
-            Def.task {
-              log.info(s"[golem] Building Scala.js bundle for $component ...")
-              val report = (Compile / ScalaJSPlugin.autoImport.fullLinkJS).value.data
-              val jsFile = linkedJsFile(report, outDir)
-              ensureFreshLinkedJs(jsFile, newestInputModified)
-              IO.createDirectory(out.getParentFile)
-              IO.copyFile(jsFile, out, preserveLastModified = true)
-              log.info(s"[golem] Wrote Scala.js bundle to ${out.getAbsolutePath}")
-              out
-            }
+            log.warn(
+              s"[golem] Detected stale Scala.js linker output in ${outDir.getAbsolutePath}; deleting it before relinking."
+            )
+            IO.delete(outDir)
+          }
+
+          Def.task {
+            log.info(s"[golem] Building Scala.js bundle for $component ...")
+            val report = (Compile / ScalaJSPlugin.autoImport.fullLinkJS).value.data
+            val jsFile = linkedJsFile(report, outDir)
+            ensureLinkedJsExists(jsFile)
+            IO.createDirectory(out.getParentFile)
+            IO.copyFile(jsFile, out, preserveLastModified = true)
+            log.info(s"[golem] Wrote Scala.js bundle to ${out.getAbsolutePath}")
+            out
           }
         }
       }.evaluated,

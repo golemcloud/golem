@@ -1,0 +1,59 @@
+name: "stateless-agent"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+
+  - id: "add-stateless-agent"
+    prompt: >
+      In the test-app project, add a new ephemeral (stateless) agent type named
+      `TextProcessorAgent` with a single constructor or identity parameter for the
+      processor name. It should be a pure request-handler style agent that gets a
+      fresh instance for every invocation with no shared state between calls. The
+      agent must expose two externally invokable methods: `to-upper` which takes a
+      string and returns it uppercased, and `to-lower` which takes a string and
+      returns it lowercased. Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-stateless-agent-rust"
+      ts:
+        - "golem-stateless-agent-ts"
+      scala:
+        - "golem-stateless-agent-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-ephemeral-mode"
+    shell:
+      command: "golem"
+      args: ["list-agent-types", "--environment", "test-app/local", "--format", "json"]
+    expect:
+      exit_code: 0
+      stdout_contains: '"mode":"Ephemeral"'
+
+  - id: "invoke-to-upper"
+    invoke_json:
+      agent: 'TextProcessorAgent("proc-1")'
+      method:
+        rust: "to_upper"
+        ts: "toUpper"
+        scala: "toUpper"
+      args: '"hello world"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "HELLO WORLD"
+
+  - id: "invoke-to-lower"
+    invoke_json:
+      agent: 'TextProcessorAgent("proc-1")'
+      method:
+        rust: "to_lower"
+        ts: "toLower"
+        scala: "toLower"
+      args: '"HELLO WORLD"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "hello world"

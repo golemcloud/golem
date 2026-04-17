@@ -1,0 +1,102 @@
+name: "add-config-manifest"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-config-agent"
+    prompt: >
+      In the test-app project, add a new durable agent type called `AppConfigAgent`
+      identified by a single constructor parameter for the instance name.
+
+      AppConfigAgent must accept typed configuration with the following structure:
+      - `appName` (string)
+      - `maxRetries` (a 32-bit signed integer)
+      - `server` — a nested record/object with two fields:
+        - `host` (string)
+        - `port` (a 32-bit signed integer)
+
+      Define configuration types/structs for both the top-level config and the
+      nested `server` record, and use the agent config mechanism (Config<T>) to
+      receive them in the constructor.
+
+      Expose a method called `get-settings` that returns a record/object with four
+      fields: `app-name` (string), `max-retries` (s32/number/Int), `server-host`
+      (string), and `server-port` (s32/number/Int). The values must come from the
+      agent's typed configuration, reading through the nested `server` record.
+
+      In `golem.yaml`, set default configuration values under the `agents` section for
+      `AppConfigAgent`:
+      - `appName` set to `"MyApp"`
+      - `maxRetries` set to `3`
+      - `server.host` set to `"localhost"`
+      - `server.port` set to `8080`
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-config-rust"
+      ts:
+        - "golem-add-config-ts"
+      scala:
+        - "golem-add-config-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-golem-yaml-config"
+    shell:
+      command: "cat"
+      args: ["test-app/golem.yaml"]
+    expect:
+      stdout_matches: "[\\s\\S]*config:[\\s\\S]*"
+
+  - id: "verify-config-metadata"
+    shell:
+      command: "golem"
+      args: ["component", "get", "--format", "json"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_matches: "[\\s\\S]*\"source\"\\s*:\\s*\"Local\"[\\s\\S]*appName[\\s\\S]*"
+
+  - id: "invoke-get-settings"
+    invoke_json:
+      agent: 'AppConfigAgent("test")'
+      method:
+        rust: "get_settings"
+        ts: "getSettings"
+        scala: "getSettings"
+    expect:
+      rust:
+        result_json:
+          - path: "$.app_name"
+            equals: "MyApp"
+          - path: "$.max_retries"
+            equals: 3
+          - path: "$.server_host"
+            equals: "localhost"
+          - path: "$.server_port"
+            equals: 8080
+      ts:
+        result_json:
+          - path: "$.appName"
+            equals: "MyApp"
+          - path: "$.maxRetries"
+            equals: 3
+          - path: "$.serverHost"
+            equals: "localhost"
+          - path: "$.serverPort"
+            equals: 8080
+      scala:
+        result_json:
+          - path: "$.appName"
+            equals: "MyApp"
+          - path: "$.maxRetries"
+            equals: 3
+          - path: "$.serverHost"
+            equals: "localhost"
+          - path: "$.serverPort"
+            equals: 8080

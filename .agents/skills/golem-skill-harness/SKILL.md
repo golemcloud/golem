@@ -412,6 +412,21 @@ Cross-language example:
 Like `invoke` and `invoke_json`, `trigger.method` can be language-conditional when Rust,
 TypeScript, and Scala use different method casing.
 
+#### `check_file` — Assert on file contents
+
+Reads a file relative to the golem project directory and runs assertions against its contents.
+The file content is treated as `stdout` for assertion purposes.
+
+```yaml
+- id: "check-output"
+  check_file:
+    path: "output.txt"
+  expect:
+    stdout_contains: "expected text"
+    stdout_not_contains: "unwanted text"
+    stdout_matches: "regex.*pattern"
+```
+
 #### `sleep` — Wait for a duration
 
 ```yaml
@@ -426,9 +441,9 @@ Available assertion fields:
 | Field | Applies To | Description |
 |-------|-----------|-------------|
 | `exit_code` | shell, invoke | Assert process exit code |
-| `stdout_contains` | shell, invoke | Stdout includes substring |
-| `stdout_not_contains` | shell, invoke | Stdout must NOT include substring |
-| `stdout_matches` | shell, invoke | Stdout matches regex |
+| `stdout_contains` | shell, invoke, check_file | Stdout includes substring |
+| `stdout_not_contains` | shell, invoke, check_file | Stdout must NOT include substring |
+| `stdout_matches` | shell, invoke, check_file | Stdout matches regex |
 | `status` | http | HTTP response status code |
 | `body_contains` | http | Response body includes substring |
 | `body_matches` | http | Response body matches regex |
@@ -575,6 +590,7 @@ Failed steps are automatically classified:
 | `CREATE_PROJECT_FAILED` | infra | `golem new` project creation failed |
 | `CREATE_AGENT_FAILED` | infra | `golem agent new` failed |
 | `DELETE_AGENT_FAILED` | infra | `golem agent delete` failed |
+| `FILE_CHECK_FAILED` | assertion | Could not read file for check_file step |
 | `ASSERTION_FAILED` | assertion | Output didn't match expect assertions |
 
 ## Output and Reports

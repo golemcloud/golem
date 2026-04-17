@@ -65,6 +65,11 @@ class WeatherAgent extends BaseAgent {
 }
 ```
 
+## Related Skills
+
+- Load `golem-js-runtime` for details on the QuickJS runtime environment, available Web/Node.js APIs, and npm compatibility
+- Load `golem-file-io-ts` for reading and writing files from agent code
+
 ## Key Constraints
 
 - All agent classes must extend `BaseAgent` and be decorated with `@agent()`
