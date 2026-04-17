@@ -240,7 +240,10 @@ impl DeploymentIdentity {
     ) -> Result<DeploymentPlan, DeployRepoError> {
         Ok(DeploymentPlan {
             current_revision,
-            deployment_hash: self.to_diffable().hash(),
+            deployment_hash: self
+                .to_diffable()
+                .hash()
+                .map_err(|err| DeployRepoError::InternalError(anyhow!(err)))?,
             components: self
                 .components
                 .into_iter()
@@ -584,7 +587,7 @@ impl DeploymentRevisionCreationRecord {
                         actor,
                     )
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, _>>()?,
             created_retry_policies,
             user_account_id: actor.0,
         })

@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::diff::{BTreeMapDiff, Diffable, Hash, Hashable, hash_from_serialized_value};
+use crate::model::diff::{
+    BTreeMapDiff, DiffError, Diffable, Hash, Hashable, hash_from_serialized_value,
+};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -31,14 +33,14 @@ pub struct McpDeploymentAgentOptionsDiff {
 impl Diffable for McpDeploymentAgentOptions {
     type DiffResult = McpDeploymentAgentOptionsDiff;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
-        if new.security_scheme != current.security_scheme {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        Ok(if new.security_scheme != current.security_scheme {
             Some(McpDeploymentAgentOptionsDiff {
                 security_scheme_changed: true,
             })
         } else {
             None
-        }
+        })
     }
 }
 
@@ -49,7 +51,7 @@ pub struct McpDeployment {
 }
 
 impl Hashable for McpDeployment {
-    fn hash(&self) -> Hash {
+    fn hash(&self) -> Result<Hash, DiffError> {
         hash_from_serialized_value(self)
     }
 }
@@ -64,16 +66,16 @@ pub struct McpDeploymentDiff {
 impl Diffable for McpDeployment {
     type DiffResult = McpDeploymentDiff;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let agents_changes = new
             .agents
-            .diff_with_current(&current.agents)
+            .diff_with_current(&current.agents)?
             .unwrap_or_default();
 
-        if !agents_changes.is_empty() {
+        Ok(if !agents_changes.is_empty() {
             Some(Self::DiffResult { agents_changes })
         } else {
             None
-        }
+        })
     }
 }
