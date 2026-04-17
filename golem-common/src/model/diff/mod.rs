@@ -16,6 +16,7 @@ mod agent;
 mod component;
 mod deployment;
 mod environment;
+mod error;
 mod hash;
 mod http_api_deployment;
 mod mcp_deployment;
@@ -24,11 +25,11 @@ mod resource_definition;
 mod ser;
 
 pub use crate::base_model::diff::DIFF_MODEL_VERSION;
-pub use crate::base_model::diff::DiffError;
 pub use agent::*;
 pub use component::*;
 pub use deployment::*;
 pub use environment::*;
+pub use error::*;
 pub use hash::*;
 pub use http_api_deployment::*;
 pub use mcp_deployment::*;
@@ -407,7 +408,7 @@ Bump DIFF_MODEL_VERSION if the model change is breaking; otherwise update expect
 
     fn expected_diff_model_fingerprint(version: u32) -> Option<&'static str> {
         match version {
-            1 => Some("345656775d9b31832eaf5542869a37df5187d6ff1efc4bb68aa67bfdea1c5f65"),
+            1 => Some("9fc77f8071b1e5a89a72a498ecc74d3656031b36bd18561920b52fbb1c63a018"),
             _ => None,
         }
     }
