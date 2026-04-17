@@ -885,6 +885,7 @@ impl AppCommandHandler {
                     domain.0.clone(),
                     diff::HttpApiDeployment {
                         webhooks_url: http_api_deployment.webhooks_url.clone(),
+                        openapi_endpoint: http_api_deployment.openapi_endpoint.clone(),
                         agents,
                     }
                     .into(),

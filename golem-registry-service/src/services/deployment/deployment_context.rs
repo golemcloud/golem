@@ -217,9 +217,10 @@ impl DeploymentContext {
             }
 
             add_openapi_spec_routes(
-                &deployment.domain,
+                deployment,
                 &mut current_route_id,
                 &mut deployment_routes,
+                errors,
             );
 
             add_cors_preflight_http_routes(

@@ -51,6 +51,7 @@ error_forwarding!(HttpApiDeploymentRepoError, RepoError);
 #[desert(evolution())]
 pub struct HttpApiDeploymentData {
     pub webhooks_url: String,
+    pub openapi_endpoint: Option<String>,
     pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
 }
 
@@ -93,6 +94,7 @@ impl HttpApiDeploymentRevisionRecord {
     pub fn creation(
         http_api_deployment_id: HttpApiDeploymentId,
         webhooks_url: String,
+        openapi_endpoint: Option<String>,
         agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
         actor: AccountId,
     ) -> Result<Self, HttpApiDeploymentRepoError> {
@@ -103,6 +105,7 @@ impl HttpApiDeploymentRevisionRecord {
             audit: DeletableRevisionAuditFields::new(actor.0),
             data: Blob::new(HttpApiDeploymentData {
                 webhooks_url,
+                openapi_endpoint,
                 agents,
             }),
         };
@@ -121,6 +124,7 @@ impl HttpApiDeploymentRevisionRecord {
             audit,
             data: Blob::new(HttpApiDeploymentData {
                 webhooks_url: value.webhooks_url,
+                openapi_endpoint: value.openapi_endpoint,
                 agents: value.agents,
             }),
         };
@@ -140,6 +144,7 @@ impl HttpApiDeploymentRevisionRecord {
             audit: DeletableRevisionAuditFields::deletion(created_by),
             data: Blob::new(HttpApiDeploymentData {
                 webhooks_url: "".to_string(),
+                openapi_endpoint: None,
                 agents: BTreeMap::new(),
             }),
         };
@@ -150,6 +155,7 @@ impl HttpApiDeploymentRevisionRecord {
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
             webhooks_url: self.data.value().webhooks_url.clone(),
+            openapi_endpoint: self.data.value().openapi_endpoint.clone(),
             agents: self
                 .data
                 .value()
@@ -198,6 +204,7 @@ impl TryFrom<HttpApiDeploymentExtRevisionRecord> for HttpApiDeployment {
             domain: Domain(value.domain),
             hash: value.revision.hash.into(),
             webhooks_url: data.webhooks_url,
+            openapi_endpoint: data.openapi_endpoint,
             agents: data.agents,
             created_at: value.entity_created_at.into(),
         })

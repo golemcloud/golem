@@ -15656,6 +15656,8 @@ components:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
         webhooksUrl:
           type: string
+        openapiEndpoint:
+          type: string
         createdAt:
           type: string
           format: date-time
@@ -15723,6 +15725,8 @@ components:
           type: string
         webhooksUrl:
           type: string
+        openapiEndpoint:
+          type: string
         agents:
           type: object
           additionalProperties:
@@ -15739,6 +15743,8 @@ components:
           type: integer
           format: uint64
         webhookUrl:
+          type: string
+        openapiEndpoint:
           type: string
         agents:
           type: object

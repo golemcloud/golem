@@ -41,6 +41,7 @@ impl HttpApiDeployment {
     pub fn to_diffable(&self) -> diff::HttpApiDeployment {
         diff::HttpApiDeployment {
             webhooks_url: self.webhooks_url.clone(),
+            openapi_endpoint: self.openapi_endpoint.clone(),
             agents: self
                 .agents
                 .iter()

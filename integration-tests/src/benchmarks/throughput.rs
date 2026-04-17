@@ -562,6 +562,7 @@ impl ThroughputBenchmark {
             let http_api_deployment_creation = HttpApiDeploymentCreation {
                 domain: domain.clone(),
                 webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+                openapi_endpoint: None,
                 agents: BTreeMap::from_iter([
                     (
                         AgentTypeName("BenchmarkAgent".to_string()),

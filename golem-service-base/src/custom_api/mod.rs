@@ -287,7 +287,16 @@ pub struct WebhookCallbackBehaviour {
 
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
-pub struct OpenApiSpecBehaviour {}
+pub struct OpenApiSpecBehaviour {
+    pub format: OpenApiSpecFormat,
+}
+
+#[derive(Debug, Clone, Copy, BinaryCodec)]
+#[desert(evolution())]
+pub enum OpenApiSpecFormat {
+    Json,
+    Yaml,
+}
 
 #[derive(Debug, Clone)]
 pub enum RouteSecurity {

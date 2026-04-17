@@ -32,8 +32,9 @@ use golem_common::model::http_api_deployment::{
 };
 use golem_service_base::custom_api::{
     CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
-    CorsPreflightMethodPolicy, MethodParameter, OpenApiSpecBehaviour, OriginPattern, PathSegment,
-    RequestBodySchema, RouteBehaviour, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    CorsPreflightMethodPolicy, MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat,
+    OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour,
+    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use heck::ToKebabCase;
 use itertools::Itertools;
@@ -311,25 +312,38 @@ pub fn add_webhook_callback_routes(
 }
 
 pub fn add_openapi_spec_routes(
-    domain: &Domain,
+    deployment: &HttpApiDeployment,
     current_route_id: &mut i32,
     compiled_routes: &mut Vec<UnboundCompiledRoute>,
+    errors: &mut Vec<DeployValidationError>,
 ) {
-    for openapi_path in ["openapi.json", "openapi.yaml"] {
+    let openapi_prefix = match parse_openapi_endpoint_path_segments(deployment) {
+        Ok(path) => path,
+        Err(error) => {
+            errors.push(error);
+            return;
+        }
+    };
+
+    for (format, openapi_path) in [
+        (OpenApiSpecFormat::Json, "openapi.json"),
+        (OpenApiSpecFormat::Yaml, "openapi.yaml"),
+    ] {
         let route_id = *current_route_id;
         *current_route_id = current_route_id.checked_add(1).unwrap();
 
+        let mut path = openapi_prefix.clone();
+        path.push(PathSegment::Literal {
+            value: openapi_path.to_string(),
+        });
+
         compiled_routes.push(UnboundCompiledRoute {
             route_id,
-            domain: domain.clone(),
+            domain: deployment.domain.clone(),
             method: HttpMethod::Get(Empty {}),
-            // Note: This is currently a fixed path,
-            // but it can be part of the http api deployment configuration
-            path: vec![PathSegment::Literal {
-                value: openapi_path.to_string(),
-            }],
+            path,
             body: RequestBodySchema::Unused,
-            behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {}),
+            behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format }),
             security: UnboundRouteSecurity::None,
             cors: CorsOptions {
                 allowed_patterns: Vec::new(),
@@ -573,6 +587,55 @@ fn parse_literal_only_path_segments(input: &str) -> Vec<PathSegment> {
         .filter(|s| !s.is_empty())
         .map(|segment| PathSegment::Literal {
             value: segment.to_string(),
+        })
+        .collect()
+}
+
+fn parse_openapi_endpoint_path_segments(
+    deployment: &HttpApiDeployment,
+) -> Result<Vec<PathSegment>, DeployValidationError> {
+    let Some(openapi_endpoint) = deployment.openapi_endpoint.as_deref() else {
+        return Ok(Vec::new());
+    };
+
+    let make_error = |error: &str| DeployValidationError::HttpApiDeploymentInvalidOpenApiEndpoint {
+        domain: deployment.domain.clone(),
+        openapi_endpoint: openapi_endpoint.to_string(),
+        error: error.to_string(),
+    };
+
+    if openapi_endpoint.contains('?') {
+        return Err(make_error("query parameters are not allowed"));
+    }
+
+    if openapi_endpoint.contains('#') {
+        return Err(make_error("fragments are not allowed"));
+    }
+
+    let trimmed = openapi_endpoint.trim_matches('/');
+
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if trimmed.contains("//") {
+        return Err(make_error("empty path segments are not allowed"));
+    }
+
+    trimmed
+        .split('/')
+        .map(|segment| {
+            if segment == "openapi.json" || segment == "openapi.yaml" {
+                Err(make_error(
+                    "the prefix must not include openapi.json or openapi.yaml",
+                ))
+            } else if segment == "*" || (segment.starts_with('{') && segment.ends_with('}')) {
+                Err(make_error("only literal path segments are allowed"))
+            } else {
+                Ok(PathSegment::Literal {
+                    value: segment.to_string(),
+                })
+            }
         })
         .collect()
 }

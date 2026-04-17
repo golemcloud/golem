@@ -2443,6 +2443,7 @@ mod app_builder {
                                     app.source.to_path_buf(),
                                     HttpApiDeploymentDeployProperties {
                                         webhooks_url: api_deployment.webhook_url.unwrap_or_else(HttpApiDeploymentCreation::default_webhooks_url),
+                                        openapi_endpoint: HttpApiDeploymentCreation::normalize_openapi_endpoint(api_deployment.openapi_endpoint),
                                         agents,
                                     },
                                 ));

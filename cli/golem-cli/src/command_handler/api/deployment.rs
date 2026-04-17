@@ -235,6 +235,7 @@ impl ApiDeploymentCommandHandler {
                     &HttpApiDeploymentCreation {
                         domain: domain.clone(),
                         webhooks_url: deployable_http_api_deployment.webhooks_url.clone(),
+                        openapi_endpoint: deployable_http_api_deployment.openapi_endpoint.clone(),
                         agents: deployable_http_api_deployment.agents.clone(),
                     },
                 )
@@ -325,6 +326,11 @@ impl ApiDeploymentCommandHandler {
             diff::DiffForHashOf::ValueDiff { diff } => diff.webhooks_url_changed,
         };
 
+        let openapi_endpoint_changed = match diff {
+            diff::DiffForHashOf::HashDiff { .. } => true,
+            diff::DiffForHashOf::ValueDiff { diff } => diff.openapi_endpoint_changed,
+        };
+
         let agents_changed = match diff {
             diff::DiffForHashOf::HashDiff { .. } => true,
             diff::DiffForHashOf::ValueDiff { diff } => !diff.agents_changes.is_empty(),
@@ -341,6 +347,11 @@ impl ApiDeploymentCommandHandler {
                     current_revision: http_api_deployment.revision,
                     webhook_url: if webhook_url_changed {
                         Some(deployable_http_api_deployment.webhooks_url.clone())
+                    } else {
+                        None
+                    },
+                    openapi_endpoint: if openapi_endpoint_changed {
+                        Some(deployable_http_api_deployment.openapi_endpoint.clone())
                     } else {
                         None
                     },

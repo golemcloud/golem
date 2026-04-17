@@ -48,6 +48,7 @@ async fn create_http_api_deployment_for_nonexitant_domain(
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     let result = client
@@ -80,6 +81,7 @@ async fn create_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     let http_api_deployment = client
@@ -131,6 +133,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     let http_api_deployment = client
@@ -150,6 +153,7 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
             ),
         ])),
         webhook_url: Some("/webhooks2/".to_string()),
+        openapi_endpoint: None,
     };
 
     let updated_http_api_deployment = client
@@ -230,6 +234,7 @@ async fn delete_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     let http_api_deployment = client
@@ -295,6 +300,7 @@ async fn cannot_create_two_http_api_deployments_for_same_domain(
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     client
@@ -333,6 +339,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     let http_api_deployment = client
@@ -342,6 +349,7 @@ async fn updates_with_wrong_revision_number_are_rejected(
     let http_api_deployment_update = HttpApiDeploymentUpdate {
         current_revision: http_api_deployment.revision.next()?,
         webhook_url: None,
+        openapi_endpoint: None,
         agents: Some(BTreeMap::from_iter([
             (
                 AgentTypeName("test-api".to_string()),
@@ -384,6 +392,7 @@ async fn http_api_deployment_recreation(deps: &EnvBasedTestDependencies) -> anyh
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     let http_api_deployment_1 = client
@@ -438,6 +447,7 @@ async fn fetch_in_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     let http_api_deployment = client
@@ -484,6 +494,7 @@ async fn cannot_access_http_api_deployment_from_another_user(
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     let deployment = client_a
@@ -524,6 +535,7 @@ async fn cannot_delete_http_api_deployment_from_another_user(
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     let deployment = client_a
@@ -560,6 +572,7 @@ async fn delete_with_wrong_revision_is_rejected(
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     let deployment = client
@@ -598,6 +611,7 @@ async fn deleting_twice_returns_404(deps: &EnvBasedTestDependencies) -> anyhow::
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     let deployment = client

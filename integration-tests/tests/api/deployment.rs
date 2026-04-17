@@ -261,6 +261,7 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     let http_api_deployment = client

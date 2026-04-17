@@ -63,12 +63,14 @@ declare_structs! {
     pub struct HttpApiDeploymentCreation {
         pub domain: Domain,
         pub webhooks_url: String,
+        pub openapi_endpoint: Option<String>,
         pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>
     }
 
     pub struct HttpApiDeploymentUpdate {
         pub current_revision: HttpApiDeploymentRevision,
         pub webhook_url: Option<String>,
+        pub openapi_endpoint: Option<Option<String>>,
         pub agents: Option<BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>>
     }
 
@@ -80,6 +82,7 @@ declare_structs! {
         pub hash: diff::Hash,
         pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
         pub webhooks_url: String,
+        pub openapi_endpoint: Option<String>,
         pub created_at: DateTime<chrono::Utc>,
     }
 }
@@ -87,5 +90,17 @@ declare_structs! {
 impl HttpApiDeploymentCreation {
     pub fn default_webhooks_url() -> String {
         "/webhooks/".to_string()
+    }
+
+    pub fn normalize_openapi_endpoint(openapi_endpoint: Option<String>) -> Option<String> {
+        openapi_endpoint.and_then(|value| {
+            let trimmed = value.trim_matches('/');
+
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(format!("/{trimmed}"))
+            }
+        })
     }
 }

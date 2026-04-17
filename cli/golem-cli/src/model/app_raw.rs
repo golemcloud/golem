@@ -322,6 +322,13 @@ pub struct HttpApiDeployment {
     pub domain: Domain,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "openapi_endpoint",
+        alias = "openapiEndpoint"
+    )]
+    pub openapi_endpoint: Option<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub agents: IndexMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
 }

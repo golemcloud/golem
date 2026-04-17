@@ -66,6 +66,7 @@ pub async fn make_test_context(
         domain: domain.clone(),
         agents: BTreeMap::from_iter(agent_and_http_options),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     client

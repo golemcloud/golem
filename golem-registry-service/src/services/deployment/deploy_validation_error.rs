@@ -95,6 +95,14 @@ pub enum DeployValidationError {
         agent_type: AgentTypeName,
         url: String,
     },
+    #[error(
+        "Http api deployment {domain} has an invalid OpenAPI endpoint prefix {openapi_endpoint}: {error}"
+    )]
+    HttpApiDeploymentInvalidOpenApiEndpoint {
+        domain: Domain,
+        openapi_endpoint: String,
+        error: String,
+    },
     #[error("Overriding security scheme is only allowed if the environment level option is set")]
     SecurityOverrideDisabled,
     #[error("Http api for domain {domain} has multiple routes for pattern {rendered_method} {rendered_path}", rendered_method = render_http_method(method), rendered_path = itertools::join(path.iter().map(|p| p.to_string()), "/"))]

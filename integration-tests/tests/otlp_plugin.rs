@@ -106,6 +106,7 @@ async fn otlp_basic_trace_export(
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     client
@@ -209,6 +210,7 @@ async fn otlp_all_signals_export(
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     client

@@ -801,6 +801,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
                 HttpApiDeploymentAgentOptions::default(),
             )]),
             webhooks_url: "/webhooks/".to_string(),
+            openapi_endpoint: None,
         }),
     }
     .with_updated_hash()

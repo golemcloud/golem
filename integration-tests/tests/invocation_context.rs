@@ -93,6 +93,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
             HttpApiDeploymentAgentOptions::default(),
         )]),
         webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        openapi_endpoint: None,
     };
 
     client
