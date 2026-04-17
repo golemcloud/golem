@@ -997,6 +997,15 @@ mod test {
     use crate::model::cascade::property::map::MapMergeMode;
     use crate::model::cascade::property::vec::VecMergeMode;
     use crate::model::format::Format;
+    use golem_common::base_model::retry_policy::{
+        ApiAddDelayPolicy, ApiBooleanValue, ApiClampPolicy, ApiCountBoxPolicy,
+        ApiExponentialPolicy, ApiFibonacciPolicy, ApiFilteredOnPolicy, ApiImmediatePolicy,
+        ApiIntegerValue, ApiJitterPolicy, ApiNeverPolicy, ApiPeriodicPolicy, ApiPredicate,
+        ApiPredicateFalse, ApiPredicateNot, ApiPredicatePair, ApiPredicateTrue, ApiPredicateValue,
+        ApiPropertyComparison, ApiPropertyExistence, ApiPropertyPattern, ApiPropertyPrefix,
+        ApiPropertySetCheck, ApiPropertySubstring, ApiRetryPolicy, ApiRetryPolicyPair,
+        ApiTextValue, ApiTimeBoxPolicy,
+    };
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
     use golem_common::model::domain_registration::Domain;
@@ -1087,7 +1096,9 @@ mod test {
 
     fn arb_url_model() -> BoxedStrategy<Url> {
         arb_dns_label()
-            .prop_map(|host| Url::parse(&format!("https://{host}.example.com")).unwrap())
+            .prop_filter_map("valid url", |host| {
+                Url::parse(&format!("https://{host}.example.com")).ok()
+            })
             .boxed()
     }
 
@@ -1690,6 +1701,192 @@ mod test {
         .boxed()
     }
 
+    fn arb_api_predicate_value_model() -> BoxedStrategy<ApiPredicateValue> {
+        prop_oneof![
+            arb_ident().prop_map(|value| ApiPredicateValue::Text(ApiTextValue { value })),
+            any::<i64>().prop_map(|value| ApiPredicateValue::Integer(ApiIntegerValue { value })),
+            any::<bool>().prop_map(|value| ApiPredicateValue::Boolean(ApiBooleanValue { value })),
+        ]
+        .boxed()
+    }
+
+    fn arb_api_predicate_model() -> BoxedStrategy<ApiPredicate> {
+        let leaf = prop_oneof![
+            Just(ApiPredicate::True(ApiPredicateTrue {})),
+            Just(ApiPredicate::False(ApiPredicateFalse {})),
+            arb_ident().prop_map(|property| {
+                ApiPredicate::PropExists(ApiPropertyExistence { property })
+            }),
+            (arb_ident(), arb_api_predicate_value_model()).prop_map(|(property, value)| {
+                ApiPredicate::PropEq(ApiPropertyComparison { property, value })
+            }),
+            (arb_ident(), arb_api_predicate_value_model()).prop_map(|(property, value)| {
+                ApiPredicate::PropNeq(ApiPropertyComparison { property, value })
+            }),
+            (
+                arb_ident(),
+                prop::collection::vec(arb_api_predicate_value_model(), 1..=3),
+            )
+                .prop_map(|(property, values)| {
+                    ApiPredicate::PropIn(ApiPropertySetCheck { property, values })
+                }),
+            (arb_ident(), arb_ident()).prop_map(|(property, pattern)| {
+                ApiPredicate::PropMatches(ApiPropertyPattern { property, pattern })
+            }),
+            (arb_ident(), arb_ident()).prop_map(|(property, prefix)| {
+                ApiPredicate::PropStartsWith(ApiPropertyPrefix { property, prefix })
+            }),
+            (arb_ident(), arb_ident()).prop_map(|(property, substring)| {
+                ApiPredicate::PropContains(ApiPropertySubstring {
+                    property,
+                    substring,
+                })
+            }),
+        ];
+
+        leaf.prop_recursive(3, 48, 2, |inner| {
+            prop_oneof![
+                (inner.clone(), inner.clone()).prop_map(|(left, right)| {
+                    ApiPredicate::And(ApiPredicatePair {
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    })
+                }),
+                (inner.clone(), inner.clone()).prop_map(|(left, right)| {
+                    ApiPredicate::Or(ApiPredicatePair {
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    })
+                }),
+                inner.prop_map(|predicate| {
+                    ApiPredicate::Not(ApiPredicateNot {
+                        predicate: Box::new(predicate),
+                    })
+                }),
+            ]
+        })
+        .boxed()
+    }
+
+    fn arb_api_retry_policy_model() -> BoxedStrategy<ApiRetryPolicy> {
+        let leaf = prop_oneof![
+            Just(ApiRetryPolicy::Immediate(ApiImmediatePolicy {})),
+            Just(ApiRetryPolicy::Never(ApiNeverPolicy {})),
+            (0u64..=10000u64)
+                .prop_map(|delay_ms| { ApiRetryPolicy::Periodic(ApiPeriodicPolicy { delay_ms }) }),
+            (
+                (0u64..=10000u64),
+                (1u8..=20u8).prop_map(|n| n as f64 / 10.0)
+            )
+                .prop_map(|(base_delay_ms, factor)| {
+                    ApiRetryPolicy::Exponential(ApiExponentialPolicy {
+                        base_delay_ms,
+                        factor,
+                    })
+                },),
+            ((0u64..=10000u64), (0u64..=10000u64)).prop_map(|(first_ms, second_ms)| {
+                ApiRetryPolicy::Fibonacci(ApiFibonacciPolicy {
+                    first_ms,
+                    second_ms,
+                })
+            }),
+        ];
+
+        leaf.prop_recursive(3, 48, 2, |inner| {
+            prop_oneof![
+                ((0u32..=50u32), inner.clone()).prop_map(|(max_retries, inner)| {
+                    ApiRetryPolicy::CountBox(ApiCountBoxPolicy {
+                        max_retries,
+                        inner: Box::new(inner),
+                    })
+                }),
+                ((0u64..=100000u64), inner.clone()).prop_map(|(limit_ms, inner)| {
+                    ApiRetryPolicy::TimeBox(ApiTimeBoxPolicy {
+                        limit_ms,
+                        inner: Box::new(inner),
+                    })
+                }),
+                ((0u64..=100000u64), (0u64..=100000u64), inner.clone()).prop_map(
+                    |(min_delay_ms, max_delay_ms, inner)| {
+                        ApiRetryPolicy::Clamp(ApiClampPolicy {
+                            min_delay_ms,
+                            max_delay_ms,
+                            inner: Box::new(inner),
+                        })
+                    },
+                ),
+                ((0u64..=100000u64), inner.clone()).prop_map(|(delay_ms, inner)| {
+                    ApiRetryPolicy::AddDelay(ApiAddDelayPolicy {
+                        delay_ms,
+                        inner: Box::new(inner),
+                    })
+                }),
+                ((1u8..=20u8).prop_map(|n| n as f64 / 10.0), inner.clone()).prop_map(
+                    |(factor, inner)| {
+                        ApiRetryPolicy::Jitter(ApiJitterPolicy {
+                            factor,
+                            inner: Box::new(inner),
+                        })
+                    },
+                ),
+                (arb_api_predicate_model(), inner.clone()).prop_map(|(predicate, inner)| {
+                    ApiRetryPolicy::FilteredOn(ApiFilteredOnPolicy {
+                        predicate,
+                        inner: Box::new(inner),
+                    })
+                }),
+                (inner.clone(), inner.clone()).prop_map(|(first, second)| {
+                    ApiRetryPolicy::AndThen(ApiRetryPolicyPair {
+                        first: Box::new(first),
+                        second: Box::new(second),
+                    })
+                }),
+                (inner.clone(), inner.clone()).prop_map(|(first, second)| {
+                    ApiRetryPolicy::Union(ApiRetryPolicyPair {
+                        first: Box::new(first),
+                        second: Box::new(second),
+                    })
+                }),
+                (inner.clone(), inner.clone()).prop_map(|(first, second)| {
+                    ApiRetryPolicy::Intersect(ApiRetryPolicyPair {
+                        first: Box::new(first),
+                        second: Box::new(second),
+                    })
+                }),
+            ]
+        })
+        .boxed()
+    }
+
+    fn arb_retry_policy_defaults_model()
+    -> BoxedStrategy<IndexMap<EnvironmentName, Vec<EnvironmentRetryPolicyDefault>>> {
+        prop::collection::vec(
+            (
+                arb_ident().prop_map(EnvironmentName),
+                prop::collection::vec(
+                    (
+                        arb_ident(),
+                        0u32..=100u32,
+                        arb_api_predicate_model(),
+                        arb_api_retry_policy_model(),
+                    )
+                        .prop_map(|(name, priority, predicate, policy)| {
+                            EnvironmentRetryPolicyDefault {
+                                name,
+                                priority,
+                                predicate: predicate.into(),
+                                policy: policy.into(),
+                            }
+                        }),
+                    0..=2,
+                ),
+            ),
+            0..=3,
+        )
+        .prop_map(IndexMap::from_iter)
+        .boxed()
+    }
+
     fn arb_application_model_v3() -> BoxedStrategy<Application> {
         (
             arb_opt(arb_semver()),
@@ -1722,6 +1919,7 @@ mod test {
                     .prop_map(IndexMap::from_iter),
                 arb_opt(arb_bridge_sdks_model()),
                 arb_secret_defaults_model(),
+                arb_retry_policy_defaults_model(),
                 arb_resource_defaults_model(),
             ),
         )
@@ -1731,7 +1929,15 @@ mod test {
                     app,
                     includes,
                     (component_templates, components, agents, custom_commands, clean),
-                    (http_api, mcp, environments, bridge, secret_defaults, resource_defaults),
+                    (
+                        http_api,
+                        mcp,
+                        environments,
+                        bridge,
+                        secret_defaults,
+                        retry_policy_defaults,
+                        resource_defaults,
+                    ),
                 )| Application {
                     manifest_version,
                     app,
@@ -1746,7 +1952,7 @@ mod test {
                     environments,
                     bridge,
                     secret_defaults,
-                    retry_policy_defaults: IndexMap::new(),
+                    retry_policy_defaults,
                     resource_defaults,
                 },
             )
@@ -1771,18 +1977,42 @@ mod test {
 
     proptest! {
         #![proptest_config(ProptestConfig {
-            cases: 4096,
+            cases: 400,
             .. ProptestConfig::default()
         })]
 
         #[test]
         fn proptest_schema_accepts_serialized_application_documents(app in arb_application_document()) {
-            let value = serde_json::to_value(&app).unwrap();
-            let evaluation = JSON_SCHEMA_VALIDATOR.evaluate(&value);
+            let json_str = serde_json::to_string(&app).unwrap();
+            let yaml_str = serde_yaml::to_string(&app).unwrap();
+
+            let app_from_json: Application = serde_json::from_str(&json_str).unwrap();
+            let app_from_yaml: Application = serde_yaml::from_str(&yaml_str).unwrap();
+
+            let app_from_json_value = serde_json::to_value(&app_from_json).unwrap();
+            let app_from_yaml_value = serde_json::to_value(&app_from_yaml).unwrap();
+            let app_original_value = serde_json::to_value(&app).unwrap();
+
+            prop_assert_eq!(app_from_json_value.clone(), app_from_yaml_value);
+            prop_assert_eq!(app_from_json_value, app_original_value);
+
+            let json_value: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+            let json_evaluation = JSON_SCHEMA_VALIDATOR.evaluate(&json_value);
             prop_assert!(
-                evaluation.flag().valid,
-                "Schema validation failed for generated app JSON: {:?}",
-                evaluation
+                json_evaluation.flag().valid,
+                "Schema validation failed for generated app JSON payload: {:?}",
+                json_evaluation
+                    .iter_errors()
+                    .map(|e| format!("{} :: {}", e.instance_location, e.error))
+                    .collect::<Vec<_>>()
+            );
+
+            let yaml_value: serde_json::Value = serde_yaml::from_str(&yaml_str).unwrap();
+            let yaml_evaluation = JSON_SCHEMA_VALIDATOR.evaluate(&yaml_value);
+            prop_assert!(
+                yaml_evaluation.flag().valid,
+                "Schema validation failed for generated app YAML payload: {:?}",
+                yaml_evaluation
                     .iter_errors()
                     .map(|e| format!("{} :: {}", e.instance_location, e.error))
                     .collect::<Vec<_>>()

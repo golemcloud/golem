@@ -17094,15 +17094,15 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
       required:
       - name
       - priority
-      - predicateJson
-      - policyJson
+      - predicate
+      - policy
     RetryPolicyDto:
       title: RetryPolicyDto
       type: object
@@ -17121,18 +17121,18 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
       required:
       - id
       - environmentId
       - name
       - revision
       - priority
-      - predicateJson
-      - policyJson
+      - predicate
+      - policy
     RetryPolicyUpdate:
       title: RetryPolicyUpdate
       type: object
@@ -17143,10 +17143,10 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
       required:
       - currentRevision
     SecuritySchemeAgentSecurity:

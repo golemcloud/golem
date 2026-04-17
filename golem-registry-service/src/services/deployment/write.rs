@@ -308,7 +308,7 @@ impl DeploymentWriteService {
             data.retry_policy_defaults,
             auth.account_id(),
             &mut errors,
-        );
+        )?;
 
         if !errors.is_empty() {
             return Err(DeploymentWriteError::DeploymentValidationFailed(errors));

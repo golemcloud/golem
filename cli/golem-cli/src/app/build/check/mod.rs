@@ -562,12 +562,10 @@ fn expected_dependency_value(expected: &ExpectedDependencyKind) -> String {
 mod test {
     use super::{
         DependencyMatcherSemantics, DependencySpecCompliance, ExpectedDependencyKind,
-        evaluate_dependency_spec_compliance, parse_target_libdir,
-        target_libdir_has_rust_target_libs, verify_semantic_version_compatibility,
+        evaluate_dependency_spec_compliance, verify_semantic_version_compatibility,
     };
     use crate::fs;
     use pretty_assertions::assert_eq;
-    use tempfile::tempdir;
     use test_r::test;
 
     #[test]

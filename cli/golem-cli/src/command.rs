@@ -1418,12 +1418,12 @@ pub mod api {
                 /// Priority (higher = checked first)
                 #[arg(long)]
                 priority: u32,
-                /// Predicate as JSON string
+                /// Predicate as JSON or YAML
                 #[arg(long)]
-                predicate_json: String,
-                /// Policy as JSON string
+                predicate: String,
+                /// Policy as JSON or YAML
                 #[arg(long)]
-                policy_json: String,
+                policy: String,
             },
 
             /// List retry policies in the environment
@@ -1444,12 +1444,12 @@ pub mod api {
                 /// New priority (optional)
                 #[arg(long)]
                 priority: Option<u32>,
-                /// New predicate as JSON string (optional)
+                /// New predicate as JSON or YAML (optional)
                 #[arg(long)]
-                predicate_json: Option<String>,
-                /// New policy as JSON string (optional)
+                predicate: Option<String>,
+                /// New policy as JSON or YAML (optional)
                 #[arg(long)]
-                policy_json: Option<String>,
+                policy: Option<String>,
             },
 
             /// Delete a retry policy

@@ -481,7 +481,7 @@ impl DeploymentContext {
         retry_policy_defaults_in_deployment: Vec<DeploymentRetryPolicyDefault>,
         actor: AccountId,
         errors: &mut Vec<DeployValidationError>,
-    ) -> Vec<RetryPolicyCreationRecord> {
+    ) -> Result<Vec<RetryPolicyCreationRecord>, DeploymentWriteError> {
         let existing_names: HashSet<String> = retry_policies_in_environment
             .iter()
             .map(|p| p.name.clone())
@@ -508,26 +508,24 @@ impl DeploymentContext {
                 continue;
             }
 
-            // Convert API types back to core types for DB storage
-            let predicate: golem_common::model::retry_policy::Predicate = rpd.predicate.into();
-            let policy: golem_common::model::retry_policy::RetryPolicy = rpd.policy.into();
-            let predicate_json =
-                serde_json::to_string(&predicate).expect("Predicate serialization cannot fail");
-            let policy_json =
-                serde_json::to_string(&policy).expect("RetryPolicy serialization cannot fail");
-
             creations.push(RetryPolicyCreationRecord::new(
                 RetryPolicyId::new(),
                 self.environment.id,
                 rpd.name,
                 rpd.priority,
-                predicate_json,
-                policy_json,
+                serde_json::to_string(&golem_common::model::retry_policy::Predicate::from(
+                    rpd.predicate,
+                ))
+                .map_err(|e| DeploymentWriteError::InternalError(e.into()))?,
+                serde_json::to_string(&golem_common::model::retry_policy::RetryPolicy::from(
+                    rpd.policy,
+                ))
+                .map_err(|e| DeploymentWriteError::InternalError(e.into()))?,
                 actor,
             ));
         }
 
-        creations
+        Ok(creations)
     }
 }
 

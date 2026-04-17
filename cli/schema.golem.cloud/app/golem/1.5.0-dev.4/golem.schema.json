@@ -1204,43 +1204,16 @@
       "additionalProperties": false
     },
     "predicateValue": {
-      "description": "A typed value for property comparisons. Exactly one key: text, integer, or boolean.",
+      "description": "Predicate value encoded as primitive JSON value.",
       "oneOf": [
         {
-          "type": "object",
-          "properties": {
-            "text": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "text"
-          ],
-          "additionalProperties": false
+          "type": "string"
         },
         {
-          "type": "object",
-          "properties": {
-            "integer": {
-              "type": "integer"
-            }
-          },
-          "required": [
-            "integer"
-          ],
-          "additionalProperties": false
+          "type": "integer"
         },
         {
-          "type": "object",
-          "properties": {
-            "boolean": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "boolean"
-          ],
-          "additionalProperties": false
+          "type": "boolean"
         }
       ]
     },
@@ -1282,8 +1255,11 @@
       "additionalProperties": false
     },
     "retryPredicate": {
-      "description": "A composable predicate tree for matching retry contexts. Unit variants (true, false) are bare strings; compound variants are single-key objects.",
+      "description": "Composable retry predicate encoded as compact unions.",
       "oneOf": [
+        {
+          "type": "boolean"
+        },
         {
           "type": "string",
           "enum": [
@@ -1298,9 +1274,7 @@
               "$ref": "#/definitions/propertyComparison"
             }
           },
-          "required": [
-            "propEq"
-          ],
+          "required": ["propEq"],
           "additionalProperties": false
         },
         {
@@ -1310,9 +1284,7 @@
               "$ref": "#/definitions/propertyComparison"
             }
           },
-          "required": [
-            "propNeq"
-          ],
+          "required": ["propNeq"],
           "additionalProperties": false
         },
         {
@@ -1322,9 +1294,7 @@
               "$ref": "#/definitions/propertyComparison"
             }
           },
-          "required": [
-            "propGt"
-          ],
+          "required": ["propGt"],
           "additionalProperties": false
         },
         {
@@ -1334,9 +1304,7 @@
               "$ref": "#/definitions/propertyComparison"
             }
           },
-          "required": [
-            "propGte"
-          ],
+          "required": ["propGte"],
           "additionalProperties": false
         },
         {
@@ -1346,9 +1314,7 @@
               "$ref": "#/definitions/propertyComparison"
             }
           },
-          "required": [
-            "propLt"
-          ],
+          "required": ["propLt"],
           "additionalProperties": false
         },
         {
@@ -1358,21 +1324,31 @@
               "$ref": "#/definitions/propertyComparison"
             }
           },
-          "required": [
-            "propLte"
-          ],
+          "required": ["propLte"],
           "additionalProperties": false
         },
         {
           "type": "object",
           "properties": {
             "propExists": {
-              "type": "string"
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "property": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["property"],
+                  "additionalProperties": false
+                }
+              ]
             }
           },
-          "required": [
-            "propExists"
-          ],
+          "required": ["propExists"],
           "additionalProperties": false
         },
         {
@@ -1382,9 +1358,7 @@
               "$ref": "#/definitions/propertySetCheck"
             }
           },
-          "required": [
-            "propIn"
-          ],
+          "required": ["propIn"],
           "additionalProperties": false
         },
         {
@@ -1400,16 +1374,11 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "property",
-                "pattern"
-              ],
+              "required": ["property", "pattern"],
               "additionalProperties": false
             }
           },
-          "required": [
-            "propMatches"
-          ],
+          "required": ["propMatches"],
           "additionalProperties": false
         },
         {
@@ -1425,16 +1394,11 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "property",
-                "prefix"
-              ],
+              "required": ["property", "prefix"],
               "additionalProperties": false
             }
           },
-          "required": [
-            "propStartsWith"
-          ],
+          "required": ["propStartsWith"],
           "additionalProperties": false
         },
         {
@@ -1450,16 +1414,11 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "property",
-                "substring"
-              ],
+              "required": ["property", "substring"],
               "additionalProperties": false
             }
           },
-          "required": [
-            "propContains"
-          ],
+          "required": ["propContains"],
           "additionalProperties": false
         },
         {
@@ -1474,9 +1433,7 @@
               "maxItems": 2
             }
           },
-          "required": [
-            "and"
-          ],
+          "required": ["and"],
           "additionalProperties": false
         },
         {
@@ -1491,9 +1448,7 @@
               "maxItems": 2
             }
           },
-          "required": [
-            "or"
-          ],
+          "required": ["or"],
           "additionalProperties": false
         },
         {
@@ -1503,9 +1458,7 @@
               "$ref": "#/definitions/retryPredicate"
             }
           },
-          "required": [
-            "not"
-          ],
+          "required": ["not"],
           "additionalProperties": false
         }
       ]
@@ -1531,7 +1484,7 @@
       "additionalProperties": false
     },
     "retryPolicy": {
-      "description": "A composable retry policy tree. Unit variants (immediate, never) are bare strings; compound variants are single-key objects.",
+      "description": "Composable retry policy encoded as compact unions.",
       "oneOf": [
         {
           "type": "string",
@@ -1547,9 +1500,7 @@
               "$ref": "#/definitions/duration"
             }
           },
-          "required": [
-            "periodic"
-          ],
+          "required": ["periodic"],
           "additionalProperties": false
         },
         {
@@ -1565,16 +1516,11 @@
                   "type": "number"
                 }
               },
-              "required": [
-                "baseDelay",
-                "factor"
-              ],
+              "required": ["baseDelay", "factor"],
               "additionalProperties": false
             }
           },
-          "required": [
-            "exponential"
-          ],
+          "required": ["exponential"],
           "additionalProperties": false
         },
         {
@@ -1590,16 +1536,11 @@
                   "$ref": "#/definitions/duration"
                 }
               },
-              "required": [
-                "first",
-                "second"
-              ],
+              "required": ["first", "second"],
               "additionalProperties": false
             }
           },
-          "required": [
-            "fibonacci"
-          ],
+          "required": ["fibonacci"],
           "additionalProperties": false
         },
         {
@@ -1616,16 +1557,11 @@
                   "$ref": "#/definitions/retryPolicy"
                 }
               },
-              "required": [
-                "maxRetries",
-                "inner"
-              ],
+              "required": ["maxRetries", "inner"],
               "additionalProperties": false
             }
           },
-          "required": [
-            "countBox"
-          ],
+          "required": ["countBox"],
           "additionalProperties": false
         },
         {
@@ -1641,16 +1577,11 @@
                   "$ref": "#/definitions/retryPolicy"
                 }
               },
-              "required": [
-                "limit",
-                "inner"
-              ],
+              "required": ["limit", "inner"],
               "additionalProperties": false
             }
           },
-          "required": [
-            "timeBox"
-          ],
+          "required": ["timeBox"],
           "additionalProperties": false
         },
         {
@@ -1669,17 +1600,11 @@
                   "$ref": "#/definitions/retryPolicy"
                 }
               },
-              "required": [
-                "minDelay",
-                "maxDelay",
-                "inner"
-              ],
+              "required": ["minDelay", "maxDelay", "inner"],
               "additionalProperties": false
             }
           },
-          "required": [
-            "clamp"
-          ],
+          "required": ["clamp"],
           "additionalProperties": false
         },
         {
@@ -1695,16 +1620,11 @@
                   "$ref": "#/definitions/retryPolicy"
                 }
               },
-              "required": [
-                "delay",
-                "inner"
-              ],
+              "required": ["delay", "inner"],
               "additionalProperties": false
             }
           },
-          "required": [
-            "addDelay"
-          ],
+          "required": ["addDelay"],
           "additionalProperties": false
         },
         {
@@ -1720,16 +1640,11 @@
                   "$ref": "#/definitions/retryPolicy"
                 }
               },
-              "required": [
-                "factor",
-                "inner"
-              ],
+              "required": ["factor", "inner"],
               "additionalProperties": false
             }
           },
-          "required": [
-            "jitter"
-          ],
+          "required": ["jitter"],
           "additionalProperties": false
         },
         {
@@ -1745,16 +1660,11 @@
                   "$ref": "#/definitions/retryPolicy"
                 }
               },
-              "required": [
-                "predicate",
-                "inner"
-              ],
+              "required": ["predicate", "inner"],
               "additionalProperties": false
             }
           },
-          "required": [
-            "filteredOn"
-          ],
+          "required": ["filteredOn"],
           "additionalProperties": false
         },
         {
@@ -1769,9 +1679,7 @@
               "maxItems": 2
             }
           },
-          "required": [
-            "andThen"
-          ],
+          "required": ["andThen"],
           "additionalProperties": false
         },
         {
@@ -1786,9 +1694,7 @@
               "maxItems": 2
             }
           },
-          "required": [
-            "union"
-          ],
+          "required": ["union"],
           "additionalProperties": false
         },
         {
@@ -1803,9 +1709,7 @@
               "maxItems": 2
             }
           },
-          "required": [
-            "intersect"
-          ],
+          "required": ["intersect"],
           "additionalProperties": false
         }
       ]

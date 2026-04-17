@@ -866,8 +866,11 @@ impl From<RetryPolicyError> for ApiError {
     fn from(value: RetryPolicyError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            RetryPolicyError::InvalidPredicateJson(_) | RetryPolicyError::InvalidPolicyJson(_) => {
-                Self::bad_request(api::error_code::VALIDATION_ERROR, error)
+            RetryPolicyError::InvalidPredicateJson(_) => {
+                Self::bad_request(api::error_code::RETRY_POLICY_INVALID_PREDICATE_JSON, error)
+            }
+            RetryPolicyError::InvalidPolicyJson(_) => {
+                Self::bad_request(api::error_code::RETRY_POLICY_INVALID_POLICY_JSON, error)
             }
             RetryPolicyError::ConcurrentModification => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)
