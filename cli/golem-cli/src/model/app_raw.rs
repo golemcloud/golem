@@ -992,18 +992,801 @@ fn json_value_without_null_fields(value: serde_json::Value) -> serde_json::Value
 
 #[cfg(test)]
 mod test {
-    mod app_manifest_json_schema_validation {
-        use crate::model::app_raw::{Application, JSON_SCHEMA_VALIDATOR};
-        use test_r::test;
+    use super::*;
+    use crate::model::app_raw::{Application, JSON_SCHEMA_VALIDATOR};
+    use crate::model::cascade::property::map::MapMergeMode;
+    use crate::model::cascade::property::vec::VecMergeMode;
+    use crate::model::format::Format;
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::quota::{
+        EnforcementAction, ResourceCapacityLimit, ResourceConcurrencyLimit,
+        ResourceDefinitionCreation, ResourceLimit, ResourceName, ResourceRateLimit, TimePeriod,
+    };
+    use golem_common::model::security_scheme::SecuritySchemeName;
+    use indexmap::IndexMap;
+    use proptest::prelude::*;
+    use proptest::string::string_regex;
+    use serde_json::Value;
+    use std::collections::HashMap;
+    #[allow(unused_imports)]
+    use test_r::test;
+    use url::Url;
+
+    fn arb_opt<T: Clone + std::fmt::Debug + 'static>(
+        strategy: BoxedStrategy<T>,
+    ) -> BoxedStrategy<Option<T>> {
+        prop_oneof![3 => strategy.prop_map(Some), 2 => Just(None)].boxed()
+    }
+
+    fn arb_ident() -> BoxedStrategy<String> {
+        string_regex("[a-z][a-z0-9_-]{0,12}").unwrap().boxed()
+    }
+
+    fn arb_dns_label() -> BoxedStrategy<String> {
+        string_regex("[a-z][a-z0-9-]{0,12}").unwrap().boxed()
+    }
+
+    fn arb_semver() -> BoxedStrategy<String> {
+        (0u8..=9, 0u8..=9, 0u8..=9)
+            .prop_map(|(a, b, c)| format!("{a}.{b}.{c}"))
+            .boxed()
+    }
+
+    fn arb_json_value() -> BoxedStrategy<Value> {
+        let leaf = prop_oneof![
+            any::<bool>().prop_map(Value::Bool),
+            any::<i64>().prop_map(|n| Value::from(n)),
+            arb_ident().prop_map(Value::String),
+        ];
+
+        leaf.prop_recursive(3, 64, 4, |inner| {
+            prop_oneof![
+                prop::collection::vec(inner.clone(), 0..=3).prop_map(Value::Array),
+                prop::collection::btree_map(arb_ident(), inner, 0..=3)
+                    .prop_map(|m| Value::Object(m.into_iter().collect())),
+            ]
+        })
+        .boxed()
+    }
+
+    fn arb_token_list_model() -> BoxedStrategy<LenientTokenList> {
+        prop_oneof![
+            Just(LenientTokenList::None),
+            arb_ident().prop_map(LenientTokenList::String),
+            prop::collection::vec(arb_ident(), 1..=3).prop_map(LenientTokenList::List),
+        ]
+        .boxed()
+    }
+
+    fn arb_map_merge_mode_model() -> BoxedStrategy<MapMergeMode> {
+        prop_oneof![
+            Just(MapMergeMode::Upsert),
+            Just(MapMergeMode::Replace),
+            Just(MapMergeMode::Remove),
+        ]
+        .boxed()
+    }
+
+    fn arb_vec_merge_mode_model() -> BoxedStrategy<VecMergeMode> {
+        prop_oneof![
+            Just(VecMergeMode::Append),
+            Just(VecMergeMode::Prepend),
+            Just(VecMergeMode::Replace),
+        ]
+        .boxed()
+    }
+
+    fn arb_string_index_map_model() -> BoxedStrategy<IndexMap<String, String>> {
+        prop::collection::vec((arb_ident(), arb_ident()), 0..=3)
+            .prop_map(IndexMap::from_iter)
+            .boxed()
+    }
+
+    fn arb_url_model() -> BoxedStrategy<Url> {
+        arb_dns_label()
+            .prop_map(|host| Url::parse(&format!("https://{host}.example.com")).unwrap())
+            .boxed()
+    }
+
+    fn arb_external_command_model() -> BoxedStrategy<ExternalCommand> {
+        (
+            arb_ident(),
+            arb_opt(arb_ident()),
+            arb_string_index_map_model(),
+            prop::collection::vec(arb_ident(), 0..=2),
+            prop::collection::vec(arb_ident(), 0..=2),
+            prop::collection::vec(arb_ident(), 0..=2),
+            prop::collection::vec(arb_ident(), 0..=2),
+        )
+            .prop_map(
+                |(command, dir, env, rmdirs, mkdirs, sources, targets)| ExternalCommand {
+                    command,
+                    dir,
+                    env,
+                    rmdirs,
+                    mkdirs,
+                    sources,
+                    targets,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_build_commands_model() -> BoxedStrategy<Vec<BuildCommand>> {
+        prop::collection::vec(
+            arb_external_command_model().prop_map(BuildCommand::External),
+            0..=3,
+        )
+        .boxed()
+    }
+
+    fn arb_plugin_installation_model() -> BoxedStrategy<PluginInstallation> {
+        (
+            arb_opt(arb_ident()),
+            arb_ident(),
+            string_regex("[0-9]+\\.[0-9]+\\.[0-9]+(-[a-z0-9.]+)?").unwrap(),
+            arb_string_index_map_model(),
+        )
+            .prop_map(|(account, name, version, parameters)| PluginInstallation {
+                account,
+                name,
+                version,
+                parameters: parameters.into_iter().collect::<HashMap<_, _>>(),
+            })
+            .boxed()
+    }
+
+    fn arb_initial_component_file_model() -> BoxedStrategy<InitialComponentFile> {
+        (arb_ident(), arb_ident(), any::<bool>())
+            .prop_map(
+                |(source_path, target_name, writable)| InitialComponentFile {
+                    source_path,
+                    target_path: CanonicalFilePath::from_abs_str(&format!("/{target_name}"))
+                        .unwrap(),
+                    permissions: Some(if writable {
+                        AgentFilePermissions::ReadWrite
+                    } else {
+                        AgentFilePermissions::ReadOnly
+                    }),
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
+        (
+            any::<bool>(),
+            arb_opt(arb_ident()),
+            arb_opt(arb_ident()),
+            (
+                arb_opt(arb_vec_merge_mode_model()),
+                arb_build_commands_model(),
+                prop::collection::vec(
+                    (
+                        arb_ident(),
+                        prop::collection::vec(arb_external_command_model(), 0..=2),
+                    ),
+                    0..=2,
+                )
+                .prop_map(IndexMap::from_iter),
+                prop::collection::vec(arb_ident(), 0..=3),
+            ),
+            (
+                arb_opt(arb_json_value()),
+                arb_opt(arb_map_merge_mode_model()),
+                arb_opt(arb_string_index_map_model()),
+                arb_opt(arb_map_merge_mode_model()),
+                arb_opt(arb_string_index_map_model()),
+            ),
+            (
+                arb_opt(arb_vec_merge_mode_model()),
+                arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+                arb_opt(arb_vec_merge_mode_model()),
+                arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+            ),
+        )
+            .prop_map(
+                |(
+                    is_default,
+                    component_wasm,
+                    output_wasm,
+                    (build_merge_mode, build, custom_commands, clean),
+                    (config, env_merge_mode, env, wasi_config_merge_mode, wasi_config),
+                    (plugins_merge_mode, plugins, files_merge_mode, files),
+                )| ComponentPreset {
+                    default: is_default.then_some(Marker),
+                    component_wasm,
+                    output_wasm,
+                    build_merge_mode,
+                    build,
+                    custom_commands,
+                    clean,
+                    config,
+                    env_merge_mode,
+                    env,
+                    wasi_config_merge_mode,
+                    wasi_config,
+                    plugins_merge_mode,
+                    plugins,
+                    files_merge_mode,
+                    files,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
+        (
+            arb_token_list_model(),
+            arb_opt(arb_ident()),
+            arb_opt(arb_ident()),
+            (
+                arb_opt(arb_vec_merge_mode_model()),
+                arb_build_commands_model(),
+                prop::collection::vec(
+                    (
+                        arb_ident(),
+                        prop::collection::vec(arb_external_command_model(), 0..=2),
+                    ),
+                    0..=2,
+                )
+                .prop_map(IndexMap::from_iter),
+                prop::collection::vec(arb_ident(), 0..=3),
+            ),
+            (
+                arb_opt(arb_json_value()),
+                arb_opt(arb_map_merge_mode_model()),
+                arb_opt(arb_string_index_map_model()),
+                arb_opt(arb_map_merge_mode_model()),
+                arb_opt(arb_string_index_map_model()),
+            ),
+            (
+                arb_opt(arb_vec_merge_mode_model()),
+                arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+                arb_opt(arb_vec_merge_mode_model()),
+                arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+            ),
+            prop::collection::vec((arb_ident(), arb_component_preset_model()), 0..=2)
+                .prop_map(IndexMap::from_iter),
+        )
+            .prop_map(
+                |(
+                    templates,
+                    component_wasm,
+                    output_wasm,
+                    (build_merge_mode, build, custom_commands, clean),
+                    (config, env_merge_mode, env, wasi_config_merge_mode, wasi_config),
+                    (plugins_merge_mode, plugins, files_merge_mode, files),
+                    presets,
+                )| ComponentTemplate {
+                    templates,
+                    component_wasm,
+                    output_wasm,
+                    build_merge_mode,
+                    build,
+                    custom_commands,
+                    clean,
+                    config,
+                    env_merge_mode,
+                    env,
+                    wasi_config_merge_mode,
+                    wasi_config,
+                    plugins_merge_mode,
+                    plugins,
+                    files_merge_mode,
+                    files,
+                    presets,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_component_model() -> BoxedStrategy<Component> {
+        (
+            arb_token_list_model(),
+            arb_opt(arb_ident()),
+            arb_opt(arb_ident()),
+            arb_opt(arb_ident()),
+            (
+                arb_opt(arb_vec_merge_mode_model()),
+                arb_build_commands_model(),
+                prop::collection::vec(
+                    (
+                        arb_ident(),
+                        prop::collection::vec(arb_external_command_model(), 0..=2),
+                    ),
+                    0..=2,
+                )
+                .prop_map(IndexMap::from_iter),
+                prop::collection::vec(arb_ident(), 0..=3),
+            ),
+            (
+                arb_opt(arb_json_value()),
+                arb_opt(arb_map_merge_mode_model()),
+                arb_opt(arb_string_index_map_model()),
+                arb_opt(arb_map_merge_mode_model()),
+                arb_opt(arb_string_index_map_model()),
+            ),
+            (
+                arb_opt(arb_vec_merge_mode_model()),
+                arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+                arb_opt(arb_vec_merge_mode_model()),
+                arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+            ),
+            prop::collection::vec((arb_ident(), arb_component_preset_model()), 0..=2)
+                .prop_map(IndexMap::from_iter),
+        )
+            .prop_map(
+                |(
+                    templates,
+                    dir,
+                    component_wasm,
+                    output_wasm,
+                    (build_merge_mode, build, custom_commands, clean),
+                    (config, env_merge_mode, env, wasi_config_merge_mode, wasi_config),
+                    (plugins_merge_mode, plugins, files_merge_mode, files),
+                    presets,
+                )| Component {
+                    templates,
+                    dir,
+                    component_wasm,
+                    output_wasm,
+                    build_merge_mode,
+                    build,
+                    custom_commands,
+                    clean,
+                    config,
+                    env_merge_mode,
+                    env,
+                    wasi_config_merge_mode,
+                    wasi_config,
+                    plugins_merge_mode,
+                    plugins,
+                    files_merge_mode,
+                    files,
+                    presets,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_agent_preset_model() -> BoxedStrategy<AgentPreset> {
+        (
+            any::<bool>(),
+            arb_opt(arb_json_value()),
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_string_index_map_model()),
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_string_index_map_model()),
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+        )
+            .prop_map(
+                |(
+                    is_default,
+                    config,
+                    env_merge_mode,
+                    env,
+                    wasi_config_merge_mode,
+                    wasi_config,
+                    plugins_merge_mode,
+                    plugins,
+                    files_merge_mode,
+                    files,
+                )| AgentPreset {
+                    default: is_default.then_some(Marker),
+                    config,
+                    env_merge_mode,
+                    env,
+                    wasi_config_merge_mode,
+                    wasi_config,
+                    plugins_merge_mode,
+                    plugins,
+                    files_merge_mode,
+                    files,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_agent_model() -> BoxedStrategy<Agent> {
+        (
+            arb_token_list_model(),
+            arb_opt(arb_json_value()),
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_string_index_map_model()),
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_string_index_map_model()),
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
+            arb_opt(arb_vec_merge_mode_model()),
+            arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+            prop::collection::vec((arb_ident(), arb_agent_preset_model()), 0..=2)
+                .prop_map(IndexMap::from_iter),
+        )
+            .prop_map(
+                |(
+                    templates,
+                    config,
+                    env_merge_mode,
+                    env,
+                    wasi_config_merge_mode,
+                    wasi_config,
+                    plugins_merge_mode,
+                    plugins,
+                    files_merge_mode,
+                    files,
+                    presets,
+                )| Agent {
+                    templates,
+                    config,
+                    env_merge_mode,
+                    env,
+                    wasi_config_merge_mode,
+                    wasi_config,
+                    plugins_merge_mode,
+                    plugins,
+                    files_merge_mode,
+                    files,
+                    presets,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_server_model() -> BoxedStrategy<Server> {
+        prop_oneof![
+            Just(Server::Builtin(BuiltinServer::Local)),
+            Just(Server::Builtin(BuiltinServer::Cloud)),
+            (
+                arb_url_model(),
+                arb_url_model(),
+                any::<bool>(),
+                any::<bool>(),
+                arb_ident(),
+            )
+                .prop_map(
+                    |(url, worker_url, allow_insecure, use_oauth, static_token)| {
+                        let auth = if use_oauth {
+                            CustomServerAuth::OAuth2 { oauth2: Marker }
+                        } else {
+                            CustomServerAuth::Static { static_token }
+                        };
+
+                        Server::Custom(Box::new(CustomServer {
+                            url,
+                            worker_url: Some(worker_url),
+                            allow_insecure: Some(allow_insecure),
+                            auth,
+                        }))
+                    }
+                ),
+        ]
+        .boxed()
+    }
+
+    fn arb_cli_options_model() -> BoxedStrategy<CliOptions> {
+        (
+            arb_opt(prop_oneof![Just(Format::Text), Just(Format::Json)].boxed()),
+            any::<bool>(),
+            any::<bool>(),
+            any::<bool>(),
+        )
+            .prop_map(
+                |(format, auto_confirm, redeploy_agents, reset)| CliOptions {
+                    format,
+                    auto_confirm: auto_confirm.then_some(Marker),
+                    redeploy_agents: redeploy_agents.then_some(Marker),
+                    reset: reset.then_some(Marker),
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_deployment_options_model() -> BoxedStrategy<DeploymentOptions> {
+        (any::<bool>(), any::<bool>(), any::<bool>())
+            .prop_map(|(compatibility_check, version_check, security_overrides)| {
+                DeploymentOptions {
+                    compatibility_check: Some(compatibility_check),
+                    version_check: Some(version_check),
+                    security_overrides: Some(security_overrides),
+                }
+            })
+            .boxed()
+    }
+
+    fn arb_environment_model() -> BoxedStrategy<Environment> {
+        (
+            any::<bool>(),
+            arb_opt(arb_ident()),
+            arb_opt(arb_server_model()),
+            arb_token_list_model(),
+            arb_opt(arb_cli_options_model()),
+            arb_opt(arb_deployment_options_model()),
+        )
+            .prop_map(
+                |(is_default, account, server, component_presets, cli, deployment)| Environment {
+                    default: is_default.then_some(Marker),
+                    account,
+                    server,
+                    component_presets,
+                    cli,
+                    deployment,
+                },
+            )
+            .boxed()
+    }
+
+    fn arb_http_api_deployment_model() -> BoxedStrategy<HttpApiDeployment> {
+        (
+            arb_dns_label(),
+            arb_opt(
+                (arb_dns_label(), arb_ident())
+                    .prop_map(|(host, path)| format!("https://{host}.example.com/{path}"))
+                    .boxed(),
+            ),
+            prop::collection::vec(
+                (
+                    arb_ident().prop_map(AgentTypeName),
+                    (
+                        arb_opt(arb_ident().prop_map(SecuritySchemeName).boxed()),
+                        arb_opt(arb_ident()),
+                    )
+                        .prop_map(
+                            |(security_scheme, test_session_header_name)| {
+                                HttpApiDeploymentAgentOptions {
+                                    security_scheme,
+                                    test_session_header_name,
+                                }
+                            },
+                        ),
+                ),
+                0..=3,
+            )
+            .prop_map(IndexMap::from_iter),
+        )
+            .prop_map(|(domain, webhook_url, agents)| HttpApiDeployment {
+                domain: Domain(format!("{domain}.example.com")),
+                webhook_url,
+                agents,
+            })
+            .boxed()
+    }
+
+    fn arb_http_api_model() -> BoxedStrategy<HttpApi> {
+        prop::collection::vec(
+            (
+                arb_ident().prop_map(EnvironmentName),
+                prop::collection::vec(arb_http_api_deployment_model(), 0..=2),
+            ),
+            0..=3,
+        )
+        .prop_map(|deployments| HttpApi {
+            deployments: IndexMap::from_iter(deployments),
+        })
+        .boxed()
+    }
+
+    fn arb_mcp_deployment_model() -> BoxedStrategy<McpDeployment> {
+        (
+            arb_dns_label(),
+            prop::collection::vec(
+                (
+                    arb_ident().prop_map(AgentTypeName),
+                    arb_opt(arb_ident())
+                        .prop_map(|security_scheme| McpDeploymentAgentOptions { security_scheme }),
+                ),
+                0..=3,
+            )
+            .prop_map(IndexMap::from_iter),
+        )
+            .prop_map(|(domain, agents)| McpDeployment {
+                domain: Domain(format!("{domain}.example.com")),
+                agents,
+            })
+            .boxed()
+    }
+
+    fn arb_mcp_model() -> BoxedStrategy<Mcp> {
+        prop::collection::vec(
+            (
+                arb_ident().prop_map(EnvironmentName),
+                prop::collection::vec(arb_mcp_deployment_model(), 0..=2),
+            ),
+            0..=3,
+        )
+        .prop_map(|deployments| Mcp {
+            deployments: IndexMap::from_iter(deployments),
+        })
+        .boxed()
+    }
+
+    fn arb_bridge_sdk_language_targets() -> BoxedStrategy<BridgeSdkLanguageTargets> {
+        (arb_token_list_model(), arb_opt(arb_ident()))
+            .prop_map(|(agents, output_dir)| BridgeSdkLanguageTargets { agents, output_dir })
+            .boxed()
+    }
+
+    fn arb_bridge_sdks_model() -> BoxedStrategy<BridgeSdks> {
+        (
+            arb_opt(arb_bridge_sdk_language_targets()),
+            arb_opt(arb_bridge_sdk_language_targets()),
+        )
+            .prop_map(|(ts, rust)| BridgeSdks { ts, rust })
+            .boxed()
+    }
+
+    fn arb_secret_defaults_model()
+    -> BoxedStrategy<IndexMap<EnvironmentName, Vec<EnvironmentAgentSecret>>> {
+        prop::collection::vec(
+            (
+                arb_ident().prop_map(EnvironmentName),
+                prop::collection::vec(
+                    (prop::collection::vec(arb_ident(), 1..=3), arb_json_value())
+                        .prop_map(|(path, value)| EnvironmentAgentSecret { path, value }),
+                    0..=2,
+                ),
+            ),
+            0..=3,
+        )
+        .prop_map(IndexMap::from_iter)
+        .boxed()
+    }
+
+    fn arb_resource_limit_model() -> BoxedStrategy<ResourceLimit> {
+        prop_oneof![
+            (1u64..=100u64, 1u64..=300u64).prop_map(|(value, max)| {
+                ResourceLimit::Rate(ResourceRateLimit {
+                    value,
+                    period: TimePeriod::Second,
+                    max,
+                })
+            }),
+            (1u64..=100u64)
+                .prop_map(|value| ResourceLimit::Capacity(ResourceCapacityLimit { value })),
+            (1u64..=100u64)
+                .prop_map(|value| ResourceLimit::Concurrency(ResourceConcurrencyLimit { value })),
+        ]
+        .boxed()
+    }
+
+    fn arb_resource_defaults_model()
+    -> BoxedStrategy<IndexMap<EnvironmentName, Vec<ResourceDefinitionCreation>>> {
+        prop::collection::vec(
+            (
+                arb_ident().prop_map(EnvironmentName),
+                prop::collection::vec(
+                    (
+                        arb_ident(),
+                        arb_resource_limit_model(),
+                        any::<bool>(),
+                        arb_ident(),
+                        arb_ident(),
+                    )
+                        .prop_map(|(name, limit, reject, unit, units)| {
+                            ResourceDefinitionCreation {
+                                name: ResourceName(name),
+                                limit,
+                                enforcement_action: if reject {
+                                    EnforcementAction::Reject
+                                } else {
+                                    EnforcementAction::Throttle
+                                },
+                                unit,
+                                units,
+                            }
+                        }),
+                    0..=2,
+                ),
+            ),
+            0..=3,
+        )
+        .prop_map(IndexMap::from_iter)
+        .boxed()
+    }
+
+    fn arb_application_model_v3() -> BoxedStrategy<Application> {
+        (
+            arb_opt(arb_semver()),
+            arb_opt(arb_ident()),
+            prop::collection::vec(arb_ident(), 0..=3),
+            (
+                prop::collection::vec((arb_ident(), arb_component_template_model()), 0..=3)
+                    .prop_map(IndexMap::from_iter),
+                prop::collection::vec((arb_ident(), arb_component_model()), 0..=3)
+                    .prop_map(IndexMap::from_iter),
+                prop::collection::vec(
+                    (arb_ident().prop_map(AgentTypeName), arb_agent_model()),
+                    0..=3,
+                )
+                .prop_map(IndexMap::from_iter),
+                prop::collection::vec(
+                    (
+                        arb_ident(),
+                        prop::collection::vec(arb_external_command_model(), 0..=2),
+                    ),
+                    0..=3,
+                )
+                .prop_map(IndexMap::from_iter),
+                prop::collection::vec(arb_ident(), 0..=3),
+            ),
+            (
+                arb_opt(arb_http_api_model()),
+                arb_opt(arb_mcp_model()),
+                prop::collection::vec((arb_ident(), arb_environment_model()), 0..=3)
+                    .prop_map(IndexMap::from_iter),
+                arb_opt(arb_bridge_sdks_model()),
+                arb_secret_defaults_model(),
+                arb_resource_defaults_model(),
+            ),
+        )
+            .prop_map(
+                |(
+                    manifest_version,
+                    app,
+                    includes,
+                    (component_templates, components, agents, custom_commands, clean),
+                    (http_api, mcp, environments, bridge, secret_defaults, resource_defaults),
+                )| Application {
+                    manifest_version,
+                    app,
+                    includes,
+                    component_templates,
+                    components,
+                    agents,
+                    custom_commands,
+                    clean,
+                    http_api,
+                    mcp,
+                    environments,
+                    bridge,
+                    secret_defaults,
+                    retry_policy_defaults: IndexMap::new(),
+                    resource_defaults,
+                },
+            )
+            .boxed()
+    }
+
+    prop_compose! {
+        fn arb_application_document()(app in arb_application_model_v3()) -> Application {
+            app
+        }
+    }
+
+    #[test]
+    fn schema_is_loadable_and_validates_empty_app() {
+        let app = Application {
+            app: Some("app-name".to_string()),
+            ..Default::default()
+        };
+
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 4096,
+            .. ProptestConfig::default()
+        })]
 
         #[test]
-        fn schema_is_loadable_and_validates_empty_app() {
-            let app = Application {
-                app: Some("app-name".to_string()),
-                ..Default::default()
-            };
-
-            assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
+        fn proptest_schema_accepts_serialized_application_documents(app in arb_application_document()) {
+            let value = serde_json::to_value(&app).unwrap();
+            let evaluation = JSON_SCHEMA_VALIDATOR.evaluate(&value);
+            prop_assert!(
+                evaluation.flag().valid,
+                "Schema validation failed for generated app JSON: {:?}",
+                evaluation
+                    .iter_errors()
+                    .map(|e| format!("{} :: {}", e.instance_location, e.error))
+                    .collect::<Vec<_>>()
+            );
         }
     }
 }

@@ -123,6 +123,7 @@
     "templates": {
       "description": "List of parent templates",
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "templates": {
           "$ref": "#/definitions/lenientTokenList"
@@ -131,43 +132,237 @@
     },
     "componentTemplate": {
       "description": "Component template definition",
-      "allOf": [
-        {
-          "$ref": "#/definitions/templates"
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "templates": {
+          "$ref": "#/definitions/lenientTokenList"
         },
-        {
-          "$ref": "#/definitions/componentLayerProperties"
+        "componentWasm": {
+          "type": "string",
+          "description": "File path for the built WASM component."
         },
-        {
-          "$ref": "#/definitions/componentPresets"
+        "outputWasm": {
+          "type": "string",
+          "description": "File path for the output WASM component which is ready to be uploaded to Golem."
+        },
+        "buildMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "build": {
+          "type": "array",
+          "description": "Commands used for creating component WASM.",
+          "items": {
+            "$ref": "#/definitions/buildCommand"
+          }
+        },
+        "customCommands": {
+          "type": "object",
+          "description": "User defined custom commands.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/externalCommand"
+            }
+          }
+        },
+        "clean": {
+          "type": "array",
+          "description": "User defined extra paths used in the clean command.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "config": {},
+        "envMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
+          "type": "object",
+          "description": "WASI configuration variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "pluginsMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "plugins": {
+          "type": "array",
+          "description": "Installed plugins for the agent",
+          "items": {
+            "$ref": "#/definitions/pluginInstallation"
+          }
+        },
+        "filesMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "files": {
+          "type": "array",
+          "description": "Initial component file system",
+          "items": {
+            "$ref": "#/definitions/initialComponentFile"
+          }
+        },
+        "presets": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/componentPreset"
+          }
         }
-      ]
+      }
     },
     "component": {
       "description": "Component definition",
-      "allOf": [
-        {
-          "$ref": "#/definitions/componentTemplate"
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "templates": {
+          "$ref": "#/definitions/lenientTokenList"
         },
-        {
+        "dir": {
+          "type": "string",
+          "description": "Base directory for resolving component paths"
+        },
+        "componentWasm": {
+          "type": "string",
+          "description": "File path for the built WASM component."
+        },
+        "outputWasm": {
+          "type": "string",
+          "description": "File path for the output WASM component which is ready to be uploaded to Golem."
+        },
+        "buildMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "build": {
+          "type": "array",
+          "description": "Commands used for creating component WASM.",
+          "items": {
+            "$ref": "#/definitions/buildCommand"
+          }
+        },
+        "customCommands": {
           "type": "object",
-          "properties": {
-            "dir": {
-              "type": "string",
-              "description": "Base directory for resolving component paths"
+          "description": "User defined custom commands.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/externalCommand"
             }
           }
+        },
+        "clean": {
+          "type": "array",
+          "description": "User defined extra paths used in the clean command.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "config": {},
+        "envMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
+          "type": "object",
+          "description": "WASI configuration variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "pluginsMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "plugins": {
+          "type": "array",
+          "description": "Installed plugins for the agent",
+          "items": {
+            "$ref": "#/definitions/pluginInstallation"
+          }
+        },
+        "filesMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "files": {
+          "type": "array",
+          "description": "Initial component file system",
+          "items": {
+            "$ref": "#/definitions/initialComponentFile"
+          }
+        },
+        "presets": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/componentPreset"
+          }
         }
-      ]
+      }
     },
     "componentLayerProperties": {
       "type": "object",
-      "allOf": [
-        {
-          "$ref": "#/definitions/agentLayerProperties"
-        }
-      ],
+      "additionalProperties": false,
       "properties": {
+        "config": {},
+        "envMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
+          "type": "object",
+          "description": "WASI configuration variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "pluginsMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "plugins": {
+          "type": "array",
+          "description": "Installed plugins for the agent",
+          "items": {
+            "$ref": "#/definitions/pluginInstallation"
+          }
+        },
+        "filesMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "files": {
+          "type": "array",
+          "description": "Initial component file system",
+          "items": {
+            "$ref": "#/definitions/initialComponentFile"
+          }
+        },
         "componentWasm": {
           "type": "string",
           "description": "File path for the built WASM component."
@@ -208,6 +403,7 @@
     "componentPresets": {
       "type": "object",
       "description": "Component definition presets",
+      "additionalProperties": false,
       "properties": {
         "presets": {
           "type": "object",
@@ -219,12 +415,84 @@
     },
     "componentPreset": {
       "type": "object",
-      "allOf": [
-        {
-          "$ref": "#/definitions/componentLayerProperties"
-        }
-      ],
+      "additionalProperties": false,
       "properties": {
+        "config": {},
+        "envMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
+          "type": "object",
+          "description": "WASI configuration variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "pluginsMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "plugins": {
+          "type": "array",
+          "description": "Installed plugins for the agent",
+          "items": {
+            "$ref": "#/definitions/pluginInstallation"
+          }
+        },
+        "filesMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "files": {
+          "type": "array",
+          "description": "Initial component file system",
+          "items": {
+            "$ref": "#/definitions/initialComponentFile"
+          }
+        },
+        "componentWasm": {
+          "type": "string",
+          "description": "File path for the built WASM component."
+        },
+        "outputWasm": {
+          "type": "string",
+          "description": "File path for the output WASM component which is ready to be uploaded to Golem."
+        },
+        "buildMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "build": {
+          "type": "array",
+          "description": "Commands used for creating component WASM.",
+          "items": {
+            "$ref": "#/definitions/buildCommand"
+          }
+        },
+        "customCommands": {
+          "type": "object",
+          "description": "User defined custom commands.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/externalCommand"
+            }
+          }
+        },
+        "clean": {
+          "type": "array",
+          "description": "User defined extra paths used in the clean command.",
+          "items": {
+            "type": "string"
+          }
+        },
         "default": {
           "const": true
         }
@@ -232,34 +500,106 @@
     },
     "agent": {
       "description": "Agent definition",
-      "allOf": [
-        {
-          "$ref": "#/definitions/templates"
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "templates": {
+          "$ref": "#/definitions/lenientTokenList"
         },
-        {
-          "$ref": "#/definitions/agentLayerProperties"
+        "config": {},
+        "envMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
         },
-        {
+        "env": {
           "type": "object",
-          "properties": {
-            "presets": {
-              "type": "object",
-              "additionalProperties": {
-                "$ref": "#/definitions/agentPreset"
-              }
-            }
+          "description": "Environment variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
+          "type": "object",
+          "description": "WASI configuration variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "pluginsMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "plugins": {
+          "type": "array",
+          "description": "Installed plugins for the agent",
+          "items": {
+            "$ref": "#/definitions/pluginInstallation"
+          }
+        },
+        "filesMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "files": {
+          "type": "array",
+          "description": "Initial component file system",
+          "items": {
+            "$ref": "#/definitions/initialComponentFile"
+          }
+        },
+        "presets": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/agentPreset"
           }
         }
-      ]
+      }
     },
     "agentPreset": {
       "type": "object",
-      "allOf": [
-        {
-          "$ref": "#/definitions/agentLayerProperties"
-        }
-      ],
+      "additionalProperties": false,
       "properties": {
+        "config": {},
+        "envMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
+          "type": "object",
+          "description": "WASI configuration variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "pluginsMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "plugins": {
+          "type": "array",
+          "description": "Installed plugins for the agent",
+          "items": {
+            "$ref": "#/definitions/pluginInstallation"
+          }
+        },
+        "filesMergeMode": {
+          "$ref": "#/definitions/vecMergeMode"
+        },
+        "files": {
+          "type": "array",
+          "description": "Initial component file system",
+          "items": {
+            "$ref": "#/definitions/initialComponentFile"
+          }
+        },
         "default": {
           "const": true
         }
@@ -267,6 +607,7 @@
     },
     "agentLayerProperties": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "config": {},
         "envMergeMode": {
