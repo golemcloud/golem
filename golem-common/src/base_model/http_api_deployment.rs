@@ -104,3 +104,45 @@ impl HttpApiDeploymentCreation {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::HttpApiDeploymentCreation;
+    use test_r::test;
+
+    #[test]
+    fn normalize_openapi_endpoint_treats_root_variants_as_unset() {
+        assert_eq!(
+            HttpApiDeploymentCreation::normalize_openapi_endpoint(None),
+            None
+        );
+        assert_eq!(
+            HttpApiDeploymentCreation::normalize_openapi_endpoint(Some("".to_string())),
+            None
+        );
+        assert_eq!(
+            HttpApiDeploymentCreation::normalize_openapi_endpoint(Some("/".to_string())),
+            None
+        );
+        assert_eq!(
+            HttpApiDeploymentCreation::normalize_openapi_endpoint(Some("///".to_string())),
+            None
+        );
+    }
+
+    #[test]
+    fn normalize_openapi_endpoint_canonicalizes_slashes() {
+        assert_eq!(
+            HttpApiDeploymentCreation::normalize_openapi_endpoint(Some("docs".to_string())),
+            Some("/docs".to_string())
+        );
+        assert_eq!(
+            HttpApiDeploymentCreation::normalize_openapi_endpoint(Some("/docs/".to_string())),
+            Some("/docs".to_string())
+        );
+        assert_eq!(
+            HttpApiDeploymentCreation::normalize_openapi_endpoint(Some("/docs/specs/".to_string())),
+            Some("/docs/specs".to_string())
+        );
+    }
+}

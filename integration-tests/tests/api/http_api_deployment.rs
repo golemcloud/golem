@@ -220,6 +220,66 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 
 #[test]
 #[tracing::instrument]
+async fn update_http_api_deployment_openapi_endpoint_can_be_set_and_cleared(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let domain = user.register_domain(&env.id).await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    let http_api_deployment = client
+        .create_http_api_deployment(
+            &env.id.0,
+            &HttpApiDeploymentCreation {
+                domain,
+                agents: BTreeMap::from_iter([(
+                    AgentTypeName("test-api".to_string()),
+                    HttpApiDeploymentAgentOptions::default(),
+                )]),
+                webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+                openapi_endpoint: None,
+            },
+        )
+        .await?;
+
+    let updated_http_api_deployment = client
+        .update_http_api_deployment(
+            &http_api_deployment.id.0,
+            &HttpApiDeploymentUpdate {
+                current_revision: http_api_deployment.revision,
+                webhook_url: None,
+                openapi_endpoint: Some(Some("/docs/".to_string())),
+                agents: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(
+        updated_http_api_deployment.openapi_endpoint,
+        Some("/docs".to_string())
+    );
+
+    let cleared_http_api_deployment = client
+        .update_http_api_deployment(
+            &http_api_deployment.id.0,
+            &HttpApiDeploymentUpdate {
+                current_revision: updated_http_api_deployment.revision,
+                webhook_url: None,
+                openapi_endpoint: Some(None),
+                agents: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(cleared_http_api_deployment.openapi_endpoint, None);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn delete_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;

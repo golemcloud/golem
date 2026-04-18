@@ -33,8 +33,8 @@ use golem_common::model::http_api_deployment::{
 use golem_service_base::custom_api::{
     CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
     CorsPreflightMethodPolicy, MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat,
-    OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour,
-    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, SessionFromHeaderRouteSecurity,
+    WebhookCallbackBehaviour,
 };
 use heck::ToKebabCase;
 use itertools::Itertools;
@@ -696,8 +696,24 @@ mod tests {
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentId};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
+
+    fn test_deployment(openapi_endpoint: Option<&str>) -> HttpApiDeployment {
+        HttpApiDeployment {
+            id: HttpApiDeploymentId::new(),
+            revision:
+                golem_common::model::http_api_deployment::HttpApiDeploymentRevision::try_from(0u64)
+                    .unwrap(),
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            domain: Domain("example.com".to_string()),
+            hash: Hash::empty(),
+            agents: BTreeMap::new(),
+            webhooks_url: "/webhooks".to_string(),
+            openapi_endpoint: openapi_endpoint.map(|value| value.to_string()),
+            created_at: Utc::now(),
+        }
+    }
 
     #[test]
     fn parses_mixed_segments_as_literals() {
@@ -753,6 +769,129 @@ mod tests {
         ];
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn parses_openapi_endpoint_segments_for_literal_prefix() {
+        let result = parse_openapi_endpoint_path_segments(&test_deployment(Some("/docs/specs/")))
+            .expect("expected valid openapi prefix");
+
+        assert_eq!(
+            result,
+            vec![
+                PathSegment::Literal {
+                    value: "docs".to_string(),
+                },
+                PathSegment::Literal {
+                    value: "specs".to_string(),
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_openapi_endpoint_as_root_when_unset() {
+        let result = parse_openapi_endpoint_path_segments(&test_deployment(None))
+            .expect("expected root openapi prefix");
+
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_openapi_prefixes() {
+        for invalid_prefix in [
+            "/docs?x=1",
+            "/docs#fragment",
+            "/docs//bad",
+            "/docs/{id}",
+            "/docs/{*rest}",
+            "/docs/*",
+            "/docs/openapi.json",
+        ] {
+            let result =
+                parse_openapi_endpoint_path_segments(&test_deployment(Some(invalid_prefix)));
+
+            assert!(matches!(
+                result,
+                Err(DeployValidationError::HttpApiDeploymentInvalidOpenApiEndpoint { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn add_openapi_spec_routes_uses_custom_prefix_and_formats() {
+        let deployment = test_deployment(Some("/docs"));
+        let mut route_id = 1;
+        let mut compiled_routes = Vec::new();
+        let mut errors = Vec::new();
+
+        add_openapi_spec_routes(
+            &deployment,
+            &mut route_id,
+            &mut compiled_routes,
+            &mut errors,
+        );
+
+        assert!(errors.is_empty());
+        assert_eq!(compiled_routes.len(), 2);
+
+        assert_eq!(
+            compiled_routes[0].path,
+            vec![
+                PathSegment::Literal {
+                    value: "docs".to_string(),
+                },
+                PathSegment::Literal {
+                    value: "openapi.json".to_string(),
+                }
+            ]
+        );
+        assert!(matches!(
+            &compiled_routes[0].behaviour,
+            RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
+                format: OpenApiSpecFormat::Json
+            })
+        ));
+
+        assert_eq!(
+            compiled_routes[1].path,
+            vec![
+                PathSegment::Literal {
+                    value: "docs".to_string(),
+                },
+                PathSegment::Literal {
+                    value: "openapi.yaml".to_string(),
+                }
+            ]
+        );
+        assert!(matches!(
+            &compiled_routes[1].behaviour,
+            RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
+                format: OpenApiSpecFormat::Yaml
+            })
+        ));
+    }
+
+    #[test]
+    fn add_openapi_spec_routes_reports_invalid_prefix_error() {
+        let deployment = test_deployment(Some("/docs?x=1"));
+        let mut route_id = 1;
+        let mut compiled_routes = Vec::new();
+        let mut errors = Vec::new();
+
+        add_openapi_spec_routes(
+            &deployment,
+            &mut route_id,
+            &mut compiled_routes,
+            &mut errors,
+        );
+
+        assert!(compiled_routes.is_empty());
+        assert_eq!(errors.len(), 1);
+        assert!(matches!(
+            &errors[0],
+            DeployValidationError::HttpApiDeploymentInvalidOpenApiEndpoint { .. }
+        ));
     }
 
     #[test]
@@ -817,18 +956,7 @@ mod tests {
             },
         ];
 
-        let deployment = HttpApiDeployment {
-            id: HttpApiDeploymentId::new(),
-            revision:
-                golem_common::model::http_api_deployment::HttpApiDeploymentRevision::try_from(0u64)
-                    .unwrap(),
-            environment_id: EnvironmentId(uuid::Uuid::nil()),
-            domain: Domain("example.com".to_string()),
-            hash: Hash::empty(),
-            agents: BTreeMap::new(),
-            webhooks_url: "/webhooks".to_string(),
-            created_at: Utc::now(),
-        };
+        let deployment = test_deployment(None);
 
         let mut route_id = 3;
         add_cors_preflight_http_routes(&deployment, &mut route_id, &mut compiled_routes);
