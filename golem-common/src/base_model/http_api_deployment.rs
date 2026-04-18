@@ -92,16 +92,26 @@ impl HttpApiDeploymentCreation {
         "/webhooks/".to_string()
     }
 
-    pub fn normalize_openapi_endpoint(openapi_endpoint: Option<String>) -> Option<String> {
-        openapi_endpoint.and_then(|value| {
-            let trimmed = value.trim_matches('/');
+    fn normalize_path_prefix(path: &str, trailing_slash: bool) -> String {
+        let trimmed = path.trim_matches('/');
 
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(format!("/{trimmed}"))
-            }
-        })
+        if trimmed.is_empty() {
+            "/".to_string()
+        } else if trailing_slash {
+            format!("/{trimmed}/")
+        } else {
+            format!("/{trimmed}")
+        }
+    }
+
+    pub fn normalize_webhooks_url(webhooks_url: String) -> String {
+        Self::normalize_path_prefix(&webhooks_url, true)
+    }
+
+    pub fn normalize_openapi_endpoint(openapi_endpoint: Option<String>) -> Option<String> {
+        openapi_endpoint
+            .map(|value| Self::normalize_path_prefix(&value, false))
+            .filter(|value| value != "/")
     }
 }
 
@@ -143,6 +153,38 @@ mod tests {
         assert_eq!(
             HttpApiDeploymentCreation::normalize_openapi_endpoint(Some("/docs/specs/".to_string())),
             Some("/docs/specs".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_webhooks_url_treats_root_variants_as_root_prefix() {
+        assert_eq!(
+            HttpApiDeploymentCreation::normalize_webhooks_url("".to_string()),
+            "/".to_string()
+        );
+        assert_eq!(
+            HttpApiDeploymentCreation::normalize_webhooks_url("/".to_string()),
+            "/".to_string()
+        );
+        assert_eq!(
+            HttpApiDeploymentCreation::normalize_webhooks_url("///".to_string()),
+            "/".to_string()
+        );
+    }
+
+    #[test]
+    fn normalize_webhooks_url_canonicalizes_slashes() {
+        assert_eq!(
+            HttpApiDeploymentCreation::normalize_webhooks_url("webhooks".to_string()),
+            "/webhooks/".to_string()
+        );
+        assert_eq!(
+            HttpApiDeploymentCreation::normalize_webhooks_url("/webhooks".to_string()),
+            "/webhooks/".to_string()
+        );
+        assert_eq!(
+            HttpApiDeploymentCreation::normalize_webhooks_url("/webhooks/v2/".to_string()),
+            "/webhooks/v2/".to_string()
         );
     }
 }

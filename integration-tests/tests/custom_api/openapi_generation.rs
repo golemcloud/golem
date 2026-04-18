@@ -21,22 +21,10 @@ use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use pretty_assertions::assert_eq;
 use std::io::Write;
-use std::ops::Deref;
 use test_r::test_dep;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
-
-#[derive(Debug)]
-struct CustomPrefixHttpTestContext(HttpTestContext);
-
-impl Deref for CustomPrefixHttpTestContext {
-    type Target = HttpTestContext;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
 
 #[test_dep]
 async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
@@ -63,79 +51,47 @@ async fn test_context(deps: &EnvBasedTestDependencies) -> HttpTestContext {
     .unwrap()
 }
 
-#[test_dep]
-async fn custom_prefix_test_context(
-    deps: &EnvBasedTestDependencies,
-) -> CustomPrefixHttpTestContext {
-    CustomPrefixHttpTestContext(
-        make_test_context_with_openapi_endpoint(
-            deps,
-            vec![
-                (
-                    AgentTypeName("HttpAgent".to_string()),
-                    HttpApiDeploymentAgentOptions::default(),
-                ),
-                (
-                    AgentTypeName("CorsAgent".to_string()),
-                    HttpApiDeploymentAgentOptions::default(),
-                ),
-                (
-                    AgentTypeName("WebhookAgent".to_string()),
-                    HttpApiDeploymentAgentOptions::default(),
-                ),
-            ],
-            "golem_it_agent_sdk_rust_release",
-            "golem-it:agent-sdk-rust",
-            Some("/docs".to_string()),
-        )
-        .await
-        .unwrap(),
-    )
-}
+#[test]
+#[tracing::instrument]
+async fn test_open_api_yaml_generation(agent: &HttpTestContext) -> anyhow::Result<()> {
+    let mut mint = Mint::new("tests/goldenfiles");
+    let mut mint_goldenfile = mint.new_goldenfile("expected_openapi_yaml.yaml")?;
 
-async fn fetch_openapi_yaml(
-    agent: &HttpTestContext,
-    path: &str,
-) -> anyhow::Result<serde_yaml::Value> {
-    let response = agent.client.get(agent.base_url.join(path)?).send().await?;
+    let yaml_response = agent
+        .client
+        .get(agent.base_url.join("/openapi.yaml")?)
+        .send()
+        .await?;
 
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(yaml_response.status(), reqwest::StatusCode::OK);
     assert!(
-        response
+        yaml_response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.starts_with("application/yaml"))
     );
 
-    Ok(serde_yaml::from_slice(&response.bytes().await?)?)
-}
+    let yaml_value: serde_yaml::Value = serde_yaml::from_slice(&yaml_response.bytes().await?)?;
+    let encoded_yaml = serde_yaml::to_string(&yaml_value)?;
+    let _ = mint_goldenfile.write(encoded_yaml.as_bytes())?;
 
-async fn fetch_openapi_json(
-    agent: &HttpTestContext,
-    path: &str,
-) -> anyhow::Result<serde_json::Value> {
-    let response = agent.client.get(agent.base_url.join(path)?).send().await?;
+    let json_response = agent
+        .client
+        .get(agent.base_url.join("/openapi.json")?)
+        .send()
+        .await?;
 
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(json_response.status(), reqwest::StatusCode::OK);
     assert!(
-        response
+        json_response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.starts_with("application/json"))
     );
 
-    Ok(serde_json::from_slice(&response.bytes().await?)?)
-}
-
-async fn assert_openapi_json_and_yaml_are_equivalent(
-    agent: &HttpTestContext,
-    yaml_path: &str,
-    json_path: &str,
-) -> anyhow::Result<()> {
-    let yaml_value = fetch_openapi_yaml(agent, yaml_path).await?;
-    let json_value = fetch_openapi_json(agent, json_path).await?;
+    let json_value: serde_json::Value = serde_json::from_slice(&json_response.bytes().await?)?;
     let yaml_as_json = serde_json::to_value(&yaml_value)?;
 
     assert_eq!(json_value, yaml_as_json);
@@ -145,52 +101,72 @@ async fn assert_openapi_json_and_yaml_are_equivalent(
 
 #[test]
 #[tracing::instrument]
-async fn test_open_api_yaml_generation(agent: &HttpTestContext) -> anyhow::Result<()> {
-    let mut mint = Mint::new("tests/goldenfiles");
-    let mut mint_goldenfile = mint.new_goldenfile("expected_openapi_yaml.yaml")?;
-
-    let yaml_value = fetch_openapi_yaml(agent, "/openapi.yaml").await?;
-    let encoded_yaml = serde_yaml::to_string(&yaml_value)?;
-    let _ = mint_goldenfile.write(encoded_yaml.as_bytes())?;
-
-    Ok(())
-}
-
-#[test]
-#[tracing::instrument]
-async fn test_open_api_json_generation(agent: &HttpTestContext) -> anyhow::Result<()> {
+async fn test_open_api_custom_prefix_json_generation(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
     let mut mint = Mint::new("tests/goldenfiles");
     let mut mint_goldenfile = mint.new_goldenfile("expected_openapi_json.json")?;
 
-    let json_value = fetch_openapi_json(agent, "/openapi.json").await?;
+    let agent = make_test_context_with_openapi_endpoint(
+        deps,
+        vec![
+            (
+                AgentTypeName("HttpAgent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+            (
+                AgentTypeName("CorsAgent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+            (
+                AgentTypeName("WebhookAgent".to_string()),
+                HttpApiDeploymentAgentOptions::default(),
+            ),
+        ],
+        "golem_it_agent_sdk_rust_release",
+        "golem-it:agent-sdk-rust",
+        Some("/docs".to_string()),
+    )
+    .await?;
+
+    let json_response = agent
+        .client
+        .get(agent.base_url.join("/docs/openapi.json")?)
+        .send()
+        .await?;
+
+    assert_eq!(json_response.status(), reqwest::StatusCode::OK);
+    assert!(
+        json_response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("application/json"))
+    );
+
+    let json_value: serde_json::Value = serde_json::from_slice(&json_response.bytes().await?)?;
     let encoded_json = serde_json::to_string_pretty(&json_value)?;
     let _ = mint_goldenfile.write(encoded_json.as_bytes())?;
 
-    Ok(())
-}
+    let yaml_response = agent
+        .client
+        .get(agent.base_url.join("/docs/openapi.yaml")?)
+        .send()
+        .await?;
 
-#[test]
-#[tracing::instrument]
-async fn test_open_api_json_and_yaml_are_equivalent(agent: &HttpTestContext) -> anyhow::Result<()> {
-    assert_openapi_json_and_yaml_are_equivalent(agent, "/openapi.yaml", "/openapi.json").await
-}
+    assert_eq!(yaml_response.status(), reqwest::StatusCode::OK);
+    assert!(
+        yaml_response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("application/yaml"))
+    );
 
-#[test]
-#[tracing::instrument]
-async fn test_open_api_custom_prefix_json_and_yaml_are_equivalent(
-    agent: &CustomPrefixHttpTestContext,
-) -> anyhow::Result<()> {
-    assert_openapi_json_and_yaml_are_equivalent(agent, "/docs/openapi.yaml", "/docs/openapi.json")
-        .await
-}
+    let yaml_value: serde_yaml::Value = serde_yaml::from_slice(&yaml_response.bytes().await?)?;
+    let yaml_as_json = serde_json::to_value(&yaml_value)?;
 
-#[test]
-#[tracing::instrument]
-async fn test_open_api_custom_prefix_moves_routes(
-    agent: &CustomPrefixHttpTestContext,
-) -> anyhow::Result<()> {
-    let _ = fetch_openapi_yaml(agent, "/docs/openapi.yaml").await?;
-    let _ = fetch_openapi_json(agent, "/docs/openapi.json").await?;
+    assert_eq!(json_value, yaml_as_json);
 
     let root_yaml_response = agent
         .client

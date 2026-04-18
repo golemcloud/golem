@@ -990,7 +990,7 @@
         }
       }
     },
-    "/openapi.json": {
+    "/docs/openapi.json": {
       "get": {
         "responses": {
           "200": {
@@ -1007,7 +1007,7 @@
         }
       }
     },
-    "/openapi.yaml": {
+    "/docs/openapi.yaml": {
       "get": {
         "responses": {
           "200": {

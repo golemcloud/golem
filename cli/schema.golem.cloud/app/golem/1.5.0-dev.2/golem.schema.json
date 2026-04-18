@@ -678,10 +678,6 @@
           "type": "string",
           "description": "Domain"
         },
-        "openapi_endpoint": {
-          "type": "string",
-          "description": "Optional deployment-level prefix for the synthetic OpenAPI export"
-        },
         "definitions": {
           "type": "array",
           "description": "HTTP API definitions to be used in the deployment",

@@ -119,6 +119,37 @@ async fn create_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
 
 #[test]
 #[tracing::instrument]
+async fn create_http_api_deployment_normalizes_webhooks_url(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let domain = user.register_domain(&env.id).await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    let http_api_deployment = client
+        .create_http_api_deployment(
+            &env.id.0,
+            &HttpApiDeploymentCreation {
+                domain,
+                agents: BTreeMap::from_iter([(
+                    AgentTypeName("test-api".to_string()),
+                    HttpApiDeploymentAgentOptions::default(),
+                )]),
+                webhooks_url: "webhooks".to_string(),
+                openapi_endpoint: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(http_api_deployment.webhooks_url, "/webhooks/".to_string());
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
@@ -214,6 +245,52 @@ async fn update_http_api_deployment(deps: &EnvBasedTestDependencies) -> anyhow::
             .await?;
         assert_eq!(result.values, vec![updated_http_api_deployment]);
     }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn update_http_api_deployment_normalizes_webhooks_url(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let domain = user.register_domain(&env.id).await?;
+
+    let client = deps.registry_service().client(&user.token).await;
+
+    let http_api_deployment = client
+        .create_http_api_deployment(
+            &env.id.0,
+            &HttpApiDeploymentCreation {
+                domain,
+                agents: BTreeMap::from_iter([(
+                    AgentTypeName("test-api".to_string()),
+                    HttpApiDeploymentAgentOptions::default(),
+                )]),
+                webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+                openapi_endpoint: None,
+            },
+        )
+        .await?;
+
+    let updated_http_api_deployment = client
+        .update_http_api_deployment(
+            &http_api_deployment.id.0,
+            &HttpApiDeploymentUpdate {
+                current_revision: http_api_deployment.revision,
+                agents: None,
+                webhook_url: Some("webhooks2".to_string()),
+                openapi_endpoint: None,
+            },
+        )
+        .await?;
+
+    assert_eq!(
+        updated_http_api_deployment.webhooks_url,
+        "/webhooks2/".to_string()
+    );
 
     Ok(())
 }

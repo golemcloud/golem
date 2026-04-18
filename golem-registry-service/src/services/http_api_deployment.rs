@@ -137,7 +137,7 @@ impl HttpApiDeploymentService {
         let id = HttpApiDeploymentId::new();
         let record = HttpApiDeploymentRevisionRecord::creation(
             id,
-            data.webhooks_url,
+            HttpApiDeploymentCreation::normalize_webhooks_url(data.webhooks_url),
             HttpApiDeploymentCreation::normalize_openapi_endpoint(data.openapi_endpoint),
             data.agents,
             auth.account_id(),
@@ -206,7 +206,8 @@ impl HttpApiDeploymentService {
 
         http_api_deployment.revision = http_api_deployment.revision.next()?;
         if let Some(webhooks_url) = update.webhook_url {
-            http_api_deployment.webhooks_url = webhooks_url;
+            http_api_deployment.webhooks_url =
+                HttpApiDeploymentCreation::normalize_webhooks_url(webhooks_url);
         };
         if let Some(openapi_endpoint) = update.openapi_endpoint {
             http_api_deployment.openapi_endpoint =
