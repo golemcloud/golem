@@ -26,6 +26,7 @@ use bytes::Bytes;
 use futures::Stream;
 use golem_api_grpc::proto::golem::worker::InvocationContext;
 use golem_common::model::AgentInvocationOutput;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
     DataValue, GolemUserPrincipal, ParsedAgentId, Principal, UntypedDataValue,
 };
@@ -695,6 +696,44 @@ impl WorkerService {
             .await?;
 
         Ok(canceled)
+    }
+
+    pub async fn process_oplog_entries(
+        &self,
+        target_agent_id: &AgentId,
+        environment_id: EnvironmentId,
+        component_revision: ComponentRevision,
+        idempotency_key: IdempotencyKey,
+        _account_id: AccountId,
+        config: std::collections::HashMap<String, String>,
+        metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
+        first_entry_index: OplogIndex,
+        entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<()> {
+        let environment_auth_details = self
+            .auth_service
+            .authorize_environment_actions(
+                environment_id,
+                EnvironmentAction::UpdateWorker,
+                &auth_ctx,
+            )
+            .await?;
+
+        self.worker_client
+            .process_oplog_entries(
+                target_agent_id,
+                environment_id,
+                component_revision,
+                idempotency_key,
+                environment_auth_details.account_id_owning_environment,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+                auth_ctx,
+            )
+            .await
     }
 
     pub async fn invoke_agent(

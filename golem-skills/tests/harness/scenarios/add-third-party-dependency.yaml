@@ -24,7 +24,7 @@ steps:
       deploy: true
 
   - id: "use-dependency"
-    continue_session: true
+    continueSession: true
     prompt:
       rust: >
         Modify the CounterAgent in test-app so the 'increment' function base64-encodes the current counter

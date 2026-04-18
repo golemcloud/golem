@@ -13,8 +13,6 @@
 // limitations under the License.
 
 import { Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
-
-import './setup';
 import { lazyLoadTypeMetadata } from '../src';
 
 /**

@@ -1298,50 +1298,69 @@ pub mod api {
         pub enum AgentSecretSubcommand {
             /// Create Agent Secret in the environment
             Create {
-                /// Path of the secret to create. The casing of path segments will be normalized during creation.
-                #[arg(long, value_parser = parse_agent_secret_path)]
+                /// Path of the secret (dot-separated, e.g. "apiKey" or "db.password"). Casing is normalized during creation.
+                #[arg(value_parser = parse_agent_secret_path)]
                 path: AgentSecretPath,
-                /// Description of the agent type in json
+                /// Type of the secret, using the project's language syntax (e.g. "String" for Rust, "string" for TypeScript) or JSON format
                 #[arg(long)]
                 secret_type: String,
-                /// Value of the secret in json
+                /// Value of the secret (e.g. "my-key" for strings, 42 for numbers). Uses the project's language syntax or JSON
                 #[arg(long)]
                 secret_value: Option<String>,
             },
 
-            /// Update Agent Secret
+            /// Get Agent Secret by path or ID
+            Get {
+                /// Path of the secret (dot-separated)
+                #[arg(value_parser = parse_agent_secret_path, required_unless_present = "id", conflicts_with = "id")]
+                path: Option<AgentSecretPath>,
+                /// ID of the secret (alternative to path)
+                #[arg(long, required_unless_present = "path", conflicts_with = "path")]
+                id: Option<AgentSecretId>,
+            },
+
+            /// Update Agent Secret value
             UpdateValue {
-                /// Id of the secret to update
-                #[arg(long)]
-                id: AgentSecretId,
-                /// Value of the secret in json
+                /// Path of the secret (dot-separated)
+                #[arg(value_parser = parse_agent_secret_path, required_unless_present = "id", conflicts_with = "id")]
+                path: Option<AgentSecretPath>,
+                /// ID of the secret (alternative to path)
+                #[arg(long, required_unless_present = "path", conflicts_with = "path")]
+                id: Option<AgentSecretId>,
+                /// Value of the secret (e.g. "my-key" for strings, 42 for numbers). Uses the project's language syntax or JSON
                 #[arg(long)]
                 secret_value: Option<String>,
             },
 
             /// Delete Agent Secret
             Delete {
-                /// Id of the secret to delete
-                #[arg(long)]
-                id: AgentSecretId,
+                /// Path of the secret (dot-separated)
+                #[arg(value_parser = parse_agent_secret_path, required_unless_present = "id", conflicts_with = "id")]
+                path: Option<AgentSecretPath>,
+                /// ID of the secret (alternative to path)
+                #[arg(long, required_unless_present = "path", conflicts_with = "path")]
+                id: Option<AgentSecretId>,
             },
 
             /// List Agent Secrets
-            List,
+            List {
+                /// Include environment ID and secret ID columns in text output
+                #[arg(long)]
+                ids: bool,
+            },
         }
     }
 
     pub mod resource_definition {
         use crate::model::EnforcementActionArg;
         use clap::Subcommand;
-        use golem_common::model::quota::{ResourceDefinitionId, ResourceDefinitionRevision};
+        use golem_common::model::quota::ResourceDefinitionId;
 
         #[derive(Debug, Subcommand)]
         pub enum ResourceDefinitionSubcommand {
             /// Create a quota resource definition in the environment
             Create {
                 /// Name of the resource (unique within the environment)
-                #[arg(long)]
                 name: String,
                 /// Resource limit as JSON: one of
                 ///   {"type":"rate","value":N,"period":"second|minute|hour|day|month|year","max":N}
@@ -1362,12 +1381,12 @@ pub mod api {
 
             /// Update an existing quota resource definition
             Update {
-                /// ID of the resource definition to update
-                #[arg(long)]
-                id: ResourceDefinitionId,
-                /// Current revision of the resource definition
-                #[arg(long)]
-                current_revision: ResourceDefinitionRevision,
+                /// Name of the resource definition
+                #[arg(required_unless_present = "id", conflicts_with = "id")]
+                name: Option<String>,
+                /// ID of the resource definition (alternative to name)
+                #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+                id: Option<ResourceDefinitionId>,
                 /// New resource limit as JSON (optional)
                 #[arg(long)]
                 limit: Option<String>,
@@ -1384,19 +1403,22 @@ pub mod api {
 
             /// Delete a quota resource definition
             Delete {
-                /// ID of the resource definition to delete
-                #[arg(long)]
-                id: ResourceDefinitionId,
-                /// Current revision of the resource definition
-                #[arg(long)]
-                current_revision: ResourceDefinitionRevision,
+                /// Name of the resource definition
+                #[arg(required_unless_present = "id", conflicts_with = "id")]
+                name: Option<String>,
+                /// ID of the resource definition (alternative to name)
+                #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+                id: Option<ResourceDefinitionId>,
             },
 
-            /// Get a quota resource definition by ID
+            /// Get a quota resource definition by name or ID
             Get {
-                /// ID of the resource definition
-                #[arg(long)]
-                id: ResourceDefinitionId,
+                /// Name of the resource definition
+                #[arg(required_unless_present = "id", conflicts_with = "id")]
+                name: Option<String>,
+                /// ID of the resource definition (alternative to name)
+                #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+                id: Option<ResourceDefinitionId>,
             },
 
             /// List quota resource definitions in the environment
@@ -1413,7 +1435,6 @@ pub mod api {
             /// Create a retry policy in the environment
             Create {
                 /// Name of the retry policy
-                #[arg(long)]
                 name: String,
                 /// Priority (higher = checked first)
                 #[arg(long)]
@@ -1429,18 +1450,24 @@ pub mod api {
             /// List retry policies in the environment
             List,
 
-            /// Get a retry policy by ID
+            /// Get a retry policy by name or ID
             Get {
-                /// ID of the retry policy
-                #[arg(long)]
-                id: RetryPolicyId,
+                /// Name of the retry policy
+                #[arg(required_unless_present = "id", conflicts_with = "id")]
+                name: Option<String>,
+                /// ID of the retry policy (alternative to name)
+                #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+                id: Option<RetryPolicyId>,
             },
 
             /// Update a retry policy
             Update {
-                /// ID of the retry policy to update
-                #[arg(long)]
-                id: RetryPolicyId,
+                /// Name of the retry policy
+                #[arg(required_unless_present = "id", conflicts_with = "id")]
+                name: Option<String>,
+                /// ID of the retry policy (alternative to name)
+                #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+                id: Option<RetryPolicyId>,
                 /// New priority (optional)
                 #[arg(long)]
                 priority: Option<u32>,
@@ -1454,9 +1481,12 @@ pub mod api {
 
             /// Delete a retry policy
             Delete {
-                /// ID of the retry policy to delete
-                #[arg(long)]
-                id: RetryPolicyId,
+                /// Name of the retry policy
+                #[arg(required_unless_present = "id", conflicts_with = "id")]
+                name: Option<String>,
+                /// ID of the retry policy (alternative to name)
+                #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+                id: Option<RetryPolicyId>,
             },
         }
     }
@@ -1842,12 +1872,14 @@ pub fn help_target_to_command(target: ShowClapHelpTarget) -> Command {
 
 #[cfg(test)]
 mod test {
+    use crate::command::api::agent_secret::AgentSecretSubcommand;
     use crate::command::{
-        GolemCliCommand, builtin_exec_subcommands, help_target_to_subcommand_names,
+        GolemCliCommand, GolemCliSubcommand, builtin_exec_subcommands,
+        help_target_to_subcommand_names,
     };
     use crate::error::ShowClapHelpTarget;
     use clap::builder::StyledStr;
-    use clap::{Command, CommandFactory};
+    use clap::{Command, CommandFactory, Parser};
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet};
     use strum::IntoEnumIterator;
@@ -1856,6 +1888,21 @@ mod test {
     #[test]
     fn command_debug_assert() {
         GolemCliCommand::command().debug_assert();
+    }
+
+    #[test]
+    fn agent_secret_list_accepts_ids_flag() {
+        let command = GolemCliCommand::try_parse_from(["golem", "agent-secret", "list", "--ids"])
+            .expect("command should parse");
+
+        let GolemCliSubcommand::AgentSecret { subcommand } = command.subcommand else {
+            panic!("expected agent-secret subcommand");
+        };
+
+        assert!(matches!(
+            subcommand,
+            AgentSecretSubcommand::List { ids: true }
+        ));
     }
 
     #[test]

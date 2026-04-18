@@ -201,6 +201,11 @@ pub enum RegistryInvalidationEvent {
         resource_definition_id: crate::base_model::quota::ResourceDefinitionId,
         resource_name: crate::base_model::quota::ResourceName,
     },
+    /// An agent secret was created, updated, or deleted.
+    AgentSecretChanged {
+        event_id: u64,
+        environment_id: EnvironmentId,
+    },
 }
 
 impl RegistryInvalidationEvent {
@@ -214,6 +219,7 @@ impl RegistryInvalidationEvent {
             Self::SecuritySchemeChanged { event_id, .. } => *event_id,
             Self::RetryPolicyChanged { event_id, .. } => *event_id,
             Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
+            Self::AgentSecretChanged { event_id, .. } => *event_id,
         }
     }
 }

@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { agent, BaseAgent } from '../src';
-import { Principal } from 'golem:agent/common@1.5.0';
+import { agent, BaseAgent, Principal } from '../src';
 
 @agent()
 export class AgentWithPrincipalAutoInjection1 extends BaseAgent {

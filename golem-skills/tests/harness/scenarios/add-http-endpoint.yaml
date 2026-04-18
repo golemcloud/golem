@@ -1,0 +1,101 @@
+name: "add-http-endpoint"
+settings:
+  golem_server:
+    custom_request_port: 9006
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-todo-agent-with-http"
+    prompt: >
+      In the test-app project, add a new durable agent type called `TodoAgent` identified by
+      a single constructor parameter for the list name. Give it an HTTP mount under
+      `/todos/{list-name}` and make sure it is exposed through the app HTTP API on
+      `test-app.localhost:9006`.
+
+      TodoAgent must store a list of todo items in agent state. Each item has an `id` (string),
+      a `title` (string), and a `done` (boolean) field. Use a record, object type, or case class
+      named `TodoItem` for this.
+
+      Expose these HTTP endpoints:
+      - `POST /items` — accepts a `title` string in the JSON request body, creates a new
+        `TodoItem` with an auto-generated sequential id (starting from "1"), `done` set to
+        `false`, stores it, and returns the created item as JSON.
+      - `GET /items` — returns all stored items as a JSON array.
+      - `POST /items/{id}/complete` — finds the item with the given id, sets `done` to `true`,
+        and returns the updated item as JSON.
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-http-endpoint-rust"
+      ts:
+        - "golem-add-http-endpoint-ts"
+      scala:
+        - "golem-add-http-endpoint-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "http-create-item"
+    http:
+      url: "http://test-app.localhost:9006/todos/groceries/items"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+      body: '{"title":"Milk"}'
+    expect:
+      status: 200
+      body_json:
+        - path: "$.title"
+          equals: "Milk"
+        - path: "$.done"
+          equals: false
+
+  - id: "http-create-second-item"
+    http:
+      url: "http://test-app.localhost:9006/todos/groceries/items"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+      body: '{"title":"Eggs"}'
+    expect:
+      status: 200
+      body_json:
+        - path: "$.title"
+          equals: "Eggs"
+        - path: "$.done"
+          equals: false
+
+  - id: "http-list-items"
+    http:
+      url: "http://test-app.localhost:9006/todos/groceries/items"
+      method: "GET"
+    expect:
+      status: 200
+      body_contains: "Milk"
+
+  - id: "http-complete-item"
+    http:
+      url: "http://test-app.localhost:9006/todos/groceries/items/1/complete"
+      method: "POST"
+    expect:
+      status: 200
+      body_json:
+        - path: "$.done"
+          equals: true
+        - path: "$.title"
+          equals: "Milk"
+
+  - id: "http-different-instance"
+    http:
+      url: "http://test-app.localhost:9006/todos/work/items"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: []

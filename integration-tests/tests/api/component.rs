@@ -72,7 +72,7 @@ async fn create_and_get_component(deps: &EnvBasedTestDependencies) -> anyhow::Re
     }
 
     {
-        let fetched_components = client.get_environment_components(&env.id.0).await?;
+        let fetched_components = client.list_environment_components(&env.id.0).await?;
         assert_eq!(fetched_components.values, vec![component]);
     }
 
@@ -116,7 +116,7 @@ async fn update_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     }
 
     {
-        let fetched_components = client.get_environment_components(&env.id.0).await?;
+        let fetched_components = client.list_environment_components(&env.id.0).await?;
         assert_eq!(fetched_components.values, vec![updated_component]);
     }
     Ok(())
@@ -254,7 +254,7 @@ async fn delete_component(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     }
 
     {
-        let fetched_components = client.get_environment_components(&env.id.0).await?;
+        let fetched_components = client.list_environment_components(&env.id.0).await?;
         assert_eq!(fetched_components.values, vec![]);
     }
     Ok(())

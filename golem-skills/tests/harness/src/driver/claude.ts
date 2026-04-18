@@ -14,6 +14,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
   protected readonly driverName = "claude";
   protected readonly skillDirs = [".agents/skills"];
   private sessionId: string | null = null;
+  private activatedSkillNames: Set<string> = new Set();
 
   async setup(workspace: string, bootstrapSkillSourceDir: string): Promise<void> {
     await super.setup(workspace, bootstrapSkillSourceDir);
@@ -69,6 +70,15 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
 
   async teardown(): Promise<void> {
     this.sessionId = null;
+    this.activatedSkillNames.clear();
+  }
+
+  getActivatedSkills(): string[] | undefined {
+    return Array.from(this.activatedSkillNames);
+  }
+
+  resetActivatedSkills(): void {
+    this.activatedSkillNames.clear();
   }
 
   private async runClaudeStreamJson(
@@ -135,6 +145,13 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
                   block.name as string,
                   block.input as Record<string, unknown> | undefined,
                 );
+                if (block.name === "Skill") {
+                  const input = block.input as Record<string, unknown> | undefined;
+                  const skillName = typeof input?.skill === "string" ? input.skill : undefined;
+                  if (skillName) {
+                    this.activatedSkillNames.add(skillName);
+                  }
+                }
               }
             }
           }

@@ -135,7 +135,7 @@ steps:
     });
   });
 
-  it("loads step with timeout and continue_session", async () => {
+  it("loads step with timeout and continueSession", async () => {
     const filePath = await writeTempYaml(`
 name: "step-options"
 steps:
@@ -144,12 +144,12 @@ steps:
     timeout: 60
   - id: "step-2"
     prompt: "second"
-    continue_session: false
+    continueSession: false
     timeout: 120
 `);
     const spec = await ScenarioLoader.load(filePath);
     assert.equal(spec.steps[0].timeout, 60);
-    assert.equal(spec.steps[1].continue_session, false);
+    assert.equal(spec.steps[1].continueSession, false);
     assert.equal(spec.steps[1].timeout, 120);
   });
 

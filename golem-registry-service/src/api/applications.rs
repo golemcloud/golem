@@ -137,7 +137,7 @@ impl ApplicationsApi {
         Ok(Json(application))
     }
 
-    /// Get all applications in the account
+    /// List all applications in the account
     #[oai(
         path = "/accounts/:account_id/apps",
         method = "get",

@@ -63,7 +63,10 @@ object AgentConstructor {
           .decode(codec.schema, payload)
           .flatMap(codec.decode)
           .fold(
-            err => js.Promise.reject(err.asInstanceOf[Any]).asInstanceOf[js.Promise[Instance]],
+            err =>
+              js.Promise
+                .reject(JsAgentError.invalidInput(err).asInstanceOf[Any])
+                .asInstanceOf[js.Promise[Instance]],
             value => FutureInterop.toPromise(build(value, principal))
           )
     }

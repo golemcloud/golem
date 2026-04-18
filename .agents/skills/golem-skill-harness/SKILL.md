@@ -242,7 +242,10 @@ Every step must have **exactly one** action field. Common fields available on al
   allowedExtraSkills:              # Extra skills that are OK to activate
     - "golem-db-app-rust"
   strictSkillMatch: false          # If true, ONLY expectedSkills may activate
-  continue_session: true           # Continue previous agent session (vs new session)
+  continueSession: true            # Continue previous agent session and keep cumulative
+                                   # skill tracking for that prompt session.
+                                   # Set to false to start a fresh agent session with
+                                   # fresh skill tracking.
   verify:
     build: true                    # Run `golem build` after the prompt
     deploy: true                   # Run `golem build` + `golem deploy --yes`
@@ -409,6 +412,21 @@ Cross-language example:
 Like `invoke` and `invoke_json`, `trigger.method` can be language-conditional when Rust,
 TypeScript, and Scala use different method casing.
 
+#### `check_file` — Assert on file contents
+
+Reads a file relative to the golem project directory and runs assertions against its contents.
+The file content is treated as `stdout` for assertion purposes.
+
+```yaml
+- id: "check-output"
+  check_file:
+    path: "output.txt"
+  expect:
+    stdout_contains: "expected text"
+    stdout_not_contains: "unwanted text"
+    stdout_matches: "regex.*pattern"
+```
+
 #### `sleep` — Wait for a duration
 
 ```yaml
@@ -423,13 +441,18 @@ Available assertion fields:
 | Field | Applies To | Description |
 |-------|-----------|-------------|
 | `exit_code` | shell, invoke | Assert process exit code |
-| `stdout_contains` | shell, invoke | Stdout includes substring |
-| `stdout_not_contains` | shell, invoke | Stdout must NOT include substring |
-| `stdout_matches` | shell, invoke | Stdout matches regex |
+| `stdout_contains` | shell, invoke, check_file | Stdout includes substring |
+| `stdout_not_contains` | shell, invoke, check_file | Stdout must NOT include substring |
+| `stdout_matches` | shell, invoke, check_file | Stdout matches regex |
 | `status` | http | HTTP response status code |
 | `body_contains` | http | Response body includes substring |
 | `body_matches` | http | Response body matches regex |
 | `result_json` | invoke_json | JSONPath assertions on parsed JSON result |
+
+Regex-based assertions use JavaScript `RegExp` syntax because the harness evaluates them with
+Node.js. `--dry-run` validates that `stdout_matches` and `body_matches` compile successfully.
+Use JavaScript-compatible patterns such as `\\d+`, `(?:...)`, and `[\\s\\S]*` for cross-line
+matches. Do not use PCRE-only inline flags such as `(?s)`.
 
 `result_json` entries support:
 - `path`: JSONPath expression (e.g., `$.name`, `$.items[0].id`)
@@ -535,7 +558,10 @@ The harness detects whether an agent actually read a skill using two mechanisms:
 1. **Filesystem watcher**: `fswatch` (macOS) or `inotifywait` (Linux) monitors SKILL.md file access events
 2. **atime comparison**: Snapshots file access times before each step and compares after
 
-Both mechanisms feed into `expectedSkills` / `allowedExtraSkills` / `strictSkillMatch` verification.
+Both mechanisms feed into `expectedSkills` / `allowedExtraSkills` / `strictSkillMatch`
+verification. Skill tracking is scoped to the current prompt session: followup prompts accumulate
+activations, while the first prompt in a scenario and any prompt with `continueSession: false`
+start a fresh tracking session.
 
 ## Agent Drivers
 
@@ -564,6 +590,7 @@ Failed steps are automatically classified:
 | `CREATE_PROJECT_FAILED` | infra | `golem new` project creation failed |
 | `CREATE_AGENT_FAILED` | infra | `golem agent new` failed |
 | `DELETE_AGENT_FAILED` | infra | `golem agent delete` failed |
+| `FILE_CHECK_FAILED` | assertion | Could not read file for check_file step |
 | `ASSERTION_FAILED` | assertion | Output didn't match expect assertions |
 
 ## Output and Reports

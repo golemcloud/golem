@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::diff::{
-    Diffable, Hash, Hashable, PluginInstallation, hash_from_serialized_value,
+    DiffError, Diffable, Hash, Hashable, PluginInstallation, hash_from_serialized_value,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -37,7 +37,7 @@ pub struct EnvironmentDiff {
 impl Diffable for Environment {
     type DiffResult = EnvironmentDiff;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let diff = EnvironmentDiff {
             compatibility_check_changed: new.compatibility_check != current.compatibility_check,
             version_check_changed: new.version_check != current.version_check,
@@ -48,12 +48,12 @@ impl Diffable for Environment {
             || diff.version_check_changed
             || diff.security_overrides_changed;
 
-        any_changed.then_some(diff)
+        Ok(any_changed.then_some(diff))
     }
 }
 
 impl Hashable for Environment {
-    fn hash(&self) -> Hash {
+    fn hash(&self) -> Result<Hash, DiffError> {
         hash_from_serialized_value(self)
     }
 }
@@ -73,14 +73,14 @@ pub struct EnvironmentPluginInstallationsDiff {
 impl Diffable for EnvironmentPluginInstallations {
     type DiffResult = EnvironmentPluginInstallationsDiff;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let plugins_changed = new.plugins_by_priority != current.plugins_by_priority;
-        plugins_changed.then_some(EnvironmentPluginInstallationsDiff { plugins_changed })
+        Ok(plugins_changed.then_some(EnvironmentPluginInstallationsDiff { plugins_changed }))
     }
 }
 
 impl Hashable for EnvironmentPluginInstallations {
-    fn hash(&self) -> Hash {
+    fn hash(&self) -> Result<Hash, DiffError> {
         hash_from_serialized_value(self)
     }
 }

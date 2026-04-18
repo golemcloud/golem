@@ -26,8 +26,8 @@ use crate::model::text::resource_definition::{
 use anyhow::bail;
 use golem_client::api::ResourcesClient;
 use golem_common::model::quota::{
-    EnforcementAction, ResourceDefinitionCreation, ResourceDefinitionId,
-    ResourceDefinitionRevision, ResourceDefinitionUpdate, ResourceLimit, ResourceName,
+    EnforcementAction, ResourceDefinition, ResourceDefinitionCreation, ResourceDefinitionId,
+    ResourceDefinitionUpdate, ResourceLimit, ResourceName,
 };
 use std::sync::Arc;
 
@@ -56,16 +56,16 @@ impl ResourceDefinitionCommandHandler {
                     .await
             }
             ResourceDefinitionSubcommand::Update {
+                name,
                 id,
-                current_revision,
                 limit,
                 enforcement_action,
                 unit,
                 units,
             } => {
                 self.cmd_update(
+                    name,
                     id,
-                    current_revision,
                     limit,
                     enforcement_action.map(Into::into),
                     unit,
@@ -73,11 +73,8 @@ impl ResourceDefinitionCommandHandler {
                 )
                 .await
             }
-            ResourceDefinitionSubcommand::Delete {
-                id,
-                current_revision,
-            } => self.cmd_delete(id, current_revision).await,
-            ResourceDefinitionSubcommand::Get { id } => self.cmd_get(id).await,
+            ResourceDefinitionSubcommand::Delete { name, id } => self.cmd_delete(name, id).await,
+            ResourceDefinitionSubcommand::Get { name, id } => self.cmd_get(name, id).await,
             ResourceDefinitionSubcommand::List => self.cmd_list().await,
         }
     }
@@ -127,10 +124,54 @@ impl ResourceDefinitionCommandHandler {
         Ok(())
     }
 
+    async fn resolve_resource_definition(
+        &self,
+        name: Option<String>,
+        id: Option<ResourceDefinitionId>,
+    ) -> anyhow::Result<ResourceDefinition> {
+        let clients = self.ctx.golem_clients().await?;
+
+        if let Some(name) = name {
+            let environment = self
+                .ctx
+                .environment_handler()
+                .resolve_environment(EnvironmentResolveMode::Any)
+                .await?;
+
+            let Some(resource) = clients
+                .resources
+                .list_environment_resources(&environment.environment_id.0)
+                .await
+                .map_service_error()?
+                .values
+                .into_iter()
+                .find(|r| r.name.0 == name)
+            else {
+                log_error(format!(
+                    "Resource definition '{name}' not found in environment"
+                ));
+                bail!(NonSuccessfulExit);
+            };
+
+            Ok(resource)
+        } else if let Some(id) = id {
+            let resource = clients
+                .resources
+                .get_resource(&id.0)
+                .await
+                .map_service_error()?;
+
+            Ok(resource)
+        } else {
+            log_error("Either name or --id must be provided");
+            bail!(NonSuccessfulExit);
+        }
+    }
+
     async fn cmd_update(
         &self,
-        id: ResourceDefinitionId,
-        current_revision: ResourceDefinitionRevision,
+        name: Option<String>,
+        id: Option<ResourceDefinitionId>,
         limit: Option<String>,
         enforcement_action: Option<EnforcementAction>,
         unit: Option<String>,
@@ -145,13 +186,15 @@ impl ResourceDefinitionCommandHandler {
             }
         };
 
+        let resource = self.resolve_resource_definition(name, id).await?;
+
         let clients = self.ctx.golem_clients().await?;
         let result = clients
             .resources
             .update_resource(
-                &id.0,
+                &resource.id.0,
                 &ResourceDefinitionUpdate {
-                    current_revision,
+                    current_revision: resource.revision,
                     limit,
                     enforcement_action,
                     unit,
@@ -170,20 +213,15 @@ impl ResourceDefinitionCommandHandler {
 
     async fn cmd_delete(
         &self,
-        id: ResourceDefinitionId,
-        current_revision: ResourceDefinitionRevision,
+        name: Option<String>,
+        id: Option<ResourceDefinitionId>,
     ) -> anyhow::Result<()> {
+        let resource = self.resolve_resource_definition(name, id).await?;
+
         let clients = self.ctx.golem_clients().await?;
-
-        let resource = clients
-            .resources
-            .get_resource(&id.0)
-            .await
-            .map_service_error()?;
-
         clients
             .resources
-            .delete_resource(&id.0, current_revision.get())
+            .delete_resource(&resource.id.0, resource.revision.get())
             .await
             .map_service_error()?;
 
@@ -194,13 +232,12 @@ impl ResourceDefinitionCommandHandler {
         Ok(())
     }
 
-    async fn cmd_get(&self, id: ResourceDefinitionId) -> anyhow::Result<()> {
-        let clients = self.ctx.golem_clients().await?;
-        let result = clients
-            .resources
-            .get_resource(&id.0)
-            .await
-            .map_service_error()?;
+    async fn cmd_get(
+        &self,
+        name: Option<String>,
+        id: Option<ResourceDefinitionId>,
+    ) -> anyhow::Result<()> {
+        let result = self.resolve_resource_definition(name, id).await?;
 
         self.ctx
             .log_handler()
@@ -219,7 +256,7 @@ impl ResourceDefinitionCommandHandler {
         let clients = self.ctx.golem_clients().await?;
         let results = clients
             .resources
-            .get_environment_resources(&environment.environment_id.0)
+            .list_environment_resources(&environment.environment_id.0)
             .await
             .map_service_error()?
             .values;

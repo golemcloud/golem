@@ -25,7 +25,7 @@ import java.io.FileOutputStream
 import java.nio.file.Paths
 import java.security.MessageDigest
 
-import org.scalajs.linker.interface.ModuleInitializer
+import org.scalajs.linker.interface.{ModuleInitializer, Report}
 import org.scalajs.sbtplugin.ScalaJSPlugin
 import org.scalafmt.interfaces.Scalafmt
 
@@ -58,6 +58,30 @@ object GolemPlugin extends AutoPlugin {
 
   private def sameSha256(file: File, expectedSha: Array[Byte]): Boolean =
     file.exists() && file.length() > 0 && java.util.Arrays.equals(sha256(IO.readBytes(file)), expectedSha)
+
+  private def latestModified(file: File): Long =
+    if (!file.exists()) 0L
+    else if (file.isFile) file.lastModified()
+    else (file ** "*").get.iterator.filter(_.isFile).map(_.lastModified()).foldLeft(0L)(math.max)
+
+  private def latestModified(files: Iterable[File]): Long =
+    files.foldLeft(0L)((currentMax, file) => math.max(currentMax, latestModified(file)))
+
+  private def latestLinkedJsModified(outDir: File): Long =
+    if (!outDir.exists()) 0L
+    else (outDir ** "*.js").get.iterator.map(_.lastModified()).foldLeft(0L)(math.max)
+
+  private def linkedJsFile(report: Report, outDir: File): File =
+    report.publicModules.headOption
+      .map(module => outDir / module.jsFileName)
+      .getOrElse(sys.error("[golem] No public Scala.js modules were linked."))
+
+  private def ensureLinkedJsExists(jsFile: File): Unit =
+    if (!jsFile.exists()) {
+      sys.error(
+        s"[golem] Scala.js linker output not found at ${jsFile.getAbsolutePath}; try running 'clean' then build again."
+      )
+    }
 
   private def embeddedAgentGuestWasmBytes(cl: ClassLoader, repoRootFallback: File): Array[Byte] = {
     val resourcePath = "golem/wasm/agent_guest.wasm"
@@ -179,41 +203,62 @@ object GolemPlugin extends AutoPlugin {
         golemEnsureAgentGuestWasm.value
         ()
       },
-      golemBuildComponent := {
+      golemBuildComponent := Def.inputTaskDyn {
         val args         = spaceDelimited("<component> <outFile> <agentWasmFile?>").parsed
         val component    = args.headOption.getOrElse(sys.error("Missing component name"))
         val outPath      = args.lift(1).getOrElse(".golem/scala.js")
         val agentWasmOpt = args.lift(2)
-        val out          = file(outPath)
-        val log          = streams.value.log
+        Def.taskDyn {
+          val out = file(outPath)
+          val log = streams.value.log
 
-        agentWasmOpt.foreach { p =>
-          val target = file(p)
-          val bytes  = embeddedAgentGuestWasmBytes(getClass.getClassLoader, (LocalRootProject / baseDirectory).value)
-          val sha    = sha256(bytes)
-          if (!sameSha256(target, sha)) {
-            IO.createDirectory(target.getParentFile)
-            val fos = new FileOutputStream(target)
-            try fos.write(bytes)
-            finally fos.close()
-            log.info(s"[golem] Wrote embedded agent_guest.wasm to ${target.getAbsolutePath}")
+          agentWasmOpt.foreach { p =>
+            val target = file(p)
+            val bytes  = embeddedAgentGuestWasmBytes(getClass.getClassLoader, (LocalRootProject / baseDirectory).value)
+            val sha    = sha256(bytes)
+            if (!sameSha256(target, sha)) {
+              IO.createDirectory(target.getParentFile)
+              val fos = new FileOutputStream(target)
+              try fos.write(bytes)
+              finally fos.close()
+              log.info(s"[golem] Wrote embedded agent_guest.wasm to ${target.getAbsolutePath}")
+            }
+          }
+
+          (Compile / compile).value
+
+          val outDir =
+            (Compile / ScalaJSPlugin.autoImport.fullLinkJS / ScalaJSPlugin.autoImport.scalaJSLinkerOutputDirectory).value
+          val newestInputModified =
+            latestModified((Compile / sources).value ++ (Compile / products).value)
+          val staleLinkerOutputs = {
+            val newestLinkedOutput = latestLinkedJsModified(outDir)
+            newestLinkedOutput > 0L && newestLinkedOutput < newestInputModified
+          }
+
+          // Delete stale linker output here in the taskDyn body, BEFORE fullLinkJS
+          // is scheduled as a dependency of the inner Def.task. Deleting inside the
+          // Def.task body would run AFTER fullLinkJS (since .value dependencies are
+          // resolved first), destroying the freshly-linked output.
+          if (staleLinkerOutputs) {
+            log.warn(
+              s"[golem] Detected stale Scala.js linker output in ${outDir.getAbsolutePath}; deleting it before relinking."
+            )
+            IO.delete(outDir)
+          }
+
+          Def.task {
+            log.info(s"[golem] Building Scala.js bundle for $component ...")
+            val report = (Compile / ScalaJSPlugin.autoImport.fullLinkJS).value.data
+            val jsFile = linkedJsFile(report, outDir)
+            ensureLinkedJsExists(jsFile)
+            IO.createDirectory(out.getParentFile)
+            IO.copyFile(jsFile, out, preserveLastModified = true)
+            log.info(s"[golem] Wrote Scala.js bundle to ${out.getAbsolutePath}")
+            out
           }
         }
-
-        log.info(s"[golem] Building Scala.js bundle for $component ...")
-        val report = (Compile / ScalaJSPlugin.autoImport.fullLinkJS).value.data
-        val outDir =
-          (Compile / ScalaJSPlugin.autoImport.fullLinkJS / ScalaJSPlugin.autoImport.scalaJSLinkerOutputDirectory).value
-        val jsName =
-          report.publicModules.headOption
-            .map(_.jsFileName)
-            .getOrElse(sys.error("[golem] No public Scala.js modules were linked."))
-        val jsFile = outDir / jsName
-        IO.createDirectory(out.getParentFile)
-        IO.copyFile(jsFile, out)
-        log.info(s"[golem] Wrote Scala.js bundle to ${out.getAbsolutePath}")
-        out
-      },
+      }.evaluated,
       Compile / compile                             := (Compile / compile).dependsOn(golemPrepare).value,
       Compile / ScalaJSPlugin.autoImport.fastLinkJS :=
         (Compile / ScalaJSPlugin.autoImport.fastLinkJS).dependsOn(golemPrepare).value,

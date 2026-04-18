@@ -25,7 +25,7 @@ import {
   BinaryReference,
   DataValue,
   ElementValue,
-  Principal,
+  Principal as HostPrincipal,
   TextReference,
 } from 'golem:agent/common@1.5.0';
 import {
@@ -39,6 +39,7 @@ import * as util from 'node:util';
 import { getLanguageCodes, getMimeTypes } from '../../schema/helpers';
 import { Config } from '../../../agentConfig';
 import { QuotaToken } from '../../../host/quota';
+import { Principal, sdkPrincipalFromHost, sdkPrincipalToHost } from '../../../principal';
 
 export type ParameterDetail = {
   name: string;
@@ -65,7 +66,7 @@ export type ParameterDetail = {
 export function deserializeDataValue(
   dataValue: DataValue,
   paramTypes: ParameterDetail[],
-  principal: Principal,
+  principal: HostPrincipal,
 ): any[] {
   switch (dataValue.tag) {
     case 'tuple':
@@ -112,7 +113,7 @@ export function deserializeDataValue(
           case 'principal':
             // If principal, we do not increment the data value element index,
             // because principal is not represented in data value
-            return principal;
+            return sdkPrincipalFromHost(principal);
 
           case 'config':
             // If config, we do not increment the data value element index,
@@ -298,9 +299,20 @@ export function serializeToDataValue(tsValue: any, typeInfoInternal: TypeInfoInt
         };
       }
 
-      // If this is a QuotaToken, convert to its record representation first.
-      const valueToSerialize =
-        typeInfoInternal.tsType.kind === 'quota-token' ? tsValue._toRecord() : tsValue;
+      // convert builtin sdk types to serializable representation
+      let valueToSerialize;
+      switch (typeInfoInternal.tsType.kind) {
+        case 'quota-token': {
+          valueToSerialize = (tsValue as QuotaToken)._toRecord();
+          break;
+        }
+        case 'principal': {
+          valueToSerialize = sdkPrincipalToHost(tsValue as Principal);
+          break;
+        }
+        default:
+          valueToSerialize = tsValue;
+      }
 
       const witValue = WitValue.fromTsValueDefault(valueToSerialize, typeInfoInternal.val);
       const elementValue: ElementValue = {

@@ -117,12 +117,39 @@ export function markAtomicOperation(): AtomicOperationGuard {
 /**
  * Executes a function atomically.
  * Supports both sync and async callbacks.
+ *
+ * On success the atomic region is committed via `mark_end_operation`.
+ * On failure the region is intentionally left open so the executor sees the
+ * trap as occurring **inside** the atomic region and can retry from the
+ * begin-operation marker (matching the Rust SDK behaviour where `Drop` is
+ * never called on panic because WASM panics don't unwind).
+ *
  * @param f - The function to execute atomically (sync or async).
  * @returns The result of the executed function, or a Promise if an async function was passed.
  */
 export function atomically<T>(f: () => T): T {
   const guard = markAtomicOperation();
-  return executeWithDrop([guard], f);
+  try {
+    const result = f();
+    if (isPromiseLike(result)) {
+      return result.then(
+        (val) => {
+          guard.drop();
+          return val;
+        },
+        (err) => {
+          // Do NOT drop the guard — leave the atomic region open so the
+          // executor retries from the begin marker.
+          throw err;
+        },
+      ) as T;
+    }
+    guard.drop();
+    return result;
+  } catch (e) {
+    // Do NOT drop the guard — same reasoning as the async rejection path.
+    throw e;
+  }
 }
 
 function isPromiseLike(value: unknown): value is Promise<unknown> {

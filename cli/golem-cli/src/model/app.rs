@@ -1314,6 +1314,7 @@ impl<'a> Component<'a> {
                 .and_then(|template_name| match template_name {
                     "ts" => Some(GuestLanguage::TypeScript),
                     "rust" => Some(GuestLanguage::Rust),
+                    "scala" => Some(GuestLanguage::Scala),
                     _ => None,
                 })
         })

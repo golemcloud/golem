@@ -99,9 +99,19 @@ const RetrySchema = z.object({
 
 const HttpSchema = z.object({
   url: z.string(),
-  method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH"]).default("GET"),
-  body: z.string().optional(),
+  method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]).default("GET"),
+  body: langConditional(z.string()).optional(),
   headers: z.record(z.string()).optional(),
+});
+
+const GetAgentTypeSchema = z.object({
+  name: z.string(),
+});
+
+const ListAgentTypesSchema = z.object({});
+
+const CheckFileSchema = z.object({
+  path: z.string(),
 });
 
 const InvokeSchema = z.object({
@@ -112,7 +122,7 @@ const InvokeSchema = z.object({
 
 const ShellSchema = z.object({
   command: z.string(),
-  args: z.array(z.string()).optional(),
+  args: langConditional(z.array(z.string())).optional(),
   cwd: z.string().optional(),
 });
 
@@ -149,6 +159,9 @@ const ACTION_FIELDS = [
   "create_project",
   "sleep",
   "http",
+  "get_agent_type",
+  "list_agent_types",
+  "check_file",
 ] as const;
 
 // Language-conditional: accepts either T or { ts: T, rust: T, scala: T, ... }
@@ -175,11 +188,11 @@ const StepSpecSchema = z
     allowedExtraSkills: langConditional(z.array(z.string())).optional(),
     strictSkillMatch: z.boolean().optional(),
     timeout: z.number().optional(),
-    continue_session: z.boolean().optional(),
+    continueSession: z.boolean().optional(),
     verify: langConditional(VerifySchema).optional(),
     invoke: InvokeSchema.optional(),
     invoke_json: InvokeSchema.optional(),
-    expect: ExpectSchema.optional(),
+    expect: langConditional(ExpectSchema).optional(),
     sleep: z.number().optional(),
     shell: ShellSchema.optional(),
     trigger: TriggerSchema.optional(),
@@ -187,6 +200,9 @@ const StepSpecSchema = z
     delete_agent: DeleteAgentSchema.optional(),
     create_project: CreateProjectSchema.optional(),
     http: HttpSchema.optional(),
+    get_agent_type: GetAgentTypeSchema.optional(),
+    list_agent_types: ListAgentTypesSchema.optional(),
+    check_file: CheckFileSchema.optional(),
     retry: RetrySchema.optional(),
     only_if: StepConditionSchema.optional(),
     skip_if: StepConditionSchema.optional(),
@@ -247,13 +263,13 @@ interface StepCommon {
   allowedExtraSkills?: LangConditional<string[]>;
   strictSkillMatch?: boolean;
   timeout?: number;
-  continue_session?: boolean;
+  continueSession?: boolean;
   verify?: LangConditional<{
     build?: boolean;
     deploy?: boolean;
     expectedFiles?: LangConditional<string[]>;
   }>;
-  expect?: z.infer<typeof ExpectSchema>;
+  expect?: LangConditional<z.infer<typeof ExpectSchema>>;
   only_if?: StepCondition;
   skip_if?: StepCondition;
   retry?: { attempts: number; delay: number };
@@ -264,7 +280,8 @@ type InvokeSpec = {
   method: LangConditional<string>;
   args?: LangConditional<string>;
 };
-type ShellSpec = { command: string; args?: string[]; cwd?: string };
+type ShellSpec = { command: string; args?: LangConditional<string[]>; cwd?: string };
+type ResolvedShellSpec = { command: string; args?: string[]; cwd?: string };
 type TriggerSpec = {
   agent: string;
   method: LangConditional<string>;
@@ -281,10 +298,12 @@ type DeleteAgentSpec = { name: string };
 type CreateProjectSpec = { name: string; presets?: LangConditional<string[]> };
 type HttpSpec = {
   url: string;
-  method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
-  body?: string;
+  method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "OPTIONS";
+  body?: LangConditional<string>;
   headers?: Record<string, string>;
 };
+type GetAgentTypeSpec = { name: string };
+type ListAgentTypesSpec = Record<string, never>;
 
 type RawStepSpec = z.infer<typeof StepSpecSchema>;
 
@@ -298,6 +317,13 @@ type DeleteAgentStep = StepCommon & { tag: "delete_agent"; delete_agent: DeleteA
 type CreateProjectStep = StepCommon & { tag: "create_project"; create_project: CreateProjectSpec };
 type SleepStep = StepCommon & { tag: "sleep"; sleep: number };
 type HttpStep = StepCommon & { tag: "http"; http: HttpSpec };
+type GetAgentTypeStep = StepCommon & { tag: "get_agent_type"; get_agent_type: GetAgentTypeSpec };
+type ListAgentTypesStep = StepCommon & {
+  tag: "list_agent_types";
+  list_agent_types: ListAgentTypesSpec;
+};
+type CheckFileSpec = { path: string };
+type CheckFileStep = StepCommon & { tag: "check_file"; check_file: CheckFileSpec };
 
 export type StepSpec =
   | PromptStep
@@ -309,7 +335,10 @@ export type StepSpec =
   | DeleteAgentStep
   | CreateProjectStep
   | SleepStep
-  | HttpStep;
+  | HttpStep
+  | GetAgentTypeStep
+  | ListAgentTypesStep
+  | CheckFileStep;
 
 export interface ScenarioSpec {
   name: string;
@@ -338,7 +367,7 @@ export function parseStep(raw: RawStepSpec): StepSpec {
     ...(raw.allowedExtraSkills !== undefined && { allowedExtraSkills: raw.allowedExtraSkills }),
     ...(raw.strictSkillMatch !== undefined && { strictSkillMatch: raw.strictSkillMatch }),
     ...(raw.timeout !== undefined && { timeout: raw.timeout }),
-    ...(raw.continue_session !== undefined && { continue_session: raw.continue_session }),
+    ...(raw.continueSession !== undefined && { continueSession: raw.continueSession }),
     ...(raw.verify !== undefined && { verify: raw.verify }),
     ...(raw.expect !== undefined && { expect: raw.expect }),
     ...(raw.only_if !== undefined && { only_if: raw.only_if }),
@@ -367,6 +396,12 @@ export function parseStep(raw: RawStepSpec): StepSpec {
       return { ...common, tag, sleep: raw.sleep! };
     case "http":
       return { ...common, tag, http: raw.http! };
+    case "get_agent_type":
+      return { ...common, tag, get_agent_type: raw.get_agent_type! };
+    case "list_agent_types":
+      return { ...common, tag, list_agent_types: raw.list_agent_types ?? {} };
+    case "check_file":
+      return { ...common, tag, check_file: raw.check_file! };
   }
 }
 
@@ -484,9 +519,11 @@ export class ScenarioExecutor {
   private driver: AgentDriver;
   private watcher: SkillWatcher;
   private watcherStarted = false;
+  private currentSkillSessionBaseline: number | undefined;
   private workspace: string;
   private bootstrapSkillSourceDir: string;
   private options: ScenarioExecutorOptions;
+  private routerPort: number = 9881;
 
   constructor(
     driver: AgentDriver,
@@ -514,7 +551,7 @@ export class ScenarioExecutor {
 
   private substituteStepVariables(step: StepSpec, variables: Record<string, string>): StepSpec {
     const sub = (s: string | undefined) => (s ? substituteVariables(s, variables) : s);
-    const subArr = (arr: string[] | undefined) =>
+    const _subArr = (arr: string[] | undefined) =>
       arr?.map((s) => substituteVariables(s, variables));
     const subLangStr = (v: LangConditional<string>): LangConditional<string> =>
       typeof v === "string"
@@ -525,6 +562,18 @@ export class ScenarioExecutor {
     const subLangStrOpt = (
       v: LangConditional<string> | undefined,
     ): LangConditional<string> | undefined => (v === undefined ? undefined : subLangStr(v));
+    const subLangArr = (v: LangConditional<string[]>): LangConditional<string[]> =>
+      Array.isArray(v)
+        ? v.map((s) => substituteVariables(s, variables))
+        : Object.fromEntries(
+            Object.entries(v).map(([k, arr]) => [
+              k,
+              arr.map((s: string) => substituteVariables(s, variables)),
+            ]),
+          );
+    const subLangArrOpt = (
+      v: LangConditional<string[]> | undefined,
+    ): LangConditional<string[]> | undefined => (v === undefined ? undefined : subLangArr(v));
 
     switch (step.tag) {
       case "prompt":
@@ -552,7 +601,7 @@ export class ScenarioExecutor {
           ...step,
           shell: {
             command: substituteVariables(step.shell.command, variables),
-            args: subArr(step.shell.args),
+            args: subLangArrOpt(step.shell.args),
             cwd: sub(step.shell.cwd),
           },
         };
@@ -587,7 +636,7 @@ export class ScenarioExecutor {
           http: {
             ...step.http,
             url: substituteVariables(step.http.url, variables),
-            body: sub(step.http.body),
+            body: subLangStrOpt(step.http.body),
             headers: step.http.headers
               ? Object.fromEntries(
                   Object.entries(step.http.headers).map(([k, v]) => [
@@ -602,6 +651,24 @@ export class ScenarioExecutor {
         return { ...step };
       case "sleep":
         return { ...step };
+      case "get_agent_type":
+        return {
+          ...step,
+          get_agent_type: {
+            ...step.get_agent_type,
+            name: substituteVariables(step.get_agent_type.name, variables),
+          },
+        };
+      case "list_agent_types":
+        return { ...step };
+      case "check_file":
+        return {
+          ...step,
+          check_file: {
+            ...step.check_file,
+            path: substituteVariables(step.check_file.path, variables),
+          },
+        };
     }
   }
 
@@ -612,6 +679,7 @@ export class ScenarioExecutor {
       ...step,
       expectedSkills: resolveByLanguage(step.expectedSkills, lang),
       allowedExtraSkills: resolveByLanguage(step.allowedExtraSkills, lang),
+      expect: resolveByLanguage(step.expect, lang),
       verify: resolvedVerify
         ? {
             ...resolvedVerify,
@@ -659,6 +727,26 @@ export class ScenarioExecutor {
         },
       } as StepSpec;
     }
+    if (step.tag === "shell") {
+      return {
+        ...resolved,
+        tag: "shell",
+        shell: {
+          ...step.shell,
+          args: resolveByLanguage(step.shell.args, lang),
+        },
+      } as StepSpec;
+    }
+    if (step.tag === "http") {
+      return {
+        ...resolved,
+        tag: "http",
+        http: {
+          ...step.http,
+          body: resolveByLanguage(step.http.body, lang),
+        },
+      } as StepSpec;
+    }
     return resolved as StepSpec;
   }
 
@@ -677,6 +765,16 @@ export class ScenarioExecutor {
     };
   }
 
+  private ensureResolvedShellSpec(shell: ShellSpec): ResolvedShellSpec {
+    if (shell.args !== undefined && !Array.isArray(shell.args)) {
+      throw new Error("Shell args must resolve to a string array for the current language");
+    }
+    return {
+      ...shell,
+      args: shell.args as string[] | undefined,
+    };
+  }
+
   private ensureResolvedTriggerSpec(trigger: TriggerSpec): ResolvedTriggerSpec {
     if (typeof trigger.method !== "string") {
       throw new Error("Trigger method must resolve to a string for the current language");
@@ -690,6 +788,55 @@ export class ScenarioExecutor {
       method: trigger.method,
       args: trigger.args as string | undefined,
     };
+  }
+
+  private startsNewPromptSession(step: StepSpec, isFirstPrompt: boolean): boolean {
+    return step.tag === "prompt" && (isFirstPrompt || step.continueSession === false);
+  }
+
+  private driverTracksSkillsNatively(): boolean {
+    return this.driver.getActivatedSkills() !== undefined;
+  }
+
+  private async ensureWatcherStarted(): Promise<void> {
+    if (!this.watcherStarted) {
+      await this.watcher.start();
+      this.watcherStarted = true;
+    }
+  }
+
+  private async beginSkillTrackingSession(): Promise<void> {
+    this.driver.resetActivatedSkills();
+
+    if (this.driverTracksSkillsNatively()) {
+      this.currentSkillSessionBaseline = undefined;
+      return;
+    }
+
+    await this.ensureWatcherStarted();
+    await this.watcher.snapshotAtimes();
+    await new Promise((resolve) => setTimeout(resolve, WATCHER_SNAPSHOT_SETTLE_MS));
+    this.currentSkillSessionBaseline = this.watcher.markBaseline();
+  }
+
+  private async ensureSkillTrackingReadyForStep(shouldTrackSkills: boolean): Promise<number> {
+    if (this.driverTracksSkillsNatively()) {
+      return 0;
+    }
+
+    if (this.currentSkillSessionBaseline !== undefined) {
+      return this.currentSkillSessionBaseline;
+    }
+
+    if (!shouldTrackSkills) {
+      return 0;
+    }
+
+    await this.ensureWatcherStarted();
+    await this.watcher.snapshotAtimes();
+    await new Promise((resolve) => setTimeout(resolve, WATCHER_SNAPSHOT_SETTLE_MS));
+    this.currentSkillSessionBaseline = this.watcher.markBaseline();
+    return this.currentSkillSessionBaseline;
   }
 
   async execute(spec: ScenarioSpec): Promise<ScenarioRunResult> {
@@ -734,12 +881,14 @@ export class ScenarioExecutor {
     }
 
     // Setup workspace (each run gets a unique ID so no cleanup needed)
+    this.currentSkillSessionBaseline = undefined;
     await fs.mkdir(this.workspace, { recursive: true });
     await this.driver.setup(this.workspace, this.bootstrapSkillSourceDir);
     await this.verifyGolemConnectivity(spec);
 
     // Build extra env for commands from settings
     const commandEnv = this.buildCommandEnv(spec);
+    this.routerPort = spec.settings?.golem_server?.router_port ?? 9881;
     const variables = this.buildVariables(spec.name);
     const conditionContext = {
       agent: this.options.agent,
@@ -897,17 +1046,13 @@ export class ScenarioExecutor {
       spec.settings?.timeout_per_subprompt ??
       this.options.globalTimeoutSeconds ??
       DEFAULT_STEP_TIMEOUT_SECONDS;
-    const shouldTrackSkills = this.needsSkillTracking(step);
-    let stepBaseline = 0;
-    if (shouldTrackSkills) {
-      if (!this.watcherStarted) {
-        await this.watcher.start();
-        this.watcherStarted = true;
-      }
-      await this.watcher.snapshotAtimes();
-      await new Promise((resolve) => setTimeout(resolve, WATCHER_SNAPSHOT_SETTLE_MS));
-      stepBaseline = this.watcher.markBaseline();
+    const startsNewPromptSession = this.startsNewPromptSession(step, isFirstPrompt);
+    if (startsNewPromptSession) {
+      await this.beginSkillTrackingSession();
     }
+    const shouldTrackSkills = this.needsSkillTracking(step);
+    const driverTracksSkills = shouldTrackSkills && this.driverTracksSkillsNatively();
+    const stepBaseline = await this.ensureSkillTrackingReadyForStep(shouldTrackSkills);
     const stepLabel = step.id ?? "(unnamed)";
     log.stepStart(stepLabel, stepTimeoutSeconds);
 
@@ -951,7 +1096,7 @@ export class ScenarioExecutor {
       case "shell":
         await this.executeShell(
           stepLabel,
-          step.shell,
+          this.ensureResolvedShellSpec(step.shell),
           step.expect,
           stepTimeoutSeconds,
           commandEnv,
@@ -971,13 +1116,12 @@ export class ScenarioExecutor {
         const promptResult = await this.executePrompt(
           stepLabel,
           step.prompt as string,
-          step.continue_session,
+          step.continueSession,
           isFirstPrompt,
           stepTimeoutSeconds,
           idleTimeout,
           fail,
         );
-        isFirstPrompt = promptResult.isFirstPrompt;
         stepTimedOut = promptResult.timedOut;
         stepTimeoutKind = promptResult.timeoutKind;
         break;
@@ -1005,11 +1149,33 @@ export class ScenarioExecutor {
       case "http":
         await this.executeHttp(stepLabel, step.http, step.expect, stepTimeoutSeconds, fail);
         break;
+      case "get_agent_type":
+        await this.executeGetAgentType(
+          stepLabel,
+          step.get_agent_type,
+          step.expect,
+          stepTimeoutSeconds,
+          commandEnv,
+          fail,
+        );
+        break;
+      case "list_agent_types":
+        await this.executeListAgentTypes(
+          stepLabel,
+          step.expect,
+          stepTimeoutSeconds,
+          commandEnv,
+          fail,
+        );
+        break;
+      case "check_file":
+        await this.executeCheckFile(stepLabel, step.check_file, step.expect, fail);
+        break;
     }
 
     // Verify skills activation
     const activatedSkills = shouldTrackSkills
-      ? await this.verifySkillActivation(stepLabel, step, stepBaseline, fail)
+      ? await this.verifySkillActivation(stepLabel, step, stepBaseline, driverTracksSkills, fail)
       : [];
 
     // Build/deploy/expectedFiles verification
@@ -1042,7 +1208,7 @@ export class ScenarioExecutor {
       success,
       errors,
       activatedSkills,
-      isFirstPrompt,
+      isFirstPrompt: step.tag === "prompt" && success ? false : isFirstPrompt,
       timedOut: stepTimedOut,
       timeoutKind: stepTimeoutKind,
     };
@@ -1135,7 +1301,7 @@ export class ScenarioExecutor {
 
   private async executeShell(
     stepLabel: string,
-    shell: ShellSpec,
+    shell: ResolvedShellSpec,
     expect: StepCommon["expect"],
     timeout: number,
     commandEnv: Record<string, string>,
@@ -1167,6 +1333,41 @@ export class ScenarioExecutor {
     }
   }
 
+  private async executeCheckFile(
+    stepLabel: string,
+    spec: CheckFileSpec,
+    expect: StepCommon["expect"],
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    let baseDir: string;
+    try {
+      baseDir = await this.findGolemProjectDir();
+    } catch {
+      baseDir = this.workspace;
+    }
+    const resolvedPath = path.resolve(baseDir, spec.path);
+    log.stepAction(stepLabel, `checking file: ${resolvedPath}`);
+
+    let content: string;
+    try {
+      content = await fs.readFile(resolvedPath, "utf-8");
+    } catch (err) {
+      fail(`FILE_CHECK_FAILED: could not read file "${resolvedPath}": ${err}`);
+      return;
+    }
+
+    log.stepAction(stepLabel, `file size: ${content.length} bytes`);
+
+    if (expect) {
+      this.evaluateAssertions(
+        { stdout: content, stderr: "", exitCode: 0 },
+        expect,
+        fail,
+        stepLabel,
+      );
+    }
+  }
+
   private async executeTrigger(
     stepLabel: string,
     trigger: ResolvedTriggerSpec,
@@ -1190,7 +1391,7 @@ export class ScenarioExecutor {
     timeout: number,
     idleTimeout: number | undefined,
     fail: (msg: string) => void,
-  ): Promise<{ isFirstPrompt: boolean; timedOut?: boolean; timeoutKind?: "step" | "idle" }> {
+  ): Promise<{ timedOut?: boolean; timeoutKind?: "step" | "idle" }> {
     const opts: DriverTimeoutOptions = {
       stepTimeoutSeconds: timeout,
       idleTimeoutSeconds: idleTimeout,
@@ -1200,12 +1401,12 @@ export class ScenarioExecutor {
       log.stepPrompt(stepLabel, prompt, "followup");
       const result = await this.driver.sendFollowup(prompt, opts);
       if (!result.success) fail(`Agent failed: ${result.output}`);
-      return { isFirstPrompt: false, timedOut: result.timedOut, timeoutKind: result.timeoutKind };
+      return { timedOut: result.timedOut, timeoutKind: result.timeoutKind };
     } else {
       log.stepPrompt(stepLabel, prompt, "initial");
       const result = await this.driver.sendPrompt(prompt, opts);
       if (!result.success) fail(`Agent failed: ${result.output}`);
-      return { isFirstPrompt: false, timedOut: result.timedOut, timeoutKind: result.timeoutKind };
+      return { timedOut: result.timedOut, timeoutKind: result.timeoutKind };
     }
   }
 
@@ -1280,6 +1481,175 @@ export class ScenarioExecutor {
     }
   }
 
+  private async resolveDeploymentContext(
+    stepLabel: string,
+    timeout: number,
+    commandEnv: Record<string, string>,
+  ): Promise<{ environmentId: string; deploymentRevision: number } | undefined> {
+    const projectDir = await this.findGolemProjectDir();
+    log.stepAction(stepLabel, "resolving deployment context via golem environment list");
+    const result = await this.runLocalCommand(
+      "golem",
+      ["--format", "json", "environment", "list"],
+      timeout,
+      projectDir,
+      commandEnv,
+    );
+    if (!result.success) {
+      return undefined;
+    }
+
+    const parsed = parseJsonCommandOutput<unknown[]>(result.stdout);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return undefined;
+    }
+
+    const env = parsed[0] as Record<string, unknown>;
+    const envSummary = env["environment"] as Record<string, unknown> | undefined;
+    if (!envSummary) {
+      return undefined;
+    }
+    const environmentId = envSummary["id"] as string | undefined;
+    const currentDeployment = envSummary["currentDeployment"] as
+      | Record<string, unknown>
+      | undefined;
+    const deploymentRevision = currentDeployment?.["deploymentRevision"] as number | undefined;
+
+    if (!environmentId || deploymentRevision === undefined) {
+      return undefined;
+    }
+
+    log.stepAction(stepLabel, `resolved env=${environmentId} deployment=${deploymentRevision}`);
+    return { environmentId, deploymentRevision };
+  }
+
+  private getRouterPort(): number {
+    return this.routerPort ?? 9881;
+  }
+
+  private static readonly LOCAL_WELL_KNOWN_TOKEN = "5c832d93-ff85-4a8f-9803-513950fdfdb1";
+
+  private golemApiHeaders(): Record<string, string> {
+    return { Authorization: `Bearer ${ScenarioExecutor.LOCAL_WELL_KNOWN_TOKEN}` };
+  }
+
+  private async executeGetAgentType(
+    stepLabel: string,
+    spec: GetAgentTypeSpec,
+    expect: StepCommon["expect"],
+    timeout: number,
+    commandEnv: Record<string, string>,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    const ctx = await this.resolveDeploymentContext(stepLabel, timeout, commandEnv);
+    if (!ctx) {
+      fail("GET_AGENT_TYPE_FAILED: could not resolve deployment context");
+      return;
+    }
+
+    const routerPort = this.getRouterPort();
+    const url = `http://localhost:${routerPort}/v1/envs/${ctx.environmentId}/deployments/${ctx.deploymentRevision}/agent-types/${spec.name}`;
+    log.stepAction(stepLabel, `GET ${url}`);
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout * 1000);
+      const onParentAbort = () => controller.abort();
+      this.options.abortSignal?.addEventListener("abort", onParentAbort);
+
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: this.golemApiHeaders(),
+        });
+        const body = await response.text();
+        log.httpResponse(stepLabel, response.status, body);
+
+        if (expect) {
+          this.evaluateAssertions(
+            {
+              stdout: body,
+              stderr: "",
+              exitCode: response.ok ? 0 : 1,
+              body,
+              status: response.status,
+            },
+            expect,
+            fail,
+            stepLabel,
+          );
+        } else if (!response.ok) {
+          fail(`GET_AGENT_TYPE_FAILED: ${response.status} ${body.slice(0, 500)}`);
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        this.options.abortSignal?.removeEventListener("abort", onParentAbort);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.httpFailure(stepLabel, msg);
+      fail(`GET_AGENT_TYPE_FAILED: ${msg}`);
+    }
+  }
+
+  private async executeListAgentTypes(
+    stepLabel: string,
+    expect: StepCommon["expect"],
+    timeout: number,
+    commandEnv: Record<string, string>,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    const ctx = await this.resolveDeploymentContext(stepLabel, timeout, commandEnv);
+    if (!ctx) {
+      fail("LIST_AGENT_TYPES_FAILED: could not resolve deployment context");
+      return;
+    }
+
+    const routerPort = this.getRouterPort();
+    const url = `http://localhost:${routerPort}/v1/envs/${ctx.environmentId}/deployments/${ctx.deploymentRevision}/agent-types`;
+    log.stepAction(stepLabel, `GET ${url}`);
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout * 1000);
+      const onParentAbort = () => controller.abort();
+      this.options.abortSignal?.addEventListener("abort", onParentAbort);
+
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: this.golemApiHeaders(),
+        });
+        const body = await response.text();
+        log.httpResponse(stepLabel, response.status, body);
+
+        if (expect) {
+          this.evaluateAssertions(
+            {
+              stdout: body,
+              stderr: "",
+              exitCode: response.ok ? 0 : 1,
+              body,
+              status: response.status,
+            },
+            expect,
+            fail,
+            stepLabel,
+          );
+        } else if (!response.ok) {
+          fail(`LIST_AGENT_TYPES_FAILED: ${response.status} ${body.slice(0, 500)}`);
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        this.options.abortSignal?.removeEventListener("abort", onParentAbort);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.httpFailure(stepLabel, msg);
+      fail(`LIST_AGENT_TYPES_FAILED: ${msg}`);
+    }
+  }
+
   private async executeHttp(
     stepLabel: string,
     http: HttpSpec,
@@ -1295,7 +1665,7 @@ export class ScenarioExecutor {
     try {
       const response = await fetch(http.url, {
         method: http.method ?? "GET",
-        body: http.body,
+        body: http.body as string | undefined,
         headers: http.headers,
         signal: controller.signal,
       });
@@ -1304,6 +1674,10 @@ export class ScenarioExecutor {
       log.httpResponse(stepLabel, response.status, body);
 
       if (expect) {
+        const headers: Record<string, string> = {};
+        response.headers.forEach((value, key) => {
+          headers[key.toLowerCase()] = value;
+        });
         this.evaluateAssertions(
           {
             stdout: body,
@@ -1311,6 +1685,7 @@ export class ScenarioExecutor {
             exitCode: response.ok ? 0 : 1,
             body,
             status: response.status,
+            headers,
           },
           expect,
           fail,
@@ -1359,19 +1734,33 @@ export class ScenarioExecutor {
     stepLabel: string,
     step: StepSpec,
     baseline: ReturnType<SkillWatcher["markBaseline"]>,
+    driverTracksSkills: boolean,
     fail: (msg: string) => void,
   ): Promise<string[]> {
-    const watcherEvents = this.watcher.getActivatedEventsSince(baseline);
-    const atimeResults = await this.watcher.getSkillsWithChangedAtime();
-    for (const evt of watcherEvents) {
-      log.stepSkillDetected(stepLabel, "fswatch", evt.skillName, evt.path);
+    let activatedSkills: string[];
+
+    if (driverTracksSkills) {
+      activatedSkills = this.driver.getActivatedSkills() ?? [];
+      for (const name of activatedSkills) {
+        log.stepSkillDetected(stepLabel, "driver", name, "");
+      }
+    } else {
+      const watcherEvents = this.watcher.getActivatedEventsSince(baseline);
+      const atimeResults = await this.watcher.getSkillsWithChangedAtime();
+      for (const evt of watcherEvents) {
+        log.stepSkillDetected(stepLabel, "fswatch", evt.skillName, evt.path);
+      }
+      for (const res of atimeResults) {
+        log.stepSkillDetected(stepLabel, "atime", res.skillName, res.path);
+      }
+      activatedSkills = Array.from(
+        new Set([
+          ...watcherEvents.map((e) => e.skillName),
+          ...atimeResults.map((r) => r.skillName),
+        ]),
+      );
     }
-    for (const res of atimeResults) {
-      log.stepSkillDetected(stepLabel, "atime", res.skillName, res.path);
-    }
-    const activatedSkills = Array.from(
-      new Set([...watcherEvents.map((e) => e.skillName), ...atimeResults.map((r) => r.skillName)]),
-    );
+
     log.stepActivatedSkills(stepLabel, activatedSkills);
     const error = this.assertSkillActivation(stepLabel, step, activatedSkills);
     if (error) fail(error);

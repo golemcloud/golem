@@ -75,7 +75,8 @@ impl RegistryInvalidationHandler for ShardManagerRegistryInvalidationHandler {
             | RegistryInvalidationEvent::AccountTokensInvalidated { .. }
             | RegistryInvalidationEvent::EnvironmentPermissionsChanged { .. }
             | RegistryInvalidationEvent::SecuritySchemeChanged { .. }
-            | RegistryInvalidationEvent::RetryPolicyChanged { .. } => {}
+            | RegistryInvalidationEvent::RetryPolicyChanged { .. }
+            | RegistryInvalidationEvent::AgentSecretChanged { .. } => {}
         }
     }
 }

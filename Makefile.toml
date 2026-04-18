@@ -15,6 +15,8 @@
 # - `cargo make test`: runs all unit tests, worker executor tests and integration tests
 # - `cargo make check-openapi`: generates openapi spec from the code and checks if it is the same as the one in the openapi directory (for CI)
 # - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
+# - `cargo make check-diff-model-fingerprint`: verifies golem-common diff model fingerprint against goldenfile
+# - `cargo make update-diff-model-fingerprint`: updates golem-common diff model fingerprint goldenfile
 # - `cargo make publish`: publishes packages to crates.io
 # - `cargo make run`: runs all services locally, requires redis, lnav and nginx
 # - `cargo make run-with-login-enabled`: runs all services locally with login enabled, requires redis, lnav and nginx. Also requires oauth2 configuration to be provided.
@@ -655,6 +657,31 @@ script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli --test integration app::agents::test_ts_code_first_with_rpc_and_all_types -- --nocapture
 exec --fail-on-error cargo-test-r run --package golem-cli --test integration app::agents::test_rust_code_first_with_rpc_and_all_types -- --nocapture
 '''
+
+[tasks.check-diff-model-fingerprint]
+description = "Checks diff model fingerprint goldenfile"
+command = "cargo"
+args = [
+    "test",
+    "-p",
+    "golem-common",
+    "diff_model_version_matches_diff_module_fingerprint",
+    "--",
+    "--nocapture",
+]
+
+[tasks.update-diff-model-fingerprint]
+description = "Updates diff model fingerprint goldenfile"
+env = { "UPDATE_GOLDENFILES" = "1" }
+command = "cargo"
+args = [
+    "test",
+    "-p",
+    "golem-common",
+    "diff_model_version_matches_diff_module_fingerprint",
+    "--",
+    "--nocapture",
+]
 
 [tasks.sharding-tests-debug]
 dependencies = ["build-bins-non-ci"]

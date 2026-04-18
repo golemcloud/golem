@@ -82,7 +82,7 @@ final class ShardAgentImpl(input: (String, Int)) extends ShardAgent {
 
 ## Custom Types
 
-Use case classes for structured data. The SDK requires a `zio.blocks.schema.Schema` for custom types used as method parameters or return values:
+Use case classes for structured data. The SDK requires a `zio.blocks.schema.Schema` for custom types used as method parameters or return values. For collections, use `List[T]` instead of `Array[T]` — `Array` does not have automatic `Schema` derivation support:
 
 ```scala
 import zio.blocks.schema.Schema
@@ -115,6 +115,11 @@ trait ApiAgent extends BaseAgent {
   def update(body: UpdateRequest): Future[UpdateResponse]
 }
 ```
+
+## Related Skills
+
+- Load `golem-js-runtime` for details on the QuickJS runtime environment, available Web/Node.js APIs, and npm compatibility
+- Load `golem-file-io-scala` for reading and writing files from agent code
 
 ## Key Constraints
 

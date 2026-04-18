@@ -1,0 +1,75 @@
+name: "add-config-cli"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-config-agent"
+    prompt: >
+      In the test-app project, add a new durable agent type called `GreeterAgent`
+      identified by a single constructor parameter for the instance name.
+
+      GreeterAgent must accept typed configuration with the following structure:
+      - `greeting` (string)
+      - `style` — a nested record/object with two fields:
+        - `uppercase` (boolean)
+        - `suffix` (string)
+
+      Define configuration types/structs for both the top-level config and the
+      nested `style` record, and use the agent config mechanism (Config<T>) to
+      receive them in the constructor.
+
+      Do NOT set any default values in `golem.yaml` — all config will be provided
+      when creating individual agent instances via the CLI.
+
+      Expose a method called `greet` that takes a `name` string parameter and returns
+      a string. Build the greeting as `"{greeting}, {name}{suffix}"`. If `uppercase`
+      is true, convert the entire result to uppercase before returning.
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-config-rust"
+      ts:
+        - "golem-add-config-ts"
+      scala:
+        - "golem-add-config-scala"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-config-metadata"
+    shell:
+      command: "golem"
+      args: ["component", "get", "--format", "json"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_matches: "[\\s\\S]*\"source\"\\s*:\\s*\"Local\"[\\s\\S]*greeting[\\s\\S]*uppercase[\\s\\S]*"
+
+  - id: "create-agent-with-config"
+    create_agent:
+      name: 'GreeterAgent("g1")'
+      config:
+        greeting: "Howdy"
+        style.uppercase: "false"
+        style.suffix: "!"
+
+  - id: "invoke-greet"
+    invoke_json:
+      agent: 'GreeterAgent("g1")'
+      method:
+        rust: "greet"
+        ts: "greet"
+        scala: "greet"
+      args: '"World"'
+    expect:
+      result_json:
+        - path: "$"
+          contains: "Howdy"
+        - path: "$"
+          contains: "World"
+        - path: "$"
+          contains: "!"

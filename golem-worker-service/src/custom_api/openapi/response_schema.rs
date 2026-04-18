@@ -166,9 +166,19 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
                 string_schema.clone(),
             );
 
-            let allowed_methods_enum: Vec<Option<String>> = cors_preflight_behaviour
-                .allowed_methods
+            headers.insert(
+                "Access-Control-Allow-Credentials".to_string(),
+                string_schema.clone(),
+            );
+
+            let allowed_methods: Vec<_> = cors_preflight_behaviour
+                .method_policies
                 .iter()
+                .map(|policy| &policy.method)
+                .collect();
+
+            let allowed_methods_enum: Vec<Option<String>> = allowed_methods
+                .into_iter()
                 .map(|m| {
                     Some(match m {
                         HttpMethod::Get(_) => "GET".to_string(),

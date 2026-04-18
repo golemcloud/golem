@@ -500,7 +500,7 @@ async fn deploy_creates_missing_secret_from_default(
         )
         .await?;
 
-    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
 
     assert_eq!(secrets.values.len(), 3);
     let secret = secrets
@@ -562,7 +562,7 @@ async fn deploy_ignores_default_if_secret_already_exists(
         )
         .await?;
 
-    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
 
     assert_eq!(secrets.values.len(), 3);
     let secret = secrets
@@ -626,7 +626,7 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
         )
         .await?;
 
-    let secrets = client.get_environment_agent_secrets(&env.id.0).await?;
+    let secrets = client.list_environment_agent_secrets(&env.id.0).await?;
 
     assert_eq!(secrets.values.len(), 3);
     let secret = secrets

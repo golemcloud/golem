@@ -245,8 +245,8 @@ impl DeploymentWriteService {
         )?;
 
         {
-            let actual_hash = deployment_context.hash();
-            if data.expected_deployment_hash != deployment_context.hash() {
+            let actual_hash = deployment_context.hash().map_err(anyhow::Error::new)?;
+            if data.expected_deployment_hash != actual_hash {
                 return Err(DeploymentWriteError::DeploymentHashMismatch {
                     requested_hash: data.expected_deployment_hash,
                     actual_hash,

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { executeWithDropAsync, markAtomicOperation } from './guard';
+import { markAtomicOperation } from './guard';
 import { type OplogIndex, getOplogIndex, setOplogIndex } from './hostapi';
 import { Result } from './result';
 
@@ -182,7 +182,15 @@ export async function infallibleTransaction<Out>(
   const guard = markAtomicOperation();
   const beginOplogIndex = getOplogIndex();
   const tx = new InfallibleTransaction(beginOplogIndex);
-  return executeWithDropAsync([guard], () => f(tx));
+  try {
+    const result = await f(tx);
+    guard.drop();
+    return result;
+  } catch (e) {
+    // Do NOT drop the guard — leave the atomic region open so the executor
+    // sees the trap inside the region and can retry from the begin marker.
+    throw e;
+  }
 }
 
 /**
@@ -203,15 +211,21 @@ export async function fallibleTransaction<Out, Err>(
 ): Promise<TransactionResult<Out, Err>> {
   const guard = markAtomicOperation();
   const tx = new FallibleTransaction<Err>();
-  const execute = async () => {
+  try {
     const result = await f(tx);
+    let out: TransactionResult<Out, Err>;
     if (result.isOk()) {
-      return Result.ok(result.val);
+      out = Result.ok(result.val);
     } else {
-      return Result.err(await tx.onFailure(result.val));
+      out = Result.err(await tx.onFailure(result.val));
     }
-  };
-  return executeWithDropAsync([guard], execute);
+    guard.drop();
+    return out;
+  } catch (e) {
+    // Do NOT drop the guard — leave the atomic region open so the executor
+    // sees the trap inside the region and can retry from the begin marker.
+    throw e;
+  }
 }
 
 /**

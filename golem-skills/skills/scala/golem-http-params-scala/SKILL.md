@@ -96,6 +96,8 @@ def updateItem(id: String, name: String, count: Int): Future[Item]
 
 Each unmapped parameter becomes a top-level field in the expected JSON body object. All custom types require a `zio.blocks.schema.Schema` instance.
 
+> **⚠️ Important for callers:** When making HTTP requests *to* a Golem agent endpoint, always send a JSON object with the parameter names as keys — even for a single `String` body parameter. For example, calling the `updateItem` endpoint above requires `{"name": "Widget", "count": 5}`, **not** a raw text string. See the `golem-make-http-request-scala` skill for examples.
+
 ## Return Type to HTTP Response Mapping
 
 | Return Type | HTTP Status | Response Body |

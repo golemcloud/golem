@@ -77,7 +77,7 @@ async fn create_and_get_retry_policy(deps: &EnvBasedTestDependencies) -> anyhow:
     }
 
     {
-        let all = client.get_environment_retry_policies(&env.id.0).await?;
+        let all = client.list_environment_retry_policies(&env.id.0).await?;
         assert!(all.values.contains(&created));
     }
 
@@ -158,7 +158,7 @@ async fn delete_retry_policy(deps: &EnvBasedTestDependencies) -> anyhow::Result<
         .delete_retry_policy(&created.id.0, created.revision.into())
         .await?;
 
-    let all = client.get_environment_retry_policies(&env.id.0).await?;
+    let all = client.list_environment_retry_policies(&env.id.0).await?;
     assert!(
         !all.values.iter().any(|p| p.id == created.id),
         "deleted policy should not appear in environment list"
@@ -189,7 +189,7 @@ async fn create_multiple_policies_different_priorities(
         created_ids.push(created.id);
     }
 
-    let all = client.get_environment_retry_policies(&env.id.0).await?;
+    let all = client.list_environment_retry_policies(&env.id.0).await?;
 
     for id in &created_ids {
         assert!(

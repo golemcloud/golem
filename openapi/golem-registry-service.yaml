@@ -26,6 +26,7 @@ tags:
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
 - name: McpDeployment
+- name: Me
 - name: Plugin
 - name: RegistryService
 - name: Reports
@@ -59,162 +60,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/VersionInfo'
       operationId: version
-  /v1/accounts/{account_id}/tokens:
-    get:
-      tags:
-      - RegistryService
-      - Account
-      - Token
-      summary: Get all tokens
-      description: |-
-        Gets all created tokens of an account.
-        The format of each element is the same as the data object in the oauth2 endpoint's response.
-      parameters:
-      - name: account_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_Token'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_account_tokens
-    post:
-      tags:
-      - RegistryService
-      - Account
-      - Token
-      summary: Create new token
-      description: |
-        Creates a new token with a given expiration date.
-        The response not only contains the token data but also the secret which can be passed as a bearer token to the Authorization header to the Golem Cloud REST API.
-      parameters:
-      - name: account_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/TokenCreation'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/TokenWithSecret'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: create_token
   /v1/accounts:
     post:
       tags:
       - RegistryService
       - Account
-      summary: Create account
-      description: Create a new account. The response is the created account data.
+      summary: Create a new account. The response is the created account data.
       requestBody:
         content:
           application/json; charset=utf-8:
@@ -279,8 +130,7 @@ paths:
       tags:
       - RegistryService
       - Account
-      summary: Get account
-      description: Retrieve an account for a given Account ID
+      summary: Retrieve an account for a given Account ID
       parameters:
       - name: account_id
         schema:
@@ -343,7 +193,7 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_account
-    put:
+    patch:
       tags:
       - RegistryService
       - Account
@@ -425,8 +275,7 @@ paths:
       tags:
       - RegistryService
       - Account
-      summary: Delete account
-      description: Delete an account.
+      summary: Delete an account.
       parameters:
       - name: account_id
         schema:
@@ -502,7 +351,7 @@ paths:
       tags:
       - RegistryService
       - Account
-      summary: Get account's plan
+      summary: Get an account's plan
       parameters:
       - name: account_id
         schema:
@@ -569,7 +418,7 @@ paths:
       tags:
       - RegistryService
       - Account
-      summary: Update plan of an accout
+      summary: Set the plan of an account
       parameters:
       - name: account_id
         schema:
@@ -643,7 +492,7 @@ paths:
       tags:
       - RegistryService
       - Account
-      summary: Update roles of an accout
+      summary: Set the roles of an account
       parameters:
       - name: account_id
         schema:
@@ -712,13 +561,86 @@ paths:
       - Cookie: []
       - Token: []
       operationId: set_account_roles
-  /v1/accounts/{account_id}/plugins:
+  /v1/accounts/{account_id}/tokens:
+    get:
+      tags:
+      - RegistryService
+      - Account
+      - Token
+      summary: |-
+        List all tokens of an account.
+        The format of each element is the same as the data object in the oauth2 endpoint's response.
+      parameters:
+      - name: account_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_Token'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: list_account_tokens
     post:
       tags:
       - RegistryService
       - Account
-      - Plugin
-      summary: Register a new plugin
+      - Token
+      summary: Create new token
+      description: |
+        Creates a new token with a given expiration date.
+        The response not only contains the token data but also the secret which can be passed as a bearer token to the Authorization header to the Golem Cloud REST API.
       parameters:
       - name: account_id
         schema:
@@ -732,7 +654,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/PluginRegistrationCreation'
+              $ref: '#/components/schemas/TokenCreation'
         required: true
       responses:
         '200':
@@ -740,7 +662,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/PluginRegistrationDto'
+                $ref: '#/components/schemas/TokenWithSecret'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -786,75 +708,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: create_plugin
-    get:
-      tags:
-      - RegistryService
-      - Account
-      - Plugin
-      summary: Get all plugins registered in account
-      parameters:
-      - name: account_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_PluginRegistrationDto'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_account_plugins
+      operationId: create_token
   /v1/envs/{environment_id}/agent-secrets:
     post:
       tags:
@@ -935,7 +789,7 @@ paths:
       - RegistryService
       - AgentSecrets
       - Environment
-      summary: Get all agent secrets of the environment
+      summary: List all agent secrets of the environment
       parameters:
       - name: environment_id
         schema:
@@ -997,7 +851,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_environment_agent_secrets
+      operationId: list_environment_agent_secrets
   /v1/agent-secrets/{agent_secret_id}:
     get:
       tags:
@@ -1295,7 +1149,7 @@ paths:
       - RegistryService
       - Application
       - Account
-      summary: Get all applications in the account
+      summary: List all applications in the account
       parameters:
       - name: account_id
         schema:
@@ -1739,7 +1593,7 @@ paths:
       - RegistryService
       - Component
       - Environment
-      summary: Get all components in the environment
+      summary: List all components in the environment
       parameters:
       - name: environment_id
         schema:
@@ -1801,7 +1655,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_environment_components
+      operationId: list_environment_components
   /v1/envs/{environment_id}/components/{component_name}:
     get:
       tags:
@@ -1885,7 +1739,7 @@ paths:
       - Component
       - Environment
       - Deployment
-      summary: Get all components in a specific deployment
+      summary: List all components in a specific deployment
       parameters:
       - name: environment_id
         schema:
@@ -1955,7 +1809,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_deployment_components
+      operationId: list_deployment_components
   /v1/envs/{environment_id}/deployments/{deployment_revision}/components/{component_name}:
     get:
       tags:
@@ -2198,7 +2052,7 @@ paths:
       tags:
       - RegistryService
       - Component
-      summary: Update the component
+      summary: Delete the component
       parameters:
       - name: component_id
         schema:
@@ -2691,7 +2545,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: delete_domain_registrations
+      operationId: delete_domain_registration
   /v1/envs/{environment_id}/plugins:
     post:
       tags:
@@ -2834,7 +2688,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: list_environment_plugin_grants
+      operationId: list_environment_environment_plugin_grants
   /v1/environment-plugins/{environment_plugin_grant_id}:
     get:
       tags:
@@ -3195,87 +3049,6 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_application_environment
-  /v1/envs:
-    get:
-      tags:
-      - RegistryService
-      - Environment
-      summary: List all environments that are visible to the current user, either directly or through shares.
-      parameters:
-      - name: account_email
-        schema:
-          type: string
-        in: query
-        required: false
-        deprecated: false
-        explode: true
-      - name: app_name
-        schema:
-          type: string
-        in: query
-        required: false
-        deprecated: false
-        explode: true
-      - name: env_name
-        schema:
-          type: string
-        in: query
-        required: false
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_EnvironmentWithDetails'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: list_visible_environments
   /v1/envs/{environment_id}:
     get:
       tags:
@@ -4158,7 +3931,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_environment_environment_shares
+      operationId: list_environment_environment_shares
   /v1/environment-shares/{environment_share_id}:
     get:
       tags:
@@ -4517,7 +4290,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: list_http_api_deployments_in_environment
+      operationId: list_environment_http_api_deployments
   /v1/http-api-deployments/{http_api_deployment_id}:
     get:
       tags:
@@ -4881,7 +4654,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_http_api_deployment_in_environment
+      operationId: get_environment_http_api_deployment
   /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments/{domain}:
     get:
       tags:
@@ -4966,92 +4739,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_http_api_deployment_in_deployment
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments/{domain}/openapi:
-    get:
-      tags:
-      - RegistryService
-      - ApiDeployment
-      - Environment
-      - Deployment
-      summary: Get openapi spec of http api definition in the deployment
-      parameters:
-      - name: environment_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: deployment_revision
-        schema:
-          type: integer
-          format: uint64
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: domain
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/UntypedJsonBody'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_openapi_of_http_api_deployment_in_deployment
+      operationId: get_deployment_http_api_deployment
   /v1/envs/{environment_id}/deployments/{deployment_revision}/http-api-deployments:
     get:
       tags:
@@ -5129,7 +4817,598 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: list_http_api_deployments_in_deployment
+      operationId: list_deployment_http_api_deployments
+  /v1/login/oauth2:
+    post:
+      tags:
+      - RegistryService
+      - Login
+      summary: Acquire token with OAuth2 authorization
+      description: |
+        Gets a token by authorizing with an external OAuth2 provider. Currently only github is supported.
+
+        In the response:
+        - `id` is the identifier of the token itself
+        - `accountId` is the account's identifier, can be used on the account API
+        - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
+      parameters:
+      - name: provider
+        schema:
+          $ref: '#/components/schemas/OAuth2Provider'
+        in: query
+        description: Currently only `github` is supported.
+        required: true
+        deprecated: false
+        explode: true
+      - name: access-token
+        schema:
+          type: string
+        in: query
+        description: OAuth2 access token
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/TokenWithSecret'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: login_oauth2
+  /v1/login/oauth2/device/start:
+    post:
+      tags:
+      - RegistryService
+      - Login
+      summary: Start OAuth2 interactive flow
+      description: |-
+        Starts an interactive authorization flow.
+        The user must open the returned url and enter the userCode in a form before the expires deadline.
+        Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/OAuth2DeviceflowStart'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/OAuth2DeviceflowData'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: start_oauth2_device_flow
+  /v1/login/oauth2/device/complete:
+    post:
+      tags:
+      - RegistryService
+      - Login
+      summary: Finish GitHub OAuth2 interactive flow
+      description: |-
+        Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
+        Returns a JSON string containing the encodedSession from the start endpoint's response.
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              type: string
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/TokenWithSecret'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: complete_oauth2_device_flow
+  /v1/login/oauth2/web/authorize:
+    get:
+      tags:
+      - RegistryService
+      - Login
+      summary: Initiate OAuth2 Web Flow
+      description: Starts the OAuth2 web flow authorization process by returning the authorization URL for the given provider.
+      parameters:
+      - name: provider
+        schema:
+          $ref: '#/components/schemas/OAuth2Provider'
+        in: query
+        description: Currently only `github` is supported.
+        required: true
+        deprecated: false
+        explode: true
+      - name: redirect
+        schema:
+          type: string
+        in: query
+        description: The redirect URL to redirect to after the user has authorized the application
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/OAuth2WebflowData'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: start_oauth2_webflow
+  /v1/login/oauth2/web/callback:
+    get:
+      tags:
+      - RegistryService
+      - Login
+      summary: OAuth2 Web Flow callback
+      description: |-
+        This endpoint handles the callback from the provider after the user has authorized the application.
+        It exchanges the code for an access token and then uses that to log the user in.
+      parameters:
+      - name: code
+        schema:
+          type: string
+        in: query
+        description: The authorization code returned by GitHub
+        required: true
+        deprecated: false
+        explode: true
+      - name: state
+        schema:
+          type: string
+          format: uuid
+        in: query
+        description: The state parameter for CSRF protection
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '302':
+          description: Redirect to the given URL specified in the web flow start
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+          headers:
+            LOCATION:
+              required: true
+              deprecated: false
+              schema:
+                type: string
+        '200':
+          description: OAuth flow has completed
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: submit_oauth2_webflow_callback
+  /v1/login/oauth2/web/poll:
+    get:
+      tags:
+      - RegistryService
+      - Login
+      summary: Poll for OAuth2 Web Flow token
+      description: |-
+        This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
+        A given state might only be exchanged for a token once. Any further attempts to exchange the state will fail.
+      parameters:
+      - name: state
+        schema:
+          type: string
+          format: uuid
+        in: query
+        description: The state parameter for identifying the session
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: OAuth flow has completed
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/TokenWithSecret'
+        '202':
+          description: OAuth flow is pending
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      operationId: poll_oauth2_webflow
+  /v1/me/token:
+    get:
+      tags:
+      - RegistryService
+      - Me
+      summary: |-
+        Gets information about the current token.
+        The JSON is the same as the data object in the oauth2 endpoint's response.
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Token'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: current_login_token
+  /v1/me/visible-environments:
+    get:
+      tags:
+      - RegistryService
+      - Me
+      summary: List all environments that are visible to the current user, either directly or through shares.
+      parameters:
+      - name: account_email
+        schema:
+          type: string
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: app_name
+        schema:
+          type: string
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: env_name
+        schema:
+          type: string
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_EnvironmentWithDetails'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: list_visible_environments
   /v1/envs/{environment_id}/mcp-deployments:
     post:
       tags:
@@ -5272,7 +5551,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: list_mcp_deployments_in_environment
+      operationId: list_environment_mcp_deployments
   /v1/envs/{environment_id}/mcp-deployments/{domain}:
     get:
       tags:
@@ -5348,7 +5627,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_mcp_deployment_in_environment
+      operationId: get_environment_mcp_deployment
   /v1/mcp-deployments/{mcp_deployment_id}:
     get:
       tags:
@@ -5721,7 +6000,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_mcp_deployment_in_deployment
+      operationId: get_deployment_mcp_deployment
   /v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-deployments:
     get:
       tags:
@@ -5799,103 +6078,36 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: list_mcp_deployments_in_deployment
-  /v1/login/oauth2:
+      operationId: list_deployment_mcp_deployments
+  /v1/accounts/{account_id}/plugins:
     post:
       tags:
       - RegistryService
-      - Login
-      summary: Acquire token with OAuth2 authorization
-      description: |
-        Gets a token by authorizing with an external OAuth2 provider. Currently only github is supported.
-
-        In the response:
-        - `id` is the identifier of the token itself
-        - `accountId` is the account's identifier, can be used on the account API
-        - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
+      - Plugin
+      - Account
+      summary: Register a new plugin
       parameters:
-      - name: provider
-        schema:
-          $ref: '#/components/schemas/OAuth2Provider'
-        in: query
-        description: Currently only `github` is supported.
-        required: true
-        deprecated: false
-        explode: true
-      - name: access-token
+      - name: account_id
         schema:
           type: string
-        in: query
-        description: OAuth2 access token
+          format: uuid
+        in: path
         required: true
         deprecated: false
         explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/PluginRegistrationCreation'
+        required: true
       responses:
         '200':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/TokenWithSecret'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: login_oauth2
-  /v1/login/token:
-    get:
-      tags:
-      - RegistryService
-      - Login
-      summary: Get information about a token
-      description: |-
-        Gets information about a token that is selected by the secret key passed in the Authorization header.
-        The JSON is the same as the data object in the oauth2 endpoint's response.
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Token'
+                $ref: '#/components/schemas/PluginRegistrationDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5941,258 +6153,29 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: current_login_token
-  /v1/login/oauth2/device/start:
-    post:
-      tags:
-      - RegistryService
-      - Login
-      summary: Start OAuth2 interactive flow
-      description: |-
-        Starts an interactive authorization flow.
-        The user must open the returned url and enter the userCode in a form before the expires deadline.
-        Then the finish GitHub OAuth2 interactive flow endpoint must be called with the encoded session to finish the flow.
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/OAuth2DeviceflowStart'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/OAuth2DeviceflowData'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: start_oauth2_device_flow
-  /v1/login/oauth2/device/complete:
-    post:
-      tags:
-      - RegistryService
-      - Login
-      summary: Finish GitHub OAuth2 interactive flow
-      description: |-
-        Finishes an interactive authorization flow. The returned JSON is equivalent to the oauth2 endpoint's response.
-        Returns a JSON string containing the encodedSession from the start endpoint's response.
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              type: string
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/TokenWithSecret'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: complete_oauth2_device_flow
-  /v1/login/oauth2/web/authorize:
+      operationId: create_plugin
     get:
       tags:
       - RegistryService
-      - Login
-      summary: Initiate OAuth2 Web Flow
-      description: Starts the OAuth2 web flow authorization process by returning the authorization URL for the given provider.
+      - Plugin
+      - Account
+      summary: List all plugins registered in account
       parameters:
-      - name: provider
-        schema:
-          $ref: '#/components/schemas/OAuth2Provider'
-        in: query
-        description: Currently only `github` is supported.
-        required: true
-        deprecated: false
-        explode: true
-      - name: redirect
-        schema:
-          type: string
-        in: query
-        description: The redirect URL to redirect to after the user has authorized the application
-        required: false
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/OAuth2WebflowData'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: start_oauth2_webflow
-  /v1/login/oauth2/web/callback:
-    get:
-      tags:
-      - RegistryService
-      - Login
-      summary: OAuth2 Web Flow callback
-      description: |-
-        This endpoint handles the callback from the provider after the user has authorized the application.
-        It exchanges the code for an access token and then uses that to log the user in.
-      parameters:
-      - name: code
-        schema:
-          type: string
-        in: query
-        description: The authorization code returned by GitHub
-        required: true
-        deprecated: false
-        explode: true
-      - name: state
+      - name: account_id
         schema:
           type: string
           format: uuid
-        in: query
-        description: The state parameter for CSRF protection
+        in: path
         required: true
         deprecated: false
         explode: true
       responses:
-        '302':
-          description: Redirect to the given URL specified in the web flow start
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Empty'
-          headers:
-            LOCATION:
-              required: true
-              deprecated: false
-              schema:
-                type: string
         '200':
-          description: OAuth flow has completed
+          description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Empty'
+                $ref: '#/components/schemas/Page_PluginRegistrationDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -6235,82 +6218,10 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-      operationId: submit_oauth2_webflow_callback
-  /v1/login/oauth2/web/poll:
-    get:
-      tags:
-      - RegistryService
-      - Login
-      summary: Poll for OAuth2 Web Flow token
-      description: |-
-        This endpoint is used by clients to poll for the token after the user has authorized the application via the web flow.
-        A given state might only be exchanged for a token once. Any further attempts to exchange the state will fail.
-      parameters:
-      - name: state
-        schema:
-          type: string
-          format: uuid
-        in: query
-        description: The state parameter for identifying the session
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: OAuth flow has completed
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/TokenWithSecret'
-        '202':
-          description: OAuth flow is pending
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Empty'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      operationId: poll_oauth2_webflow
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: list_account_plugins
   /v1/plugins/{plugin_id}:
     get:
       tags:
@@ -6704,7 +6615,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_environment_resources
+      operationId: list_environment_resources
   /v1/envs/{environment_id}/resources/{resource_name}:
     get:
       tags:
@@ -6781,169 +6692,6 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_environment_resource
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/resources:
-    get:
-      tags:
-      - RegistryService
-      - Resources
-      - Environment
-      - Deployment
-      summary: Get all resources in a specific deployment
-      parameters:
-      - name: environment_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: deployment_revision
-        schema:
-          type: integer
-          format: uint64
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_ResourceDefinition'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_deployment_resources
-  /v1/envs/{environment_id}/deployments/{deployment_revision}/resources/{resource_name}:
-    get:
-      tags:
-      - RegistryService
-      - Resources
-      - Environment
-      - Deployment
-      summary: Get resource in a deployment by name
-      parameters:
-      - name: environment_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: deployment_revision
-        schema:
-          type: integer
-          format: uint64
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: resource_name
-        schema:
-          type: string
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ResourceDefinition'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_deployment_resource
   /v1/resources/{resource_id}:
     get:
       tags:
@@ -7374,7 +7122,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_environment_retry_policies
+      operationId: list_environment_retry_policies
   /v1/retry-policies/{retry_policy_id}:
     get:
       tags:
@@ -7733,7 +7481,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: get_environment_security_schemes
+      operationId: list_environment_security_schemes
   /v1/security-schemes/{security_scheme_id}:
     get:
       tags:
@@ -10167,6 +9915,7 @@ components:
       - revision
       - applicationId
       - name
+      - diffModelVersion
       - compatibilityCheck
       - versionCheck
       - securityOverrides
@@ -10184,6 +9933,9 @@ components:
           format: uuid
         name:
           type: string
+        diffModelVersion:
+          type: integer
+          format: uint32
         compatibilityCheck:
           type: boolean
         versionCheck:
@@ -10351,6 +10103,7 @@ components:
       - id
       - revision
       - name
+      - diffModelVersion
       - compatibilityCheck
       - versionCheck
       - securityOverrides
@@ -10364,6 +10117,9 @@ components:
           format: uint64
         name:
           type: string
+        diffModelVersion:
+          type: integer
+          format: uint32
         compatibilityCheck:
           type: boolean
         versionCheck:
@@ -12223,9 +11979,6 @@ components:
             type: string
         value:
           $ref: '#/components/schemas/ValueAndType'
-    UntypedJsonBody:
-      type: object
-      description: A json body without a static schema
     ValueAndType:
       type: object
       required:

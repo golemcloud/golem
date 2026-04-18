@@ -15,6 +15,7 @@
 use super::deployment::DeployRepoError;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
+use anyhow::anyhow;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
@@ -127,7 +128,11 @@ impl ComponentRevisionRecord {
         }
     }
 
-    pub fn deletion(created_by: Uuid, component_id: Uuid, revision_id: i64) -> Self {
+    pub fn deletion(
+        created_by: Uuid,
+        component_id: Uuid,
+        revision_id: i64,
+    ) -> Result<Self, ComponentRepoError> {
         let mut value = Self {
             component_id,
             revision_id,
@@ -138,11 +143,11 @@ impl ComponentRevisionRecord {
             object_store_key: "".to_string(),
             binary_hash: SqlBlake3Hash::empty(),
         };
-        value.update_hash();
-        value
+        value.update_hash()?;
+        Ok(value)
     }
 
-    pub fn to_diffable(&self) -> diff::Component {
+    pub fn to_diffable(&self) -> Result<diff::Component, diff::DiffError> {
         let agent_type_provision_configs =
             self.metadata
                 .value()
@@ -157,14 +162,19 @@ impl ComponentRevisionRecord {
                                 .config
                                 .iter()
                                 .map(|e| {
-                                    (
+                                    Ok((
                                         e.path.join("."),
-                                        NormalizedJsonValue::new(e.value.to_json_value().expect(
-                                            "TypedAgentConfigEntry value must be valid JSON",
-                                        )),
-                                    )
+                                        NormalizedJsonValue::new(e.value.to_json_value().map_err(
+                                            |reason| diff::DiffError::TypedConfigJsonConversion {
+                                                operation:
+                                                    "component revision to_diffable config entry conversion",
+                                                path: e.path.join("."),
+                                                reason,
+                                            },
+                                        )?),
+                                    ))
                                 })
-                                .collect(),
+                                .collect::<Result<_, _>>()?,
                             files_by_path: config
                                 .files
                                 .iter()
@@ -196,23 +206,29 @@ impl ComponentRevisionRecord {
                                 })
                                 .collect(),
                         };
-                    (name.0.clone(), state.into())
+                    Ok((name.0.clone(), state.into()))
                 })
-                .collect();
+                .collect::<Result<_, _>>()?;
 
-        diff::Component {
+        Ok(diff::Component {
             wasm_hash: self.binary_hash.into(),
             agent_type_provision_configs,
-        }
+        })
     }
 
-    pub fn update_hash(&mut self) {
-        self.hash = self.to_diffable().hash().into()
+    pub fn update_hash(&mut self) -> Result<(), ComponentRepoError> {
+        self.hash = self
+            .to_diffable()
+            .map_err(|err| ComponentRepoError::InternalError(anyhow!(err)))?
+            .hash()
+            .map_err(|err| ComponentRepoError::InternalError(anyhow!(err)))?
+            .into();
+        Ok(())
     }
 
-    pub fn with_updated_hash(mut self) -> Self {
-        self.update_hash();
-        self
+    pub fn with_updated_hash(mut self) -> Result<Self, ComponentRepoError> {
+        self.update_hash()?;
+        Ok(self)
     }
 }
 

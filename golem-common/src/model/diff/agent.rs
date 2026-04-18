@@ -14,6 +14,7 @@
 
 use crate::base_model::json::NormalizedJsonValue;
 use crate::model::component::AgentFilePermissions;
+use crate::model::diff::DiffError;
 use crate::model::diff::hash::{Hash, HashOf, Hashable, hash_from_serialized_value};
 use crate::model::diff::plugin::PluginInstallation;
 use crate::model::diff::ser::serialize_with_mode;
@@ -30,7 +31,7 @@ pub struct AgentFile {
 }
 
 impl Hashable for AgentFile {
-    fn hash(&self) -> Hash {
+    fn hash(&self) -> Result<Hash, DiffError> {
         hash_from_serialized_value(self)
     }
 }
@@ -45,22 +46,22 @@ pub struct AgentFileDiff {
 impl Diffable for AgentFile {
     type DiffResult = AgentFileDiff;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let content_changed = new.hash != current.hash;
         let permissions_changed = new.permissions != current.permissions;
 
-        if content_changed || permissions_changed {
+        Ok(if content_changed || permissions_changed {
             Some(AgentFileDiff {
                 content_changed,
                 permissions_changed,
             })
         } else {
             None
-        }
+        })
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentTypeProvisionConfig {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -77,7 +78,7 @@ pub struct AgentTypeProvisionConfig {
 }
 
 impl Hashable for AgentTypeProvisionConfig {
-    fn hash(&self) -> Hash {
+    fn hash(&self) -> Result<Hash, DiffError> {
         hash_from_serialized_value(self)
     }
 }
@@ -100,40 +101,42 @@ pub struct AgentTypeProvisionConfigDiff {
 impl Diffable for AgentTypeProvisionConfig {
     type DiffResult = AgentTypeProvisionConfigDiff;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
-        let env_changes = new.env.diff_with_current(&current.env).unwrap_or_default();
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
+        let env_changes = new.env.diff_with_current(&current.env)?.unwrap_or_default();
         let wasi_config_changes = new
             .wasi_config
-            .diff_with_current(&current.wasi_config)
+            .diff_with_current(&current.wasi_config)?
             .unwrap_or_default();
         let file_changes = new
             .files_by_path
-            .diff_with_current(&current.files_by_path)
+            .diff_with_current(&current.files_by_path)?
             .unwrap_or_default();
         let plugin_changes = new
             .plugins_by_grant_id
-            .diff_with_current(&current.plugins_by_grant_id)
+            .diff_with_current(&current.plugins_by_grant_id)?
             .unwrap_or_default();
         let config_changes = new
             .config
-            .diff_with_current(&current.config)
+            .diff_with_current(&current.config)?
             .unwrap_or_default();
 
-        if !env_changes.is_empty()
-            || !wasi_config_changes.is_empty()
-            || !file_changes.is_empty()
-            || !plugin_changes.is_empty()
-            || !config_changes.is_empty()
-        {
-            Some(AgentTypeProvisionConfigDiff {
-                env_changes,
-                wasi_config_changes,
-                file_changes,
-                plugin_changes,
-                config_changes,
-            })
-        } else {
-            None
-        }
+        Ok(
+            if !env_changes.is_empty()
+                || !wasi_config_changes.is_empty()
+                || !file_changes.is_empty()
+                || !plugin_changes.is_empty()
+                || !config_changes.is_empty()
+            {
+                Some(AgentTypeProvisionConfigDiff {
+                    env_changes,
+                    wasi_config_changes,
+                    file_changes,
+                    plugin_changes,
+                    config_changes,
+                })
+            } else {
+                None
+            },
+        )
     }
 }

@@ -55,7 +55,7 @@ async fn share_environment_with_other_user(deps: &EnvBasedTestDependencies) -> a
 
     {
         let all_environment_shares = client_1
-            .get_environment_environment_shares(&env.id.0)
+            .list_environment_environment_shares(&env.id.0)
             .await?;
         assert!(all_environment_shares.values.contains(&share));
     }
@@ -97,7 +97,7 @@ async fn delete_environment_shares(deps: &EnvBasedTestDependencies) -> anyhow::R
 
     {
         let all_environment_shares = client_1
-            .get_environment_environment_shares(&env.id.0)
+            .list_environment_environment_shares(&env.id.0)
             .await?;
         assert_eq!(all_environment_shares.values, Vec::new());
     }

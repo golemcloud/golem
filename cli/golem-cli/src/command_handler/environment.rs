@@ -15,6 +15,7 @@
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
+use crate::error::HintError;
 use crate::error::HintError::NoApplicationManifestFound;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::AnyhowMapServiceError;
@@ -29,7 +30,7 @@ use crate::model::text::fmt::log_text_view;
 use crate::model::text::help::EnvironmentNameHelp;
 use crate::model::text::plugin::PluginNameAndVersion;
 use anyhow::{anyhow, bail};
-use golem_client::api::EnvironmentClient;
+use golem_client::api::{EnvironmentClient, MeClient};
 use golem_client::model::{EnvironmentCreation, EnvironmentPluginGrantWithDetails};
 use golem_common::cache::SimpleCache;
 use golem_common::model::application::ApplicationId;
@@ -78,7 +79,7 @@ impl EnvironmentCommandHandler {
             .ctx
             .golem_clients()
             .await?
-            .environment
+            .me
             .list_visible_environments(None, None, None)
             .await
             .map_service_error()?
@@ -100,16 +101,35 @@ impl EnvironmentCommandHandler {
         &self,
         mode: EnvironmentResolveMode,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
-        match self.ctx.environment_reference() {
+        let resolved = match self.ctx.environment_reference() {
             Some(environment_reference) => {
                 self.resolve_environment_reference(mode, environment_reference)
                     .await
             }
             None => self.resolve_manifest_environment(mode).await,
-        }
+        }?;
+
+        self.ensure_diff_model_version_compatible(resolved)
     }
 
-    pub async fn resolve_manifest_environment(
+    fn ensure_diff_model_version_compatible(
+        &self,
+        resolved: ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
+        let expected_cli_diff_model_version = diff::DIFF_MODEL_VERSION;
+        let server_diff_model_version = resolved.server_environment.diff_model_version;
+
+        if server_diff_model_version != expected_cli_diff_model_version {
+            bail!(HintError::DiffModelVersionMismatch {
+                expected_cli_diff_model_version,
+                server_diff_model_version,
+            });
+        }
+
+        Ok(resolved)
+    }
+
+    async fn resolve_manifest_environment(
         &self,
         mode: EnvironmentResolveMode,
     ) -> anyhow::Result<ResolvedEnvironmentIdentity> {
@@ -120,7 +140,7 @@ impl EnvironmentCommandHandler {
                         .ctx
                         .golem_clients()
                         .await?
-                        .environment
+                        .me
                         .list_visible_environments(
                             Some(account),
                             Some(&env.application_name.0),
@@ -180,7 +200,7 @@ impl EnvironmentCommandHandler {
         }
     }
 
-    pub async fn resolve_environment_reference(
+    async fn resolve_environment_reference(
         &self,
         mode: EnvironmentResolveMode,
         environment_reference: &EnvironmentReference,
@@ -227,7 +247,7 @@ impl EnvironmentCommandHandler {
                     .ctx
                     .golem_clients()
                     .await?
-                    .environment
+                    .me
                     .list_visible_environments(
                         Some(account_email),
                         Some(&application_name.0),
@@ -363,7 +383,7 @@ impl EnvironmentCommandHandler {
         let diffable_manifest_options = manifest_options.to_diffable();
         let diffable_current_options = environment.server_environment.to_diffable();
 
-        let Some(_diff) = diffable_manifest_options.diff_with_current(&diffable_current_options)
+        let Some(_diff) = diffable_manifest_options.diff_with_current(&diffable_current_options)?
         else {
             return Ok(false);
         };
@@ -371,7 +391,7 @@ impl EnvironmentCommandHandler {
         let unified_diff = diffable_manifest_options.unified_yaml_diff_with_current(
             &diffable_current_options,
             diff::SerializeMode::ValueIfAvailable,
-        );
+        )?;
 
         log_warn_action("Detected", "environment deployment option changes");
         {
@@ -439,7 +459,7 @@ impl EnvironmentCommandHandler {
             .ctx
             .golem_clients()
             .await?
-            .environment
+            .me
             .list_visible_environments(None, None, None)
             .await
             .map_service_error()?
@@ -476,7 +496,7 @@ impl EnvironmentCommandHandler {
                     ctx.golem_clients()
                         .await?
                         .environment
-                        .list_environment_plugin_grants(&environment.environment_id.0)
+                        .list_environment_environment_plugin_grants(&environment.environment_id.0)
                         .await
                         .map_service_error()
                         .map_err(Arc::new)

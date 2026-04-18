@@ -1599,7 +1599,6 @@ async fn recovering_an_old_worker_after_updating_a_component(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
-        .unique()
         .store()
         .await?;
 
@@ -1661,7 +1660,6 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
-        .unique()
         .store()
         .await?;
 
@@ -3500,7 +3498,6 @@ async fn invoking_worker_while_its_getting_deleted_works(
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_rpc_rust)
-        .unique()
         .store()
         .await?;
 
@@ -3519,7 +3516,9 @@ async fn invoking_worker_while_its_getting_deleted_works(
         let agent_id = agent_id.clone();
         tokio::spawn(async move {
             let mut expected_counter: u64 = 0;
+            let mut iteration: u64 = 0;
             loop {
+                iteration += 1;
                 match executor
                     .invoke_and_await_agent(
                         &component_clone,
@@ -3532,7 +3531,9 @@ async fn invoking_worker_while_its_getting_deleted_works(
                     Ok(_) => {
                         expected_counter += 1;
                     }
-                    Err(e) => break Err(e),
+                    Err(error) => {
+                        break Err(error);
+                    }
                 }
 
                 match executor
@@ -3546,14 +3547,21 @@ async fn invoking_worker_while_its_getting_deleted_works(
                 {
                     Ok(result) => {
                         let value = result.into_return_value();
-                        if let Some(Value::U64(v)) = value {
-                            if v < expected_counter {
-                                break Ok(());
+                        match value {
+                            Some(Value::U64(v)) => {
+                                if v < expected_counter {
+                                    break Ok(());
+                                }
+                                expected_counter = v;
                             }
-                            expected_counter = v;
+                            other => {
+                                tracing::warn!(iteration, expected_counter, value = ?other, "Unexpected value while checking global counter")
+                            }
                         }
                     }
-                    Err(e) => break Err(e),
+                    Err(error) => {
+                        break Err(error);
+                    }
                 }
             }
         })
@@ -3568,22 +3576,22 @@ async fn invoking_worker_while_its_getting_deleted_works(
         tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    _ = deleting_task_cancel_token.cancelled() => { break },
-                    _ = executor.delete_worker(&worker_id) => { }
+                    _ = deleting_task_cancel_token.cancelled() => {
+                        break
+                    },
+                    result = executor.delete_worker(&worker_id) => {
+                        let _ = result;
+                    }
                 }
             }
         })
     };
 
-    let invocation_result = invoking_task.await?;
+    let _invocation_result = invoking_task.await?;
     deleting_task_cancel_token.cancel();
 
     // Either the counter reset was detected (Ok) or the invocation failed (Err).
     // Both are valid outcomes of invoking while deleting.
-    if let Err(e) = invocation_result {
-        info!("Invocation failed during deletion as expected: {e}");
-    }
-
     Ok(())
 }
 

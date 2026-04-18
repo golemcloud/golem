@@ -305,7 +305,8 @@ pub async fn test_environment_create(deps: &Deps) {
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let env = deps
         .environment_repo
@@ -401,7 +402,8 @@ pub async fn test_environment_update(deps: &Deps) {
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let revision_1_created = deps
         .environment_repo
@@ -457,7 +459,8 @@ pub async fn test_environment_update(deps: &Deps) {
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let revision_2_created = deps
         .environment_repo
@@ -619,7 +622,8 @@ pub async fn test_component_stage(deps: &Deps) {
         object_store_key: "xys".to_string(),
         binary_hash: blake3::hash("test".as_bytes()).into(),
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_revision_0 = deps
         .component_repo
@@ -681,7 +685,8 @@ pub async fn test_component_stage(deps: &Deps) {
         binary_hash: SqlBlake3Hash::empty(),
         ..revision_0.clone()
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_revision_1 = deps
         .component_repo
@@ -710,7 +715,8 @@ pub async fn test_component_stage(deps: &Deps) {
         component_id: other_component_id,
         ..revision_0.clone()
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_other_component_0 = deps
         .component_repo
@@ -771,7 +777,8 @@ pub async fn test_component_stage(deps: &Deps) {
         revision_id: 3,
         ..revision_after_delete
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
     let_assert!(created_after_delete = created_after_delete);
     assert!(created_after_delete.revision == revision_after_delete);
 }
@@ -796,7 +803,8 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
             webhooks_url: "/webhooks/".to_string(),
         }),
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_revision_0 = deps
         .http_api_deployment_repo
@@ -850,7 +858,8 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         ..revision_0.clone()
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_revision_1 = deps
         .http_api_deployment_repo
@@ -884,7 +893,8 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         http_api_deployment_id: other_deployment_id,
         ..revision_0.clone()
     }
-    .with_updated_hash();
+    .with_updated_hash()
+    .unwrap();
 
     let created_other_deployment_0 = deps
         .http_api_deployment_repo

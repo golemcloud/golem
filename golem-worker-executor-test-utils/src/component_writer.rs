@@ -189,7 +189,7 @@ impl FileSystemComponentWriter {
             environment_roles_from_shares,
             final_hash: Hash::empty(),
         }
-        .with_updated_hash();
+        .with_updated_hash()?;
 
         write_metadata_to_file(
             &metadata,
@@ -533,12 +533,12 @@ pub(super) struct LocalFileSystemComponentMetadata {
 }
 
 impl LocalFileSystemComponentMetadata {
-    pub fn with_updated_hash(self) -> Self {
+    pub fn with_updated_hash(self) -> anyhow::Result<Self> {
         let diffable = ComponentDto::from(Component::from(self.clone())).to_diffable();
-        Self {
-            final_hash: diffable.hash(),
+        Ok(Self {
+            final_hash: diffable?.hash()?,
             ..self
-        }
+        })
     }
 }
 

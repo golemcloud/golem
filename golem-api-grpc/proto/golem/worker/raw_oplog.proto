@@ -1,0 +1,307 @@
+syntax = "proto3";
+
+package golem.worker;
+
+import "golem/common/account_id.proto";
+import "golem/common/environment.proto";
+import "golem/common/uuid.proto";
+import "golem/component/plugin.proto";
+import "golem/worker/idempotency_key.proto";
+import "golem/worker/public_oplog.proto";
+import "golem/worker/retry_policy.proto";
+import "golem/worker/worker_error.proto";
+import "golem/worker/worker_id.proto";
+import "google/protobuf/timestamp.proto";
+
+// An oplog entry in its raw/internal representation.
+message RawOplogEntry {
+  google.protobuf.Timestamp timestamp = 1;
+  oneof entry {
+    RawCreateParameters create = 2;
+    RawHostCallParameters host_call = 3;
+    RawAgentInvocationStartedParameters agent_invocation_started = 4;
+    RawAgentInvocationFinishedParameters agent_invocation_finished = 5;
+    RawTimestampOnly suspend = 6;
+    RawErrorParameters error = 7;
+    RawTimestampOnly no_op = 8;
+    RawJumpParameters jump = 9;
+    RawTimestampOnly interrupted = 10;
+    RawTimestampOnly exited = 11;
+    RawTimestampOnly begin_atomic_region = 12;
+    RawEndAtomicRegionParameters end_atomic_region = 13;
+    RawTimestampOnly begin_remote_write = 14;
+    RawEndRemoteWriteParameters end_remote_write = 15;
+    RawPendingAgentInvocationParameters pending_agent_invocation = 16;
+    RawPendingUpdateParameters pending_update = 17;
+    RawSuccessfulUpdateParameters successful_update = 18;
+    RawFailedUpdateParameters failed_update = 19;
+    RawGrowMemoryParameters grow_memory = 20;
+    RawFilesystemStorageUsageUpdateParameters filesystem_storage_usage_update = 21;
+    RawCreateResourceParameters create_resource = 22;
+    RawDropResourceParameters drop_resource = 23;
+    RawLogParameters log = 24;
+    RawTimestampOnly restart = 25;
+    RawActivatePluginParameters activate_plugin = 26;
+    RawDeactivatePluginParameters deactivate_plugin = 27;
+    RawRevertParameters revert = 28;
+    RawCancelPendingInvocationParameters cancel_pending_invocation = 29;
+    RawStartSpanParameters start_span = 30;
+    RawFinishSpanParameters finish_span = 31;
+    RawSetSpanAttributeParameters set_span_attribute = 32;
+    RawChangePersistenceLevelParameters change_persistence_level = 33;
+    RawBeginRemoteTransactionParameters begin_remote_transaction = 34;
+    RawRemoteTransactionParameters pre_commit_remote_transaction = 35;
+    RawRemoteTransactionParameters pre_rollback_remote_transaction = 36;
+    RawRemoteTransactionParameters committed_remote_transaction = 37;
+    RawRemoteTransactionParameters rolled_back_remote_transaction = 38;
+    RawSnapshotParameters snapshot = 39;
+    RawOplogProcessorCheckpointParameters oplog_processor_checkpoint = 40;
+    RawSetRetryPolicyParameters set_retry_policy = 41;
+    RawRemoveRetryPolicyParameters remove_retry_policy = 42;
+  }
+}
+
+// Empty message used for timestamp-only oplog variants.
+message RawTimestampOnly {}
+
+// Payload that can be stored inline or externally.
+message RawOplogPayload {
+  oneof payload {
+    bytes inline_data = 1;
+    RawExternalPayload external = 2;
+  }
+}
+
+// Reference to an externally stored payload.
+message RawExternalPayload {
+  golem.common.UUID payload_id = 1;
+  bytes md5_hash = 2;
+}
+
+// Span data in raw form.
+message RawSpanData {
+  oneof span {
+    RawLocalSpan local_span = 1;
+    RawExternalSpan external_span = 2;
+  }
+}
+
+message RawLocalSpan {
+  string span_id = 1;
+  google.protobuf.Timestamp start = 2;
+  optional string parent_id = 3;
+  repeated RawSpanData linked_context = 4;
+  map<string, string> attributes = 5;
+  bool inherited = 6;
+}
+
+message RawExternalSpan {
+  string span_id = 1;
+}
+
+// Update description in raw form.
+message RawUpdateDescription {
+  oneof description {
+    uint64 automatic_target_revision = 1;
+    RawSnapshotBasedUpdate snapshot_based = 2;
+  }
+}
+
+message RawSnapshotBasedUpdate {
+  uint64 target_revision = 1;
+  RawOplogPayload payload = 2;
+  string mime_type = 3;
+}
+
+// Oplog region (start..end index range).
+message RawOplogRegion {
+  uint64 start = 1;
+  uint64 end = 2;
+}
+
+// Key-value pair for environment variables.
+message RawEnvVar {
+  string key = 1;
+  string value = 2;
+}
+
+// --- Variant-specific parameter messages ---
+
+message RawCreateParameters {
+  AgentId agent_id = 1;
+  uint64 component_revision = 2;
+  repeated RawEnvVar env = 3;
+  golem.common.EnvironmentId environment_id = 4;
+  golem.common.AccountId created_by = 5;
+  optional AgentId parent = 6;
+  uint64 component_size = 7;
+  uint64 initial_total_linear_memory_size = 8;
+  repeated golem.component.EnvironmentPluginGrantId initial_active_plugins = 9;
+  map<string, string> config_vars = 10;
+  repeated bytes local_agent_config = 11;
+  optional golem.common.UUID original_phantom_id = 12;
+}
+
+message RawHostCallParameters {
+  string function_name = 1;
+  RawOplogPayload request = 2;
+  RawOplogPayload response = 3;
+  WrappedFunctionType durable_function_type = 4;
+}
+
+message RawAgentInvocationStartedParameters {
+  IdempotencyKey idempotency_key = 1;
+  RawOplogPayload payload = 2;
+  string trace_id = 3;
+  repeated string trace_states = 4;
+  repeated RawSpanData invocation_context = 5;
+}
+
+message RawAgentInvocationFinishedParameters {
+  RawOplogPayload result = 1;
+  int64 consumed_fuel = 2;
+  uint64 component_revision = 3;
+}
+
+message RawErrorParameters {
+  AgentError error = 1;
+  uint64 retry_from = 2;
+  bool inside_atomic_region = 3;
+  optional bytes retry_policy_state = 4;
+}
+
+message RawJumpParameters {
+  RawOplogRegion jump = 1;
+}
+
+message RawEndAtomicRegionParameters {
+  uint64 begin_index = 1;
+}
+
+message RawEndRemoteWriteParameters {
+  uint64 begin_index = 1;
+}
+
+message RawPendingAgentInvocationParameters {
+  IdempotencyKey idempotency_key = 1;
+  RawOplogPayload payload = 2;
+  string trace_id = 3;
+  repeated string trace_states = 4;
+  repeated RawSpanData invocation_context = 5;
+}
+
+message RawPendingUpdateParameters {
+  RawUpdateDescription description = 1;
+}
+
+message RawSuccessfulUpdateParameters {
+  uint64 target_revision = 1;
+  uint64 new_component_size = 2;
+  repeated golem.component.EnvironmentPluginGrantId new_active_plugins = 3;
+}
+
+message RawFailedUpdateParameters {
+  uint64 target_revision = 1;
+  optional string details = 2;
+}
+
+message RawGrowMemoryParameters {
+  uint64 delta = 1;
+}
+
+message RawFilesystemStorageUsageUpdateParameters {
+  int64 delta = 1;
+}
+
+message RawResourceTypeId {
+  string name = 1;
+  string owner = 2;
+}
+
+message RawCreateResourceParameters {
+  uint64 id = 1;
+  RawResourceTypeId resource_type_id = 2;
+}
+
+message RawDropResourceParameters {
+  uint64 id = 1;
+  RawResourceTypeId resource_type_id = 2;
+}
+
+message RawLogParameters {
+  OplogLogLevel level = 1;
+  string context = 2;
+  string message = 3;
+}
+
+message RawActivatePluginParameters {
+  golem.component.EnvironmentPluginGrantId plugin_grant_id = 1;
+}
+
+message RawDeactivatePluginParameters {
+  golem.component.EnvironmentPluginGrantId plugin_grant_id = 1;
+}
+
+message RawRevertParameters {
+  RawOplogRegion dropped_region = 1;
+}
+
+message RawCancelPendingInvocationParameters {
+  IdempotencyKey idempotency_key = 1;
+}
+
+message RawStartSpanParameters {
+  string span_id = 1;
+  optional string parent = 2;
+  optional string linked_context_id = 3;
+  map<string, string> attributes = 4;
+}
+
+message RawFinishSpanParameters {
+  string span_id = 1;
+}
+
+message RawSetSpanAttributeParameters {
+  string span_id = 1;
+  string key = 2;
+  string value = 3;
+}
+
+message RawChangePersistenceLevelParameters {
+  PersistenceLevel persistence_level = 1;
+}
+
+message RawBeginRemoteTransactionParameters {
+  string transaction_id = 1;
+  optional uint64 original_begin_index = 2;
+}
+
+message RawRemoteTransactionParameters {
+  uint64 begin_index = 1;
+}
+
+message RawSnapshotParameters {
+  RawOplogPayload data = 1;
+  string mime_type = 2;
+}
+
+message RawOplogProcessorCheckpointParameters {
+  golem.component.EnvironmentPluginGrantId plugin_grant_id = 1;
+  AgentId target_agent_id = 2;
+  uint64 confirmed_up_to = 3;
+  uint64 sending_up_to = 4;
+  uint64 last_batch_start = 5;
+}
+
+message RawSetRetryPolicyParameters {
+  golem.worker.retry.NamedRetryPolicy policy = 1;
+}
+
+message RawRemoveRetryPolicyParameters {
+  string name = 1;
+}
+
+message RawOplogEntryWithIndex {
+  uint64 oplog_index = 1;
+  RawOplogEntry entry = 2;
+}

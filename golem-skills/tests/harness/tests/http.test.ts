@@ -115,7 +115,7 @@ steps:
   });
 
   it("loads http with all methods", async () => {
-    for (const method of ["GET", "POST", "PUT", "DELETE", "PATCH"]) {
+    for (const method of ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]) {
       const filePath = await writeTempYaml(`
 name: "method-${method.toLowerCase()}"
 steps:
@@ -131,5 +131,31 @@ steps:
         assert.equal(step.http.method, method);
       }
     }
+  });
+
+  it("loads http with OPTIONS method", async () => {
+    const filePath = await writeTempYaml(`
+name: "options-test"
+steps:
+  - id: "preflight"
+    http:
+      url: "http://localhost:8080/api"
+      method: "OPTIONS"
+      headers:
+        Origin: "https://example.com"
+    expect:
+      status: 200
+      header_contains:
+        Access-Control-Allow-Origin: "https://example.com"
+`);
+    const spec = await ScenarioLoader.load(filePath);
+    const step = spec.steps[0];
+    assert.equal(step.tag, "http");
+    if (step.tag === "http") {
+      assert.equal(step.http.method, "OPTIONS");
+    }
+    assert.deepEqual(step.expect?.header_contains, {
+      "Access-Control-Allow-Origin": "https://example.com",
+    });
   });
 });

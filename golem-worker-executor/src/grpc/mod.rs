@@ -46,8 +46,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetFileContentsRequest, GetFileContentsResponse, GetFileSystemNodeRequest,
     GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest,
     GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InvokeAgentRequest, InvokeAgentResponse, RevertWorkerRequest, RevertWorkerResponse,
-    SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    InvokeAgentRequest, InvokeAgentResponse, ProcessOplogEntriesRequest,
+    ProcessOplogEntriesResponse, RevertWorkerRequest, RevertWorkerResponse, SearchOplogRequest,
+    SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse, process_oplog_entries_response,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
@@ -55,9 +56,10 @@ use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal, UntypedDat
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
-use golem_common::model::worker::AgentConfigEntryDto;
+use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
@@ -71,7 +73,7 @@ use golem_service_base::grpc::{
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -246,6 +248,62 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
+    /// Checks whether a create-worker request carries the same parameters that
+    /// an already-persisted worker was created with.  When this returns `true`
+    /// the request is treated as an idempotent duplicate and succeeds without
+    /// error.
+    ///
+    /// The stored `env` includes component-level default environment variables
+    /// that were merged in during the original creation.  The request only
+    /// carries per-worker overrides.  We therefore check that every request env
+    /// var is present in the stored env with the same value — extra entries in
+    /// the stored env are component-level defaults and are expected.
+    ///
+    /// For the `config` entries we compare only the *paths*, because the stored
+    /// representation (`TypedAgentConfigEntry`) uses a different value encoding
+    /// than the request (`AgentConfigEntryDto`).  Path equality is adequate
+    /// because for the same component the same path + JSON value will always be
+    /// parsed into the same typed value.
+    fn is_same_worker_creation_request(
+        existing: &AgentMetadata,
+        request_env: &[(String, String)],
+        request_wasi_config: &BTreeMap<String, String>,
+        request_config: &[AgentConfigEntryDto],
+    ) -> bool {
+        // env — the stored env is request env merged with component defaults.
+        // Verify that every request env var exists in the stored env with the
+        // same value; additional entries are component-level defaults.
+        let existing_env: HashMap<&str, &str> = existing
+            .env
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        for (k, v) in request_env {
+            match existing_env.get(k.as_str()) {
+                Some(existing_v) if *existing_v == v.as_str() => {}
+                _ => return false,
+            }
+        }
+
+        // wasi_config — both are BTreeMap, direct comparison
+        if existing.wasi_config != *request_wasi_config {
+            return false;
+        }
+
+        // config — compare paths (same path + same JSON value always yields
+        // the same TypedAgentConfigEntry for a given component revision)
+        if existing.config.len() != request_config.len() {
+            return false;
+        }
+        for (existing_entry, request_entry) in existing.config.iter().zip(request_config.iter()) {
+            if existing_entry.path != request_entry.path {
+                return false;
+            }
+        }
+
+        true
+    }
+
     async fn create_worker_internal(
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
@@ -257,22 +315,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
-        let existing_worker = self.worker_service().get(&owned_agent_id).await;
-        if existing_worker.is_some() && !request.ignore_already_existing {
-            return Err(WorkerExecutorError::worker_already_exists(
-                owned_agent_id.agent_id(),
-            ));
-        }
-
         let principal = extract_principal(&request.principal);
 
-        let env = request
+        let env: Vec<(String, String)> = request
             .env
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        let wasi_config = request.wasi_config.into_iter().collect();
+        let wasi_config: BTreeMap<String, String> = request.wasi_config.into_iter().collect();
 
         let config = request
             .config
@@ -284,6 +335,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "Failed parsing local agent config: {err}"
                 ))
             })?;
+
+        // NOTE: to return creation (limit) errors, we still "get_or_create",
+        //       even if the worker already exists with ignore_already_existing requested
+        let existing_worker = self.worker_service().get(&owned_agent_id).await;
+        if let Some(existing) = existing_worker
+            && !request.ignore_already_existing
+            && !Self::is_same_worker_creation_request(
+                &existing.initial_worker_metadata,
+                &env,
+                &wasi_config,
+                &config,
+            )
+        {
+            return Err(WorkerExecutorError::worker_already_exists(
+                owned_agent_id.agent_id(),
+            ));
+        }
 
         let invocation_context = from_proto_invocation_context(&request.invocation_context);
 
@@ -1759,6 +1827,93 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    async fn process_oplog_entries_internal(
+        &self,
+        request: ProcessOplogEntriesRequest,
+    ) -> Result<(), WorkerExecutorError> {
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        Self::validate_auth_ctx(&request.auth_ctx)?;
+
+        let component_revision: golem_common::model::component::ComponentRevision =
+            request.component_revision.try_into().map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("invalid component_revision: {e}"))
+            })?;
+
+        let idempotency_key: IdempotencyKey = request
+            .idempotency_key
+            .ok_or(WorkerExecutorError::invalid_request(
+                "idempotency_key not found",
+            ))?
+            .into();
+
+        let account_id: AccountId = request
+            .account_id
+            .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("invalid account_id: {e}"))
+            })?;
+
+        let config: Vec<(String, String)> = request.config.into_iter().collect();
+
+        let metadata_dto: AgentMetadataDto = request
+            .metadata
+            .ok_or(WorkerExecutorError::invalid_request("metadata not found"))?
+            .try_into()
+            .map_err(|e: String| {
+                WorkerExecutorError::invalid_request(format!("invalid metadata: {e}"))
+            })?;
+
+        let metadata = AgentMetadataForGuests {
+            agent_id: metadata_dto.agent_id,
+            args: vec![],
+            env: metadata_dto.env.into_iter().collect(),
+            wasi_config: metadata_dto.wasi_config,
+            status: metadata_dto.status,
+            component_revision: metadata_dto.component_revision,
+            retry_count: metadata_dto.retry_count as u64,
+            environment_id: metadata_dto.environment_id,
+        };
+
+        let entries: Vec<golem_common::model::oplog::OplogEntry> = request
+            .entries
+            .into_iter()
+            .map(golem_common::model::oplog::OplogEntry::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(WorkerExecutorError::invalid_request)?;
+
+        let first_entry_index = OplogIndex::from_u64(request.first_entry_index);
+
+        let worker = Worker::get_or_create_running(
+            self,
+            &owned_agent_id,
+            None,
+            None,
+            Vec::new(),
+            Some(component_revision),
+            None,
+            &InvocationContextStack::fresh(),
+            Principal::anonymous(),
+        )
+        .await?;
+
+        let _result = worker
+            .invoke(AgentInvocation::ProcessOplogEntries {
+                idempotency_key,
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+            })
+            .await?;
+
+        Ok(())
+    }
+
     fn create_proto_metadata(
         metadata: AgentMetadata,
         last_error_and_retry_count: Option<LastError>,
@@ -2701,6 +2856,38 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             err.clone().into(),
                         ),
                     ),
+                })),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn process_oplog_entries(
+        &self,
+        request: Request<ProcessOplogEntriesRequest>,
+    ) -> ResponseResult<ProcessOplogEntriesResponse> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "process_oplog_entries",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+
+        let result = self
+            .process_oplog_entries_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(_) => record.succeed(Ok(Response::new(ProcessOplogEntriesResponse {
+                result: Some(process_oplog_entries_response::Result::Success(
+                    golem::common::Empty {},
+                )),
+            }))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(ProcessOplogEntriesResponse {
+                    result: Some(process_oplog_entries_response::Result::Failure(
+                        err.clone().into(),
+                    )),
                 })),
                 &mut err,
             ),

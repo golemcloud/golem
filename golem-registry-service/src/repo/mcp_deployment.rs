@@ -379,7 +379,7 @@ impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
                         user_account_id,
                         mcp_deployment_id,
                         revision_id,
-                    ),
+                    )?,
                 )
                 .await?;
 
@@ -570,7 +570,7 @@ impl McpDeploymentRepoInternal for DbMcpDeploymentRepo<PostgresPool> {
         tx: &mut Self::Tx,
         revision: McpDeploymentRevisionRecord,
     ) -> Result<McpDeploymentRevisionRecord, McpDeploymentRepoError> {
-        let revision = revision.with_updated_hash();
+        let revision = revision.with_updated_hash()?;
         tx.fetch_one_as(
             sqlx::query_as(indoc! { r#"
                     INSERT INTO mcp_deployment_revisions

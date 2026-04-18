@@ -140,7 +140,7 @@ async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
         .await?;
 
     {
-        let all_plugins = client.get_account_plugins(&user.account_id.0).await?;
+        let all_plugins = client.list_account_plugins(&user.account_id.0).await?;
         let plugin_ids = all_plugins
             .values
             .into_iter()

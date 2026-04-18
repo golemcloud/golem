@@ -451,7 +451,7 @@ async fn shared_quota_across_two_agents(
     user.start_agent(&component.id, agent_b.clone()).await?;
 
     let mut tasks = JoinSet::new();
-    for agent_id in [agent_a, agent_b] {
+    for (agent_id, expected_use) in [(agent_a, 10u64), (agent_b, 20u64)] {
         let user = user.clone();
         let component = component.clone();
         tasks.spawn(async move {
@@ -459,7 +459,7 @@ async fn shared_quota_across_two_agents(
                 &component,
                 &agent_id,
                 "try_reserve_and_commit",
-                data_value!("shared".to_string(), 10u64, 8u64),
+                data_value!("shared".to_string(), expected_use, 8u64),
             )
             .await
         });

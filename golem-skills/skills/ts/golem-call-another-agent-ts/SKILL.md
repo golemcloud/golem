@@ -32,15 +32,7 @@ The calling agent **blocks** until the target agent processes the request and re
 
 ## Phantom Agents
 
-Normally, agents with the same constructor parameters refer to the same instance. **Phantom agents** allow multiple distinct instances with the same constructor parameters:
-
-```typescript
-// Create a new phantom agent (gets a random unique ID)
-const phantom = CounterAgent.newPhantom("shared-name");
-
-// Reconnect to an existing phantom by its UUID
-const samePhantom = CounterAgent.getPhantom(existingUuid, "shared-name");
-```
+To create multiple distinct instances with the same constructor parameters, use phantom agents. See the `golem-multi-instance-agent-ts` skill.
 
 ## Cross-Component RPC
 

@@ -7,6 +7,8 @@ componentTemplates:
       dir: "{{ appRootDir }}"
       sources:
       - "{{ componentDir }}/src"
+      - "{{ appRootDir }}/*.sbt"
+      - "{{ appRootDir }}/project"
       targets:
       - "{{ appRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
     - injectToPrebuiltQuickjs: "{{ appRootDir }}/.generated/agent_guest.wasm"
