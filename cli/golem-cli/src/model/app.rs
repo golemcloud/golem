@@ -824,7 +824,8 @@ impl PartitionedComponentPresets {
                     if preset.default == Some(app_raw::Marker) || default_custom_preset.is_none() {
                         default_custom_preset = Some(preset_name.clone());
                     }
-                    custom_presets.insert(preset_name, preset.into_component_layer_properties().into());
+                    custom_presets
+                        .insert(preset_name, preset.into_component_layer_properties().into());
                 }
             }
         }

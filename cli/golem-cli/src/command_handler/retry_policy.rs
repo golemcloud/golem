@@ -25,12 +25,12 @@ use crate::model::text::retry_policy::{
 use anyhow::bail;
 use golem_client::api::RetryPoliciesClient;
 use golem_common::model::UntypedJsonBody;
+use golem_common::model::retry_policy::RetryPolicyDto;
 use golem_common::model::retry_policy::{
     Predicate, RetryPolicy, RetryPolicyCreation, RetryPolicyId, RetryPolicyUpdate,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use golem_common::model::retry_policy::RetryPolicyDto;
 use std::sync::Arc;
 
 pub struct RetryPolicyCommandHandler {
@@ -190,8 +190,14 @@ impl RetryPolicyCommandHandler {
                 &RetryPolicyUpdate {
                     current_revision: current.revision,
                     priority,
-                    predicate: predicate.as_deref().map(parse_and_validate_predicate).transpose()?,
-                    policy: policy.as_deref().map(parse_and_validate_policy).transpose()?,
+                    predicate: predicate
+                        .as_deref()
+                        .map(parse_and_validate_predicate)
+                        .transpose()?,
+                    policy: policy
+                        .as_deref()
+                        .map(parse_and_validate_policy)
+                        .transpose()?,
                 },
             )
             .await
