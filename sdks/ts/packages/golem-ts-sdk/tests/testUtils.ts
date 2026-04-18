@@ -25,6 +25,7 @@ export const BarAgentCustomClassName = new AgentClassName('my-complex-agent');
 export const EphemeralAgentClassName = new AgentClassName('EphemeralAgent');
 export const SimpleHttpAgentClassName = new AgentClassName('SimpleHttpAgent');
 export const ComplexHttpAgentClassName = new AgentClassName('ComplexHttpAgent');
+export const AllHttpMethodsAgentClassName = new AgentClassName('AllHttpMethodsAgent');
 export const SnapshottingDisabledAgentClassName = new AgentClassName('SnapshottingDisabledAgent');
 export const SnapshottingEnabledAgentClassName = new AgentClassName('SnapshottingEnabledAgent');
 export const SnapshottingPeriodicAgentClassName = new AgentClassName('SnapshottingPeriodicAgent');

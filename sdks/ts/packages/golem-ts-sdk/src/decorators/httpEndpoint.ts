@@ -30,6 +30,11 @@ export type EndpointDecoratorOptions = {
   post?: string;
   put?: string;
   delete?: string;
+  patch?: string;
+  head?: string;
+  options?: string;
+  connect?: string;
+  trace?: string;
   custom?: {
     method: string;
     path: string;
@@ -67,11 +72,13 @@ export type EndpointDecoratorOptions = {
  * ```
  *
  * ### HTTP Methods
- * - Specify **one** of `get`, `post`, `put`, `delete`, or `custom`.
+ * - Specify **one** of `get`, `post`, `put`, `delete`, `patch`, `head`, `options`, `connect`, `trace`, or `custom`.
  * - The value of the option is the endpoint path.
  * - Examples:
  *   - Simple GET: `{ get: '/status' }`
  *   - GET with path variables: `{ get: '/rooms/{roomId}/messages/{messageId}' }`
+ *   - PATCH endpoint: `{ patch: '/update/{id}' }`
+ *   - HEAD endpoint: `{ head: '/check/{resource}' }`
  * - Path variables must exactly match method parameters.
  * - No "foreign" path variables are allowed.
  *
@@ -141,13 +148,24 @@ export function endpoint(opts: EndpointDecoratorOptions) {
       );
     }
 
-    const methods = ['get', 'post', 'put', 'delete', 'custom'] as const;
+    const methods = [
+      'get',
+      'post',
+      'put',
+      'delete',
+      'patch',
+      'head',
+      'options',
+      'connect',
+      'trace',
+      'custom',
+    ] as const;
 
     const providedMethods = methods.filter((m) => (m === 'custom' ? !!opts.custom : !!opts[m]));
 
     if (providedMethods.length === 0) {
       throw new Error(
-        `Endpoint decorator must specify one HTTP method (get/post/put/delete/custom) for method ${methodName}`,
+        `Endpoint decorator must specify one HTTP method (get/post/put/delete/patch/head/options/connect/trace/custom) for method ${methodName}`,
       );
     }
 
