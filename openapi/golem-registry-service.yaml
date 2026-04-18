@@ -11979,6 +11979,9 @@ components:
             type: string
         value:
           $ref: '#/components/schemas/ValueAndType'
+    UntypedJsonBody:
+      type: object
+      description: A json body without a static schema
     ValueAndType:
       type: object
       required:

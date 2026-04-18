@@ -17176,6 +17176,9 @@ components:
       - accountId
       - createdAt
       - expiresAt
+    UntypedJsonBody:
+      description: A json body without a static schema
+      type: object
     VersionedName:
       title: VersionedName
       type: object
