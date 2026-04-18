@@ -1047,7 +1047,7 @@ mod test {
     fn arb_json_value() -> BoxedStrategy<Value> {
         let leaf = prop_oneof![
             any::<bool>().prop_map(Value::Bool),
-            any::<i64>().prop_map(|n| Value::from(n)),
+            any::<i64>().prop_map(Value::from),
             arb_ident().prop_map(Value::String),
         ];
 

@@ -217,9 +217,9 @@ object GolemServer {
         name,
         "--priority",
         priority.toString,
-        "--predicate-json",
+        "--predicate",
         predicateJson,
-        "--policy-json",
+        "--policy",
         policyJson
       ).flatMap { result =>
         if (result.exitCode == 0) ZIO.unit
