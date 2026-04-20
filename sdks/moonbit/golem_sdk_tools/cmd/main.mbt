@@ -1,46 +1,41 @@
 ///|
-/// Fixes string literals that the formatter broke across lines by rejoining them.
+/// Rejoins string literals that the MoonBit formatter broke across lines.
+/// Detects lines with an odd number of quotes (indicating an unterminated
+/// string) and merges subsequent lines until the string is closed.
 fn fix_broken_strings(input : String) -> String {
   let lines = input.split("\n")
   let result : Array[String] = []
-  let mut in_broken_string = false
-  let mut accumulated = ""
+  let mut in_broken = false
+  let mut acc = ""
   for line in lines {
-    let line_str = line.to_string()
-    if in_broken_string {
-      accumulated = accumulated + " " + line_str.trim_start(chars=" ").to_string()
-      let trimmed_end = line_str.trim_end(chars=" ").to_string()
-      if trimmed_end.has_suffix("\"") || trimmed_end.has_suffix("\",") {
-        result.push(accumulated)
-        in_broken_string = false
-        accumulated = ""
+    let s = line.to_string()
+    if in_broken {
+      acc = acc + " " + s.trim_start(chars=" ").to_string()
+      let trimmed = s.trim_end(chars=" ").to_string()
+      if trimmed.has_suffix("\"") || trimmed.has_suffix("\",") {
+        result.push(acc)
+        in_broken = false
+        acc = ""
       }
     } else {
-      let trimmed = line_str.trim_start(chars=" ").to_string()
-      let quote_count = count_char(trimmed, '"')
-      if quote_count % 2 != 0 {
-        in_broken_string = true
-        accumulated = line_str
+      let mut quotes = 0
+      for ch in s {
+        if ch == '"' {
+          quotes += 1
+        }
+      }
+      if quotes % 2 != 0 {
+        in_broken = true
+        acc = s
       } else {
-        result.push(line_str)
+        result.push(s)
       }
     }
   }
-  if in_broken_string {
-    result.push(accumulated)
+  if in_broken {
+    result.push(acc)
   }
   result.join("\n")
-}
-
-///|
-fn count_char(s : String, c : Char) -> Int {
-  let mut n = 0
-  for ch in s {
-    if ch == c {
-      n += 1
-    }
-  }
-  n
 }
 
 ///|

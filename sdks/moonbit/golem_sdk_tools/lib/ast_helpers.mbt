@@ -89,7 +89,8 @@ fn make_tuple_type(elements : Array[@syntax.Type]) -> @syntax.Type {
 // --- Expressions: Literals ---
 
 ///|
-/// Creates a string literal expression.
+/// Creates a string literal expression. Collapses newlines to spaces since
+/// the formatter may break long string literals across lines.
 fn make_string_expr(s : String) -> @syntax.Expr {
   let collapsed = s
     .replace(old="\r\n", new=" ")
