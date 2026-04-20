@@ -376,7 +376,7 @@ serialize them via `@formatter.impls_to_string`. The `ast_helpers.mbt` file prov
 functions for constructing AST nodes (types, expressions, patterns, match cases, etc.).
 
 **Architecture note**: The `golem_sdk_tools` now uses `moonbitlang/formatter` (via a local path
-dependency pointing to `../../moonbit-formatter`) for code emission, and `moonbitlang/parser` for
+dependency on `moonbitlang/formatter` 0.1.5) for code emission, and `moonbitlang/parser` for
 both parsing and AST construction. The earlier custom emitter was replaced once the formatter
 dependency became available via a local path workaround.
 
@@ -545,8 +545,7 @@ project-level `bin-deps` approach (via `.mooncakes/`) so users don't need a glob
 
 **Note**: Both `golemcloud/golem_sdk` and `golemcloud/golem_sdk_tools` must be published to
 mooncakes.io before the release template will work. The `golem_sdk_tools` module currently
-depends on `moonbitlang/formatter` via a local path (`../../moonbit-formatter`), which must be
-resolved before publishing.
+depends on `moonbitlang/formatter` (0.1.5) from the official mooncakes registry.
 
 ## Coding Conventions
 
@@ -577,5 +576,5 @@ resolved before publishing.
 - **wasm-tools** — for `component embed` (adds WIT type info to WASM) and `component new` (creates Component Model WASM)
 - **moon** — MoonBit build tool
 - **moonbitlang/parser** (0.1.16) — used by `golem_sdk_tools` for parsing source files and AST construction
-- **moonbitlang/formatter** (local path `../../moonbit-formatter`) — used by `golem_sdk_tools` for emitting generated MoonBit source from AST
+- **moonbitlang/formatter** (0.1.5) — used by `golem_sdk_tools` for emitting generated MoonBit source from AST
 - **moonbitlang/x** (0.4.39) — used by `golem_sdk_tools` for filesystem and env args

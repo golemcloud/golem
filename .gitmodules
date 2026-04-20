@@ -1,3 +1,0 @@
-[submodule "sdks/moonbit/moonbit-formatter"]
-	path = sdks/moonbit/moonbit-formatter
-	url = https://github.com/vigoo/formatter
