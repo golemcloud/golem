@@ -12,17 +12,13 @@ pub trait WebsocketTest {
     fn echo_and_record(&self, url: String, msg: String) -> String;
     /// Connects once, stores the connection in agent state and receives one message.
     fn connect_and_receive_first(&self, url: String) -> String;
-    /// Like `connect_and_receive_first`, but uses blocking_receive_with_timeout
-    /// to exercise the timeout receive path before consuming the result.
-    fn connect_subscribe_and_receive_first(&self, url: String) -> String;
     /// Receives the next message from the connection stored in agent state.
     fn receive_next_from_persisted(&self) -> String;
     /// Like `receive_next_from_persisted`, but returns websocket errors to the caller.
     fn receive_next_from_persisted_result(&self) -> Result<String, String>;
     /// Closes the persisted websocket and returns any close error to the caller.
     fn close_persisted_result(&self) -> Result<(), String>;
-    /// Receives from the persisted websocket with a timeout and reports whether a message arrived.
-    fn subscribe_to_persisted(&self) -> bool;
+
     /// Activates the agent without touching the persisted websocket.
     fn noop(&self) -> String;
     fn create_promise(&self) -> PromiseId;
@@ -83,22 +79,6 @@ impl WebsocketTest for WebsocketTestImpl {
         first
     }
 
-    fn connect_subscribe_and_receive_first(&self, url: String) -> String {
-        let ws = WebsocketConnection::connect(&url, None).expect("connect failed");
-        // Use blocking_receive_with_timeout with a generous timeout to exercise
-        // the timeout-based receive path.
-        let first = match ws
-            .blocking_receive_with_timeout(30_000)
-            .expect("receive failed")
-        {
-            Some(WebSocketMessage::Text(t)) => t,
-            Some(WebSocketMessage::Binary(b)) => format!("{} bytes", b.len()),
-            None => panic!("timed out waiting for first message"),
-        };
-        *self.persisted_ws.borrow_mut() = Some(ws);
-        first
-    }
-
     fn receive_next_from_persisted(&self) -> String {
         let mut ws_ref = self.persisted_ws.borrow_mut();
         let ws = ws_ref
@@ -131,19 +111,6 @@ impl WebsocketTest for WebsocketTestImpl {
             .expect("persisted websocket was not initialized");
         ws.close(None, None)
             .map_err(|e| format!("Close error: {:?}", e))
-    }
-
-    fn subscribe_to_persisted(&self) -> bool {
-        let mut ws_ref = self.persisted_ws.borrow_mut();
-        let ws = ws_ref
-            .as_mut()
-            .expect("persisted websocket was not initialized");
-        // Use a short timeout to check if there's a message ready
-        match ws.blocking_receive_with_timeout(100) {
-            Ok(Some(_)) => true,
-            Ok(None) => false,
-            Err(_) => false,
-        }
     }
 
     fn noop(&self) -> String {
