@@ -11,11 +11,12 @@ componentTemplates:
         - command: moon run cmd -- agents {{ appRootDir }}
           dir: GOLEM_MOONBIT_BUILD_TOOLS_PATH
         - command: moon build --target wasm
-        - command: sh -c "wasm-tools component embed GOLEM_MOONBIT_BUILD_SDK_PATH/wit $(find _build/wasm/debug/build -name '*.wasm' -not -name '*.embed.wasm' | head -1) --encoding utf16 --output _build/wasm/debug/component.embed.wasm"
+          dir: "{{ appRootDir }}"
+        - command: sh -c "wasm-tools component embed GOLEM_MOONBIT_BUILD_SDK_PATH/wit $(find {{ appRootDir }}/_build/wasm/debug/build -name '*.wasm' -not -name '*.embed.wasm' | head -1) --encoding utf16 --output {{ appRootDir }}/_build/wasm/debug/component.embed.wasm"
           mkdirs:
-          - _build/wasm/debug
-        - command: wasm-tools component new _build/wasm/debug/component.embed.wasm --output _build/wasm/debug/component.agent.wasm
-        componentWasm: _build/wasm/debug/component.agent.wasm
+          - "{{ appRootDir }}/_build/wasm/debug"
+        - command: wasm-tools component new {{ appRootDir }}/_build/wasm/debug/component.embed.wasm --output {{ appRootDir }}/_build/wasm/debug/component.agent.wasm
+        componentWasm: "{{ appRootDir }}/_build/wasm/debug/component.agent.wasm"
       release:
         build:
         - command: moon run cmd -- reexports GOLEM_MOONBIT_BUILD_SDK_PATH {{ componentDir }}
@@ -23,6 +24,7 @@ componentTemplates:
         - command: moon run cmd -- agents {{ appRootDir }}
           dir: GOLEM_MOONBIT_BUILD_TOOLS_PATH
         - command: moon build --target wasm --release
-        - command: sh -c "wasm-tools component embed GOLEM_MOONBIT_BUILD_SDK_PATH/wit $(find _build/wasm/release/build -name '*.wasm' -not -name '*.embed.wasm' | head -1) --encoding utf16 --output _build/wasm/release/component.embed.wasm"
-        - command: wasm-tools component new _build/wasm/release/component.embed.wasm --output _build/wasm/release/component.agent.wasm
-        componentWasm: _build/wasm/release/component.agent.wasm
+          dir: "{{ appRootDir }}"
+        - command: sh -c "wasm-tools component embed GOLEM_MOONBIT_BUILD_SDK_PATH/wit $(find {{ appRootDir }}/_build/wasm/release/build -name '*.wasm' -not -name '*.embed.wasm' | head -1) --encoding utf16 --output {{ appRootDir }}/_build/wasm/release/component.embed.wasm"
+        - command: wasm-tools component new {{ appRootDir }}/_build/wasm/release/component.embed.wasm --output {{ appRootDir }}/_build/wasm/release/component.agent.wasm
+        componentWasm: "{{ appRootDir }}/_build/wasm/release/component.agent.wasm"
