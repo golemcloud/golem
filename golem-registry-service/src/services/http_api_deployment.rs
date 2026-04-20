@@ -46,6 +46,10 @@ pub enum HttpApiDeploymentError {
     HttpApiDeploymentForDomainAlreadyExists(Domain),
     #[error("Domain {0} is not registered")]
     DomainNotRegistered(Domain),
+    #[error(
+        "Domain {0} cannot be used for an HTTP API deployment: it belongs to the MCP domain namespace"
+    )]
+    DomainNotValidForHttpApi(Domain),
     #[error("Concurrent update attempt")]
     ConcurrentUpdate,
     #[error(transparent)]
@@ -63,6 +67,7 @@ impl SafeDisplay for HttpApiDeploymentError {
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::HttpApiDeploymentForDomainAlreadyExists(_) => self.to_string(),
             Self::DomainNotRegistered(_) => self.to_string(),
+            Self::DomainNotValidForHttpApi(_) => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
             Self::Unauthorized(inner) => inner.to_safe_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -130,6 +135,15 @@ impl HttpApiDeploymentService {
             .map_err(|err| match err {
                 DomainRegistrationError::DomainRegistrationByDomainNotFound(domain) => {
                     HttpApiDeploymentError::DomainNotRegistered(domain)
+                }
+                other => other.into(),
+            })?;
+
+        self.domain_registration_service
+            .validate_domain_for_http_api(&data.domain)
+            .map_err(|err| match err {
+                DomainRegistrationError::DomainNotValidForHttpApi(domain) => {
+                    HttpApiDeploymentError::DomainNotValidForHttpApi(domain)
                 }
                 other => other.into(),
             })?;
