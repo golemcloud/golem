@@ -136,11 +136,23 @@ const TYPESCRIPT_TSCONFIG_REQUIREMENTS: &[TsConfigSettingRequirement] = &[
     },
 ];
 
+const MOONBIT_TOOL_REQUIREMENTS: &[ToolRequirement] = &[ToolRequirement {
+    key: "moon",
+    name: "moon",
+    check: ToolRequirementCheck::CommandVersion {
+        command: "moon",
+        args: &["version"],
+    },
+    version_range: Some(VersionRange::at_least(versions::build_tool::MOON_MIN)),
+    install_hint: "Install MoonBit toolchain: https://docs.moonbitlang.com",
+}];
+
 pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [ToolRequirement] {
     match language {
         GuestLanguage::Rust => RUST_TOOL_REQUIREMENTS,
         GuestLanguage::TypeScript => TYPESCRIPT_TOOL_REQUIREMENTS,
         GuestLanguage::Scala => &[],
+        GuestLanguage::MoonBit => MOONBIT_TOOL_REQUIREMENTS,
     }
 }
 

@@ -1,0 +1,24 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/x/num"
+
+// Values
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+#deprecated
+pub trait Num {
+  from_int(Int) -> Self
+  op_add(Self, Self) -> Self
+  op_sub(Self, Self) -> Self
+  op_mul(Self, Self) -> Self
+  op_div(Self, Self) -> Self
+  op_neg(Self) -> Self
+  abs(Self) -> Self
+  signum(Self) -> Self
+}
+

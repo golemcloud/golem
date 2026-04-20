@@ -1,0 +1,454 @@
+{
+  "packages": [
+    {
+      "root": "golemcloud/scripts",
+      "rel": "release",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/release/release.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "abort",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/abort/abort.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "array",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/array/array.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "bench",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/bench/bench.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "bigint",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/bigint/bigint.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "bool",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/bool/bool.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "buffer",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/buffer/buffer.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "builtin",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/builtin/builtin.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "byte",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/byte/byte.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "bytes",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/bytes/bytes.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "char",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/char/char.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "cmp",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/cmp/cmp.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "coverage",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/coverage/coverage.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "debug",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/debug/debug.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "deque",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/deque/deque.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "double",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/double/double.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "encoding/ascii",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/encoding/ascii/ascii.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "encoding/base64",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/encoding/base64/base64.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "encoding/utf16",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/encoding/utf16/utf16.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "encoding/utf8",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/encoding/utf8/utf8.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "env",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/env/env.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "error",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/error/error.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "float",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/float/float.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "hashmap",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/hashmap/hashmap.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "hashset",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/hashset/hashset.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "immut/array",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/immut/array/array.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "immut/hashmap",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/immut/hashmap/hashmap.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "immut/hashset",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/immut/hashset/hashset.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "immut/internal/path",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/immut/internal/path/path.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "immut/internal/sparse_array",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/immut/internal/sparse_array/sparse_array.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "immut/priority_queue",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/immut/priority_queue/priority_queue.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "immut/sorted_map",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/immut/sorted_map/sorted_map.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "immut/sorted_set",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/immut/sorted_set/sorted_set.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "int",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/int/int.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "int16",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/int16/int16.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "int64",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/int64/int64.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "internal/regex_engine",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/internal/regex_engine/regex_engine.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "internal/regex_engine/ast",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/internal/regex_engine/ast/ast.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "internal/regex_engine/automata",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/internal/regex_engine/automata/automata.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "internal/regex_engine/shared_types",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/internal/regex_engine/shared_types/shared_types.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "internal/regex_engine/shared_types/rechar_set",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/internal/regex_engine/shared_types/rechar_set/rechar_set.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "internal/regex_engine/symbol_map",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/internal/regex_engine/symbol_map/symbol_map.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "internal/regex_parser",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/internal/regex_parser/regex_parser.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "json",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/json/json.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "list",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/list/list.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "math",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/math/math.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "option",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/option/option.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "prelude",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/prelude/prelude.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "priority_queue",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/priority_queue/priority_queue.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "queue",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/queue/queue.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "quickcheck",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/quickcheck/quickcheck.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "quickcheck/splitmix",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/quickcheck/splitmix/splitmix.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "random",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/random/random.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "random/internal/random_source",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/random/internal/random_source/random_source.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "ref",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/ref/ref.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "result",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/result/result.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "set",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/set/set.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "sorted_map",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/sorted_map/sorted_map.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "sorted_set",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/sorted_set/sorted_set.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "strconv",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/strconv/strconv.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "string",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/string/string.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "test",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/test/test.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "tuple",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/tuple/tuple.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "uint",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/uint/uint.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "uint16",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/uint16/uint16.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "uint64",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/uint64/uint64.mi"
+    },
+    {
+      "root": "moonbitlang/core",
+      "rel": "unit",
+      "artifact": "/home/vigoo/.moon/lib/core/_build/wasm-gc/release/bundle/unit/unit.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "benchmark",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/benchmark/benchmark.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "benchmark/internal/benchmark_ffi",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/benchmark/internal/benchmark_ffi/benchmark_ffi.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "codec/base64",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/codec/base64/base64.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "crypto",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/crypto/crypto.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "decimal",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/decimal/decimal.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "encoding",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/encoding/encoding.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "encoding/internal/benchmark",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/encoding/internal/benchmark/benchmark.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "encoding/internal/benchmark/decoding_batch",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/encoding/internal/benchmark/decoding_batch/decoding_batch.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "encoding/internal/benchmark/decoding_streaming",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/encoding/internal/benchmark/decoding_streaming/decoding_streaming.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "fs",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/fs/fs.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "internal/ffi",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/internal/ffi/ffi.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "json5",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/json5/json5.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "num",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/num/num.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "path",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/path/path.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "path/internal/ffi",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/path/internal/ffi/ffi.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "path/posix",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/path/posix/posix.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "path/win32",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/path/win32/win32.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "rational",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/rational/rational.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "stack",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/stack/stack.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "sys",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/sys/sys.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "sys/internal/ffi",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/sys/internal/ffi/ffi.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "time",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/time/time.mi"
+    },
+    {
+      "root": "moonbitlang/x",
+      "rel": "uuid",
+      "artifact": "/home/vigoo/projects/moonbit-golem/scripts/_build/wasm-gc/debug/build/.mooncakes/moonbitlang/x/uuid/uuid.mi"
+    }
+  ]
+}

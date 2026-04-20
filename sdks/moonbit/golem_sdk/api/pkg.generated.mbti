@@ -1,0 +1,136 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/api"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/api/host",
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/wasi/io/poll",
+}
+
+// Values
+pub fn await_promise(@types.PromiseId) -> Bytes
+
+pub fn complete_promise(@types.PromiseId, Bytes) -> Bool
+
+pub fn create_promise() -> @types.PromiseId
+
+pub fn fork() -> @host.ForkResult
+
+pub fn fork_agent(@types.AgentId, @types.AgentId, UInt64) -> Unit
+
+pub fn generate_idempotency_key() -> @types.Uuid
+
+pub fn generate_idempotency_key_string() -> String
+
+pub fn get_agent_metadata(@types.AgentId) -> @host.AgentMetadata?
+
+pub fn get_agents(@types.ComponentId, @host.AgentAnyFilter?, Bool) -> AgentsPager
+
+pub fn get_idempotence_mode() -> Bool
+
+pub fn get_oplog_index() -> UInt64
+
+pub fn get_oplog_persistence_level() -> @host.PersistenceLevel
+
+pub fn get_promise(@types.PromiseId) -> PromiseResult
+
+pub fn get_retry_policy() -> @host.RetryPolicy
+
+pub fn get_self_metadata() -> @host.AgentMetadata
+
+pub fn mark_begin_operation() -> UInt64
+
+pub fn mark_end_operation(UInt64) -> Unit
+
+pub fn oplog_commit(Byte) -> Unit
+
+pub fn resolve_agent_id(String, String) -> @types.AgentId?
+
+pub fn resolve_agent_id_strict(String, String) -> @types.AgentId?
+
+pub fn resolve_component_id(String) -> @types.ComponentId?
+
+pub fn revert_agent(@types.AgentId, @host.RevertAgentTarget) -> Unit
+
+pub fn set_idempotence_mode(Bool) -> Unit
+
+pub fn set_oplog_index(UInt64) -> Unit
+
+pub fn set_oplog_persistence_level(@host.PersistenceLevel) -> Unit
+
+pub fn set_retry_policy(@host.RetryPolicy) -> Unit
+
+pub fn update_agent(@types.AgentId, UInt64, @host.UpdateMode) -> Unit
+
+pub fn[T] with_atomic_operation(() -> T) -> T
+
+pub fn[T] with_idempotence_mode(Bool, () -> T) -> T
+
+pub fn[T] with_persistence_level(@host.PersistenceLevel, () -> T) -> T
+
+pub fn[T] with_retry_policy(@host.RetryPolicy, () -> T) -> T
+
+// Errors
+
+// Types and methods
+pub(all) struct AgentsPager {
+  // private fields
+}
+pub fn AgentsPager::collect_all(Self) -> Array[@host.AgentMetadata]
+pub fn AgentsPager::drop(Self) -> Unit
+pub fn AgentsPager::next_page(Self) -> Array[@host.AgentMetadata]?
+
+pub(all) struct PromiseResult {
+  // private fields
+}
+pub fn PromiseResult::drop(Self) -> Unit
+pub fn PromiseResult::get(Self) -> Bytes?
+pub fn PromiseResult::subscribe(Self) -> @poll.Pollable
+
+// Type aliases
+pub using @host {type AgentAllFilter}
+
+pub using @host {type AgentAnyFilter}
+
+pub using @host {type AgentConfigVarsFilter}
+
+pub using @host {type AgentCreatedAtFilter}
+
+pub using @host {type AgentEnvFilter}
+
+pub using @host {type AgentMetadata}
+
+pub using @host {type AgentNameFilter}
+
+pub using @host {type AgentPropertyFilter}
+
+pub using @host {type AgentStatus}
+
+pub using @host {type AgentStatusFilter}
+
+pub using @host {type AgentVersionFilter}
+
+pub using @host {type EnvironmentId}
+
+pub using @host {type FilterComparator}
+
+pub using @host {type ForkDetails}
+
+pub using @host {type ForkResult}
+
+pub using @host {type PersistenceLevel}
+
+pub using @poll {type Pollable}
+
+pub using @types {type PromiseId}
+
+pub using @host {type RetryPolicy}
+
+pub using @host {type RevertAgentTarget}
+
+pub using @host {type StringFilterComparator}
+
+pub using @host {type UpdateMode}
+
+// Traits
+

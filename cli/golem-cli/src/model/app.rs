@@ -1312,6 +1312,7 @@ impl<'a> Component<'a> {
                     "ts" => Some(GuestLanguage::TypeScript),
                     "rust" => Some(GuestLanguage::Rust),
                     "scala" => Some(GuestLanguage::Scala),
+                    "moonbit" => Some(GuestLanguage::MoonBit),
                     _ => None,
                 })
         })

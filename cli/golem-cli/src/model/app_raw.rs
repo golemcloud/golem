@@ -646,7 +646,7 @@ impl BridgeSdks {
         match language {
             GuestLanguage::Rust => self.rust.as_ref(),
             GuestLanguage::TypeScript => self.ts.as_ref(),
-            GuestLanguage::Scala => None,
+            GuestLanguage::Scala | GuestLanguage::MoonBit => None,
         }
     }
 

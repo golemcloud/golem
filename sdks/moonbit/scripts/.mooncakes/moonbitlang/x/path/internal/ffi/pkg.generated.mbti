@@ -1,0 +1,14 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/x/path/internal/ffi"
+
+// Values
+pub fn is_windows() -> Bool
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
+

@@ -1,0 +1,54 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/x/stack"
+
+import {
+  "moonbitlang/core/list",
+}
+
+// Values
+
+// Errors
+
+// Types and methods
+type Stack[T]
+pub fn[T] Stack::clear(Self[T]) -> Unit
+pub fn[T] Stack::drop(Self[T]) -> Unit
+pub fn[T] Stack::drop_result(Self[T]) -> Result[Unit, Unit]
+pub fn[T] Stack::each(Self[T], (T) -> Unit) -> Unit
+pub fn[T : Eq] Stack::equal(Self[T], Self[T]) -> Bool
+pub fn[T, U] Stack::fold(Self[T], init~ : U, (U, T) -> U) -> U
+pub fn[T] Stack::from_array(Array[T]) -> Self[T]
+pub fn[T] Stack::from_iter(Iter[T]) -> Self[T]
+#deprecated
+pub fn[T] Stack::from_list(@list.List[T]) -> Self[T]
+pub fn[T] Stack::from_stack(Self[T]) -> Self[T]
+pub fn[T] Stack::is_empty(Self[T]) -> Bool
+pub fn[T] Stack::iter(Self[T]) -> Iter[T]
+pub fn[T] Stack::length(Self[T]) -> Int
+#as_free_fn
+pub fn[T] Stack::new() -> Self[T]
+#as_free_fn
+pub fn[T] Stack::of(FixedArray[T]) -> Self[T]
+pub fn[T : Eq] Stack::op_equal(Self[T], Self[T]) -> Bool
+pub fn[T] Stack::peek(Self[T]) -> T?
+#deprecated
+pub fn[T] Stack::peek_exn(Self[T]) -> T
+pub fn[T] Stack::pop(Self[T]) -> T?
+pub fn[T] Stack::push(Self[T], T) -> Unit
+pub fn[T] Stack::push_array(Self[T], Array[T]) -> Unit
+#deprecated
+pub fn[T] Stack::push_list(Self[T], @list.List[T]) -> Unit
+pub fn[T] Stack::push_stack(Self[T], Self[T]) -> Unit
+pub fn[T] Stack::return_with_clear(Self[T]) -> Self[T]
+pub fn[T] Stack::to_array(Self[T]) -> Array[T]
+#deprecated
+pub fn[T] Stack::to_list(Self[T]) -> @list.List[T]
+pub fn[T] Stack::unsafe_peek(Self[T]) -> T
+pub fn[T] Stack::unsafe_pop(Self[T]) -> T
+pub impl[T : Default] Default for Stack[T]
+pub impl[T : Show] Show for Stack[T]
+
+// Type aliases
+
+// Traits
+

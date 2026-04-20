@@ -1,0 +1,79 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/rdbms/ignite2"
+
+// Values
+
+// Errors
+pub(all) suberror Error_ {
+  ConnectionFailure(String)
+  QueryParameterFailure(String)
+  QueryExecutionFailure(String)
+  QueryResponseFailure(String)
+  Other(String)
+} derive(Eq, Show)
+
+// Types and methods
+pub(all) struct DbColumn {
+  ordinal : UInt64
+  name : String
+} derive(Eq, Show)
+
+pub(all) struct DbConnection(Int) derive(Eq, Show)
+pub fn DbConnection::begin_transaction(Self) -> Result[DbTransaction, Error_]
+pub fn DbConnection::drop(Self) -> Unit
+pub fn DbConnection::execute(Self, String, Array[DbValue]) -> Result[Int64, Error_]
+#deprecated
+pub fn DbConnection::inner(Self) -> Int
+pub fn DbConnection::open(String) -> Result[Self, Error_]
+pub fn DbConnection::query(Self, String, Array[DbValue]) -> Result[DbResult, Error_]
+pub fn DbConnection::query_stream(Self, String, Array[DbValue]) -> Result[DbResultStream, Error_]
+
+pub(all) struct DbResult {
+  columns : Array[DbColumn]
+  rows : Array[DbRow]
+} derive(Eq, Show)
+
+pub(all) struct DbResultStream(Int) derive(Eq, Show)
+pub fn DbResultStream::drop(Self) -> Unit
+pub fn DbResultStream::get_columns(Self) -> Result[Array[DbColumn], Error_]
+pub fn DbResultStream::get_next(Self) -> Result[Array[DbRow]?, Error_]
+#deprecated
+pub fn DbResultStream::inner(Self) -> Int
+
+pub(all) struct DbRow {
+  values : Array[DbValue]
+} derive(Eq, Show)
+
+pub(all) struct DbTransaction(Int) derive(Eq, Show)
+pub fn DbTransaction::commit(Self) -> Result[Unit, Error_]
+pub fn DbTransaction::drop(Self) -> Unit
+pub fn DbTransaction::execute(Self, String, Array[DbValue]) -> Result[Int64, Error_]
+#deprecated
+pub fn DbTransaction::inner(Self) -> Int
+pub fn DbTransaction::query(Self, String, Array[DbValue]) -> Result[DbResult, Error_]
+pub fn DbTransaction::query_stream(Self, String, Array[DbValue]) -> Result[DbResultStream, Error_]
+pub fn DbTransaction::rollback(Self) -> Result[Unit, Error_]
+
+pub(all) enum DbValue {
+  DbNull
+  DbBoolean(Bool)
+  DbByte(Int)
+  DbShort(Int)
+  DbInt(Int)
+  DbLong(Int64)
+  DbFloat(Float)
+  DbDouble(Double)
+  DbChar(UInt)
+  DbString(String)
+  DbUuid((UInt64, UInt64))
+  DbDate(Int64)
+  DbTimestamp((Int64, Int))
+  DbTime(Int64)
+  DbDecimal(String)
+  DbByteArray(FixedArray[Byte])
+} derive(Eq, Show)
+
+// Type aliases
+
+// Traits
+
