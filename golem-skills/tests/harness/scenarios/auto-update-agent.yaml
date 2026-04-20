@@ -1,0 +1,59 @@
+name: "auto-update-agent"
+steps:
+  # 1. Create and deploy a default project (revision 0)
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  # 2. Create agent and set state to 2
+  - id: "invoke-increment-1"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  - id: "invoke-increment-2"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2
+
+  # 3. Add a new method (backward-compatible change), deploy as revision 1
+  - id: "add-get-double"
+    prompt: >
+      In the test-app project, add a new read-only method called `get-double` to the
+      CounterAgent that returns the current counter value multiplied by 2. Do not change
+      any existing methods. Build and deploy, but do not update existing running agents.
+    verify:
+      deploy: true
+
+  # 4. Update the running agent using automatic mode
+  - id: "auto-update-agent"
+    prompt: >
+      Update the running CounterAgent "c1" to the latest component revision using automatic
+      update mode. Wait for the update to complete.
+    expectedSkills:
+      - "golem-update-running-agents"
+
+  # 5. Verify the new method works and state was preserved
+  - id: "verify-updated"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method:
+        rust: "get_double"
+        ts: "getDouble"
+        scala: "getDouble"
+        moonbit: "get_double"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 4

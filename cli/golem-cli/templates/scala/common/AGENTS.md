@@ -13,6 +13,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-build` | Building a Golem application with `golem build` |
 | `golem-deploy` | Deploying a Golem application with `golem deploy` |
 | `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
+| `golem-redeploy-agents` | Redeploying existing agents by deleting and recreating them |
 | `golem-create-agent-instance-scala` | Creating a new agent instance with `golem agent new` |
 | `golem-invoke-agent-scala` | Invoking a Golem agent method from the CLI |
 | `golem-trigger-agent-scala` | Triggering a fire-and-forget invocation on a Golem agent |
@@ -45,6 +46,9 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-get-agent-metadata` | Checking agent metadata and status |
 | `golem-debug-agent-history` | Querying the operation log |
 | `golem-undo-agent-state` | Reverting agent state by undoing operations |
+| `golem-interrupt-resume-agent` | Interrupting and resuming a Golem agent |
+| `golem-test-crash-recovery` | Simulating a crash on an agent for testing crash recovery |
+| `golem-delete-agent` | Deleting an agent instance |
 
 # Golem Application Development Guide (Scala)
 

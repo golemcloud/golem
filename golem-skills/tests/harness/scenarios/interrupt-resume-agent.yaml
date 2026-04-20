@@ -1,0 +1,100 @@
+name: "interrupt-resume-agent"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+
+  - id: "add-long-running-method"
+    prompt:
+      rust: >
+        In the test-app project, add a new method called `run-forever` to the CounterAgent
+        that takes no arguments and returns nothing. It should run an infinite loop that
+        increments the counter and then sleeps for 100 milliseconds using
+        std::thread::sleep(std::time::Duration::from_millis(100)). Make sure the project
+        builds and deploys successfully.
+      ts: >
+        In the test-app project, add a new method called `runForever` to the CounterAgent
+        that takes no arguments and returns nothing. It should run an infinite loop that
+        increments the counter value and then sleeps for 100 milliseconds (use a helper like
+        function sleep(ms: number): Promise<void> { return new Promise(resolve => setTimeout(resolve, ms)); }
+        and await sleep(100) inside a while(true) loop). Make sure the project builds
+        and deploys successfully.
+      scala: >
+        In the test-app project, add a new method called `runForever` to the CounterAgent
+        that takes no arguments and returns nothing (Unit). It should run an infinite loop
+        that increments the counter value and then sleeps for 100 milliseconds using
+        Thread.sleep(100). Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, add a new method called `run_forever` to the CounterAgent
+        that takes no arguments and returns nothing (Unit). It should run an infinite loop
+        that increments the counter value and then sleeps for 100 milliseconds using
+        @monotonic_clock.subscribe_duration(100000000).block(). Make sure the project builds
+        and deploys successfully.
+    verify:
+      build: true
+      deploy: true
+
+  - id: "warmup"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  - id: "trigger-long-running"
+    shell:
+      command: "golem"
+      args:
+        rust: ["agent", "invoke", "--trigger", "CounterAgent(\"c1\")", "run_forever"]
+        ts: ["agent", "invoke", "--trigger", "CounterAgent(\"c1\")", "runForever"]
+        scala: ["agent", "invoke", "--trigger", "CounterAgent(\"c1\")", "runForever"]
+        moonbit: ["agent", "invoke", "--trigger", "CounterAgent(\"c1\")", "run_forever"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+
+  - id: "wait-for-agent-to-start"
+    sleep: 3
+
+  - id: "interrupt-agent-via-prompt"
+    prompt: >
+      Use the CLI to interrupt the CounterAgent instance named "c1".
+    expectedSkills:
+      - "golem-interrupt-resume-agent"
+
+  - id: "verify-interrupted"
+    shell:
+      command: "golem"
+      args: ["agent", "get", "CounterAgent(\"c1\")"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_contains: "Interrupted"
+
+  - id: "resume-agent-via-prompt"
+    prompt: >
+      Use the CLI to resume the interrupted CounterAgent instance named "c1".
+    expectedSkills:
+      - "golem-interrupt-resume-agent"
+
+  - id: "wait-for-agent-to-resume"
+    sleep: 3
+
+  - id: "verify-running"
+    shell:
+      command: "golem"
+      args: ["agent", "get", "CounterAgent(\"c1\")"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_contains: "Running"
+
+  - id: "delete-agent"
+    shell:
+      command: "golem"
+      args: ["agent", "delete", "CounterAgent(\"c1\")"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0

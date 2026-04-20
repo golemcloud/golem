@@ -15,6 +15,7 @@
 import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { AgentType, Principal, DataValue } from 'golem:agent/common@1.5.0';
+import { uuidToString, parseUuid } from 'golem:core/types@1.5.0';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
@@ -138,6 +139,86 @@ async function getDefinition(): Promise<AgentType> {
   return resolvedAgent.getAgentType();
 }
 
+function serializePrincipal(p: Principal): object {
+  switch (p.tag) {
+    case 'anonymous':
+      return { tag: 'anonymous' };
+    case 'agent':
+      return {
+        tag: 'agent',
+        val: {
+          componentId: uuidToString(p.val.agentId.componentId.uuid),
+          agentId: p.val.agentId.agentId,
+        },
+      };
+    case 'golem-user':
+      return {
+        tag: 'golem-user',
+        val: { accountId: uuidToString(p.val.accountId.uuid) },
+      };
+    case 'oidc':
+      return {
+        tag: 'oidc',
+        val: {
+          sub: p.val.sub,
+          issuer: p.val.issuer,
+          email: p.val.email ?? null,
+          name: p.val.name ?? null,
+          emailVerified: p.val.emailVerified ?? null,
+          givenName: p.val.givenName ?? null,
+          familyName: p.val.familyName ?? null,
+          picture: p.val.picture ?? null,
+          preferredUsername: p.val.preferredUsername ?? null,
+          claims: p.val.claims,
+        },
+      };
+  }
+}
+
+function deserializePrincipal(obj: any): Principal {
+  switch (obj.tag) {
+    case 'anonymous':
+      return { tag: 'anonymous' };
+    case 'agent':
+      return {
+        tag: 'agent',
+        val: {
+          agentId: {
+            componentId: { uuid: parseUuid(obj.val.componentId) },
+            agentId: obj.val.agentId,
+          },
+        },
+      };
+    case 'golem-user':
+      return {
+        tag: 'golem-user',
+        val: { accountId: { uuid: parseUuid(obj.val.accountId) } },
+      };
+    case 'oidc': {
+      if (!obj.val || typeof obj.val.sub !== 'string' || typeof obj.val.issuer !== 'string' || typeof obj.val.claims !== 'string') {
+        throw new Error('Missing required fields (sub, issuer, claims) in oidc principal');
+      }
+      return {
+        tag: 'oidc',
+        val: {
+          sub: obj.val.sub,
+          issuer: obj.val.issuer,
+          email: obj.val.email ?? undefined,
+          name: obj.val.name ?? undefined,
+          emailVerified: obj.val.emailVerified ?? undefined,
+          givenName: obj.val.givenName ?? undefined,
+          familyName: obj.val.familyName ?? undefined,
+          picture: obj.val.picture ?? undefined,
+          preferredUsername: obj.val.preferredUsername ?? undefined,
+          claims: obj.val.claims,
+        },
+      };
+    }
+    default:
+      throw new Error(`Unknown principal tag: ${obj.tag}`);
+  }
+}
+
 async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
   if (!resolvedAgent) {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
@@ -145,6 +226,7 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
 
   const { data: agentSnapshot, mimeType } = await resolvedAgent.saveSnapshot();
   const principal = initializationPrincipal ?? { tag: 'anonymous' };
+  const serializedPrincipal = serializePrincipal(principal);
 
   if (mimeType.startsWith('multipart/mixed')) {
     // Multipart snapshot: the state JSON part already contains agent properties.
@@ -162,7 +244,7 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
     }
 
     const stateJson = JSON.parse(new TextDecoder().decode(parts[stateIdx].body));
-    const envelope = { version: 1, principal, state: stateJson };
+    const envelope = { version: 1, principal: serializedPrincipal, state: stateJson };
     parts[stateIdx] = {
       ...parts[stateIdx],
       body: new TextEncoder().encode(JSON.stringify(envelope)),
@@ -176,14 +258,14 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
   } else if (mimeType === 'application/json') {
     // JSON snapshot: wrap in envelope { version, principal, state }
     const state = JSON.parse(new TextDecoder().decode(agentSnapshot));
-    const envelope = { version: 1, principal, state };
+    const envelope = { version: 1, principal: serializedPrincipal, state };
     return {
       payload: new TextEncoder().encode(JSON.stringify(envelope)),
       mimeType: 'application/json',
     };
   } else {
     // Binary snapshot: version-2 binary envelope with principal
-    const principalJson = JSON.stringify(principal);
+    const principalJson = JSON.stringify(serializedPrincipal);
     const principalBytes = new TextEncoder().encode(principalJson);
 
     const totalLength = 1 + 4 + principalBytes.length + agentSnapshot.length;
@@ -224,7 +306,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     }
 
     const envelope = JSON.parse(new TextDecoder().decode(parts[stateIdx].body));
-    principal = envelope.principal ?? initializationPrincipal ?? { tag: 'anonymous' };
+    principal = envelope.principal ? deserializePrincipal(envelope.principal) : (initializationPrincipal ?? { tag: 'anonymous' });
 
     if (envelope.state === undefined) {
       throw `multipart state part missing 'state' field`;
@@ -243,7 +325,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   } else if (snapshot.mimeType === 'application/json') {
     // JSON snapshot: unwrap envelope { version, principal, state }
     const envelope = JSON.parse(new TextDecoder().decode(bytes));
-    principal = envelope.principal ?? initializationPrincipal ?? { tag: 'anonymous' };
+    principal = envelope.principal ? deserializePrincipal(envelope.principal) : (initializationPrincipal ?? { tag: 'anonymous' });
     if (envelope.state === undefined) {
       throw `JSON snapshot missing 'state' field`;
     }
@@ -260,7 +342,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     } else if (version === 2) {
       const principalLen = view.getUint32(1, false); // big-endian
       const principalBytes = bytes.slice(5, 5 + principalLen);
-      principal = JSON.parse(new TextDecoder().decode(principalBytes)) as Principal;
+      principal = deserializePrincipal(JSON.parse(new TextDecoder().decode(principalBytes)));
       agentSnapshot = bytes.slice(5 + principalLen);
     } else {
       throw `Unsupported snapshot version ${version}`;

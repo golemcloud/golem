@@ -17,14 +17,11 @@
 package golem.host.js
 
 import golem.{Principal, Uuid}
-import zio.blocks.schema.json.{JsonCodec, JsonCodecDeriver}
+import zio.blocks.schema.json.Json
 
 import scala.scalajs.js
 
 object PrincipalConverter {
-
-  private val codec: JsonCodec[Principal] =
-    Principal.schema.derive(JsonCodecDeriver)
 
   def fromJs(dynamic: js.Dynamic): Principal = {
     val tag = dynamic.tag
@@ -72,8 +69,121 @@ object PrincipalConverter {
   }
 
   def toJson(principal: Principal): Array[Byte] =
-    codec.encode(principal)
+    principalToJson(principal).printBytes
 
   def fromJson(bytes: Array[Byte]): Either[String, Principal] =
-    codec.decode(bytes).left.map(_.toString)
+    Json.parse(bytes).left.map(_.toString).flatMap(principalFromJson)
+
+  private def principalToJson(principal: Principal): Json = principal match {
+    case Principal.Anonymous =>
+      Json.Object("tag" -> Json.String("anonymous"))
+
+    case Principal.Agent(componentId, agentId) =>
+      Json.Object(
+        "tag" -> Json.String("agent"),
+        "val" -> Json.Object(
+          "componentId" -> Json.String(Uuid.toStandardString(componentId)),
+          "agentId"     -> Json.String(agentId)
+        )
+      )
+
+    case Principal.GolemUser(accountId) =>
+      Json.Object(
+        "tag" -> Json.String("golem-user"),
+        "val" -> Json.Object(
+          "accountId" -> Json.String(Uuid.toStandardString(accountId))
+        )
+      )
+
+    case Principal.Oidc(sub, issuer, claims, email, name, emailVerified, givenName, familyName, picture, preferredUsername) =>
+      Json.Object(
+        "tag" -> Json.String("oidc"),
+        "val" -> Json.Object(
+          "sub"               -> Json.String(sub),
+          "issuer"            -> Json.String(issuer),
+          "email"             -> optString(email),
+          "name"              -> optString(name),
+          "emailVerified"     -> optBoolean(emailVerified),
+          "givenName"         -> optString(givenName),
+          "familyName"        -> optString(familyName),
+          "picture"           -> optString(picture),
+          "preferredUsername"  -> optString(preferredUsername),
+          "claims"            -> Json.String(claims)
+        )
+      )
+  }
+
+  private def principalFromJson(json: Json): Either[String, Principal] =
+    for {
+      tag <- getStr(json, "tag")
+      result <- tag match {
+        case "anonymous" => Right(Principal.Anonymous)
+        case "agent" =>
+          for {
+            valObj      <- getObj(json, "val")
+            cidStr      <- getStr(valObj, "componentId")
+            componentId <- Uuid.fromStandardString(cidStr)
+            agentId     <- getStr(valObj, "agentId")
+          } yield Principal.Agent(componentId, agentId)
+        case "golem-user" =>
+          for {
+            valObj    <- getObj(json, "val")
+            aidStr    <- getStr(valObj, "accountId")
+            accountId <- Uuid.fromStandardString(aidStr)
+          } yield Principal.GolemUser(accountId)
+        case "oidc" =>
+          for {
+            valObj <- getObj(json, "val")
+            sub    <- getStr(valObj, "sub")
+            issuer <- getStr(valObj, "issuer")
+            claims <- getStr(valObj, "claims")
+          } yield Principal.Oidc(
+            sub = sub,
+            issuer = issuer,
+            claims = claims,
+            email = getOptStr(valObj, "email"),
+            name = getOptStr(valObj, "name"),
+            emailVerified = getOptBool(valObj, "emailVerified"),
+            givenName = getOptStr(valObj, "givenName"),
+            familyName = getOptStr(valObj, "familyName"),
+            picture = getOptStr(valObj, "picture"),
+            preferredUsername = getOptStr(valObj, "preferredUsername")
+          )
+        case other => Left(s"Unknown principal tag: $other")
+      }
+    } yield result
+
+  private def optString(o: Option[String]): Json = o match {
+    case Some(v) => Json.String(v)
+    case None    => Json.Null
+  }
+
+  private def optBoolean(o: Option[Boolean]): Json = o match {
+    case Some(v) => Json.Boolean(v)
+    case None    => Json.Null
+  }
+
+  private def getStr(json: Json, field: String): Either[String, String] =
+    json.get(field).one.left.map(_.toString).flatMap {
+      case s: Json.String => Right(s.value)
+      case other          => Left(s"Expected string for '$field', got: ${other.print}")
+    }
+
+  private def getObj(json: Json, field: String): Either[String, Json] =
+    json.get(field).one.left.map(_.toString).flatMap {
+      case o: Json.Object => Right(o)
+      case other          => Left(s"Expected object for '$field', got: ${other.print}")
+    }
+
+  private def getOptStr(json: Json, field: String): Option[String] =
+    json.get(field).one.toOption.flatMap {
+      case s: Json.String => Some(s.value)
+      case _              => None
+    }
+
+  private def getOptBool(json: Json, field: String): Option[Boolean] =
+    json.get(field).one.toOption.flatMap {
+      case b: Json.Boolean => Some(b.value)
+      case _               => None
+    }
 }
