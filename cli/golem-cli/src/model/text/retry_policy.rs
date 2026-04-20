@@ -86,8 +86,16 @@ fn retry_policy_view_fields(view: &RetryPolicyDto) -> Vec<(String, String)> {
         .fmt_field("ID", &view.id, format_id)
         .fmt_field("Revision", &view.revision.get(), format_id)
         .fmt_field("Priority", &view.priority, ToString::to_string)
-        .fmt_field("Predicate", &view.predicate_json, ToString::to_string)
-        .fmt_field("Policy", &view.policy_json, ToString::to_string);
+        .fmt_field(
+            "Predicate",
+            &serde_json::to_string(&view.predicate).expect("Failed to serialize Retry predicate"),
+            ToString::to_string,
+        )
+        .fmt_field(
+            "Policy",
+            &serde_json::to_string(&view.policy).expect("Failed to serialize Retry policy"),
+            ToString::to_string,
+        );
 
     fields.build()
 }
