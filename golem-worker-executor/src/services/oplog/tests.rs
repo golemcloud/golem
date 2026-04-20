@@ -499,12 +499,55 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
 
 #[test]
 async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Notify;
+
+    // Use GatedBlobStorage so we can precisely control when the background
+    // S3 write completes and assert both halves of the contract:
+    //   A) reads via the live oplog object work immediately (served from cache)
+    //   B) reads via oplog_service.read() work once the background write lands
+    #[derive(Debug)]
+    struct GatedBlobStorage {
+        inner: Arc<InMemoryBlobStorage>,
+        at_gate: Arc<Notify>,
+        gate: Arc<Notify>,
+        write_done: Arc<AtomicBool>,
+    }
+    #[async_trait]
+    impl BlobStorage for GatedBlobStorage {
+        async fn get_raw(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<Vec<u8>>, anyhow::Error> { self.inner.get_raw(tl, ol, ns, path).await }
+        async fn get_stream(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<futures::stream::BoxStream<'static, Result<bytes::Bytes, anyhow::Error>>>, anyhow::Error> { self.inner.get_stream(tl, ol, ns, path).await }
+        async fn get_metadata(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<BlobMetadata>, anyhow::Error> { self.inner.get_metadata(tl, ol, ns, path).await }
+        async fn put_raw(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path, data: &[u8]) -> Result<(), anyhow::Error> {
+            self.at_gate.notify_one();
+            self.gate.notified().await;
+            let r = self.inner.put_raw(tl, ol, ns, path, data).await;
+            self.write_done.store(true, Ordering::Release);
+            r
+        }
+        async fn put_stream(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path, stream: &dyn golem_service_base::replayable_stream::ErasedReplayableStream<Item = Result<Vec<u8>, anyhow::Error>, Error = anyhow::Error>) -> Result<(), anyhow::Error> { self.inner.put_stream(tl, ol, ns, path, stream).await }
+        async fn delete(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<(), anyhow::Error> { self.inner.delete(tl, ol, ns, path).await }
+        async fn create_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<(), anyhow::Error> { self.inner.create_dir(tl, ol, ns, path).await }
+        async fn list_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Vec<PathBuf>, anyhow::Error> { self.inner.list_dir(tl, ol, ns, path).await }
+        async fn delete_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<bool, anyhow::Error> { self.inner.delete_dir(tl, ol, ns, path).await }
+        async fn exists(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<ExistsResult, anyhow::Error> { self.inner.exists(tl, ol, ns, path).await }
+    }
+
+    let at_gate = Arc::new(Notify::new());
+    let gate = Arc::new(Notify::new());
+    let write_done = Arc::new(AtomicBool::new(false));
+    let blob_storage = Arc::new(GatedBlobStorage {
+        inner: Arc::new(InMemoryBlobStorage::new()),
+        at_gate: at_gate.clone(),
+        gate: gate.clone(),
+        write_done: write_done.clone(),
+    });
+
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
-    let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
         PrimaryOplogService::new(
             indexed_storage.clone(),
-            blob_storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
             1,
             1,
             100,
@@ -555,19 +598,30 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     oplog.add(entry3.clone()).await;
     oplog.commit(CommitLevel::Always).await;
 
-    // Reads through the live oplog object are served from the in-memory cache —
-    // no S3 round-trip needed, even though the background write is still in-flight.
+    // Part A: reads via the live oplog object are served from in-memory cache —
+    // immediately available even though the background S3 write is still gated.
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
     let r3 = oplog.read(last_oplog_idx.next().next().next()).await;
-
     assert_eq!(r1, entry1);
     assert_eq!(r2, entry2);
     assert_eq!(r3, entry3);
-    // Note: oplog_service.read() bypasses the in-memory cache and goes to S3 directly.
-    // For ephemeral agents, blob writes are background/fire-and-forget so the data may
-    // not yet be visible via oplog_service.read() immediately after commit.  Ephemeral
-    // agents are never recovered from the oplog, so this eventual-consistency is acceptable.
+
+    // Part B: wait for the background write to complete, then verify
+    // oplog_service.read() (which goes to S3) also returns the entries.
+    at_gate.notified().await;
+    gate.notify_one();
+    while !write_done.load(std::sync::atomic::Ordering::Acquire) {
+        tokio::task::yield_now().await;
+    }
+
+    let entries = oplog_service
+        .read(&owned_agent_id, last_oplog_idx.next(), 3)
+        .await;
+    assert_eq!(
+        entries.into_values().collect::<Vec<_>>(),
+        vec![entry1, entry2, entry3]
+    );
 }
 
 #[test]
@@ -2504,4 +2558,189 @@ async fn ephemeral_oplog_open_does_not_block_on_blob_reads(_tracing: &Tracing) {
         "Opening EphemeralOplog blocked for {elapsed:?}; \
          expected no S3 discovery reads (< 200ms) but read delay is {read_delay:?}"
     );
+}
+
+/// `pending_background` must be bounded: entries are evicted once their
+/// background S3 write completes, but entries added *while* the write is
+/// in-flight must survive.
+///
+/// Scenario:
+///   1. Add entries e1/e2/e3, commit → indices {1,2,3} move to pending_background,
+///      background write is gated behind a barrier (not yet started).
+///   2. While write is still gated, add e4 → index {4} enters pending_background.
+///   3. Assert pending_background keys == {1,2,3,4}.
+///   4. Release the barrier, wait for write to complete.
+///   5. Trigger next commit (carries the lazy eviction) — only e4 still in buffer
+///      at this point, so commit both flushes e4 AND evicts the now-written {1,2,3}.
+///   6. Assert pending_background keys == {4}  (1/2/3 evicted, 4 survives).
+///   7. Release barrier for e4's write, wait, trigger one more commit.
+///   8. Assert pending_background is empty.
+///
+/// Before the fix this FAILS at step 6: nothing is ever evicted.
+#[test]
+async fn ephemeral_oplog_pending_background_evicted_after_write(_tracing: &Tracing) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Notify;
+
+    /// A blob storage that:
+    ///   1. fires `at_gate` when it reaches `put_raw` (telling the test it is
+    ///      waiting), then blocks until the test fires `gate`,
+    ///   2. sets `write_done` after the write completes.
+    #[derive(Debug)]
+    struct GatedBlobStorage {
+        inner: Arc<InMemoryBlobStorage>,
+        /// Fired by the storage when it has reached the gate in `put_raw`.
+        at_gate: Arc<Notify>,
+        /// Fired by the test to release the blocked `put_raw`.
+        gate: Arc<Notify>,
+        write_done: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl BlobStorage for GatedBlobStorage {
+        async fn get_raw(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<Vec<u8>>, anyhow::Error> {
+            self.inner.get_raw(tl, ol, ns, path).await
+        }
+        async fn get_stream(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<futures::stream::BoxStream<'static, Result<bytes::Bytes, anyhow::Error>>>, anyhow::Error> {
+            self.inner.get_stream(tl, ol, ns, path).await
+        }
+        async fn get_metadata(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<BlobMetadata>, anyhow::Error> {
+            self.inner.get_metadata(tl, ol, ns, path).await
+        }
+        async fn put_raw(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path, data: &[u8]) -> Result<(), anyhow::Error> {
+            // Tell the test we have arrived at the gate, then wait for release.
+            self.at_gate.notify_one();
+            self.gate.notified().await;
+            let result = self.inner.put_raw(tl, ol, ns, path, data).await;
+            self.write_done.store(true, Ordering::Release);
+            result
+        }
+        async fn put_stream(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path, stream: &dyn golem_service_base::replayable_stream::ErasedReplayableStream<Item = Result<Vec<u8>, anyhow::Error>, Error = anyhow::Error>) -> Result<(), anyhow::Error> {
+            self.inner.put_stream(tl, ol, ns, path, stream).await
+        }
+        async fn delete(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<(), anyhow::Error> {
+            self.inner.delete(tl, ol, ns, path).await
+        }
+        async fn create_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<(), anyhow::Error> {
+            self.inner.create_dir(tl, ol, ns, path).await
+        }
+        async fn list_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Vec<PathBuf>, anyhow::Error> {
+            self.inner.list_dir(tl, ol, ns, path).await
+        }
+        async fn delete_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<bool, anyhow::Error> {
+            self.inner.delete_dir(tl, ol, ns, path).await
+        }
+        async fn exists(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<ExistsResult, anyhow::Error> {
+            self.inner.exists(tl, ol, ns, path).await
+        }
+    }
+
+    let at_gate = Arc::new(Notify::new());
+    let gate = Arc::new(Notify::new());
+    let write_done = Arc::new(AtomicBool::new(false));
+    let blob_storage = Arc::new(GatedBlobStorage {
+        inner: Arc::new(InMemoryBlobStorage::new()),
+        at_gate: at_gate.clone(),
+        gate: gate.clone(),
+        write_done: write_done.clone(),
+    });
+
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+        10,
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "ephemeral-eviction-test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            None,
+            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    let ephemeral_oplog = crate::services::oplog::downcast_oplog::<
+        crate::services::oplog::ephemeral::EphemeralOplog,
+    >(&oplog)
+    .expect("expected EphemeralOplog");
+
+    // Step 1: commit e1/e2/e3 — background write is blocked behind the gate.
+    oplog.add(OplogEntry::suspend().rounded()).await;
+    oplog.add(OplogEntry::suspend().rounded()).await;
+    oplog.add(OplogEntry::suspend().rounded()).await;
+    oplog.commit(CommitLevel::Always).await;
+
+    // Step 2: add e4 while {1,2,3} write is still gated.
+    oplog.add(OplogEntry::suspend().rounded()).await;
+
+    // Step 3: {1,2,3} in pending_background (committed); e4 is still in the
+    // uncommitted buffer — not yet in pending_background.
+    let keys_before = ephemeral_oplog.pending_background_keys().await;
+    assert_eq!(
+        keys_before,
+        vec![
+            OplogIndex::from_u64(1),
+            OplogIndex::from_u64(2),
+            OplogIndex::from_u64(3),
+        ],
+        "expected {{1,2,3}} in pending_background while write is gated (e4 still in buffer)"
+    );
+
+    // Step 4: wait until the background task has reached the gate (confirmed
+    // it is waiting), then release it and wait for the write to finish.
+    at_gate.notified().await;
+    gate.notify_one();
+    while !write_done.load(Ordering::Acquire) {
+        tokio::task::yield_now().await;
+    }
+    // `write_done` is set inside `put_raw`, before `target.append()` returns.
+    // The spawned background task calls `fetch_max` *after* `target.append()`
+    // returns.  Yield once more to let the spawned task advance past the
+    // `fetch_max` call before we assert on the eviction result.
+    tokio::task::yield_now().await;
+
+    // Step 5: commit e4 + a new e5 — lazy eviction of {1,2,3} happens here
+    // (the commit path sees last_written_idx >= 3 and sweeps them out).
+    // The new write for {4,5} will block at the gate again.
+    oplog.add(OplogEntry::suspend().rounded()).await; // e5
+    oplog.commit(CommitLevel::Always).await;
+
+    // Step 6: {1,2,3} must be gone; {4,5} survive (write still in-flight).
+    let keys_after = ephemeral_oplog.pending_background_keys().await;
+    assert_eq!(
+        keys_after,
+        vec![OplogIndex::from_u64(4), OplogIndex::from_u64(5)],
+        "expected only {{4,5}} after evicting written entries {{1,2,3}}; got {keys_after:?}"
+    );
+
+    // Clean up: release the second gate so the test doesn't leak background tasks.
+    at_gate.notified().await;
+    gate.notify_one();
 }

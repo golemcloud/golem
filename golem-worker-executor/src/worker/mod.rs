@@ -349,13 +349,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
         }
 
-        // just some sanity checking
-        assert!(last_oplog_idx >= OplogIndex::INITIAL);
+        // Sanity check: durable workers always have at least the create entry.
+        // Ephemeral workers start at NONE because their status is never persisted to KV.
+        assert!(
+            last_oplog_idx >= OplogIndex::INITIAL
+                || worker.agent_mode() == AgentMode::Ephemeral
+        );
 
-        // if the worker is an agent, we need to ensure the initialize invocation is the first enqueued action.
-        // We might have crashed between creating the oplog and writing it, so just check here for it.
+        // For durable agents, ensure the initialize invocation is enqueued as the
+        // first action.  We might have crashed between creating the oplog and
+        // writing it, so guard with last_oplog_idx <= 2.
+        //
+        // Ephemeral agents skip this: prepare_instance re-enqueues initialize on
+        // every WASM reload (including the very first one), so enqueueing here
+        // would result in a duplicate on the first invocation.
         if let Some(agent_id) = &agent_id
             && last_oplog_idx <= OplogIndex::from_u64(2)
+            && worker.agent_mode() != AgentMode::Ephemeral
         {
             let init_idempotency_key = IdempotencyKey::new(format!("init-{}", worker.agent_id()));
             worker

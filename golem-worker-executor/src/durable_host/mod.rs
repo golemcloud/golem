@@ -2829,8 +2829,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         let prepare_result = if store.as_context().data().agent_mode() == AgentMode::Ephemeral {
             // Ephemeral workers are stateless: their oplog is write-only for
             // observability and is never read back by the executor.
-            // `initialize` is always enqueued as a live call in Worker::new, so
-            // there is nothing to replay.  Switch directly to live mode.
+            // Switch directly to live mode — no replay needed.
             store
                 .as_context_mut()
                 .data_mut()
@@ -2839,6 +2838,35 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 .replay_state
                 .switch_to_live()
                 .await;
+
+            // Every time an ephemeral WASM instance is (re)loaded, `initialize`
+            // must be called to reconstruct the in-memory agent state (e.g.
+            // `resolved_agent` in the SDK).  Worker::new only enqueues it on
+            // first creation; here we re-enqueue it on every subsequent reload
+            // so the fresh WASM instance is always properly initialised before
+            // the first method invocation.
+            let agent_id = store.as_context().data().parsed_agent_id();
+            if let Some(agent_id) = agent_id {
+                let worker = store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .clone();
+                // Use a fresh idempotency key on every reload so the
+                // invocation-result cache from a previous WASM instance does
+                // not suppress re-initialization of the new instance.
+                let init_idempotency_key = IdempotencyKey::fresh();
+                worker
+                    .invoke(AgentInvocation::AgentInitialization {
+                        idempotency_key: init_idempotency_key,
+                        input: agent_id.parameters.clone().into(),
+                        invocation_context: InvocationContextStack::fresh(),
+                        principal: Principal::anonymous(),
+                    })
+                    .await
+                    .ok();
+            }
 
             record_resume_worker(start.elapsed());
             Ok(None)

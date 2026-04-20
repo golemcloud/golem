@@ -24,6 +24,7 @@ use golem_common::model::oplog::{
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,7 +42,15 @@ struct EphemeralOplogState {
     /// removed from `buffer`) but whose blob/S3 write is still in-flight as a
     /// background task.  Reads consult this map before going to S3 so that the
     /// invocation loop is never blocked waiting for a storage round-trip.
+    ///
+    /// Entries are lazily evicted on the next `commit()` call once the
+    /// background write has confirmed completion via `last_written_idx`.
     pending_background: BTreeMap<OplogIndex, OplogEntry>,
+    /// The highest oplog index that has been successfully written to the blob
+    /// archive by a background task.  Updated atomically by background tasks
+    /// (no lock needed); read inside `commit()` which already holds the state
+    /// lock, so no extra synchronisation is required at the eviction site.
+    last_written_idx: Arc<AtomicU64>,
     last_oplog_idx: OplogIndex,
     last_committed_idx: OplogIndex,
     max_operations_before_commit: u64,
@@ -66,7 +75,22 @@ impl EphemeralOplogState {
     /// Flush the in-memory buffer: assigns oplog indices, caches entries in
     /// `pending_background` for immediate reads, and spawns a background task
     /// to write them to the blob archive.  Returns immediately — no S3 wait.
+    ///
+    /// Also lazily evicts entries from `pending_background` whose background
+    /// write has already completed (signalled via `last_written_idx`).  This
+    /// piggybacks on the existing lock acquisition so no extra locking is needed.
     fn commit(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
+        // Lazily evict entries confirmed written by previous background tasks.
+        // `last_written_idx` is written by background tasks with Release ordering
+        // and read here (already inside the state lock) with Acquire ordering.
+        let confirmed_up_to = OplogIndex::from_u64(
+            self.last_written_idx.load(Ordering::Acquire)
+        );
+        if confirmed_up_to > OplogIndex::NONE {
+            self.pending_background
+                .retain(|idx, _| *idx > confirmed_up_to);
+        }
+
         let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
 
         let mut result = BTreeMap::new();
@@ -81,8 +105,15 @@ impl EphemeralOplogState {
 
         if !pairs.is_empty() {
             let target = self.target.clone();
+            // The highest index in this batch — after the write completes the
+            // background task records this so the next commit can evict.
+            let max_idx: u64 = pairs.last().unwrap().0.into();
+            let last_written_idx = self.last_written_idx.clone();
             tokio::spawn(async move {
                 target.append(pairs).await;
+                // Update with the max index this batch wrote.  Use fetch_max so
+                // concurrent or out-of-order batches never regress the value.
+                last_written_idx.fetch_max(max_idx, Ordering::Release);
             });
         }
 
@@ -107,6 +138,7 @@ impl EphemeralOplog {
             state: Arc::new(Mutex::new(EphemeralOplogState {
                 buffer: VecDeque::new(),
                 pending_background: initial_pending,
+                last_written_idx: Arc::new(AtomicU64::new(0)),
                 last_oplog_idx,
                 last_committed_idx: last_oplog_idx,
                 max_operations_before_commit,
@@ -115,6 +147,22 @@ impl EphemeralOplog {
             })),
             close_fn: Some(close),
         }
+    }
+}
+
+#[cfg(test)]
+impl EphemeralOplog {
+    /// Returns the oplog indices currently held in the pending-background cache.
+    /// Used in tests to assert exactly which entries are still awaiting S3
+    /// confirmation and which have been evicted after a successful write.
+    pub async fn pending_background_keys(&self) -> Vec<OplogIndex> {
+        self.state
+            .lock()
+            .await
+            .pending_background
+            .keys()
+            .copied()
+            .collect()
     }
 }
 
