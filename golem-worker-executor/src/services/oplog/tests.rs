@@ -2509,9 +2509,14 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
 }
 
 /// Ephemeral-agent oplog writes must be fire-and-forget.
+///
+/// Two properties are verified:
+///   1. `commit(Always)` returns in well under the blob write delay (non-blocking).
+///   2. After the background write completes the entries are durably stored in
+///      the blob archive at the correct oplog indices.
 #[test]
 async fn ephemeral_oplog_commit_does_not_block_on_blob_write(_tracing: &Tracing) {
-    // 500 ms artificial write delay simulates a slow S3 round-trip.
+    // 500 ms artificial write delay simulates a slow archive round-trip.
     let write_delay = std::time::Duration::from_millis(500);
     let blob_storage = Arc::new(SlowWriteBlobStorage::new(write_delay));
 
@@ -2559,9 +2564,12 @@ async fn ephemeral_oplog_commit_does_not_block_on_blob_write(_tracing: &Tracing)
         )
         .await;
 
-    oplog.add(OplogEntry::suspend().rounded()).await;
+    let entry1 = OplogEntry::suspend().rounded();
+    let entry2 = OplogEntry::exited().rounded();
+    oplog.add(entry1.clone()).await;
+    oplog.add(entry2.clone()).await;
 
-    // Commit must return WITHOUT waiting for the slow S3 write.
+    // Property 1: commit returns without waiting for the slow archive write.
     let start = Instant::now();
     oplog.commit(CommitLevel::Always).await;
     let elapsed = start.elapsed();
@@ -2570,6 +2578,33 @@ async fn ephemeral_oplog_commit_does_not_block_on_blob_write(_tracing: &Tracing)
         elapsed < std::time::Duration::from_millis(200),
         "commit(Always) on EphemeralOplog blocked for {elapsed:?}; \
          expected fire-and-forget (< 200ms) but blob write delay is {write_delay:?}"
+    );
+
+    // Property 2: after the background write completes the entries are durably
+    // stored at the correct indices in the archive.
+    let ephemeral_oplog = crate::services::oplog::downcast_oplog::<
+        crate::services::oplog::ephemeral::EphemeralOplog,
+    >(&oplog)
+    .expect("expected EphemeralOplog");
+
+    // Wait for the background write task to finish (no sleep — poll the atomic).
+    while ephemeral_oplog.confirmed_written_up_to() < 2 {
+        tokio::task::yield_now().await;
+    }
+
+    // Reads via the live oplog object are served from the in-memory cache.
+    assert_eq!(oplog.read(OplogIndex::from_u64(1)).await, entry1);
+    assert_eq!(oplog.read(OplogIndex::from_u64(2)).await, entry2);
+
+    // Reads via the service bypass the cache and go to the archive directly,
+    // confirming the entries were durably written.
+    let archived = oplog_service
+        .read(&owned_agent_id, OplogIndex::from_u64(1), 2)
+        .await;
+    assert_eq!(
+        archived.into_values().collect::<Vec<_>>(),
+        vec![entry1, entry2],
+        "entries must be durably stored in the archive after background write completes"
     );
 }
 
