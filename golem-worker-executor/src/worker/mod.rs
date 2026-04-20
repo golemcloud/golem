@@ -352,8 +352,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // Sanity check: durable workers always have at least the create entry.
         // Ephemeral workers start at NONE because their status is never persisted to KV.
         assert!(
-            last_oplog_idx >= OplogIndex::INITIAL
-                || worker.agent_mode() == AgentMode::Ephemeral
+            last_oplog_idx >= OplogIndex::INITIAL || worker.agent_mode() == AgentMode::Ephemeral
         );
 
         // For durable agents, ensure the initialize invocation is enqueued as the

@@ -515,22 +515,108 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     }
     #[async_trait]
     impl BlobStorage for GatedBlobStorage {
-        async fn get_raw(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<Vec<u8>>, anyhow::Error> { self.inner.get_raw(tl, ol, ns, path).await }
-        async fn get_stream(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<futures::stream::BoxStream<'static, Result<bytes::Bytes, anyhow::Error>>>, anyhow::Error> { self.inner.get_stream(tl, ol, ns, path).await }
-        async fn get_metadata(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<BlobMetadata>, anyhow::Error> { self.inner.get_metadata(tl, ol, ns, path).await }
-        async fn put_raw(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path, data: &[u8]) -> Result<(), anyhow::Error> {
+        async fn get_raw(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<Option<Vec<u8>>, anyhow::Error> {
+            self.inner.get_raw(tl, ol, ns, path).await
+        }
+        async fn get_stream(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<
+            Option<futures::stream::BoxStream<'static, Result<bytes::Bytes, anyhow::Error>>>,
+            anyhow::Error,
+        > {
+            self.inner.get_stream(tl, ol, ns, path).await
+        }
+        async fn get_metadata(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<Option<BlobMetadata>, anyhow::Error> {
+            self.inner.get_metadata(tl, ol, ns, path).await
+        }
+        async fn put_raw(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+            data: &[u8],
+        ) -> Result<(), anyhow::Error> {
             self.at_gate.notify_one();
             self.gate.notified().await;
             let r = self.inner.put_raw(tl, ol, ns, path, data).await;
             self.write_done.store(true, Ordering::Release);
             r
         }
-        async fn put_stream(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path, stream: &dyn golem_service_base::replayable_stream::ErasedReplayableStream<Item = Result<Vec<u8>, anyhow::Error>, Error = anyhow::Error>) -> Result<(), anyhow::Error> { self.inner.put_stream(tl, ol, ns, path, stream).await }
-        async fn delete(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<(), anyhow::Error> { self.inner.delete(tl, ol, ns, path).await }
-        async fn create_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<(), anyhow::Error> { self.inner.create_dir(tl, ol, ns, path).await }
-        async fn list_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Vec<PathBuf>, anyhow::Error> { self.inner.list_dir(tl, ol, ns, path).await }
-        async fn delete_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<bool, anyhow::Error> { self.inner.delete_dir(tl, ol, ns, path).await }
-        async fn exists(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<ExistsResult, anyhow::Error> { self.inner.exists(tl, ol, ns, path).await }
+        async fn put_stream(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+            stream: &dyn golem_service_base::replayable_stream::ErasedReplayableStream<
+                Item = Result<Vec<u8>, anyhow::Error>,
+                Error = anyhow::Error,
+            >,
+        ) -> Result<(), anyhow::Error> {
+            self.inner.put_stream(tl, ol, ns, path, stream).await
+        }
+        async fn delete(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<(), anyhow::Error> {
+            self.inner.delete(tl, ol, ns, path).await
+        }
+        async fn create_dir(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<(), anyhow::Error> {
+            self.inner.create_dir(tl, ol, ns, path).await
+        }
+        async fn list_dir(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<Vec<PathBuf>, anyhow::Error> {
+            self.inner.list_dir(tl, ol, ns, path).await
+        }
+        async fn delete_dir(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<bool, anyhow::Error> {
+            self.inner.delete_dir(tl, ol, ns, path).await
+        }
+        async fn exists(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<ExistsResult, anyhow::Error> {
+            self.inner.exists(tl, ol, ns, path).await
+        }
     }
 
     let at_gate = Arc::new(Notify::new());
@@ -2598,16 +2684,44 @@ async fn ephemeral_oplog_pending_background_evicted_after_write(_tracing: &Traci
 
     #[async_trait]
     impl BlobStorage for GatedBlobStorage {
-        async fn get_raw(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<Vec<u8>>, anyhow::Error> {
+        async fn get_raw(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<Option<Vec<u8>>, anyhow::Error> {
             self.inner.get_raw(tl, ol, ns, path).await
         }
-        async fn get_stream(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<futures::stream::BoxStream<'static, Result<bytes::Bytes, anyhow::Error>>>, anyhow::Error> {
+        async fn get_stream(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<
+            Option<futures::stream::BoxStream<'static, Result<bytes::Bytes, anyhow::Error>>>,
+            anyhow::Error,
+        > {
             self.inner.get_stream(tl, ol, ns, path).await
         }
-        async fn get_metadata(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<BlobMetadata>, anyhow::Error> {
+        async fn get_metadata(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<Option<BlobMetadata>, anyhow::Error> {
             self.inner.get_metadata(tl, ol, ns, path).await
         }
-        async fn put_raw(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path, data: &[u8]) -> Result<(), anyhow::Error> {
+        async fn put_raw(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+            data: &[u8],
+        ) -> Result<(), anyhow::Error> {
             // Tell the test we have arrived at the gate, then wait for release.
             self.at_gate.notify_one();
             self.gate.notified().await;
@@ -2615,22 +2729,62 @@ async fn ephemeral_oplog_pending_background_evicted_after_write(_tracing: &Traci
             self.write_done.store(true, Ordering::Release);
             result
         }
-        async fn put_stream(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path, stream: &dyn golem_service_base::replayable_stream::ErasedReplayableStream<Item = Result<Vec<u8>, anyhow::Error>, Error = anyhow::Error>) -> Result<(), anyhow::Error> {
+        async fn put_stream(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+            stream: &dyn golem_service_base::replayable_stream::ErasedReplayableStream<
+                Item = Result<Vec<u8>, anyhow::Error>,
+                Error = anyhow::Error,
+            >,
+        ) -> Result<(), anyhow::Error> {
             self.inner.put_stream(tl, ol, ns, path, stream).await
         }
-        async fn delete(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<(), anyhow::Error> {
+        async fn delete(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<(), anyhow::Error> {
             self.inner.delete(tl, ol, ns, path).await
         }
-        async fn create_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<(), anyhow::Error> {
+        async fn create_dir(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<(), anyhow::Error> {
             self.inner.create_dir(tl, ol, ns, path).await
         }
-        async fn list_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Vec<PathBuf>, anyhow::Error> {
+        async fn list_dir(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<Vec<PathBuf>, anyhow::Error> {
             self.inner.list_dir(tl, ol, ns, path).await
         }
-        async fn delete_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<bool, anyhow::Error> {
+        async fn delete_dir(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<bool, anyhow::Error> {
             self.inner.delete_dir(tl, ol, ns, path).await
         }
-        async fn exists(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<ExistsResult, anyhow::Error> {
+        async fn exists(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<ExistsResult, anyhow::Error> {
             self.inner.exists(tl, ol, ns, path).await
         }
     }

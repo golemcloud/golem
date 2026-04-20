@@ -24,8 +24,8 @@ use golem_common::model::oplog::{
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 pub struct EphemeralOplog {
@@ -83,9 +83,7 @@ impl EphemeralOplogState {
         // Lazily evict entries confirmed written by previous background tasks.
         // `last_written_idx` is written by background tasks with Release ordering
         // and read here (already inside the state lock) with Acquire ordering.
-        let confirmed_up_to = OplogIndex::from_u64(
-            self.last_written_idx.load(Ordering::Acquire)
-        );
+        let confirmed_up_to = OplogIndex::from_u64(self.last_written_idx.load(Ordering::Acquire));
         if confirmed_up_to > OplogIndex::NONE {
             self.pending_background
                 .retain(|idx, _| *idx > confirmed_up_to);
