@@ -267,7 +267,7 @@ customCommands:
     - command: cargo clippy --target wasm32-wasip1
 ```
 
-Run with `golem custom-command <name>` (e.g., `golem custom-command test`).
+Run with `golem exec <name>` (e.g., `golem exec test`).
 
 `customCommands` can only contain `command:`-style external commands; they do not support `generateQuickjsCrate`, `injectToPrebuiltQuickjs`, or other build-specific command types.
 

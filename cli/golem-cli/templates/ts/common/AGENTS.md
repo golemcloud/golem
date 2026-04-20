@@ -12,6 +12,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-edit-manifest` | Editing the Golem Application Manifest (golem.yaml) — components, agents, templates, environments, httpApi, mcp, bridge SDKs, plugins, and more |
 | `golem-build` | Building a Golem application with `golem build` |
 | `golem-deploy` | Deploying a Golem application with `golem deploy` |
+| `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
 | `golem-invoke-agent-ts` | Invoking a Golem agent method from the CLI |
 | `golem-trigger-agent-ts` | Triggering a fire-and-forget invocation on a Golem agent |
 | `golem-schedule-agent-ts` | Scheduling a future invocation on a Golem agent |
