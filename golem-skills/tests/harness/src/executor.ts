@@ -1742,96 +1742,79 @@ export class ScenarioExecutor {
     fail: (msg: string) => void,
   ): Promise<void> {
     log.stepAction(stepLabel, `MCP ${spec.method} → ${spec.url}`);
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
-    const onParentAbort = () => controller.abort();
-    this.options.abortSignal?.addEventListener("abort", onParentAbort);
+
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { StreamableHTTPClientTransport } = await import(
+      "@modelcontextprotocol/sdk/client/streamableHttp.js"
+    );
+    const { CallToolResultSchema } = await import("@modelcontextprotocol/sdk/types.js");
+
+    const client = new Client(
+      { name: "golem-skill-harness", version: "1.0.0" },
+      { capabilities: {} },
+    );
+    const transport = new StreamableHTTPClientTransport(new URL(spec.url));
+    let connected = false;
+
     try {
-      // Step 1: Initialize MCP session
-      const initBody = JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2025-03-26",
-          capabilities: {},
-          clientInfo: { name: "golem-skill-harness", version: "1.0.0" },
-        },
-      });
-      const initResponse = await fetch(spec.url, {
-        method: "POST",
-        body: initBody,
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        signal: controller.signal,
-      });
-      if (!initResponse.ok) {
-        const initErrBody = await initResponse.text();
-        log.mcpFailure(stepLabel, `initialize failed: ${initResponse.status} ${initErrBody}`);
-        fail(
-          `MCP_CALL_FAILED: initialize returned ${initResponse.status}: ${initErrBody.slice(0, 500)}`,
+      await Promise.race([
+        client.connect(transport),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("MCP connect timed out")), timeoutSeconds * 1000),
+        ),
+      ]);
+      connected = true;
+
+      let body: string;
+
+      if (spec.method === "tools/list") {
+        const result = await client.listTools();
+        body = JSON.stringify(result);
+      } else if (spec.method === "tools/call") {
+        const params = spec.params ?? {};
+        const result = await client.callTool(
+          {
+            name: params.name as string,
+            arguments: (params.arguments as Record<string, unknown>) ?? {},
+          },
+          CallToolResultSchema,
         );
-        return;
-      }
-      const sessionId = initResponse.headers.get("mcp-session-id");
-      if (!sessionId) {
-        log.mcpFailure(stepLabel, "no Mcp-Session-Id header in initialize response");
-        fail("MCP_CALL_FAILED: no Mcp-Session-Id header received from initialize");
+        body = JSON.stringify(result);
+      } else if (spec.method === "resources/list") {
+        const result = await client.listResources();
+        body = JSON.stringify(result);
+      } else if (spec.method === "prompts/list") {
+        const result = await client.listPrompts();
+        body = JSON.stringify(result);
+      } else {
+        log.mcpFailure(stepLabel, `unsupported MCP method: ${spec.method}`);
+        fail(`MCP_CALL_FAILED: unsupported method "${spec.method}"`);
         return;
       }
 
-      // Step 2: Send the actual MCP method call
-      const callBody = JSON.stringify({
-        jsonrpc: "2.0",
-        id: 2,
-        method: spec.method,
-        params: spec.params ?? {},
-      });
-      const callHeaders: Record<string, string> = {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "Mcp-Session-Id": sessionId,
-      };
-      const callResponse = await fetch(spec.url, {
-        method: "POST",
-        body: callBody,
-        headers: callHeaders,
-        signal: controller.signal,
-      });
-      const body = await callResponse.text();
-      log.mcpResponse(stepLabel, spec.method, callResponse.status, body);
+      log.mcpResponse(stepLabel, spec.method, 200, body);
 
       if (expect) {
-        const headers: Record<string, string> = {};
-        callResponse.headers.forEach((value, key) => {
-          headers[key.toLowerCase()] = value;
-        });
         this.evaluateAssertions(
-          {
-            stdout: body,
-            stderr: "",
-            exitCode: callResponse.ok ? 0 : 1,
-            body,
-            status: callResponse.status,
-            headers,
-          },
+          { stdout: body, stderr: "", exitCode: 0, body, status: 200, headers: {} },
           expect,
           fail,
           stepLabel,
         );
-      } else if (!callResponse.ok) {
-        fail(`MCP_CALL_FAILED: ${callResponse.status} ${body.slice(0, 500)}`);
       }
     } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
-        log.mcpFailure(stepLabel, `request timed out after ${timeoutSeconds}s`);
-        fail(`MCP_CALL_FAILED: request timed out after ${timeoutSeconds}s`);
-      } else {
-        log.mcpFailure(stepLabel, err instanceof Error ? err.message : String(err));
-        fail(`MCP_CALL_FAILED: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      const message = err instanceof Error ? err.message : String(err);
+      log.mcpFailure(stepLabel, message);
+      fail(`MCP_CALL_FAILED: ${message}`);
     } finally {
-      clearTimeout(timeoutId);
-      this.options.abortSignal?.removeEventListener("abort", onParentAbort);
+      try {
+        if (connected) {
+          await client.close();
+        }
+        await transport.close();
+      } catch {
+        // ignore close errors
+      }
     }
   }
 

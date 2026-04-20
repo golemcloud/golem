@@ -13,6 +13,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-build` | Building a Golem application with `golem build` |
 | `golem-deploy` | Deploying a Golem application with `golem deploy` |
 | `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
+| `golem-create-agent-instance-rust` | Creating a new agent instance with `golem agent new` |
 | `golem-invoke-agent-rust` | Invoking a Golem agent method from the CLI |
 | `golem-trigger-agent-rust` | Triggering a fire-and-forget invocation on a Golem agent |
 | `golem-schedule-agent-rust` | Scheduling a future invocation on a Golem agent |
