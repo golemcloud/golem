@@ -157,6 +157,18 @@ Agent methods are automatically mapped to MCP entities based on these rules:
 | Non-singleton | No parameters | Resource template |
 | Any | Has parameters | Tool |
 
+### Tool and Resource Naming
+
+MCP tool and resource names are constructed as `{AgentTypeName}-{method_name}`, where the method name preserves the **source language naming convention** (not kebab-case):
+
+| Language | Method in code | MCP tool name |
+|---|---|---|
+| Rust | `increment_by` | `CounterAgent-increment_by` |
+| TypeScript | `incrementBy` | `CounterAgent-incrementBy` |
+| Scala | `incrementBy` | `CounterAgent-incrementBy` |
+
+Constructor parameters (which identify the agent instance) are automatically included in the tool's input schema alongside the method's own parameters.
+
 ### Agent and Method Metadata
 
 Add `description` and `prompt` annotations to improve MCP discoverability:

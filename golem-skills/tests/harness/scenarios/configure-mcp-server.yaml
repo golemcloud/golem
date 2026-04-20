@@ -52,7 +52,7 @@ steps:
       url: "http://test-app.localhost:9007/mcp"
       method: "tools/call"
       params:
-        name: "CounterAgent-increment-by"
+        name: "CounterAgent-increment_by"
         arguments:
           name: "mcp-test"
           n: 5
