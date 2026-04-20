@@ -1081,7 +1081,7 @@ pub mod worker {
             agent_id: AgentIdArgs,
             /// Agent function name to invoke
             function_name: WorkerFunctionName,
-            /// Agent function arguments in WAVE format
+            /// Agent function arguments specified using the agent's language's syntax
             arguments: Vec<WorkerFunctionArgument>,
             /// Only trigger invocation and do not wait for it
             #[clap(long, short)]

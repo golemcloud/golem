@@ -83,6 +83,18 @@ fn round_trip_scala(value: Value, typ: AnalysedType) {
     );
 }
 
+fn round_trip_moonbit(value: Value, typ: AnalysedType) {
+    let data_value = cm_value(value.clone(), typ.clone());
+    let schema = cm_schema(typ.clone());
+    let rendered = render_data_value(&data_value, &SourceLanguage::MoonBit);
+    let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::MoonBit)
+        .unwrap_or_else(|e| panic!("parse failed for rendered='{rendered}': {e}"));
+    assert_eq!(
+        data_value, parsed,
+        "round-trip failed for rendered='{rendered}'"
+    );
+}
+
 // Primitive round-trips
 
 #[test]
@@ -1465,6 +1477,309 @@ proptest! {
         let rendered = render_data_value(&data, &SourceLanguage::Scala);
         let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::Scala)
             .unwrap_or_else(|e| panic!("Scala parse failed for '{rendered}': {e}"));
+        prop_assert_eq!(data, parsed);
+    }
+}
+
+// ── MoonBit round-trip tests ────────────────────────────────────────────────
+
+#[test]
+fn moonbit_round_trip_bool() {
+    round_trip_moonbit(Value::Bool(true), AnalysedType::Bool(TypeBool));
+    round_trip_moonbit(Value::Bool(false), AnalysedType::Bool(TypeBool));
+}
+
+#[test]
+fn moonbit_round_trip_integers() {
+    round_trip_moonbit(Value::U32(42), AnalysedType::U32(TypeU32));
+    round_trip_moonbit(Value::S32(-7), AnalysedType::S32(TypeS32));
+    round_trip_moonbit(Value::S32(0), AnalysedType::S32(TypeS32));
+}
+
+#[test]
+fn moonbit_round_trip_string() {
+    round_trip_moonbit(
+        Value::String("hello world".into()),
+        AnalysedType::Str(TypeStr),
+    );
+    round_trip_moonbit(
+        Value::String("line\nnewline".into()),
+        AnalysedType::Str(TypeStr),
+    );
+}
+
+#[test]
+fn moonbit_round_trip_char() {
+    round_trip_moonbit(Value::Char('a'), AnalysedType::Chr(TypeChr));
+    round_trip_moonbit(Value::Char('\n'), AnalysedType::Chr(TypeChr));
+}
+
+#[test]
+fn moonbit_round_trip_float() {
+    round_trip_moonbit(Value::F64(2.71), AnalysedType::F64(TypeF64));
+    round_trip_moonbit(Value::F64(f64::INFINITY), AnalysedType::F64(TypeF64));
+    round_trip_moonbit(Value::F64(f64::NEG_INFINITY), AnalysedType::F64(TypeF64));
+}
+
+#[test]
+fn moonbit_round_trip_record() {
+    let typ = AnalysedType::Record(TypeRecord {
+        name: Some("my-record".to_string()),
+        owner: None,
+        fields: vec![
+            NameTypePair {
+                name: "field-one".to_string(),
+                typ: AnalysedType::U32(TypeU32),
+            },
+            NameTypePair {
+                name: "field-two".to_string(),
+                typ: AnalysedType::Str(TypeStr),
+            },
+        ],
+    });
+    let val = Value::Record(vec![Value::U32(42), Value::String("hi".into())]);
+    round_trip_moonbit(val, typ);
+}
+
+#[test]
+fn moonbit_round_trip_variant() {
+    let typ = AnalysedType::Variant(TypeVariant {
+        name: Some("my-variant".to_string()),
+        owner: None,
+        cases: vec![
+            NameOptionTypePair {
+                name: "case-a".to_string(),
+                typ: Some(AnalysedType::U32(TypeU32)),
+            },
+            NameOptionTypePair {
+                name: "case-b".to_string(),
+                typ: None,
+            },
+        ],
+    });
+    round_trip_moonbit(
+        Value::Variant {
+            case_idx: 0,
+            case_value: Some(Box::new(Value::U32(99))),
+        },
+        typ.clone(),
+    );
+    round_trip_moonbit(
+        Value::Variant {
+            case_idx: 1,
+            case_value: None,
+        },
+        typ,
+    );
+}
+
+#[test]
+fn moonbit_round_trip_enum() {
+    let typ = AnalysedType::Enum(TypeEnum {
+        name: Some("my-enum".to_string()),
+        owner: None,
+        cases: vec!["case-one".to_string(), "case-two".to_string()],
+    });
+    round_trip_moonbit(Value::Enum(0), typ.clone());
+    round_trip_moonbit(Value::Enum(1), typ);
+}
+
+#[test]
+fn moonbit_round_trip_option() {
+    let typ = AnalysedType::Option(TypeOption {
+        name: None,
+        owner: None,
+        inner: Box::new(AnalysedType::U32(TypeU32)),
+    });
+    round_trip_moonbit(Value::Option(Some(Box::new(Value::U32(42)))), typ.clone());
+    round_trip_moonbit(Value::Option(None), typ);
+}
+
+#[test]
+fn moonbit_round_trip_result() {
+    let typ = AnalysedType::Result(TypeResult {
+        name: None,
+        owner: None,
+        ok: Some(Box::new(AnalysedType::U32(TypeU32))),
+        err: Some(Box::new(AnalysedType::Str(TypeStr))),
+    });
+    round_trip_moonbit(
+        Value::Result(Ok(Some(Box::new(Value::U32(42))))),
+        typ.clone(),
+    );
+    round_trip_moonbit(
+        Value::Result(Err(Some(Box::new(Value::String("oops".into()))))),
+        typ,
+    );
+}
+
+#[test]
+fn moonbit_round_trip_flags() {
+    let typ = AnalysedType::Flags(TypeFlags {
+        name: Some("my-flags".to_string()),
+        owner: None,
+        names: vec![
+            "read".to_string(),
+            "write".to_string(),
+            "execute".to_string(),
+        ],
+    });
+    round_trip_moonbit(Value::Flags(vec![true, false, true]), typ);
+}
+
+#[test]
+fn moonbit_round_trip_flags_all_false() {
+    let typ = AnalysedType::Flags(TypeFlags {
+        name: Some("my-flags".to_string()),
+        owner: None,
+        names: vec!["flag-one".to_string(), "flag-two".to_string()],
+    });
+    round_trip_moonbit(Value::Flags(vec![false, false]), typ);
+}
+
+#[test]
+fn moonbit_round_trip_tuple() {
+    let typ = AnalysedType::Tuple(TypeTuple {
+        name: None,
+        owner: None,
+        items: vec![AnalysedType::U32(TypeU32), AnalysedType::Str(TypeStr)],
+    });
+    round_trip_moonbit(
+        Value::Tuple(vec![Value::U32(1), Value::String("x".into())]),
+        typ,
+    );
+}
+
+#[test]
+fn moonbit_round_trip_list() {
+    let typ = AnalysedType::List(TypeList {
+        name: None,
+        owner: None,
+        inner: Box::new(AnalysedType::U32(TypeU32)),
+    });
+    round_trip_moonbit(
+        Value::List(vec![Value::U32(1), Value::U32(2), Value::U32(3)]),
+        typ,
+    );
+}
+
+// MoonBit-specific parsing tests
+
+#[test]
+fn moonbit_parse_record_with_type_prefix() {
+    let typ = AnalysedType::Record(TypeRecord {
+        name: Some("my-record".to_string()),
+        owner: None,
+        fields: vec![
+            NameTypePair {
+                name: "field-one".to_string(),
+                typ: AnalysedType::U32(TypeU32),
+            },
+            NameTypePair {
+                name: "field-two".to_string(),
+                typ: AnalysedType::Str(TypeStr),
+            },
+        ],
+    });
+    let schema = cm_schema(typ.clone());
+    let parsed = parse_agent_id_params(
+        r#"MyRecord::{ field_one: 1, field_two: "hi" }"#,
+        &schema,
+        &SourceLanguage::MoonBit,
+    )
+    .unwrap();
+    let expected = cm_value(
+        Value::Record(vec![Value::U32(1), Value::String("hi".into())]),
+        typ,
+    );
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn moonbit_parse_record_without_type_prefix() {
+    let typ = AnalysedType::Record(TypeRecord {
+        name: Some("my-record".to_string()),
+        owner: None,
+        fields: vec![NameTypePair {
+            name: "field-one".to_string(),
+            typ: AnalysedType::U32(TypeU32),
+        }],
+    });
+    let schema = cm_schema(typ.clone());
+    let parsed = parse_agent_id_params("{ field_one: 42 }", &schema, &SourceLanguage::MoonBit)
+        .unwrap();
+    let expected = cm_value(Value::Record(vec![Value::U32(42)]), typ);
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn moonbit_language_specific_parsed_first() {
+    let typ = AnalysedType::Option(TypeOption {
+        name: None,
+        owner: None,
+        inner: Box::new(AnalysedType::U32(TypeU32)),
+    });
+    let schema = cm_schema(typ.clone());
+    let parsed = parse_agent_id_params("Some(42)", &schema, &SourceLanguage::MoonBit).unwrap();
+    let expected = cm_value(Value::Option(Some(Box::new(Value::U32(42)))), typ);
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn canonical_fallback_for_moonbit_language() {
+    let typ = AnalysedType::Option(TypeOption {
+        name: None,
+        owner: None,
+        inner: Box::new(AnalysedType::U32(TypeU32)),
+    });
+    let schema = cm_schema(typ.clone());
+    let parsed = parse_agent_id_params("s(42)", &schema, &SourceLanguage::MoonBit).unwrap();
+    let expected = cm_value(Value::Option(Some(Box::new(Value::U32(42)))), typ);
+    assert_eq!(parsed, expected);
+}
+
+#[test]
+fn combined_error_on_both_failures_moonbit() {
+    let schema = cm_schema(AnalysedType::U32(TypeU32));
+    let result =
+        parse_agent_id_params("not_a_number_at_all!!!", &schema, &SourceLanguage::MoonBit);
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("MoonBit parser"),
+        "error should mention MoonBit parser: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Structural parser"),
+        "error should mention Structural parser: {}",
+        err.message
+    );
+}
+
+// MoonBit property-based round-trips
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 200, .. ProptestConfig::default()
+    })]
+
+    #[test]
+    fn proptest_moonbit_leaf_roundtrip((typ, val) in leaf_type_and_value()) {
+        let data = cm_data_for(val, typ.clone());
+        let schema = cm_schema_for(typ);
+        let rendered = render_data_value(&data, &SourceLanguage::MoonBit);
+        let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::MoonBit)
+            .unwrap_or_else(|e| panic!("MoonBit parse failed for '{rendered}': {e}"));
+        prop_assert_eq!(data, parsed);
+    }
+
+    #[test]
+    fn proptest_moonbit_complex_roundtrip((typ, val) in arb_type_and_value()) {
+        let data = cm_data_for(val, typ.clone());
+        let schema = cm_schema_for(typ);
+        let rendered = render_data_value(&data, &SourceLanguage::MoonBit);
+        let parsed = parse_agent_id_params(&rendered, &schema, &SourceLanguage::MoonBit)
+            .unwrap_or_else(|e| panic!("MoonBit parse failed for '{rendered}': {e}"));
         prop_assert_eq!(data, parsed);
     }
 }
