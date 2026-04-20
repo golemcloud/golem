@@ -263,7 +263,7 @@ impl AgentSecretCommandHandler {
                     GuestLanguage::Rust => SourceLanguage::Rust,
                     GuestLanguage::TypeScript => SourceLanguage::TypeScript,
                     GuestLanguage::Scala => SourceLanguage::Scala,
-                    GuestLanguage::MoonBit => SourceLanguage::Other("moonbit".to_string()),
+                    GuestLanguage::MoonBit => SourceLanguage::MoonBit,
                 };
             }
         }
