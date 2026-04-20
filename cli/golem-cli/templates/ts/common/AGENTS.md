@@ -8,6 +8,8 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | Skill | Description |
 |-------|-------------|
 | `golem-new-project` | Creating a new Golem application project with `golem new` |
+| `golem-add-component` | Adding a new component or agent templates to an existing application |
+| `golem-edit-manifest` | Editing the Golem Application Manifest (golem.yaml) — components, agents, templates, environments, httpApi, mcp, bridge SDKs, plugins, and more |
 | `golem-build` | Building a Golem application with `golem build` |
 | `golem-deploy` | Deploying a Golem application with `golem deploy` |
 | `golem-invoke-agent-ts` | Invoking a Golem agent method from the CLI |

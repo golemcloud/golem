@@ -455,6 +455,9 @@ Options:
 
           if (scenarioFilter && spec.name !== scenarioFilter) continue;
 
+          // Language-agnostic scenarios run only once per agent (on the first language)
+          if (spec.languageAgnostic && currentLanguage !== languages[0]) continue;
+
           // Restart Golem server between scenarios to get a clean state
           if (!isFirstScenario) {
             log.dim("Restarting Golem server for clean state...");
@@ -463,7 +466,10 @@ Options:
           }
           isFirstScenario = false;
 
-          log.heading(`Running scenario: ${spec.name} [${currentAgent} x ${currentLanguage}]`);
+          const matrixLabel = spec.languageAgnostic
+            ? `${currentAgent} x multi-language`
+            : `${currentAgent} x ${currentLanguage}`;
+          log.heading(`Running scenario: ${spec.name} [${matrixLabel}]`);
           const scenarioDir = spec.name.replace(/\s+/g, "-").toLowerCase();
 
           let scenarioResult: ScenarioRunResult | undefined;

@@ -249,6 +249,7 @@ const PrerequisitesSchema = z
 
 const ScenarioSpecSchema = z.object({
   name: z.string({ required_error: 'Scenario must have a "name" field' }),
+  languageAgnostic: z.boolean().optional(),
   settings: SettingsSchema,
   prerequisites: PrerequisitesSchema,
   skip_if: StepConditionSchema.optional(),
@@ -342,6 +343,7 @@ export type StepSpec =
 
 export interface ScenarioSpec {
   name: string;
+  languageAgnostic?: boolean;
   settings?: {
     timeout_per_subprompt?: number;
     golem_server?: {
