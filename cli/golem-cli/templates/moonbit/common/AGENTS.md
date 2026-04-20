@@ -42,11 +42,14 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-file-io-moonbit` | Reading and writing files from agent code |
 | `golem-make-http-request-moonbit` | Making outgoing HTTP requests from agent code |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
+| `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
+| `golem-list-and-filter-agents` | Listing and querying agents with filters |
 | `golem-get-agent-metadata` | Checking agent metadata and status |
 | `golem-debug-agent-history` | Querying the operation log |
 | `golem-undo-agent-state` | Reverting agent state by undoing operations |
 | `golem-interrupt-resume-agent` | Interrupting and resuming a Golem agent |
 | `golem-test-crash-recovery` | Simulating a crash on an agent for testing crash recovery |
+| `golem-cancel-queued-invocation` | Canceling a pending (queued) invocation on an agent |
 | `golem-delete-agent` | Deleting an agent instance |
 
 # Golem Application Development Guide (MoonBit)

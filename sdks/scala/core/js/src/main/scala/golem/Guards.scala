@@ -68,9 +68,9 @@ object Guards {
   /**
    * Executes a block atomically.
    *
-   * On success the atomic region is committed via `markEndOperation`.
-   * On failure the region is intentionally left open so the executor sees the
-   * trap as occurring *inside* the atomic region and can retry from the
+   * On success the atomic region is committed via `markEndOperation`. On
+   * failure the region is intentionally left open so the executor sees the trap
+   * as occurring *inside* the atomic region and can retry from the
    * begin-operation marker (matching the Rust SDK behaviour where `Drop` is
    * never called on panic because WASM panics don't unwind).
    */
@@ -78,7 +78,9 @@ object Guards {
     val guard = markAtomicOperation()
     block.transform(
       result => { guard.drop(); result },
-      error  => { /* Do NOT drop — leave the atomic region open for retry */ error }
+      error => { /* Do NOT drop — leave the atomic region open for retry */
+        error
+      }
     )
   }
 

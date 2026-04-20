@@ -95,7 +95,18 @@ object PrincipalConverter {
         )
       )
 
-    case Principal.Oidc(sub, issuer, claims, email, name, emailVerified, givenName, familyName, picture, preferredUsername) =>
+    case Principal.Oidc(
+          sub,
+          issuer,
+          claims,
+          email,
+          name,
+          emailVerified,
+          givenName,
+          familyName,
+          picture,
+          preferredUsername
+        ) =>
       Json.Object(
         "tag" -> Json.String("oidc"),
         "val" -> Json.Object(
@@ -107,7 +118,7 @@ object PrincipalConverter {
           "givenName"         -> optString(givenName),
           "familyName"        -> optString(familyName),
           "picture"           -> optString(picture),
-          "preferredUsername"  -> optString(preferredUsername),
+          "preferredUsername" -> optString(preferredUsername),
           "claims"            -> Json.String(claims)
         )
       )
@@ -115,42 +126,42 @@ object PrincipalConverter {
 
   private def principalFromJson(json: Json): Either[String, Principal] =
     for {
-      tag <- getStr(json, "tag")
+      tag    <- getStr(json, "tag")
       result <- tag match {
-        case "anonymous" => Right(Principal.Anonymous)
-        case "agent" =>
-          for {
-            valObj      <- getObj(json, "val")
-            cidStr      <- getStr(valObj, "componentId")
-            componentId <- Uuid.fromStandardString(cidStr)
-            agentId     <- getStr(valObj, "agentId")
-          } yield Principal.Agent(componentId, agentId)
-        case "golem-user" =>
-          for {
-            valObj    <- getObj(json, "val")
-            aidStr    <- getStr(valObj, "accountId")
-            accountId <- Uuid.fromStandardString(aidStr)
-          } yield Principal.GolemUser(accountId)
-        case "oidc" =>
-          for {
-            valObj <- getObj(json, "val")
-            sub    <- getStr(valObj, "sub")
-            issuer <- getStr(valObj, "issuer")
-            claims <- getStr(valObj, "claims")
-          } yield Principal.Oidc(
-            sub = sub,
-            issuer = issuer,
-            claims = claims,
-            email = getOptStr(valObj, "email"),
-            name = getOptStr(valObj, "name"),
-            emailVerified = getOptBool(valObj, "emailVerified"),
-            givenName = getOptStr(valObj, "givenName"),
-            familyName = getOptStr(valObj, "familyName"),
-            picture = getOptStr(valObj, "picture"),
-            preferredUsername = getOptStr(valObj, "preferredUsername")
-          )
-        case other => Left(s"Unknown principal tag: $other")
-      }
+                  case "anonymous" => Right(Principal.Anonymous)
+                  case "agent"     =>
+                    for {
+                      valObj      <- getObj(json, "val")
+                      cidStr      <- getStr(valObj, "componentId")
+                      componentId <- Uuid.fromStandardString(cidStr)
+                      agentId     <- getStr(valObj, "agentId")
+                    } yield Principal.Agent(componentId, agentId)
+                  case "golem-user" =>
+                    for {
+                      valObj    <- getObj(json, "val")
+                      aidStr    <- getStr(valObj, "accountId")
+                      accountId <- Uuid.fromStandardString(aidStr)
+                    } yield Principal.GolemUser(accountId)
+                  case "oidc" =>
+                    for {
+                      valObj <- getObj(json, "val")
+                      sub    <- getStr(valObj, "sub")
+                      issuer <- getStr(valObj, "issuer")
+                      claims <- getStr(valObj, "claims")
+                    } yield Principal.Oidc(
+                      sub = sub,
+                      issuer = issuer,
+                      claims = claims,
+                      email = getOptStr(valObj, "email"),
+                      name = getOptStr(valObj, "name"),
+                      emailVerified = getOptBool(valObj, "emailVerified"),
+                      givenName = getOptStr(valObj, "givenName"),
+                      familyName = getOptStr(valObj, "familyName"),
+                      picture = getOptStr(valObj, "picture"),
+                      preferredUsername = getOptStr(valObj, "preferredUsername")
+                    )
+                  case other => Left(s"Unknown principal tag: $other")
+                }
     } yield result
 
   private def optString(o: Option[String]): Json = o match {
