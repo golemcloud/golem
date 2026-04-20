@@ -33,6 +33,8 @@ pub struct EphemeralOplog {
     primary: Arc<dyn Oplog>,
     target: Arc<dyn OplogArchive + Send + Sync>,
     state: Arc<Mutex<EphemeralOplogState>>,
+    /// Shared with the state so tests can read it without acquiring the lock.
+    last_written_idx: Arc<AtomicU64>,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
@@ -129,14 +131,16 @@ impl EphemeralOplog {
         initial_pending: BTreeMap<OplogIndex, OplogEntry>,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
+        let last_written_idx = Arc::new(AtomicU64::new(0));
         Self {
             owned_agent_id,
             primary,
             target: target.clone(),
+            last_written_idx: last_written_idx.clone(),
             state: Arc::new(Mutex::new(EphemeralOplogState {
                 buffer: VecDeque::new(),
                 pending_background: initial_pending,
-                last_written_idx: Arc::new(AtomicU64::new(0)),
+                last_written_idx,
                 last_oplog_idx,
                 last_committed_idx: last_oplog_idx,
                 max_operations_before_commit,
@@ -161,6 +165,15 @@ impl EphemeralOplog {
             .keys()
             .copied()
             .collect()
+    }
+
+    /// Returns the highest oplog index confirmed written by a completed
+    /// background task.  Reads the atomic directly — no lock needed.
+    /// Use this in tests to wait until a specific batch has been flushed
+    /// (including the `fetch_max` call that follows `append`), avoiding
+    /// any timing-dependent sleeps or yields.
+    pub fn confirmed_written_up_to(&self) -> u64 {
+        self.last_written_idx.load(Ordering::Acquire)
     }
 }
 

@@ -2665,13 +2665,10 @@ async fn ephemeral_oplog_open_does_not_block_on_blob_reads(_tracing: &Tracing) {
 /// Before the fix this FAILS at step 6: nothing is ever evicted.
 #[test]
 async fn ephemeral_oplog_pending_background_evicted_after_write(_tracing: &Tracing) {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::sync::Notify;
 
-    /// A blob storage that:
-    ///   1. fires `at_gate` when it reaches `put_raw` (telling the test it is
-    ///      waiting), then blocks until the test fires `gate`,
-    ///   2. sets `write_done` after the write completes.
+    /// A blob storage that fires `at_gate` when it reaches `put_raw` (telling
+    /// the test it is waiting), then blocks until the test fires `gate`.
     #[derive(Debug)]
     struct GatedBlobStorage {
         inner: Arc<InMemoryBlobStorage>,
@@ -2679,7 +2676,6 @@ async fn ephemeral_oplog_pending_background_evicted_after_write(_tracing: &Traci
         at_gate: Arc<Notify>,
         /// Fired by the test to release the blocked `put_raw`.
         gate: Arc<Notify>,
-        write_done: Arc<AtomicBool>,
     }
 
     #[async_trait]
@@ -2725,9 +2721,7 @@ async fn ephemeral_oplog_pending_background_evicted_after_write(_tracing: &Traci
             // Tell the test we have arrived at the gate, then wait for release.
             self.at_gate.notify_one();
             self.gate.notified().await;
-            let result = self.inner.put_raw(tl, ol, ns, path, data).await;
-            self.write_done.store(true, Ordering::Release);
-            result
+            self.inner.put_raw(tl, ol, ns, path, data).await
         }
         async fn put_stream(
             &self,
@@ -2791,12 +2785,10 @@ async fn ephemeral_oplog_pending_background_evicted_after_write(_tracing: &Traci
 
     let at_gate = Arc::new(Notify::new());
     let gate = Arc::new(Notify::new());
-    let write_done = Arc::new(AtomicBool::new(false));
     let blob_storage = Arc::new(GatedBlobStorage {
         inner: Arc::new(InMemoryBlobStorage::new()),
         at_gate: at_gate.clone(),
         gate: gate.clone(),
-        write_done: write_done.clone(),
     });
 
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
@@ -2868,17 +2860,16 @@ async fn ephemeral_oplog_pending_background_evicted_after_write(_tracing: &Traci
     );
 
     // Step 4: wait until the background task has reached the gate (confirmed
-    // it is waiting), then release it and wait for the write to finish.
+    // it is waiting), then release it.  We then poll `confirmed_written_up_to`
+    // which is updated by `fetch_max` AFTER `append()` returns — guaranteeing
+    // we don't proceed until the full background task (including fetch_max) has
+    // completed.  This avoids the `write_done`-before-`fetch_max` race that made
+    // the previous `yield_now()` approach flaky on multi-core CI runners.
     at_gate.notified().await;
     gate.notify_one();
-    while !write_done.load(Ordering::Acquire) {
+    while ephemeral_oplog.confirmed_written_up_to() < 3 {
         tokio::task::yield_now().await;
     }
-    // `write_done` is set inside `put_raw`, before `target.append()` returns.
-    // The spawned background task calls `fetch_max` *after* `target.append()`
-    // returns.  Yield once more to let the spawned task advance past the
-    // `fetch_max` call before we assert on the eviction result.
-    tokio::task::yield_now().await;
 
     // Step 5: commit e4 + a new e5 — lazy eviction of {1,2,3} happens here
     // (the commit path sees last_written_idx >= 3 and sweeps them out).
