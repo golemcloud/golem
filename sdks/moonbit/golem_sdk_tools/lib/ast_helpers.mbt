@@ -91,7 +91,11 @@ fn make_tuple_type(elements : Array[@syntax.Type]) -> @syntax.Type {
 ///|
 /// Creates a string literal expression.
 fn make_string_expr(s : String) -> @syntax.Expr {
-  @syntax.Expr::Constant(c=@syntax.Constant::String(s), loc=dummy_loc)
+  let collapsed = s
+    .replace(old="\r\n", new=" ")
+    .replace(old="\n", new=" ")
+    .replace(old="\r", new=" ")
+  @syntax.Expr::Constant(c=@syntax.Constant::String(collapsed), loc=dummy_loc)
 }
 
 ///|

@@ -27,8 +27,6 @@ pub fn get_oplog_persistence_level() -> PersistenceLevel
 
 pub fn get_promise(@types.PromiseId) -> GetPromiseResult
 
-pub fn get_retry_policy() -> RetryPolicy
-
 pub fn get_self_metadata() -> AgentMetadata
 
 pub fn mark_begin_operation() -> UInt64
@@ -50,8 +48,6 @@ pub fn set_idempotence_mode(Bool) -> Unit
 pub fn set_oplog_index(UInt64) -> Unit
 
 pub fn set_oplog_persistence_level(PersistenceLevel) -> Unit
-
-pub fn set_retry_policy(RetryPolicy) -> Unit
 
 pub fn update_agent(@types.AgentId, UInt64, UpdateMode) -> Unit
 
@@ -174,21 +170,13 @@ pub(all) enum PersistenceLevel {
   Smart
 } derive(Eq, Show)
 
-pub(all) struct RetryPolicy {
-  max_attempts : UInt
-  min_delay : UInt64
-  max_delay : UInt64
-  multiplier : Double
-  max_jitter_factor : Double?
-} derive(Eq, Show)
-
 pub(all) enum RevertAgentTarget {
   RevertToOplogIndex(UInt64)
   RevertLastInvocations(UInt64)
 } derive(Eq, Show)
 
 pub(all) struct Snapshot {
-  data : FixedArray[Byte]
+  payload : FixedArray[Byte]
   mime_type : String
 } derive(Eq, Show)
 

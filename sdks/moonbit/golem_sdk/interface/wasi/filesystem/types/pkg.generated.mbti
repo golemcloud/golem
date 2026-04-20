@@ -1,0 +1,191 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/wasi/filesystem/types"
+
+import {
+  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
+  "golemcloud/golem_sdk/interface/wasi/io/error",
+  "golemcloud/golem_sdk/interface/wasi/io/streams",
+}
+
+// Values
+pub fn filesystem_error_code(@error.Error_) -> ErrorCode?
+
+// Errors
+pub(all) suberror ErrorCode {
+  ACCESS
+  WOULD_BLOCK
+  ALREADY
+  BAD_DESCRIPTOR
+  BUSY
+  DEADLOCK
+  QUOTA
+  EXIST
+  FILE_TOO_LARGE
+  ILLEGAL_BYTE_SEQUENCE
+  IN_PROGRESS
+  INTERRUPTED
+  INVALID
+  IO
+  IS_DIRECTORY
+  LOOP
+  TOO_MANY_LINKS
+  MESSAGE_SIZE
+  NAME_TOO_LONG
+  NO_DEVICE
+  NO_ENTRY
+  NO_LOCK
+  INSUFFICIENT_MEMORY
+  INSUFFICIENT_SPACE
+  NOT_DIRECTORY
+  NOT_EMPTY
+  NOT_RECOVERABLE
+  UNSUPPORTED
+  NO_TTY
+  NO_SUCH_DEVICE
+  OVERFLOW
+  NOT_PERMITTED
+  PIPE
+  READ_ONLY
+  INVALID_SEEK
+  TEXT_FILE_BUSY
+  CROSS_DEVICE
+} derive(Eq, Show)
+pub fn ErrorCode::from(Int) -> Self
+pub fn ErrorCode::ordinal(Self) -> Int
+
+// Types and methods
+pub(all) enum Advice {
+  NORMAL
+  SEQUENTIAL
+  RANDOM
+  WILL_NEED
+  DONT_NEED
+  NO_REUSE
+} derive(Eq, Show)
+pub fn Advice::from(Int) -> Self
+pub fn Advice::ordinal(Self) -> Int
+
+pub(all) struct Descriptor(Int) derive(Eq, Show)
+pub fn Descriptor::advise(Self, UInt64, UInt64, Advice) -> Result[Unit, ErrorCode]
+pub fn Descriptor::append_via_stream(Self) -> Result[@streams.OutputStream, ErrorCode]
+pub fn Descriptor::create_directory_at(Self, String) -> Result[Unit, ErrorCode]
+pub fn Descriptor::drop(Self) -> Unit
+pub fn Descriptor::get_flags(Self) -> Result[DescriptorFlags, ErrorCode]
+pub fn Descriptor::get_type(Self) -> Result[DescriptorType, ErrorCode]
+#deprecated
+pub fn Descriptor::inner(Self) -> Int
+pub fn Descriptor::is_same_object(Self, Self) -> Bool
+pub fn Descriptor::link_at(Self, PathFlags, String, Self, String) -> Result[Unit, ErrorCode]
+pub fn Descriptor::metadata_hash(Self) -> Result[MetadataHashValue, ErrorCode]
+pub fn Descriptor::metadata_hash_at(Self, PathFlags, String) -> Result[MetadataHashValue, ErrorCode]
+pub fn Descriptor::open_at(Self, PathFlags, String, OpenFlags, DescriptorFlags) -> Result[Self, ErrorCode]
+pub fn Descriptor::read(Self, UInt64, UInt64) -> Result[(FixedArray[Byte], Bool), ErrorCode]
+pub fn Descriptor::read_directory(Self) -> Result[DirectoryEntryStream, ErrorCode]
+pub fn Descriptor::read_via_stream(Self, UInt64) -> Result[@streams.InputStream, ErrorCode]
+pub fn Descriptor::readlink_at(Self, String) -> Result[String, ErrorCode]
+pub fn Descriptor::remove_directory_at(Self, String) -> Result[Unit, ErrorCode]
+pub fn Descriptor::rename_at(Self, String, Self, String) -> Result[Unit, ErrorCode]
+pub fn Descriptor::set_size(Self, UInt64) -> Result[Unit, ErrorCode]
+pub fn Descriptor::set_times(Self, NewTimestamp, NewTimestamp) -> Result[Unit, ErrorCode]
+pub fn Descriptor::set_times_at(Self, PathFlags, String, NewTimestamp, NewTimestamp) -> Result[Unit, ErrorCode]
+pub fn Descriptor::stat(Self) -> Result[DescriptorStat, ErrorCode]
+pub fn Descriptor::stat_at(Self, PathFlags, String) -> Result[DescriptorStat, ErrorCode]
+pub fn Descriptor::symlink_at(Self, String, String) -> Result[Unit, ErrorCode]
+pub fn Descriptor::sync(Self) -> Result[Unit, ErrorCode]
+pub fn Descriptor::sync_data(Self) -> Result[Unit, ErrorCode]
+pub fn Descriptor::unlink_file_at(Self, String) -> Result[Unit, ErrorCode]
+pub fn Descriptor::write(Self, FixedArray[Byte], UInt64) -> Result[UInt64, ErrorCode]
+pub fn Descriptor::write_via_stream(Self, UInt64) -> Result[@streams.OutputStream, ErrorCode]
+
+pub(all) struct DescriptorFlags(Byte) derive(Eq, Show)
+pub fn DescriptorFlags::default() -> Self
+#deprecated
+pub fn DescriptorFlags::inner(Self) -> Byte
+pub fn DescriptorFlags::is_set(Self, DescriptorFlagsFlag) -> Bool
+pub fn DescriptorFlags::set(Self, DescriptorFlagsFlag) -> Self
+pub fn DescriptorFlags::unset(Self, DescriptorFlagsFlag) -> Self
+
+pub(all) enum DescriptorFlagsFlag {
+  READ
+  WRITE
+  FILE_INTEGRITY_SYNC
+  DATA_INTEGRITY_SYNC
+  REQUESTED_WRITE_SYNC
+  MUTATE_DIRECTORY
+}
+
+pub(all) struct DescriptorStat {
+  type_ : DescriptorType
+  link_count : UInt64
+  size : UInt64
+  data_access_timestamp : @wallClock.Datetime?
+  data_modification_timestamp : @wallClock.Datetime?
+  status_change_timestamp : @wallClock.Datetime?
+} derive(Eq, Show)
+
+pub(all) enum DescriptorType {
+  UNKNOWN
+  BLOCK_DEVICE
+  CHARACTER_DEVICE
+  DIRECTORY
+  FIFO
+  SYMBOLIC_LINK
+  REGULAR_FILE
+  SOCKET
+} derive(Eq, Show)
+pub fn DescriptorType::from(Int) -> Self
+pub fn DescriptorType::ordinal(Self) -> Int
+
+pub(all) struct DirectoryEntry {
+  type_ : DescriptorType
+  name : String
+} derive(Eq, Show)
+
+pub(all) struct DirectoryEntryStream(Int) derive(Eq, Show)
+pub fn DirectoryEntryStream::drop(Self) -> Unit
+#deprecated
+pub fn DirectoryEntryStream::inner(Self) -> Int
+pub fn DirectoryEntryStream::read_directory_entry(Self) -> Result[DirectoryEntry?, ErrorCode]
+
+pub(all) struct MetadataHashValue {
+  lower : UInt64
+  upper : UInt64
+} derive(Eq, Show)
+
+pub(all) enum NewTimestamp {
+  NoChange
+  Now
+  Timestamp(@wallClock.Datetime)
+} derive(Eq, Show)
+
+pub(all) struct OpenFlags(Byte) derive(Eq, Show)
+pub fn OpenFlags::default() -> Self
+#deprecated
+pub fn OpenFlags::inner(Self) -> Byte
+pub fn OpenFlags::is_set(Self, OpenFlagsFlag) -> Bool
+pub fn OpenFlags::set(Self, OpenFlagsFlag) -> Self
+pub fn OpenFlags::unset(Self, OpenFlagsFlag) -> Self
+
+pub(all) enum OpenFlagsFlag {
+  CREATE
+  DIRECTORY
+  EXCLUSIVE
+  TRUNCATE
+}
+
+pub(all) struct PathFlags(Byte) derive(Eq, Show)
+pub fn PathFlags::default() -> Self
+#deprecated
+pub fn PathFlags::inner(Self) -> Byte
+pub fn PathFlags::is_set(Self, PathFlagsFlag) -> Bool
+pub fn PathFlags::set(Self, PathFlagsFlag) -> Self
+pub fn PathFlags::unset(Self, PathFlagsFlag) -> Self
+
+pub(all) enum PathFlagsFlag {
+  SYMLINK_FOLLOW
+}
+
+// Type aliases
+
+// Traits
+
