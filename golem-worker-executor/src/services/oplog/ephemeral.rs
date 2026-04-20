@@ -34,6 +34,7 @@ pub struct EphemeralOplog {
     target: Arc<dyn OplogArchive + Send + Sync>,
     state: Arc<Mutex<EphemeralOplogState>>,
     /// Shared with the state so tests can read it without acquiring the lock.
+    #[cfg(test)]
     last_written_idx: Arc<AtomicU64>,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
@@ -76,15 +77,13 @@ impl EphemeralOplogState {
 
     /// Flush the in-memory buffer: assigns oplog indices, caches entries in
     /// `pending_background` for immediate reads, and spawns a background task
-    /// to write them to the blob archive.  Returns immediately — no S3 wait.
+    /// to write them to the blob archive.  Returns immediately — no oplog wait.
     ///
     /// Also lazily evicts entries from `pending_background` whose background
     /// write has already completed (signalled via `last_written_idx`).  This
     /// piggybacks on the existing lock acquisition so no extra locking is needed.
     fn commit(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
         // Lazily evict entries confirmed written by previous background tasks.
-        // `last_written_idx` is written by background tasks with Release ordering
-        // and read here (already inside the state lock) with Acquire ordering.
         let confirmed_up_to = OplogIndex::from_u64(self.last_written_idx.load(Ordering::Acquire));
         if confirmed_up_to > OplogIndex::NONE {
             self.pending_background
@@ -105,15 +104,19 @@ impl EphemeralOplogState {
 
         if !pairs.is_empty() {
             let target = self.target.clone();
-            // The highest index in this batch — after the write completes the
-            // background task records this so the next commit can evict.
+            let first_idx: u64 = pairs.first().unwrap().0.into();
             let max_idx: u64 = pairs.last().unwrap().0.into();
+            let count = pairs.len();
             let last_written_idx = self.last_written_idx.clone();
             tokio::spawn(async move {
                 target.append(pairs).await;
-                // Update with the max index this batch wrote.  Use fetch_max so
-                // concurrent or out-of-order batches never regress the value.
                 last_written_idx.fetch_max(max_idx, Ordering::Release);
+                tracing::debug!(
+                    first_idx,
+                    last_idx = max_idx,
+                    count,
+                    "Ephemeral oplog background write completed"
+                );
             });
         }
 
@@ -136,6 +139,7 @@ impl EphemeralOplog {
             owned_agent_id,
             primary,
             target: target.clone(),
+            #[cfg(test)]
             last_written_idx: last_written_idx.clone(),
             state: Arc::new(Mutex::new(EphemeralOplogState {
                 buffer: VecDeque::new(),
@@ -155,7 +159,7 @@ impl EphemeralOplog {
 #[cfg(test)]
 impl EphemeralOplog {
     /// Returns the oplog indices currently held in the pending-background cache.
-    /// Used in tests to assert exactly which entries are still awaiting S3
+    /// Used in tests to assert exactly which entries are still awaiting oplog
     /// confirmation and which have been evicted after a successful write.
     pub async fn pending_background_keys(&self) -> Vec<OplogIndex> {
         self.state
@@ -237,7 +241,7 @@ impl Oplog for EphemeralOplog {
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         record_oplog_call("read");
-        // Check in-memory caches first to avoid blocking on a background S3 write.
+        // Check in-memory caches first to avoid blocking on a background oplog write.
         {
             let state = self.state.lock().await;
             if let Some(entry) = state.pending_background.get(&oplog_index) {
@@ -253,7 +257,7 @@ impl Oplog for EphemeralOplog {
                 }
             }
         }
-        // Fall back to S3 for older entries already persisted and evicted from the
+        // Fall back to oplog for older entries already persisted and evicted from the
         // in-memory window.
         let entries = self.target.read(oplog_index, 1).await;
         if let Some(entry) = entries.get(&oplog_index) {
@@ -272,7 +276,7 @@ impl Oplog for EphemeralOplog {
 
         let last_idx = oplog_index.range_end(n);
 
-        // Collect from pending_background (committed but S3 write still in-flight).
+        // Collect from pending_background (committed but oplog write still in-flight).
         let mut result: BTreeMap<OplogIndex, OplogEntry> = state
             .pending_background
             .range(oplog_index..=last_idx)
@@ -292,7 +296,7 @@ impl Oplog for EphemeralOplog {
             }
         }
 
-        // For indices that predate the in-memory window, fall back to S3.
+        // For indices that predate the in-memory window, fall back to oplog.
         let first_in_memory: u64 = state
             .pending_background
             .keys()

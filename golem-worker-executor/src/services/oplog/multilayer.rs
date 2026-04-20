@@ -54,9 +54,9 @@ pub trait OplogArchiveService: Debug + Send + Sync {
     /// Opens an oplog archive for an ephemeral worker.
     ///
     /// Unlike `open`, this must **not** issue any remote storage reads
-    /// (e.g. S3 `exists` / `list_dir`) during construction.  Ephemeral-agent
-    /// oplogs are purely for observability and are never read back by the
-    /// executor, so pre-loading the entry index is unnecessary.
+    /// during construction.  Ephemeral-agent oplogs are purely for
+    /// observability and are never read back by the executor, so
+    /// pre-loading the entry index is unnecessary.
     ///
     /// The default implementation delegates to `open` for archive services
     /// that do not distinguish between the two cases.
@@ -323,7 +323,7 @@ impl OplogConstructor for CreateOplogConstructor {
 
         // Ephemeral-agent oplogs are write-only for observability and are never
         // read back by the executor.  Always start fresh at NONE (empty oplog) —
-        // no need to discover the previous last index from S3 (which would block).
+        // no need to query the archive for the previous last index.
         let last_oplog_index = if agent_mode == AgentMode::Ephemeral {
             OplogIndex::NONE
         } else {
@@ -380,28 +380,41 @@ impl OplogConstructor for CreateOplogConstructor {
                     .await;
 
                 let target_layer = self.service.lower.last();
-                // Use open_ephemeral: skips S3 exists/list_dir since ephemeral
+                // Use open_ephemeral: skips discovery reads since ephemeral
                 // oplogs are write-only for observability and never read back.
                 let target = target_layer.open_ephemeral(&self.owned_agent_id).await;
 
-                // If a brand-new worker has an initial entry (create path), write it
-                // to the archive as a fire-and-forget background task.
-                // EphemeralOplog::new is seeded with last_oplog_idx = INITIAL and
-                // the entry in pending_background so reads are served from memory.
-                // For the open path (no initial_entry) last_oplog_idx stays NONE
-                // and entries start at INITIAL(1) as normal.
+                // Discover the archive high-water mark synchronously.  This runs
+                // once per worker creation — not per invocation — so the small
+                // overhead is acceptable.  Fresh agents return NONE immediately.
+                // This ensures new entries continue from the correct index after
+                // executor failover, preserving a non-overlapping oplog.
+                let archive_base: u64 = target_layer
+                    .get_last_index(&self.owned_agent_id)
+                    .await
+                    .into();
+
                 let (ephemeral_start_idx, initial_pending) =
                     if let Some(initial_entry) = self.initial_entry {
-                        let pairs = vec![(OplogIndex::INITIAL, initial_entry.clone())];
+                        let start = OplogIndex::from_u64(archive_base + 1);
+                        let pairs = vec![(start, initial_entry.clone())];
                         let bg_target = target.clone();
+                        let start_idx: u64 = start.into();
                         tokio::spawn(async move {
                             bg_target.append(pairs).await;
+                            tracing::debug!(
+                                idx = start_idx,
+                                "Ephemeral oplog initial entry background write completed"
+                            );
                         });
                         let mut map = std::collections::BTreeMap::new();
-                        map.insert(OplogIndex::INITIAL, initial_entry);
-                        (OplogIndex::INITIAL, map)
+                        map.insert(start, initial_entry);
+                        (start, map)
                     } else {
-                        (OplogIndex::NONE, std::collections::BTreeMap::new())
+                        (
+                            OplogIndex::from_u64(archive_base),
+                            std::collections::BTreeMap::new(),
+                        )
                     };
 
                 Arc::new(

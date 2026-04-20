@@ -2839,88 +2839,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 .switch_to_live()
                 .await;
 
-            // Every time an ephemeral WASM instance is (re)loaded, `initialize`
-            // must be called live to reconstruct the in-memory agent state (e.g.
-            // `resolved_agent` in the SDK) before the first method invocation.
-            // We call it directly here — enqueueing it would place it behind
-            // the already-pending method invocation in the queue.
-            let agent_id = store.as_context().data().parsed_agent_id();
-            if let Some(agent_id) = agent_id {
-                let idempotency_key = IdempotencyKey::fresh();
-                let invocation = AgentInvocation::AgentInitialization {
-                    idempotency_key: idempotency_key.clone(),
-                    input: agent_id.parameters.clone().into(),
-                    invocation_context: InvocationContextStack::fresh(),
-                    principal: Principal::anonymous(),
-                };
-                let component_metadata = store
-                    .as_context()
-                    .data()
-                    .component_metadata()
-                    .metadata
-                    .clone();
-                let full_function_name = match lower_invocation(
-                    invocation.clone(),
-                    &component_metadata,
-                    Some(&agent_id),
-                ) {
-                    Ok(lowered) => {
-                        let full_function_name = lowered.wit_fqfn.clone();
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .set_current_idempotency_key(idempotency_key)
-                            .await;
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .set_current_invocation_context(InvocationContextStack::fresh())
-                            .await?;
-                        let invoke_result = invoke_observed_and_traced(
-                            lowered,
-                            store,
-                            instance,
-                            &component_metadata,
-                            InvocationMode::Live(invocation.clone()),
-                        )
-                        .await;
-                        match invoke_result {
-                            Ok(InvokeResult::Succeeded {
-                                result: invocation_result,
-                                consumed_fuel,
-                            }) => {
-                                let component_revision =
-                                    store.as_context().data().component_metadata().revision;
-                                let output = AgentInvocationOutput {
-                                    result: invocation_result,
-                                    consumed_fuel: Some(consumed_fuel),
-                                    invocation_status: None,
-                                    component_revision: Some(component_revision),
-                                };
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .on_agent_invocation_success(
-                                        &full_function_name,
-                                        consumed_fuel,
-                                        &output,
-                                    )
-                                    .await
-                                    .ok();
-                            }
-                            _ => {
-                                warn!("Ephemeral agent initialize failed during prepare_instance");
-                            }
-                        }
-                        full_function_name
-                    }
-                    Err(err) => {
-                        warn!("Failed to lower ephemeral initialize invocation: {err}");
-                        String::new()
-                    }
-                };
-                let _ = full_function_name;
-            }
+            // initialize is called by the invocation loop (via
+            // initialize_ephemeral_agent) before any queued invocations.
+            // No action needed in prepare_instance.
 
             record_resume_worker(start.elapsed());
             Ok(None)

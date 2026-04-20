@@ -29,7 +29,7 @@ use async_lock::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
@@ -118,14 +118,30 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     resume_replay_pending: self.resume_replay_pending.clone(),
                 };
 
-                final_decision = inner_loop.run().await;
+                // Ephemeral agents: call initialize on the fresh WASM instance
+                // before processing any queued invocations.
+                if self.parent.agent_mode() == AgentMode::Ephemeral {
+                    debug!("Ephemeral: calling initialize_ephemeral_agent");
+                    let init_outcome = inner_loop.initialize_ephemeral_agent().await;
+                    debug!(
+                        "Ephemeral: initialize_ephemeral_agent returned {:?}",
+                        matches!(init_outcome, CommandOutcome::Continue)
+                    );
+                    if !matches!(init_outcome, CommandOutcome::Continue) {
+                        final_decision = Some(RetryDecision::None);
+                    }
+                }
+
+                if final_decision.is_none() {
+                    final_decision = inner_loop.run().await;
+                }
             }
 
             self.suspend_worker(&store).await;
 
             match final_decision {
-                None | Some(RetryDecision::None) => {
-                    debug!("Invocation queue loop notifying parent about being stopped");
+                None => {
+                    // Channel closed or no work — stop and exit.
                     self.parent
                         .stop_internal(
                             true,
@@ -135,6 +151,31 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                             },
                         )
                         .await;
+                    break;
+                }
+                Some(RetryDecision::None) => {
+                    self.parent
+                        .stop_internal(
+                            true,
+                            None,
+                            FinalWorkerState::Unloaded {
+                                startup_failure: None,
+                            },
+                        )
+                        .await;
+
+                    // For ephemeral agents: after each invocation the WASM is
+                    // torn down.  Instead of breaking out of the outer loop
+                    // (which would leave pending invocations stranded), we
+                    // continue — the outer loop creates a new WASM instance,
+                    // calls initialize_ephemeral_agent, and the inner loop
+                    // processes the next pending invocation.  When no invocations
+                    // remain the inner loop idles waiting for new work.
+                    if self.parent.agent_mode() == AgentMode::Ephemeral {
+                        debug!("Ephemeral: continuing outer loop for next invocation");
+                        continue;
+                    }
+
                     break;
                 }
                 Some(RetryDecision::TryStop(ts)) => {
@@ -154,6 +195,33 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 },
                             )
                             .await;
+                        // For ephemeral agents: after each invocation the WASM is torn
+                        // down (RetryDecision::None). If other callers enqueued
+                        // invocations while this one was running, they are now in
+                        // pending_invocations with no loop to process them.
+                        if self.parent.agent_mode() == AgentMode::Ephemeral {
+                            let pending = self
+                                .parent
+                                .last_known_status
+                                .read()
+                                .await
+                                .pending_invocations
+                                .len();
+                            debug!("Ephemeral: after stop_internal, pending_invocations={pending}");
+                            if pending > 0 {
+                                debug!("Ephemeral: spawning start_if_needed for {pending} pending");
+                                let parent = self.parent.clone();
+                                tokio::spawn(async move {
+                                    debug!("Ephemeral: start_if_needed task running");
+                                    let result = Worker::start_if_needed(parent).await;
+                                    debug!(
+                                        "Ephemeral: start_if_needed returned {:?}",
+                                        result.is_ok()
+                                    );
+                                });
+                            }
+                        }
+
                         break;
                     }
                 }
@@ -302,6 +370,81 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
+    /// Calls `initialize` on a fresh ephemeral WASM instance before any queued
+    /// invocations are processed.
+    ///
+    /// Uses `InvocationMode::EphemeralInit` which skips oplog writes — the
+    /// WASM function runs to set up in-memory state (e.g. `resolved_agent`)
+    /// without any lock contention with concurrent `enqueue_worker_invocation`.
+    async fn initialize_ephemeral_agent(&mut self) -> CommandOutcome {
+        let (agent_id, component_metadata) = {
+            let store = self.store.lock().await;
+            (
+                store.data().parsed_agent_id(),
+                store.data().component_metadata().metadata.clone(),
+            )
+        };
+        if let Some(agent_id) = agent_id {
+            debug!(
+                "Ephemeral init: lowering invocation for {}",
+                agent_id.agent_type
+            );
+            let invocation = AgentInvocation::AgentInitialization {
+                idempotency_key: IdempotencyKey::fresh(),
+                input: agent_id.parameters.clone().into(),
+                invocation_context: InvocationContextStack::fresh(),
+                principal: Principal::anonymous(),
+            };
+            match lower_invocation(invocation.clone(), &component_metadata, Some(&agent_id)) {
+                Ok(lowered) => {
+                    let mut store = self.store.lock().await;
+                    store
+                        .data_mut()
+                        .set_current_idempotency_key(invocation.idempotency_key().cloned().unwrap())
+                        .await;
+                    if let Err(e) = store
+                        .data_mut()
+                        .set_current_invocation_context(InvocationContextStack::fresh())
+                        .await
+                    {
+                        warn!("Ephemeral init: failed to set invocation context: {e}");
+                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+                    }
+                    debug!("Ephemeral init: calling WASM initialize");
+                    let result = invoke_observed_and_traced(
+                        lowered,
+                        &mut *store,
+                        self.instance,
+                        &component_metadata,
+                        InvocationMode::EphemeralInit,
+                    )
+                    .await;
+                    match &result {
+                        Ok(InvokeResult::Succeeded { .. }) => {
+                            debug!("Ephemeral init: WASM initialize succeeded");
+                        }
+                        Ok(other) => {
+                            warn!("Ephemeral init: unexpected result: {other:?}");
+                        }
+                        Err(e) => {
+                            warn!("Ephemeral init: WASM initialize failed: {e}");
+                        }
+                    }
+                    match result {
+                        Ok(InvokeResult::Succeeded { .. }) => CommandOutcome::Continue,
+                        _ => CommandOutcome::BreakInnerLoop(RetryDecision::None),
+                    }
+                }
+                Err(e) => {
+                    warn!("Ephemeral init: lower_invocation failed: {e}");
+                    CommandOutcome::BreakInnerLoop(RetryDecision::None)
+                }
+            }
+        } else {
+            CommandOutcome::Continue
+        }
+    }
+
     /// The inner invocation loop started when the worker instance state is fully restored
     /// and the worker is ready to take invocations.
     ///
@@ -866,6 +1009,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             invocation_status: None,
             component_revision: Some(component_revision),
         };
+
         match self
             .store
             .data_mut()
@@ -879,6 +1023,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     {
                         CommandOutcome::Continue
                     } else {
+                        debug!("Ephemeral invocation completed, tearing down WASM instance");
                         CommandOutcome::BreakInnerLoop(RetryDecision::None)
                     }
                 } else {

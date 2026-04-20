@@ -37,6 +37,9 @@ pub enum InvocationMode {
     Live(AgentInvocation),
     /// The invocation is being replayed from the oplog; no markers need to be written.
     Replay,
+    /// Ephemeral agent init: call the WASM function but skip all oplog writes.
+    /// Used to set up in-memory agent state without any lock contention.
+    EphemeralInit,
 }
 use golem_wasm::validate_value_matches_type;
 use golem_wasm::wasmtime::{DecodeParamResult, decode_param, encode_output};

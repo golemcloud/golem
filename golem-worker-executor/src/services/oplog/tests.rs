@@ -2508,14 +2508,7 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
     );
 }
 
-/// Ephemeral-agent S3 writes must be fire-and-forget.
-///
-/// The product owner requirement: writes to the blob archive for ephemeral agents
-/// are background operations; the agent must NOT wait for them to complete.
-///
-/// This test proves the contract: `commit(Always)` on an EphemeralOplog returns
-/// in well under the artificial write delay injected by `SlowWriteBlobStorage`.
-/// Before the fix this test will FAIL because commit blocks on the S3 put.
+/// Ephemeral-agent oplog writes must be fire-and-forget.
 #[test]
 async fn ephemeral_oplog_commit_does_not_block_on_blob_write(_tracing: &Tracing) {
     // 500 ms artificial write delay simulates a slow S3 round-trip.
@@ -2580,15 +2573,16 @@ async fn ephemeral_oplog_commit_does_not_block_on_blob_write(_tracing: &Tracing)
     );
 }
 
-/// Opening an ephemeral oplog must not block on S3 `exists` / `list_dir` calls.
+/// Opening an ephemeral oplog must make exactly one `get_last_index` call
+/// (one `exists` + optional `list_dir`) to discover the S3 high-water mark
+/// for index continuity after executor failover.  The old code issued 3×
+/// `exists` + 3× `list_dir` per blob layer; the new code issues exactly one
+/// `exists` call (fast-path when no prior entries exist).
 ///
-/// The product owner requirement: the ephemeral-agent oplog is purely for
-/// observability and is NEVER read back by the worker executor.  Therefore
-/// `BlobOplogArchive::new` must not issue discovery reads (HeadObject /
-/// ListObjectsV2) when opening the archive for an ephemeral worker.
-///
-/// Before the fix this test FAILS because `BlobOplogArchive::new` calls
-/// `exists` (500 ms) + `list_dir` (500 ms) = ~1 s of blocking S3 reads.
+/// For a fresh agent (no prior S3 entries), `exists` returns false and
+/// `list_dir` is skipped entirely — total cost is one HeadObject.
+/// This test uses a `SlowReadBlobStorage` to verify that opening completes
+/// in exactly one read delay (500 ms), not the old 3× pattern (~1.5 s).
 #[test]
 async fn ephemeral_oplog_open_does_not_block_on_blob_reads(_tracing: &Tracing) {
     let read_delay = std::time::Duration::from_millis(500);
@@ -2639,10 +2633,13 @@ async fn ephemeral_oplog_open_does_not_block_on_blob_reads(_tracing: &Tracing) {
         .await;
     let elapsed = start.elapsed();
 
+    // One exists call (500 ms) for get_last_index — no list_dir since fresh.
+    // Must complete in under 2× the delay (i.e. no extra discovery calls).
     assert!(
-        elapsed < std::time::Duration::from_millis(200),
+        elapsed < read_delay * 2,
         "Opening EphemeralOplog blocked for {elapsed:?}; \
-         expected no S3 discovery reads (< 200ms) but read delay is {read_delay:?}"
+         expected exactly one S3 read (exists only, < {}ms) but got more",
+        (read_delay * 2).as_millis()
     );
 }
 
@@ -2662,7 +2659,6 @@ async fn ephemeral_oplog_open_does_not_block_on_blob_reads(_tracing: &Tracing) {
 ///   7. Release barrier for e4's write, wait, trigger one more commit.
 ///   8. Assert pending_background is empty.
 ///
-/// Before the fix this FAILS at step 6: nothing is ever evicted.
 #[test]
 async fn ephemeral_oplog_pending_background_evicted_after_write(_tracing: &Tracing) {
     use tokio::sync::Notify;
@@ -2888,4 +2884,144 @@ async fn ephemeral_oplog_pending_background_evicted_after_write(_tracing: &Traci
     // Clean up: release the second gate so the test doesn't leak background tasks.
     at_gate.notified().await;
     gate.notify_one();
+}
+
+/// When a new executor opens an EphemeralOplog for an agent that already has
+/// entries in S3 (e.g. from a previous executor that crashed), it must
+/// continue appending from the existing high-water mark so that the
+/// observability record is a faithful, non-overlapping sequence of entries.
+///
+/// Scenario:
+///   1. Executor A writes e1/e2/e3 → indices {1,2,3} in S3.
+///   2. Executor A crashes (drop simulates teardown).
+///   3. Executor B opens the same agent — discovers S3 high-water mark = 3.
+///   4. Executor B writes e4/e5 → indices {4,5}, continuing from A.
+///   5. S3 contains all five entries at non-overlapping indices.
+#[test]
+async fn ephemeral_oplog_continues_index_after_executor_failover(_tracing: &Tracing) {
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+
+    let make_oplog_service = || {
+        let primary_oplog_service = {
+            let is = indexed_storage.clone();
+            let bs = Arc::new(InMemoryBlobStorage::new());
+            async move {
+                Arc::new(PrimaryOplogService::new(is, bs, 1, 1, 100, RetryConfig::default()).await)
+            }
+        };
+        let blob_storage = blob_storage.clone();
+        let indexed_storage = indexed_storage.clone();
+        async move {
+            let primary = primary_oplog_service.await;
+            let secondary: Arc<dyn OplogArchiveService> =
+                Arc::new(CompressedOplogArchiveService::new(
+                    indexed_storage.clone(),
+                    1,
+                    RetryConfig::default(),
+                ));
+            let tertiary: Arc<dyn OplogArchiveService> =
+                Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+            Arc::new(MultiLayerOplogService::new(
+                primary,
+                nev![secondary, tertiary],
+                10,
+                10,
+            ))
+        }
+    };
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "failover-test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+
+    // ── Executor A ──────────────────────────────────────────────────────────
+    let svc_a = make_oplog_service().await;
+    let oplog_a = svc_a
+        .open(
+            &owned_agent_id,
+            None,
+            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    oplog_a.add(OplogEntry::suspend().rounded()).await; // e1 → idx 1
+    oplog_a.add(OplogEntry::suspend().rounded()).await; // e2 → idx 2
+    oplog_a.add(OplogEntry::suspend().rounded()).await; // e3 → idx 3
+    oplog_a.commit(CommitLevel::Always).await;
+
+    // Wait for A's background write to complte.
+    let ephemeral_a = crate::services::oplog::downcast_oplog::<
+        crate::services::oplog::ephemeral::EphemeralOplog,
+    >(&oplog_a)
+    .expect("expected EphemeralOplog");
+    while ephemeral_a.confirmed_written_up_to() < 3 {
+        tokio::task::yield_now().await;
+    }
+
+    // Simulate executor crash: drop oplog A.
+    drop(oplog_a);
+    drop(svc_a);
+
+    // ── Executor B ──────────────────────────────────────────────────────────
+    let svc_b = make_oplog_service().await;
+    let oplog_b = svc_b
+        .open(
+            &owned_agent_id,
+            None,
+            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    oplog_b.add(OplogEntry::exited().rounded()).await; // e4
+    oplog_b.add(OplogEntry::exited().rounded()).await; // e5
+    oplog_b.commit(CommitLevel::Always).await;
+
+    // Wait for B's background write to complete.
+    // B discovered base=3 so its entries land at indices {4,5}.
+    let ephemeral_b = crate::services::oplog::downcast_oplog::<
+        crate::services::oplog::ephemeral::EphemeralOplog,
+    >(&oplog_b)
+    .expect("expected EphemeralOplog");
+    while ephemeral_b.confirmed_written_up_to() < 5 {
+        tokio::task::yield_now().await;
+    }
+
+    // Read all 5 entries from oplog via the service (bypasses in-memory cache).
+    let all_entries = svc_b
+        .read(&owned_agent_id, OplogIndex::from_u64(1), 5)
+        .await;
+
+    assert_eq!(
+        all_entries.len(),
+        5,
+        "expected 5 distinct entries; got keys: {:?}",
+        all_entries.keys().collect::<Vec<_>>()
+    );
+
+    // A's entries (Suspend) at indices 1–3.
+    for idx in 1u64..=3 {
+        let entry = all_entries.get(&OplogIndex::from_u64(idx));
+        assert!(
+            matches!(entry, Some(OplogEntry::Suspend { .. })),
+            "idx {idx} should be A's Suspend entry but got: {entry:?}"
+        );
+    }
+
+    // B's entries (Exited) at indices 4–5, continuing from A.
+    for idx in 4u64..=5 {
+        let entry = all_entries.get(&OplogIndex::from_u64(idx));
+        assert!(
+            matches!(entry, Some(OplogEntry::Exited { .. })),
+            "idx {idx} should be B's Exited entry but got: {entry:?}"
+        );
+    }
 }

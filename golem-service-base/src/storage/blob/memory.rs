@@ -308,10 +308,16 @@ impl BlobStorage for InMemoryBlobStorage {
             file: None,
         };
 
-        let entry = Entry::Directory {
-            files: HashSet::new(),
-        };
-        self.data.upsert_async(key, entry).await;
+        // Only create the directory entry if it does not already exist.
+        // Using or_insert_with preserves any files already registered in the
+        // directory (matches the S3 behaviour where creating a prefix is
+        // idempotent and never deletes existing objects).
+        self.data
+            .entry_async(key)
+            .await
+            .or_insert_with(|| Entry::Directory {
+                files: HashSet::new(),
+            });
 
         let parent = blob_parent_to_string(path)?;
         let name = blob_file_name_to_string(path)?;
