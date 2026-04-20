@@ -85,6 +85,41 @@ pub trait HttpAgent {
 
     #[endpoint(get = "/resp/binary")]
     fn binary_response(&self) -> UnstructuredBinary<String>;
+
+    // PATCH method endpoints
+    #[endpoint(patch = "/resource/{id}")]
+    fn patch_resource(&self, id: String, update: ResourceUpdate) -> ResourceResponse;
+
+    #[endpoint(patch = "/resource/{id}/partial")]
+    fn patch_partial(&self, id: String) -> ResourceResponse;
+
+    // HEAD method endpoints
+    #[endpoint(head = "/resource/{id}")]
+    fn head_resource(&self, id: String) -> ResourceMetadata;
+
+    #[endpoint(head = "/resource/{id}/exists")]
+    fn head_exists(&self, id: String);
+
+    // OPTIONS method endpoints
+    #[endpoint(options = "/resource/{id}")]
+    fn options_resource(&self, id: String) -> OptionsResponse;
+
+    #[endpoint(options = "/api")]
+    fn options_api(&self) -> ApiOptionsResponse;
+
+    // CONNECT method endpoints
+    #[endpoint(connect = "/tunnel/{host}/{port}")]
+    fn connect_tunnel(&self, host: String, port: u16) -> TunnelResponse;
+
+    #[endpoint(connect = "/proxy/{target}")]
+    fn connect_proxy(&self, target: String) -> ProxyResponse;
+
+    // TRACE method endpoints
+    #[endpoint(trace = "/trace/{path}")]
+    fn trace_path(&self, path: String) -> TraceResponse;
+
+    #[endpoint(trace = "/trace")]
+    fn trace_root(&self) -> TraceResponse;
 }
 
 #[derive(AllowedMimeTypes, Clone, Debug)]
@@ -226,6 +261,121 @@ impl HttpAgent for HttpAgentImpl {
         UnstructuredBinary::Inline {
             data: vec![1, 2, 3, 4],
             mime_type: "application/octet-stream".to_string(),
+        }
+    }
+
+    // PATCH method implementations
+    fn patch_resource(&self, id: String, _update: ResourceUpdate) -> ResourceResponse {
+        ResourceResponse {
+            id: id.clone(),
+            updated: true,
+            method: "PATCH".to_string(),
+        }
+    }
+
+    fn patch_partial(&self, id: String) -> ResourceResponse {
+        ResourceResponse {
+            id: id.clone(),
+            updated: true,
+            method: "PATCH".to_string(),
+        }
+    }
+
+    // HEAD method implementations
+    fn head_resource(&self, id: String) -> ResourceMetadata {
+        ResourceMetadata {
+            id: id.clone(),
+            exists: true,
+            content_length: Some(1024),
+        }
+    }
+
+    fn head_exists(&self, _id: String) {
+        // HEAD method with no response body (204)
+    }
+
+    // OPTIONS method implementations
+    fn options_resource(&self, _id: String) -> OptionsResponse {
+        OptionsResponse {
+            allowed_methods: vec![
+                "GET".to_string(),
+                "POST".to_string(),
+                "PATCH".to_string(),
+                "HEAD".to_string(),
+                "OPTIONS".to_string(),
+                "DELETE".to_string(),
+            ],
+            allowed_headers: vec![
+                "Content-Type".to_string(),
+                "Authorization".to_string(),
+                "X-Request-ID".to_string(),
+            ],
+            max_age: 86400,
+        }
+    }
+
+    fn options_api(&self) -> ApiOptionsResponse {
+        ApiOptionsResponse {
+            version: "1.0.0".to_string(),
+            endpoints: vec![
+                "/resource/{id}".to_string(),
+                "/api".to_string(),
+                "/tunnel/{host}/{port}".to_string(),
+                "/proxy/{target}".to_string(),
+                "/trace/{path}".to_string(),
+            ],
+        }
+    }
+
+    // CONNECT method implementations
+    fn connect_tunnel(&self, host: String, port: u16) -> TunnelResponse {
+        TunnelResponse {
+            host: host.clone(),
+            port,
+            connected: true,
+        }
+    }
+
+    fn connect_proxy(&self, target: String) -> ProxyResponse {
+        ProxyResponse {
+            target: target.clone(),
+            proxy_active: true,
+        }
+    }
+
+    // TRACE method implementations
+    fn trace_path(&self, path: String) -> TraceResponse {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        TraceResponse {
+            path: path.clone(),
+            received_headers: vec![
+                "X-Trace-Request".to_string(),
+                "X-Debug-Info".to_string(),
+                "User-Agent: TestClient".to_string(),
+            ],
+            timestamp,
+        }
+    }
+
+    fn trace_root(&self) -> TraceResponse {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        TraceResponse {
+            path: "/".to_string(),
+            received_headers: vec![
+                "X-Root-Trace".to_string(),
+                "X-System-Check".to_string(),
+            ],
+            timestamp,
         }
     }
 }
