@@ -114,6 +114,12 @@ const CheckFileSchema = z.object({
   path: z.string(),
 });
 
+const McpCallSchema = z.object({
+  url: z.string(),
+  method: z.string(),
+  params: z.record(z.unknown()).optional(),
+});
+
 const InvokeSchema = z.object({
   agent: z.string(),
   method: langConditional(z.string()),
@@ -162,6 +168,7 @@ const ACTION_FIELDS = [
   "get_agent_type",
   "list_agent_types",
   "check_file",
+  "mcp_call",
 ] as const;
 
 // Language-conditional: accepts either T or { ts: T, rust: T, scala: T, ... }
@@ -203,6 +210,7 @@ const StepSpecSchema = z
     get_agent_type: GetAgentTypeSchema.optional(),
     list_agent_types: ListAgentTypesSchema.optional(),
     check_file: CheckFileSchema.optional(),
+    mcp_call: McpCallSchema.optional(),
     retry: RetrySchema.optional(),
     only_if: StepConditionSchema.optional(),
     skip_if: StepConditionSchema.optional(),
@@ -325,6 +333,8 @@ type ListAgentTypesStep = StepCommon & {
 };
 type CheckFileSpec = { path: string };
 type CheckFileStep = StepCommon & { tag: "check_file"; check_file: CheckFileSpec };
+type McpCallSpec = { url: string; method: string; params?: Record<string, unknown> };
+type McpCallStep = StepCommon & { tag: "mcp_call"; mcp_call: McpCallSpec };
 
 export type StepSpec =
   | PromptStep
@@ -339,7 +349,8 @@ export type StepSpec =
   | HttpStep
   | GetAgentTypeStep
   | ListAgentTypesStep
-  | CheckFileStep;
+  | CheckFileStep
+  | McpCallStep;
 
 export interface ScenarioSpec {
   name: string;
@@ -404,6 +415,8 @@ export function parseStep(raw: RawStepSpec): StepSpec {
       return { ...common, tag, list_agent_types: raw.list_agent_types ?? {} };
     case "check_file":
       return { ...common, tag, check_file: raw.check_file! };
+    case "mcp_call":
+      return { ...common, tag, mcp_call: raw.mcp_call! };
   }
 }
 
@@ -669,6 +682,14 @@ export class ScenarioExecutor {
           check_file: {
             ...step.check_file,
             path: substituteVariables(step.check_file.path, variables),
+          },
+        };
+      case "mcp_call":
+        return {
+          ...step,
+          mcp_call: {
+            ...step.mcp_call,
+            url: substituteVariables(step.mcp_call.url, variables),
           },
         };
     }
@@ -1172,6 +1193,9 @@ export class ScenarioExecutor {
         break;
       case "check_file":
         await this.executeCheckFile(stepLabel, step.check_file, step.expect, fail);
+        break;
+      case "mcp_call":
+        await this.executeMcpCall(stepLabel, step.mcp_call, step.expect, stepTimeoutSeconds, fail);
         break;
     }
 
@@ -1703,6 +1727,107 @@ export class ScenarioExecutor {
       } else {
         log.httpFailure(stepLabel, err instanceof Error ? err.message : String(err));
         fail(`HTTP_FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      this.options.abortSignal?.removeEventListener("abort", onParentAbort);
+    }
+  }
+
+  private async executeMcpCall(
+    stepLabel: string,
+    spec: McpCallSpec,
+    expect: StepCommon["expect"],
+    timeoutSeconds: number,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    log.stepAction(stepLabel, `MCP ${spec.method} → ${spec.url}`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
+    const onParentAbort = () => controller.abort();
+    this.options.abortSignal?.addEventListener("abort", onParentAbort);
+    try {
+      // Step 1: Initialize MCP session
+      const initBody = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "golem-skill-harness", version: "1.0.0" },
+        },
+      });
+      const initResponse = await fetch(spec.url, {
+        method: "POST",
+        body: initBody,
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        signal: controller.signal,
+      });
+      if (!initResponse.ok) {
+        const initErrBody = await initResponse.text();
+        log.mcpFailure(stepLabel, `initialize failed: ${initResponse.status} ${initErrBody}`);
+        fail(
+          `MCP_CALL_FAILED: initialize returned ${initResponse.status}: ${initErrBody.slice(0, 500)}`,
+        );
+        return;
+      }
+      const sessionId = initResponse.headers.get("mcp-session-id");
+      if (!sessionId) {
+        log.mcpFailure(stepLabel, "no Mcp-Session-Id header in initialize response");
+        fail("MCP_CALL_FAILED: no Mcp-Session-Id header received from initialize");
+        return;
+      }
+
+      // Step 2: Send the actual MCP method call
+      const callBody = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: spec.method,
+        params: spec.params ?? {},
+      });
+      const callHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "Mcp-Session-Id": sessionId,
+      };
+      const callResponse = await fetch(spec.url, {
+        method: "POST",
+        body: callBody,
+        headers: callHeaders,
+        signal: controller.signal,
+      });
+      const body = await callResponse.text();
+      log.mcpResponse(stepLabel, spec.method, callResponse.status, body);
+
+      if (expect) {
+        const headers: Record<string, string> = {};
+        callResponse.headers.forEach((value, key) => {
+          headers[key.toLowerCase()] = value;
+        });
+        this.evaluateAssertions(
+          {
+            stdout: body,
+            stderr: "",
+            exitCode: callResponse.ok ? 0 : 1,
+            body,
+            status: callResponse.status,
+            headers,
+          },
+          expect,
+          fail,
+          stepLabel,
+        );
+      } else if (!callResponse.ok) {
+        fail(`MCP_CALL_FAILED: ${callResponse.status} ${body.slice(0, 500)}`);
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        log.mcpFailure(stepLabel, `request timed out after ${timeoutSeconds}s`);
+        fail(`MCP_CALL_FAILED: request timed out after ${timeoutSeconds}s`);
+      } else {
+        log.mcpFailure(stepLabel, err instanceof Error ? err.message : String(err));
+        fail(`MCP_CALL_FAILED: ${err instanceof Error ? err.message : String(err)}`);
       }
     } finally {
       clearTimeout(timeoutId);

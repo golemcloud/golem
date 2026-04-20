@@ -32,6 +32,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-http-auth-rust` | Enabling authentication on HTTP endpoints |
 | `golem-add-cors-rust` | Configuring CORS allowed origins for HTTP endpoints |
 | `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
+| `golem-configure-mcp-server` | Configuring MCP (Model Context Protocol) server deployments in golem.yaml |
 | `golem-add-config-rust` | Adding typed configuration to a Rust Golem agent |
 | `golem-add-secret-rust` | Adding secrets to Rust Golem agents |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |

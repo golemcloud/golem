@@ -32,6 +32,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-http-auth-ts` | Enabling authentication and receiving Principal on HTTP endpoints |
 | `golem-add-cors-ts` | Configuring CORS allowed origins for HTTP endpoints |
 | `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
+| `golem-configure-mcp-server` | Configuring MCP (Model Context Protocol) server deployments in golem.yaml |
 | `golem-add-config-ts` | Adding typed configuration to a TypeScript Golem agent |
 | `golem-add-secret-ts` | Adding secrets to TypeScript Golem agents |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |

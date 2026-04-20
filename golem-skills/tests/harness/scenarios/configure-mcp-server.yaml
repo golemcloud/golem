@@ -1,0 +1,57 @@
+name: "configure-mcp-server"
+settings:
+  golem_server:
+    custom_request_port: 9006
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-counter-agent-and-enable-mcp"
+    prompt: >
+      In the test-app project, modify the existing CounterAgent so it has a `description`
+      annotation (e.g., "A stateful counter agent") and its `increment` method also has a
+      `description` annotation (e.g., "Increments the counter and returns the new value").
+
+      Then configure the application to expose CounterAgent through MCP by adding an `mcp`
+      section to `golem.yaml`. Deploy it on the local domain `test-app.localhost:9007`.
+      Do not add any security scheme — just expose it without authentication.
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      - "golem-configure-mcp-server"
+    allowedExtraSkills:
+      - "golem-edit-manifest"
+      - "golem-deploy"
+      - "golem-build"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-golem-yaml-mcp-config"
+    check_file:
+      path: "test-app/golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*mcp:[\\s\\S]*deployments:[\\s\\S]*local:[\\s\\S]*domain: test-app\\.localhost:9007[\\s\\S]*CounterAgent:[\\s\\S]*"
+
+  - id: "mcp-list-tools"
+    mcp_call:
+      url: "http://test-app.localhost:9007/mcp"
+      method: "tools/list"
+    expect:
+      status: 200
+      body_contains: "increment"
+
+  - id: "mcp-call-increment"
+    mcp_call:
+      url: "http://test-app.localhost:9007/mcp"
+      method: "tools/call"
+      params:
+        name: "CounterAgent-increment"
+        arguments:
+          name: "mcp-test"
+    expect:
+      status: 200
+      body_contains: "1"

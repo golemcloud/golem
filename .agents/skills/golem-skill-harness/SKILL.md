@@ -427,6 +427,37 @@ The file content is treated as `stdout` for assertion purposes.
     stdout_matches: "regex.*pattern"
 ```
 
+#### `mcp_call` — Call an MCP server method
+
+Initializes an MCP session via the Streamable HTTP transport, then sends a JSON-RPC method call.
+Session management (initialize + session ID forwarding) is handled automatically.
+
+```yaml
+- id: "list-tools"
+  mcp_call:
+    url: "http://my-app.localhost:9007/mcp"
+    method: "tools/list"
+  expect:
+    status: 200
+    body_contains: "my-tool-name"
+```
+
+With parameters (e.g., calling a tool):
+
+```yaml
+- id: "call-tool"
+  mcp_call:
+    url: "http://my-app.localhost:9007/mcp"
+    method: "tools/call"
+    params:
+      name: "CounterAgent-increment"
+      arguments:
+        name: "my-counter"
+  expect:
+    status: 200
+    body_contains: "1"
+```
+
 #### `sleep` — Wait for a duration
 
 ```yaml
@@ -441,12 +472,12 @@ Available assertion fields:
 | Field | Applies To | Description |
 |-------|-----------|-------------|
 | `exit_code` | shell, invoke | Assert process exit code |
-| `stdout_contains` | shell, invoke, check_file | Stdout includes substring |
-| `stdout_not_contains` | shell, invoke, check_file | Stdout must NOT include substring |
-| `stdout_matches` | shell, invoke, check_file | Stdout matches regex |
-| `status` | http | HTTP response status code |
-| `body_contains` | http | Response body includes substring |
-| `body_matches` | http | Response body matches regex |
+| `stdout_contains` | shell, invoke, check_file, mcp_call | Stdout includes substring |
+| `stdout_not_contains` | shell, invoke, check_file, mcp_call | Stdout must NOT include substring |
+| `stdout_matches` | shell, invoke, check_file, mcp_call | Stdout matches regex |
+| `status` | http, mcp_call | HTTP response status code |
+| `body_contains` | http, mcp_call | Response body includes substring |
+| `body_matches` | http, mcp_call | Response body matches regex |
 | `result_json` | invoke_json | JSONPath assertions on parsed JSON result |
 
 Regex-based assertions use JavaScript `RegExp` syntax because the harness evaluates them with
@@ -587,6 +618,7 @@ Failed steps are automatically classified:
 | `INVOKE_JSON_FAILED` | deploy | JSON agent invocation failed |
 | `SHELL_FAILED` | infra | Shell command returned non-zero exit |
 | `HTTP_FAILED` | network | HTTP request failed or timed out |
+| `MCP_CALL_FAILED` | network | MCP call failed (init, session, or method error) |
 | `CREATE_PROJECT_FAILED` | infra | `golem new` project creation failed |
 | `CREATE_AGENT_FAILED` | infra | `golem agent new` failed |
 | `DELETE_AGENT_FAILED` | infra | `golem agent delete` failed |
