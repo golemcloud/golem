@@ -32,18 +32,7 @@ The calling agent **blocks** until the target agent processes the request and re
 
 ## Phantom Agents
 
-Normally, agents with the same constructor parameters refer to the same instance. **Phantom agents** allow multiple distinct instances with the same constructor parameters:
-
-```rust
-// Create a new phantom agent (gets a random unique ID)
-let phantom = CounterAgentClient::new_phantom("shared-name".to_string());
-
-// Get the phantom's unique ID for later reference
-let id = phantom.phantom_id().unwrap();
-
-// Reconnect to the same phantom later
-let same_phantom = CounterAgentClient::get_phantom(id, "shared-name".to_string());
-```
+To create multiple distinct instances with the same constructor parameters, use phantom agents. See the `golem-multi-instance-agent-rust` skill.
 
 ## Cross-Component RPC
 

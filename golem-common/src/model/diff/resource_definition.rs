@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::diff::{Diffable, Hash, Hashable, hash_from_serialized_value};
+use crate::model::diff::{DiffError, Diffable, Hash, Hashable, hash_from_serialized_value};
 use crate::model::quota::{EnforcementAction, TimePeriod};
 use serde::Serialize;
 
@@ -27,27 +27,29 @@ pub struct ResourceDefinition {
 impl Diffable for ResourceDefinition {
     type DiffResult = ResourceDefinitionDiff;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let limit_changed = new.limit != current.limit;
         let enforcement_action_changed = new.enforcement_action != current.enforcement_action;
         let unit_changed = new.unit != current.unit;
         let units_changed = new.units != current.units;
 
-        if limit_changed || enforcement_action_changed || unit_changed || units_changed {
-            Some(Self::DiffResult {
-                limit_changed,
-                enforcement_action_changed,
-                unit_changed,
-                units_changed,
-            })
-        } else {
-            None
-        }
+        Ok(
+            if limit_changed || enforcement_action_changed || unit_changed || units_changed {
+                Some(Self::DiffResult {
+                    limit_changed,
+                    enforcement_action_changed,
+                    unit_changed,
+                    units_changed,
+                })
+            } else {
+                None
+            },
+        )
     }
 }
 
 impl Hashable for ResourceDefinition {
-    fn hash(&self) -> Hash {
+    fn hash(&self) -> Result<Hash, DiffError> {
         hash_from_serialized_value(self)
     }
 }
@@ -86,18 +88,18 @@ impl From<crate::model::quota::ResourceLimit> for ResourceLimit {
 impl Diffable for ResourceLimit {
     type DiffResult = ResourceLimitDiff;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let value_changed = new.value != current.value;
         let period_changed = new.period != current.period;
 
-        if value_changed || period_changed {
+        Ok(if value_changed || period_changed {
             Some(Self::DiffResult {
                 value_changed,
                 period_changed,
             })
         } else {
             None
-        }
+        })
     }
 }
 

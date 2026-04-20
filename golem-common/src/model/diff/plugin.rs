@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::diff::Diffable;
+use crate::model::diff::{DiffError, Diffable};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -30,18 +30,18 @@ pub struct PluginInstallation {
 impl Diffable for PluginInstallation {
     type DiffResult = PluginInstallationDiff;
 
-    fn diff(new: &Self, current: &Self) -> Option<Self::DiffResult> {
+    fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let priority_changed = new.priority != current.priority;
         let parameters_changed = new.parameters != current.parameters;
 
-        if priority_changed || parameters_changed {
+        Ok(if priority_changed || parameters_changed {
             Some(PluginInstallationDiff {
                 priority_changed,
                 parameters_changed,
             })
         } else {
             None
-        }
+        })
     }
 }
 

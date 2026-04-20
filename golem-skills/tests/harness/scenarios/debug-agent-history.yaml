@@ -1,0 +1,49 @@
+name: "debug-agent-history"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "invoke-1"
+    invoke:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      stdout_contains: "1"
+
+  - id: "invoke-2"
+    invoke:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      stdout_contains: "2"
+
+  - id: "dump-oplog"
+    prompt: >
+      Use the CLI to dump the full operation log for CounterAgent "c1" and save the output
+      to a file called oplog-full.txt in the test-app directory.
+    expectedSkills:
+      - "golem-debug-agent-history"
+
+  - id: "check-oplog-full"
+    check_file:
+      path: "oplog-full.txt"
+    expect:
+      stdout_contains: "INVOKE"
+
+  - id: "search-oplog"
+    prompt: >
+      Now search the operation log for CounterAgent "c1" for entries matching "increment"
+      and save the output to a file called oplog-search.txt in the test-app directory.
+    continueSession: true
+    expectedSkills:
+      - "golem-debug-agent-history"
+
+  - id: "check-oplog-search"
+    check_file:
+      path: "oplog-search.txt"
+    expect:
+      stdout_contains: "increment"

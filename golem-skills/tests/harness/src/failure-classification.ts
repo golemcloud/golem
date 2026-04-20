@@ -73,6 +73,11 @@ const CLASSIFICATION_MAP: Record<
     guidance:
       "A required file was not created. Check the scenario's expectedFiles list and verify the preceding step generated the expected project output.",
   },
+  FILE_CHECK_FAILED: {
+    category: "assertion",
+    guidance:
+      "Could not read the specified file. Check that the preceding step created the file at the expected path.",
+  },
 };
 
 export function classifyFailure(errorString: string): FailureClassification {

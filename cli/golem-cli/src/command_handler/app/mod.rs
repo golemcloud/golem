@@ -733,7 +733,7 @@ impl AppCommandHandler {
             let deploy_diff = self.detailed_deploy_diff(deploy_diff).await?;
             debug!("detailed deploy_diff: {:#?}", deploy_diff);
 
-            let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive());
+            let unified_diffs = deploy_diff.unified_diffs(self.ctx.show_sensitive())?;
             let stage_is_same_as_current = deploy_diff.is_stage_same_as_current();
 
             log_action(
@@ -914,7 +914,7 @@ impl AppCommandHandler {
             mcp_deployments: diffable_local_mcp_deployments,
         };
 
-        let local_deployment_hash = diffable_local_deployment.hash();
+        let local_deployment_hash = diffable_local_deployment.hash()?;
 
         Ok(DeployQuickDiff {
             environment,
@@ -952,7 +952,7 @@ impl AppCommandHandler {
             .map(|d| d.to_diffable())
             .unwrap_or_default();
 
-        let current_deployment_hash = diffable_current_deployment.hash();
+        let current_deployment_hash = diffable_current_deployment.hash()?;
 
         let staged_deployment = clients
             .environment
@@ -962,18 +962,18 @@ impl AppCommandHandler {
 
         let diffable_staged_deployment = staged_deployment.to_diffable();
 
-        let staged_deployment_hash = diffable_staged_deployment.hash();
+        let staged_deployment_hash = diffable_staged_deployment.hash()?;
 
-        let Some(diff) =
-            diffable_current_deployment.diff_with_new(&deploy_quick_diff.diffable_local_deployment)
+        let Some(diff) = diffable_current_deployment
+            .diff_with_new(&deploy_quick_diff.diffable_local_deployment)?
         else {
             bail!(anyhow!(
                 "The environment was changed concurrently while diffing. Retry planning and deploying!"
             ))
         };
 
-        let diff_stage =
-            diffable_staged_deployment.diff_with_new(&deploy_quick_diff.diffable_local_deployment);
+        let diff_stage = diffable_staged_deployment
+            .diff_with_new(&deploy_quick_diff.diffable_local_deployment)?;
 
         Ok(DeployDiff {
             environment: deploy_quick_diff.environment,
@@ -1014,7 +1014,7 @@ impl AppCommandHandler {
 
         debug!(
             "diffable_server_staged_deployment hash: {:#?}",
-            deploy_diff.diffable_staged_deployment.hash()
+            deploy_diff.diffable_staged_deployment.hash()?
         );
 
         Ok(deploy_diff)
@@ -1128,7 +1128,7 @@ impl AppCommandHandler {
         let rollback_diff = self.detailed_rollback_diff(rollback_diff).await?;
         debug!("detailed rollback_diff: {:#?}", rollback_diff);
 
-        let unified_diffs = rollback_diff.unified_diffs(self.ctx.show_sensitive());
+        let unified_diffs = rollback_diff.unified_diffs(self.ctx.show_sensitive())?;
 
         {
             let _indent = self.ctx.log_handler().decorated_indent_secondary();
@@ -1194,7 +1194,8 @@ impl AppCommandHandler {
         let diffable_target_deployment = quick_diff.target_deployment.to_diffable();
         let diffable_current_deployment = current_deployment.to_diffable();
 
-        let Some(diff) = diffable_target_deployment.diff_with_current(&diffable_current_deployment)
+        let Some(diff) =
+            diffable_target_deployment.diff_with_current(&diffable_current_deployment)?
         else {
             bail!(
                 "Illegal state: empty diff between current and target deployment after fetching summaries"

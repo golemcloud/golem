@@ -17,6 +17,9 @@ mod parse_common;
 mod parse_rust;
 mod parse_scala;
 mod parse_ts;
+mod parse_type_rust;
+mod parse_type_scala;
+mod parse_type_ts;
 mod render_rust;
 mod render_scala;
 mod render_ts;
@@ -144,6 +147,68 @@ pub fn render_type_for_language(
         SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
             render_ts::render_type_ts(typ, prefer_name)
         }
+    }
+}
+
+/// Parses a type string using language-specific syntax into an `AnalysedType`.
+///
+/// For known source languages, attempts language-specific parsing.
+/// For unknown languages, tries each known parser in turn.
+pub fn parse_type_for_language(
+    input: &str,
+    source_language: &SourceLanguage,
+) -> Result<golem_wasm::analysis::AnalysedType, ParseError> {
+    match source_language {
+        SourceLanguage::Rust => parse_type_rust::parse_type_rust(input),
+        SourceLanguage::TypeScript => parse_type_ts::parse_type_ts(input),
+        SourceLanguage::Scala => parse_type_scala::parse_type_scala(input),
+        SourceLanguage::Other(_) => parse_type_ts::parse_type_ts(input)
+            .or_else(|_| parse_type_rust::parse_type_rust(input))
+            .or_else(|_| parse_type_scala::parse_type_scala(input))
+            .map_err(|_| ParseError {
+                position: 0,
+                message: format!("unrecognized type '{input}'"),
+            }),
+    }
+}
+
+/// Parses a single component-model value using language-specific syntax.
+///
+/// For known source languages, attempts language-specific parsing first.
+/// For unknown languages, tries each known parser in turn.
+/// Falls back to the structural parser if all language-specific parsers fail.
+pub fn parse_value_for_language(
+    input: &str,
+    typ: &golem_wasm::analysis::AnalysedType,
+    source_language: &SourceLanguage,
+) -> Result<ValueAndType, ParseError> {
+    fn try_parse<D: parse_common::Dialect>(
+        input: &str,
+        typ: &golem_wasm::analysis::AnalysedType,
+    ) -> Result<ValueAndType, ParseError> {
+        let mut lexer = lexer::Lexer::new(input);
+        let result = parse_common::parse_cm_value::<D>(&mut lexer, typ)?;
+        let (tok, pos, _) = lexer.next_token()?;
+        if tok != lexer::Token::Eof {
+            return Err(ParseError {
+                position: pos,
+                message: format!("expected end of input, got {tok:?}"),
+            });
+        }
+        Ok(result)
+    }
+
+    match source_language {
+        SourceLanguage::Rust => try_parse::<parse_rust::RustDialect>(input, typ),
+        SourceLanguage::TypeScript => try_parse::<parse_ts::TsDialect>(input, typ),
+        SourceLanguage::Scala => try_parse::<parse_scala::ScalaDialect>(input, typ),
+        SourceLanguage::Other(_) => try_parse::<parse_ts::TsDialect>(input, typ)
+            .or_else(|_| try_parse::<parse_rust::RustDialect>(input, typ))
+            .or_else(|_| try_parse::<parse_scala::ScalaDialect>(input, typ))
+            .map_err(|_| ParseError {
+                position: 0,
+                message: format!("could not parse value '{input}'"),
+            }),
     }
 }
 

@@ -22,7 +22,7 @@ pub use crate::base_model::path::{AgentFilePath, ArchiveFilePath, CanonicalFileP
 pub use crate::base_model::worker::AgentConfigEntryDto;
 
 impl ComponentDto {
-    pub fn to_diffable(&self) -> diff::Component {
+    pub fn to_diffable(&self) -> Result<diff::Component, diff::DiffError> {
         let agent_type_provision_configs =
             self.metadata
                 .agent_type_provision_configs()
@@ -36,14 +36,19 @@ impl ComponentDto {
                                 .config
                                 .iter()
                                 .map(|e| {
-                                    (
+                                    Ok((
                                         e.path.join("."),
-                                        NormalizedJsonValue::new(e.value.to_json_value().expect(
-                                            "TypedAgentConfigEntry value must be valid JSON",
-                                        )),
-                                    )
+                                        NormalizedJsonValue::new(e.value.to_json_value().map_err(
+                                            |reason| diff::DiffError::TypedConfigJsonConversion {
+                                                operation:
+                                                    "component dto to_diffable config entry conversion",
+                                                path: e.path.join("."),
+                                                reason,
+                                            },
+                                        )?),
+                                    ))
                                 })
-                                .collect(),
+                                .collect::<Result<_, _>>()?,
                             files_by_path: config
                                 .files
                                 .iter()
@@ -75,14 +80,14 @@ impl ComponentDto {
                                 })
                                 .collect(),
                         };
-                    (name.0.clone(), state.into())
+                    Ok((name.0.clone(), state.into()))
                 })
-                .collect();
+                .collect::<Result<_, _>>()?;
 
-        diff::Component {
+        Ok(diff::Component {
             wasm_hash: self.wasm_hash,
             agent_type_provision_configs,
-        }
+        })
     }
 }
 

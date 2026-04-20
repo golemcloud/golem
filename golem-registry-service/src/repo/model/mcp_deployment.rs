@@ -14,6 +14,7 @@
 
 use super::audit::DeletableRevisionAuditFields;
 use super::hash::SqlBlake3Hash;
+use anyhow::anyhow;
 use desert_rust::BinaryCodec;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
@@ -82,7 +83,7 @@ impl McpDeploymentRevisionRecord {
         mcp_deployment_id: McpDeploymentId,
         actor: AccountId,
         agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
-    ) -> Self {
+    ) -> Result<Self, McpDeploymentRepoError> {
         let mut value = Self {
             mcp_deployment_id: mcp_deployment_id.0,
             revision_id: McpDeploymentRevision::INITIAL.into(),
@@ -90,11 +91,14 @@ impl McpDeploymentRevisionRecord {
             audit: DeletableRevisionAuditFields::new(actor.0),
             data: Blob::new(McpDeploymentData { agents }),
         };
-        value.update_hash();
-        value
+        value.update_hash()?;
+        Ok(value)
     }
 
-    pub fn from_model(deployment: McpDeployment, audit: DeletableRevisionAuditFields) -> Self {
+    pub fn from_model(
+        deployment: McpDeployment,
+        audit: DeletableRevisionAuditFields,
+    ) -> Result<Self, McpDeploymentRepoError> {
         let mut value = Self {
             mcp_deployment_id: deployment.id.0,
             revision_id: deployment.revision.into(),
@@ -104,15 +108,15 @@ impl McpDeploymentRevisionRecord {
                 agents: deployment.agents,
             }),
         };
-        value.update_hash();
-        value
+        value.update_hash()?;
+        Ok(value)
     }
 
     pub fn deletion(
         created_by: uuid::Uuid,
         mcp_deployment_id: Uuid,
         current_revision_id: i64,
-    ) -> Self {
+    ) -> Result<Self, McpDeploymentRepoError> {
         let mut value = Self {
             mcp_deployment_id,
             revision_id: current_revision_id,
@@ -122,8 +126,8 @@ impl McpDeploymentRevisionRecord {
                 agents: Default::default(),
             }),
         };
-        value.update_hash();
-        value
+        value.update_hash()?;
+        Ok(value)
     }
 
     pub fn to_diffable(&self) -> DiffMcpDeployment {
@@ -145,13 +149,19 @@ impl McpDeploymentRevisionRecord {
         }
     }
 
-    pub fn update_hash(&mut self) {
-        self.hash = self.to_diffable().hash().into_blake3().into();
+    pub fn update_hash(&mut self) -> Result<(), McpDeploymentRepoError> {
+        self.hash = self
+            .to_diffable()
+            .hash()
+            .map_err(|err| McpDeploymentRepoError::InternalError(anyhow!(err)))?
+            .into_blake3()
+            .into();
+        Ok(())
     }
 
-    pub fn with_updated_hash(mut self) -> Self {
-        self.update_hash();
-        self
+    pub fn with_updated_hash(mut self) -> Result<Self, McpDeploymentRepoError> {
+        self.update_hash()?;
+        Ok(self)
     }
 }
 

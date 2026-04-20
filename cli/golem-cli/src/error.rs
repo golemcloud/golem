@@ -42,6 +42,10 @@ pub enum HintError {
     NoApplicationManifestFound,
     ExpectedCloudProfile,
     EnvironmentHasNoDeployment,
+    DiffModelVersionMismatch {
+        expected_cli_diff_model_version: u32,
+        server_diff_model_version: u32,
+    },
     ShowClapHelp(ShowClapHelpTarget),
 }
 

@@ -110,7 +110,7 @@ impl DeploymentContext {
         })
     }
 
-    pub fn hash(&self) -> diff::Hash {
+    pub fn hash(&self) -> Result<diff::Hash, diff::DiffError> {
         let diffable = diff::Deployment {
             components: self
                 .components

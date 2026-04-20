@@ -214,7 +214,6 @@ object GolemServer {
         retryPolicyTimeoutSec,
         "retry-policy",
         "create",
-        "--name",
         name,
         "--priority",
         priority.toString,
