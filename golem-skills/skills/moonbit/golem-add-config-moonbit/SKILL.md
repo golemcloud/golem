@@ -5,133 +5,129 @@ description: "Adding typed configuration to a MoonBit Golem agent. Use when the 
 
 # Adding Typed Configuration to an Agent (MoonBit)
 
-## SDK Limitation
+The MoonBit SDK has full support for **code-first typed configuration** via `#derive.config`, `@config.Config[T]`, and `@config.Secret[T]`, equivalent to the Rust SDK's `ConfigSchema` / `#[agent_config]`.
 
-The MoonBit SDK does **not** yet have a built-in `Config<T>` mechanism or `#[agent_config]` equivalent like the Rust SDK. There is no derive macro for typed config schemas and no automatic config parameter in the agent constructor.
+## 1. Define Config Types with `#derive.config`
 
-Instead, MoonBit agents can read configuration at runtime via the **WASI config store** imports provided by the SDK at `@config/store`.
-
-## 1. Read Config from the WASI Config Store
-
-Use the `@config/store` package (located at `golem_sdk/interface/wasi/config/store`) to fetch configuration values by key:
+Annotate record structs with `#derive.config`. This auto-generates `ConfigField` trait implementations (via `golem_sdk_tools`) for schema collection and typed loading. Config types can be nested but must not be generic.
 
 ```moonbit
-// Import path: @golemcloud/golem_sdk/interface/wasi/config/store
+#derive.config
+pub(all) struct DatabaseConfig {
+  host : String
+  port : UInt
+  timeout : UInt64
+}
 
-// Get a single config value by key
-let value = @config/store.get("my_key") // Result[String?, @config/store.Error_]
-
-// Get all config key-value pairs
-let all = @config/store.get_all() // Result[Array[(String, String)], @config/store.Error_]
+#derive.config
+pub(all) struct AppConfig {
+  app_name : String
+  debug : Bool
+  database : DatabaseConfig  // nested config type
+}
 ```
 
-All values are strings — you must parse them to the desired type yourself.
+### Supported field types
 
-## 2. Use Config in an Agent
+All primitive types that implement `ConfigField`: `String`, `Bool`, `Int`, `UInt`, `Int64`, `UInt64`, `Float`, `Double`, `Byte`, `Char`, `Bytes`, plus `T?` (optional), `Array[T]`, `Result[T, E]`, and nested `#derive.config` structs.
 
-Read config values in the constructor or in methods. Since values are untyped strings, parse them manually:
+## 2. Inject Config into the Agent Constructor
+
+Add a `@config.Config[T]` parameter to the agent's `new` function. The platform loads and validates all config values at agent construction time:
 
 ```moonbit
 #derive.agent
-struct MyAgent {
-  name : String
-  foo : Int
-  bar : String
+pub(all) struct MyAgent {
+  config : @config.Config[AppConfig]
 }
 
-fn MyAgent::new(name : String) -> MyAgent {
-  let foo = match @config/store.get("foo") {
-    Ok(Some(v)) => @strconv.parse_int!(v)
-    _ => 42 // default value
-  }
-  let bar = match @config/store.get("bar") {
-    Ok(Some(v)) => v
-    _ => "default"
-  }
-  { name, foo, bar }
-}
-
-pub fn MyAgent::get_foo(self : Self) -> Int {
-  self.foo
+fn MyAgent::new(config : @config.Config[AppConfig]) -> MyAgent {
+  { config }
 }
 ```
 
-## 3. Set Config in `golem.yaml`
+Access config values through `self.config.value`:
 
-Provide configuration values under the component's config section:
+```moonbit
+pub fn MyAgent::do_work(self : Self) -> Unit {
+  let cfg = self.config.value
+  if cfg.debug {
+    @log.debug("Connected to \{cfg.database.host}:\{cfg.database.port}")
+  }
+}
+```
+
+## 3. Add Secrets with `@config.Secret[T]`
+
+Wrap sensitive fields in `@config.Secret[T]`. Secrets are stored per-environment and fetched dynamically (not snapshot-cached like regular config):
+
+```moonbit
+#derive.config
+pub(all) struct DatabaseConfig {
+  host : String
+  port : UInt
+  password : @config.Secret[String]  // secret field
+}
+```
+
+Access the current secret value with `get!()`:
+
+```moonbit
+pub fn MyAgent::connect(self : Self) -> Unit {
+  let db = self.config.value.database
+  let password = db.password.get!()
+  // use password...
+}
+```
+
+## 4. Provide Config Values
+
+### In `golem.yaml` (application manifest)
+
+Config values are typed — they match the schema defined in code:
 
 ```yaml
 agents:
   MyAgent:
     config:
-      foo: "42"
-      bar: "hello"
+      app_name: "my-app"
+      debug: true
+      database:
+        host: "localhost"
+        port: 5432
+        timeout: 30000
 ```
 
-Config values in `golem.yaml` are passed as strings to the WASI config store.
+### Secrets via `secretDefaults` in the manifest
 
-## 4. Pass Config via CLI
+```yaml
+secretDefaults:
+  local:
+    - path: [database, password]
+      value: "{{ DB_PASSWORD }}"
+```
 
-Supply or override config when creating an agent instance:
+### Secrets via CLI
 
 ```shell
-golem agent new my-ns:my-component/my-agent-1 \
-  --config foo=42 \
-  --config bar=hello
+golem agent-secret create database.password --secret-type string --secret-value "pwd"
+golem agent-secret update-value database.password --secret-value "new-pwd"
 ```
 
-## 5. Helper Pattern for Typed Config
+## 5. How It Works Under the Hood
 
-For agents with many config parameters, define a helper struct and a parsing function to keep the agent constructor clean:
-
-```moonbit
-struct MyAgentConfig {
-  foo : Int
-  bar : String
-  enabled : Bool
-}
-
-fn MyAgentConfig::from_store() -> MyAgentConfig {
-  let foo = match @config/store.get("foo") {
-    Ok(Some(v)) => @strconv.parse_int!(v)
-    _ => 0
-  }
-  let bar = match @config/store.get("bar") {
-    Ok(Some(v)) => v
-    _ => ""
-  }
-  let enabled = match @config/store.get("enabled") {
-    Ok(Some(v)) => v == "true"
-    _ => false
-  }
-  { foo, bar, enabled }
-}
-
-#derive.agent
-struct MyAgent {
-  name : String
-  config : MyAgentConfig
-}
-
-fn MyAgent::new(name : String) -> MyAgent {
-  { name, config: MyAgentConfig::from_store() }
-}
-```
-
-The config struct does **not** need `#derive.golem_schema` since it is not exposed in method signatures — it is internal to the agent.
-
-## Config Cascade
-
-Config values follow the same cascade as environment variables:
-
-**componentTemplates → components → agents → presets**
-
-- Values in `golem.yaml` act as defaults.
-- Values passed via `golem agent new --config` override those defaults.
+1. `#derive.config` is processed by `golem_sdk_tools` (see `config_types.mbt` and `config_emit.mbt`).
+2. For each annotated struct, the tool generates `ConfigField` trait implementations with:
+   - `collect_entries(path)` — declares the config schema to the platform (field paths and WIT types)
+   - `load(path)` — loads typed values from the host at runtime
+3. `@config.load_config()` is called during agent construction, which recursively loads all fields.
+4. `Secret[T]` fields store only the key path and expected type; the actual value is fetched on each `get!()` call via `@host.get_config_value`.
+5. The platform validates that all required config and secrets are provided at deploy time.
 
 ## Key Constraints
 
-- All config values from the WASI config store are **strings** — manual parsing is required
-- There is no schema validation at the platform level for MoonBit config (unlike Rust's `ConfigSchema` derive)
-- Config is read at runtime, not injected as a typed parameter — errors surface at runtime if keys are missing or values are malformed
-- The `@config/store` package is auto-generated by `wit-bindgen` — do not edit it
+- `#derive.config` does not support generic (parameterized) structs
+- Config types cannot have cycles (validated at build time)
+- `#derive.config` types cannot be nested inside `Option`, `Array`, `Result`, or `Tuple` containers — only direct nesting of one config struct inside another is allowed
+- `Secret` cannot wrap a `#derive.config` type — only primitive/leaf types
+- Config values (non-secret) are loaded once at construction; secrets are fetched dynamically on each `get!()` call

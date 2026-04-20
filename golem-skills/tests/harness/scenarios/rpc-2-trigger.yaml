@@ -31,6 +31,9 @@ steps:
       scala:
         - "golem-call-another-agent-scala"
         - "golem-fire-and-forget-scala"
+      moonbit:
+        - "golem-call-another-agent-moonbit"
+        - "golem-fire-and-forget-moonbit"
     verify:
       build: true
       deploy: true
@@ -60,6 +63,7 @@ steps:
         rust: "last_seen"
         ts: "lastSeen"
         scala: "lastSeen"
+        moonbit: "last_seen"
     expect:
       result_json:
         - path: "$"

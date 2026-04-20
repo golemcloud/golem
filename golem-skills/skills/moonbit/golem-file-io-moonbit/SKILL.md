@@ -7,103 +7,62 @@ description: "Reading and writing files from MoonBit Golem agent code. Use when 
 
 ## Overview
 
-MoonBit Golem agents can access files provisioned into the agent's filesystem via `golem.yaml`. File access uses the WASI filesystem API (`wasi:filesystem/types` and `wasi:filesystem/preopens`), which is available through the SDK's generated WIT bindings.
+MoonBit Golem agents can access files provisioned into the agent's filesystem via `golem.yaml`. File access uses the SDK's `@fs` package (`golemcloud/golem_sdk/filesystem`), which provides convenience functions and re-exports of the necessary types.
 
 To provision files into an agent's filesystem, load the `golem-add-initial-files` skill.
 
-## Prerequisites: Enabling Filesystem Imports
+## Prerequisites: Adding the Dependency
 
-The `wasi:filesystem` interfaces are defined in the SDK's WIT dependencies (`golem_sdk/wit/deps/filesystem/`) but are **not imported by default** in the `agent-guest` world. You must add the imports to `golem_sdk/wit/main.wit`:
+Add the filesystem package to your agent's `moon.pkg`:
 
-```wit
-world agent-guest {
-  // ... existing imports ...
-
-  import wasi:filesystem/types@0.2.3;
-  import wasi:filesystem/preopens@0.2.3;
-
-  // ... existing exports ...
+```
+import {
+  "golemcloud/golem_sdk/filesystem" @fs,
 }
 ```
 
-Then regenerate the WIT bindings:
-
-```sh
-cd golem_sdk
-wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub
-moon fmt
-```
-
-This generates MoonBit bindings under `interface/wasi/filesystem/` with types like `Descriptor`, `DescriptorFlags`, `OpenFlags`, and functions like `get_directories()`.
+No WIT changes or binding regeneration is needed — the SDK already includes the filesystem imports.
 
 ## File Provisioning
 
-Files must first be provisioned via `golem.yaml` (see `golem-add-initial-files` skill). Provisioned files are available through WASI preopened directories. The preopened directory for provisioned files is typically mounted at `/`.
+Files must first be provisioned via `golem.yaml` (see `golem-add-initial-files` skill). Provisioned files are available through preopened directories. The preopened directory for provisioned files is typically mounted at `/`.
 
 ## Reading Files
 
-### Getting a Preopened Directory
+### Getting the Root Directory
 
-Use `wasi:filesystem/preopens` to get access to the filesystem root:
+Use `@fs.get_root_dir()` to get the preopened directory at `/`:
 
 ```moonbit
 ///|
-fn get_root_dir() -> @wasi.filesystem.types.Descriptor? {
-  let dirs = @wasi.filesystem.preopens.get_directories()
-  for pair in dirs {
-    let (descriptor, path) = pair
-    if path == "/" {
-      return Some(descriptor)
-    }
-  }
-  None
+fn get_root() -> @fs.Descriptor {
+  @fs.get_root_dir().unwrap()
 }
 ```
 
+Or use `@fs.get_preopened_dir(path)` for a specific mount point.
+
 ### Reading a Text File
 
-Use `open-at` on the preopened directory descriptor, then `read` from the file descriptor:
+Use the convenience function `@fs.read_string`:
 
 ```moonbit
 ///|
 fn read_file(path : String) -> String!Error {
-  let root = get_root_dir().unwrap()
-  let file = root
-    .open_at(
-      @wasi.filesystem.types.PathFlags::default(),
-      path,
-      @wasi.filesystem.types.OpenFlags::default(),
-      { read: true, ..@wasi.filesystem.types.DescriptorFlags::default() },
-    )
-    .unwrap()
-  let stat = file.stat().unwrap()
-  let bytes = file.read(stat.size, 0).unwrap()
-  // Convert bytes to string
-  let buf = Buffer::new()
-  for b in bytes {
-    buf.write_byte(b)
-  }
-  buf.to_string()
+  let root = @fs.get_root_dir().unwrap()
+  @fs.read_string(root, path).unwrap()
 }
 ```
 
 ### Reading a Binary File
 
+Use `@fs.read_bytes`:
+
 ```moonbit
 ///|
-fn read_binary(path : String) -> Bytes!Error {
-  let root = get_root_dir().unwrap()
-  let file = root
-    .open_at(
-      @wasi.filesystem.types.PathFlags::default(),
-      path,
-      @wasi.filesystem.types.OpenFlags::default(),
-      { read: true, ..@wasi.filesystem.types.DescriptorFlags::default() },
-    )
-    .unwrap()
-  let stat = file.stat().unwrap()
-  let data = file.read(stat.size, 0).unwrap()
-  Bytes::from_array(data)
+fn read_binary(path : String) -> FixedArray[Byte]!Error {
+  let root = @fs.get_root_dir().unwrap()
+  @fs.read_bytes(root, path).unwrap()
 }
 ```
 
@@ -111,20 +70,23 @@ fn read_binary(path : String) -> Bytes!Error {
 
 Only files provisioned with `read-write` permission (or files in non-provisioned paths) can be written to.
 
+### Writing a Text File
+
 ```moonbit
 ///|
 fn write_file(path : String, content : String) -> Unit!Error {
-  let root = get_root_dir().unwrap()
-  let file = root
-    .open_at(
-      @wasi.filesystem.types.PathFlags::default(),
-      path,
-      { create: true, truncate: true, ..@wasi.filesystem.types.OpenFlags::default() },
-      { write: true, ..@wasi.filesystem.types.DescriptorFlags::default() },
-    )
-    .unwrap()
-  let bytes = content.to_array().map(fn(c) { c.to_int().to_byte() })
-  let _ = file.write(bytes, 0).unwrap()
+  let root = @fs.get_root_dir().unwrap()
+  @fs.write_string(root, path, content).unwrap()
+}
+```
+
+### Writing Binary Data
+
+```moonbit
+///|
+fn write_binary(path : String, data : FixedArray[Byte]) -> Unit!Error {
+  let root = @fs.get_root_dir().unwrap()
+  @fs.write_bytes(root, path, data).unwrap()
 }
 ```
 
@@ -132,28 +94,32 @@ fn write_file(path : String, content : String) -> Unit!Error {
 
 ```moonbit
 ///|
-fn list_directory(path : String) -> Array[String]!Error {
-  let root = get_root_dir().unwrap()
-  let dir = root
-    .open_at(
-      @wasi.filesystem.types.PathFlags::default(),
-      path,
-      { directory: true, ..@wasi.filesystem.types.OpenFlags::default() },
-      { read: true, ..@wasi.filesystem.types.DescriptorFlags::default() },
-    )
-    .unwrap()
-  let stream = dir.read_directory().unwrap()
-  let entries : Array[String] = []
-  loop {
-    match stream.read_directory_entry() {
-      Ok(Some(entry)) => entries.push(entry.name)
-      Ok(None) => break
-      Err(_) => break
-    }
-  }
-  entries
+fn list_dir(path : String) -> Array[String]!Error {
+  let root = @fs.get_root_dir().unwrap()
+  @fs.list_directory(root, path).unwrap()
 }
 ```
+
+## Low-Level Access
+
+For more control (e.g., opening with specific flags, using streams, stat), use the re-exported types directly from `@fs`:
+
+```moonbit
+///|
+fn open_read_only(path : String) -> @fs.Descriptor!Error {
+  let root = @fs.get_root_dir().unwrap()
+  root
+    .open_at(
+      @fs.PathFlags::default(),
+      path,
+      @fs.OpenFlags::default(),
+      @fs.DescriptorFlags::default().set(@fs.READ),
+    )
+    .unwrap()
+}
+```
+
+Available re-exported types from `@fs`: `Descriptor`, `DirectoryEntryStream`, `DescriptorFlags`, `PathFlags`, `OpenFlags`, `ErrorCode`, `DirectoryEntry`, `DescriptorStat`, `NewTimestamp`, `DescriptorType`, `Advice`, `MetadataHashValue`, `DescriptorFlagsFlag` (`READ`, `WRITE`, etc.), `PathFlagsFlag`, `OpenFlagsFlag` (`CREATE`, `DIRECTORY`, `EXCLUSIVE`, `TRUNCATE`).
 
 ## Complete Agent Example
 
@@ -171,58 +137,28 @@ fn FileReader::new(name : String) -> FileReader {
 /// Reads the content of a provisioned text file
 pub fn FileReader::read_text(self : Self, path : String) -> String {
   let _ = self
-  let root = get_root_dir().unwrap()
-  let file = root
-    .open_at(
-      @wasi.filesystem.types.PathFlags::default(),
-      path,
-      @wasi.filesystem.types.OpenFlags::default(),
-      { read: true, ..@wasi.filesystem.types.DescriptorFlags::default() },
-    )
-    .unwrap()
-  let stat = file.stat().unwrap()
-  let bytes = file.read(stat.size, 0).unwrap()
-  let buf = Buffer::new()
-  for b in bytes {
-    buf.write_byte(b)
-  }
-  buf.to_string()
+  let root = @fs.get_root_dir().unwrap()
+  @fs.read_string(root, path).unwrap()
 }
 
 /// Writes content to a file (must be writable)
 pub fn FileReader::write_text(self : Self, path : String, content : String) -> Unit {
   let _ = self
-  let root = get_root_dir().unwrap()
-  let file = root
-    .open_at(
-      @wasi.filesystem.types.PathFlags::default(),
-      path,
-      { create: true, truncate: true, ..@wasi.filesystem.types.OpenFlags::default() },
-      { write: true, ..@wasi.filesystem.types.DescriptorFlags::default() },
-    )
-    .unwrap()
-  let bytes = content.to_array().map(fn(c) { c.to_int().to_byte() })
-  let _ = file.write(bytes, 0).unwrap()
+  let root = @fs.get_root_dir().unwrap()
+  @fs.write_string(root, path, content).unwrap()
 }
 
-fn get_root_dir() -> @wasi.filesystem.types.Descriptor? {
-  let dirs = @wasi.filesystem.preopens.get_directories()
-  for pair in dirs {
-    let (descriptor, path) = pair
-    if path == "/" {
-      return Some(descriptor)
-    }
-  }
-  None
+/// Lists entries in a directory
+pub fn FileReader::list_dir(self : Self, path : String) -> Array[String] {
+  let _ = self
+  let root = @fs.get_root_dir().unwrap()
+  @fs.list_directory(root, path).unwrap()
 }
 ```
 
 ## Key Constraints
 
-- **Filesystem imports must be added** — `wasi:filesystem/types` and `wasi:filesystem/preopens` must be imported in the `agent-guest` world and bindings regenerated before filesystem operations are available
 - Files provisioned via `golem-add-initial-files` with `read-only` permission cannot be written to
 - The filesystem is per-agent-instance — each agent has its own isolated filesystem
 - File changes within an agent are persistent across invocations (durable state)
-- All paths in WASI are relative to a preopened directory descriptor — there is no global filesystem root; you must obtain a descriptor via `get_directories()`
-- MoonBit does not have a `std::fs` equivalent — all file operations go through the WASI filesystem bindings directly
-- The exact MoonBit binding names (e.g., `@wasi.filesystem.types.Descriptor`) depend on the generated code — check the generated `interface/wasi/filesystem/` directory after running `wit-bindgen`
+- All paths are relative to a preopened directory descriptor — there is no global filesystem root; you must obtain a descriptor via `get_root_dir()` or `get_preopened_dir(path)`

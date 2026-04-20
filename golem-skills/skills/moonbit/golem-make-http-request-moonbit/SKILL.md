@@ -7,73 +7,41 @@ description: "Making outgoing HTTP requests from MoonBit Golem agent code. Use w
 
 ## Overview
 
-MoonBit Golem agents use the WASI HTTP `outgoing-handler` interface for outgoing HTTP requests. The WIT definitions for `wasi:http` are included in the SDK's `wit/deps/http/` directory, but must be explicitly imported into the component's world to generate the necessary MoonBit bindings.
-
-> **⚠️ WARNING:** The MoonBit SDK does **not** include `wasi:http/outgoing-handler` in the default `agent-guest` world. You must add the import manually (see Setup below) and regenerate the WIT bindings before you can make outgoing HTTP requests.
+MoonBit Golem agents use the SDK's `@http` package (`golemcloud/golem_sdk/http`) for outgoing HTTP requests. This package re-exports the WASI HTTP types and the outgoing handler function.
 
 All outgoing HTTP requests made from a Golem agent are **automatically durably persisted** — Golem records the request and response in the oplog, so on replay the response is read from the log rather than re-executing the network call.
 
 ## Setup
 
-### 1. Add HTTP imports to `wit/main.wit`
+Add the HTTP package to your agent's `moon.pkg`:
 
-Add the following imports to the component's world definition:
-
-```wit
-import wasi:http/types@0.2.3;
-import wasi:http/outgoing-handler@0.2.3;
+```
+import {
+  "golemcloud/golem_sdk/http" @http,
+}
 ```
 
-The `wasi:http` WIT package must be present in `wit/deps/http/` (it is included by default in Golem project templates).
-
-### 2. Regenerate WIT bindings
-
-From the SDK directory, regenerate the MoonBit bindings:
-
-```sh
-wit-bindgen moonbit ./wit --derive-show --derive-eq --derive-error --project-name <your-module-name> --ignore-stub
-moon fmt
-```
-
-This creates the generated types and FFI imports under `interface/wasi/http/types/` and `interface/wasi/http/outgoingHandler/`.
-
-## Imports
-
-After binding generation, the following types and functions are available:
-
-```moonbit
-// HTTP types (generated under the wasi/http/types package)
-// Types: Fields, OutgoingRequest, OutgoingBody, IncomingResponse,
-//        IncomingBody, FutureIncomingResponse, Method, Scheme, RequestOptions
-
-// Outgoing handler (generated under the wasi/http/outgoingHandler package)
-// Function: handle(request, options) -> Result[FutureIncomingResponse, ErrorCode]
-
-// IO streams (already in SDK)
-// @streams.OutputStream, @streams.InputStream
-```
-
-The exact import paths depend on your project's package structure. They typically follow the pattern `@wasi/http/types` and `@wasi/http/outgoingHandler` (or the aliased package names in your `moon.pkg`).
+No WIT changes or binding regeneration is needed — the SDK already includes the HTTP imports.
 
 ## GET Request
 
 ```moonbit
 fn make_get_request(url_authority : String, path : String) -> String {
   // 1. Create headers
-  let headers = @httpTypes.Fields::new()
+  let headers = @http.Fields::new()
 
   // 2. Create outgoing request (defaults to GET)
-  let request = @httpTypes.OutgoingRequest::new(headers)
-  let _ = request.set_scheme(Some(@httpTypes.Scheme::HTTPS))
+  let request = @http.OutgoingRequest::new(headers)
+  let _ = request.set_scheme(Some(@http.Https))
   let _ = request.set_authority(Some(url_authority))
   let _ = request.set_path_with_query(Some(path))
 
   // 3. Finish the body (empty for GET)
   let body = request.body().unwrap()
-  @httpTypes.OutgoingBody::finish(body, None).unwrap()
+  @http.OutgoingBody::finish(body, None).unwrap()
 
   // 4. Send the request
-  let future_response = @outgoingHandler.handle(request, None).unwrap()
+  let future_response = @http.handle(request, None).unwrap()
 
   // 5. Wait for the response
   let pollable = future_response.subscribe()
@@ -88,7 +56,7 @@ fn make_get_request(url_authority : String, path : String) -> String {
   let stream = incoming_body.stream().unwrap()
   let bytes = stream.blocking_read(1048576UL).unwrap()  // read up to 1MB
   stream.drop()
-  @httpTypes.IncomingBody::finish(incoming_body)
+  @http.IncomingBody::finish(incoming_body)
 
   let body_str = String::from_utf8_lossy(bytes)
   body_str
@@ -104,7 +72,7 @@ fn make_post_request(
   json_body : String
 ) -> (UInt, String) {
   // 1. Create headers with Content-Type
-  let headers = @httpTypes.Fields::from_list(
+  let headers = @http.Fields::from_list(
     [
       ("Content-Type", b"application/json"),
       ("Accept", b"application/json"),
@@ -112,9 +80,9 @@ fn make_post_request(
   ).unwrap()
 
   // 2. Create request and set method to POST
-  let request = @httpTypes.OutgoingRequest::new(headers)
-  let _ = request.set_method(@httpTypes.Method::Post)
-  let _ = request.set_scheme(Some(@httpTypes.Scheme::HTTPS))
+  let request = @http.OutgoingRequest::new(headers)
+  let _ = request.set_method(@http.Post)
+  let _ = request.set_scheme(Some(@http.Https))
   let _ = request.set_authority(Some(authority))
   let _ = request.set_path_with_query(Some(path))
 
@@ -124,10 +92,10 @@ fn make_post_request(
   let body_bytes = json_body.to_utf8_bytes()
   output_stream.blocking_write_and_flush(body_bytes).unwrap()
   output_stream.drop()  // must drop stream before finishing body
-  @httpTypes.OutgoingBody::finish(body, None).unwrap()
+  @http.OutgoingBody::finish(body, None).unwrap()
 
   // 4. Send and wait
-  let future_response = @outgoingHandler.handle(request, None).unwrap()
+  let future_response = @http.handle(request, None).unwrap()
   let pollable = future_response.subscribe()
   pollable.block()
   let response = future_response.get().unwrap().unwrap().unwrap()
@@ -138,7 +106,7 @@ fn make_post_request(
   let stream = incoming_body.stream().unwrap()
   let bytes = stream.blocking_read(1048576UL).unwrap()
   stream.drop()
-  @httpTypes.IncomingBody::finish(incoming_body)
+  @http.IncomingBody::finish(incoming_body)
 
   (status, String::from_utf8_lossy(bytes))
 }
@@ -150,7 +118,7 @@ Headers are `Fields` resources. Field values are `FixedArray[Byte]` (the WASI `f
 
 ```moonbit
 // From a list of (name, value) pairs
-let headers = @httpTypes.Fields::from_list(
+let headers = @http.Fields::from_list(
   [
     ("Authorization", b"Bearer my-token"),
     ("Accept", b"application/json"),
@@ -159,7 +127,7 @@ let headers = @httpTypes.Fields::from_list(
 ).unwrap()
 
 // Or construct empty and append
-let headers = @httpTypes.Fields::new()
+let headers = @http.Fields::new()
 let _ = headers.append("Authorization", b"Bearer my-token")
 let _ = headers.append("Content-Type", b"application/json")
 ```
@@ -183,28 +151,28 @@ let content_type_values = resp_headers.get("Content-Type")
 Use `RequestOptions` to configure transport-level timeouts:
 
 ```moonbit
-let options = @httpTypes.RequestOptions::new()
+let options = @http.RequestOptions::new()
 let _ = options.set_connect_timeout(Some(5_000_000_000UL))         // 5 seconds in nanoseconds
 let _ = options.set_first_byte_timeout(Some(10_000_000_000UL))     // 10 seconds
 let _ = options.set_between_bytes_timeout(Some(30_000_000_000UL))  // 30 seconds
 
-let future_response = @outgoingHandler.handle(request, Some(options)).unwrap()
+let future_response = @http.handle(request, Some(options)).unwrap()
 ```
 
 ## Error Handling
 
 ```moonbit
 fn fetch_data(authority : String, path : String) -> Result[String, String] {
-  let headers = @httpTypes.Fields::new()
-  let request = @httpTypes.OutgoingRequest::new(headers)
-  let _ = request.set_scheme(Some(@httpTypes.Scheme::HTTPS))
+  let headers = @http.Fields::new()
+  let request = @http.OutgoingRequest::new(headers)
+  let _ = request.set_scheme(Some(@http.Https))
   let _ = request.set_authority(Some(authority))
   let _ = request.set_path_with_query(Some(path))
 
   let body = request.body().unwrap()
-  @httpTypes.OutgoingBody::finish(body, None).unwrap()
+  @http.OutgoingBody::finish(body, None).unwrap()
 
-  match @outgoingHandler.handle(request, None) {
+  match @http.handle(request, None) {
     Err(error_code) => Err("Request failed: " + error_code.to_string())
     Ok(future_response) => {
       let pollable = future_response.subscribe()
@@ -216,7 +184,7 @@ fn fetch_data(authority : String, path : String) -> Result[String, String] {
           let stream = incoming_body.stream().unwrap()
           let bytes = stream.blocking_read(1048576UL).unwrap()
           stream.drop()
-          @httpTypes.IncomingBody::finish(incoming_body)
+          @http.IncomingBody::finish(incoming_body)
           if status >= 200 && status < 300 {
             Ok(String::from_utf8_lossy(bytes))
           } else {
@@ -241,7 +209,7 @@ fn fetch_data(authority : String, path : String) -> Result[String, String] {
 The `blocking_read` call returns up to the requested number of bytes. For larger responses, read in a loop:
 
 ```moonbit
-fn read_full_body(incoming_body : @httpTypes.IncomingBody) -> FixedArray[Byte] {
+fn read_full_body(incoming_body : @http.IncomingBody) -> FixedArray[Byte] {
   let stream = incoming_body.stream().unwrap()
   let chunks : Array[FixedArray[Byte]] = []
   loop {
@@ -252,12 +220,12 @@ fn read_full_body(incoming_body : @httpTypes.IncomingBody) -> FixedArray[Byte] {
         }
         chunks.push(chunk)
       }
-      Err(@streams.StreamError::Closed) => break
+      Err(@http.StreamError::Closed) => break
       Err(e) => panic()
     }
   }
   stream.drop()
-  @httpTypes.IncomingBody::finish(incoming_body)
+  @http.IncomingBody::finish(incoming_body)
   // Concatenate chunks
   let total = chunks.fold(init=0, fn(acc, c) { acc + c.length() })
   let result = FixedArray::make(total, b'\x00')
@@ -287,21 +255,20 @@ fn DataFetcher::new(base_url : String) -> DataFetcher {
 
 ///|
 /// Fetch data from the configured API endpoint
-#derive.endpoint(get = "/fetch?path={path}")
 pub fn DataFetcher::fetch(self : Self, path : String) -> String {
-  let headers = @httpTypes.Fields::from_list(
+  let headers = @http.Fields::from_list(
     [("Accept", b"application/json")],
   ).unwrap()
 
-  let request = @httpTypes.OutgoingRequest::new(headers)
-  let _ = request.set_scheme(Some(@httpTypes.Scheme::HTTPS))
+  let request = @http.OutgoingRequest::new(headers)
+  let _ = request.set_scheme(Some(@http.Https))
   let _ = request.set_authority(Some(self.base_url))
   let _ = request.set_path_with_query(Some(path))
 
   let body = request.body().unwrap()
-  @httpTypes.OutgoingBody::finish(body, None).unwrap()
+  @http.OutgoingBody::finish(body, None).unwrap()
 
-  let future_response = @outgoingHandler.handle(request, None).unwrap()
+  let future_response = @http.handle(request, None).unwrap()
   let pollable = future_response.subscribe()
   pollable.block()
   let response = future_response.get().unwrap().unwrap().unwrap()
@@ -310,7 +277,7 @@ pub fn DataFetcher::fetch(self : Self, path : String) -> String {
   let stream = incoming_body.stream().unwrap()
   let bytes = stream.blocking_read(1048576UL).unwrap()
   stream.drop()
-  @httpTypes.IncomingBody::finish(incoming_body)
+  @http.IncomingBody::finish(incoming_body)
 
   let result = String::from_utf8_lossy(bytes)
   self.last_result = result
@@ -354,7 +321,6 @@ Dropping a resource out of order will cause a trap.
 
 ## Key Constraints
 
-- The `wasi:http/outgoing-handler` and `wasi:http/types` imports must be added to `wit/main.wit` and bindings must be regenerated
 - All HTTP types are WASI resources with strict ownership and drop ordering
 - Field values (`field-value`) are `FixedArray[Byte]`, not strings — use byte literals (`b"..."`) or `.to_utf8_bytes()`
 - The `blocking_read` function reads up to the requested number of bytes — for large responses, read in a loop

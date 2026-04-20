@@ -9,82 +9,54 @@ description: "Atomic blocks, persistence control, and idempotency in MoonBit Gol
 
 Golem provides **automatic durable execution** — all agents are durable by default. These APIs are **advanced controls** that most agents will never need. Only use them when you have specific requirements around persistence granularity, idempotency, or atomicity.
 
-The durability APIs are in the `@durability` package (`golem:durability/durability`) and the host API package (`golem:api/host`).
+The high-level APIs are in the `@api` package (`golemcloud/golem_sdk/api`). Import it with an alias like `@api`. The types `PersistenceLevel` and `RetryPolicy` are re-exported from this package.
 
 ## Atomic Operations
 
-Group side effects so they are retried together on failure. Use `begin_durable_function` and `end_durable_function` to mark the boundaries of an atomic region:
+Group side effects so they are retried together on failure. Use `with_atomic_operation` for automatic lifecycle management:
 
 ```moonbit
 fn atomic_transfer(from : Account, to : Account, amount : Double) -> Unit {
-  let begin_idx = @durability.begin_durable_function(
-    @oplog.WrappedFunctionType::WriteLocal,
-  )
-
-  let withdrawn = from.withdraw(amount)
-  to.deposit(withdrawn)
-
-  @durability.end_durable_function(
-    @oplog.WrappedFunctionType::WriteLocal,
-    begin_idx,
-    true, // forced_commit — flush oplog immediately
-  )
+  @api.with_atomic_operation(fn() {
+    let withdrawn = from.withdraw(amount)
+    to.deposit(withdrawn)
+  })
 }
 ```
 
 If the agent fails mid-block, the entire block is re-executed on recovery rather than resuming from the middle.
 
-### Checking Live vs. Replay
-
-Inside an atomic block, check whether the agent is executing live or replaying from the oplog:
+For manual control, use `mark_begin_operation` / `mark_end_operation`:
 
 ```moonbit
-let state = @durability.current_durable_execution_state()
-if state.is_live {
-  // First-time execution — perform real side effects
-  let result = call_external_api()
-  @durability.persist_durable_function_invocation(
-    "call_external_api",
-    request_value_and_type,
-    response_value_and_type,
-    @oplog.WrappedFunctionType::WriteRemote,
-  )
-} else {
-  // Replaying — read the persisted result instead
-  let persisted = @durability.read_persisted_durable_function_invocation()
-  // Use persisted.response
+fn atomic_transfer(from : Account, to : Account, amount : Double) -> Unit {
+  let begin = @api.mark_begin_operation()
+  let withdrawn = from.withdraw(amount)
+  to.deposit(withdrawn)
+  @api.mark_end_operation(begin)
 }
 ```
 
-### WrappedFunctionType
-
-Choose the appropriate function type based on the nature of the side effect:
-
-| Variant | Use for |
-|---------|---------|
-| `ReadLocal` | Local reads (no external I/O) |
-| `WriteLocal` | Local writes (no external I/O) |
-| `ReadRemote` | Remote reads (HTTP GET, etc.) |
-| `WriteRemote` | Remote writes (HTTP POST, payments, etc.) |
-| `WriteRemoteBatched(n?)` | Batched remote writes |
-| `WriteRemoteTransaction(n?)` | Transactional remote writes |
-
 ## Persistence Level Control
 
-Temporarily disable oplog recording for performance-sensitive sections:
+Temporarily adjust oplog recording for performance-sensitive sections. Use `with_persistence_level` for automatic save/restore:
 
 ```moonbit
-// Save current level
-let original = @host.get_oplog_persistence_level()
+fn do_fast_work() -> Unit {
+  @api.with_persistence_level(@api.PersistenceLevel::PersistNothing, fn() {
+    // Side effects here will be replayed on recovery instead of persisted
+    do_idempotent_work()
+  })
+}
+```
 
-// Disable persistence — side effects will be replayed on recovery
-@host.set_oplog_persistence_level(@host.PersistenceLevel::PersistNothing)
+For manual control, use `get_oplog_persistence_level` / `set_oplog_persistence_level`:
 
-// Perform idempotent operations where replay is safe
+```moonbit
+let original = @api.get_oplog_persistence_level()
+@api.set_oplog_persistence_level(@api.PersistenceLevel::PersistNothing)
 do_idempotent_work()
-
-// Restore original level
-@host.set_oplog_persistence_level(original)
+@api.set_oplog_persistence_level(original)
 ```
 
 ### PersistenceLevel Variants
@@ -97,20 +69,26 @@ do_idempotent_work()
 
 ## Idempotence Mode
 
-Control whether HTTP requests are retried when the result is uncertain:
+Control whether HTTP requests are retried when the result is uncertain. Use `with_idempotence_mode` for scoped control:
 
 ```moonbit
-// Disable automatic retries for non-idempotent calls (e.g., payments)
-@host.set_idempotence_mode(false)
-
-// Make the non-idempotent external API call
-let result = charge_payment(amount)
-
-// Re-enable automatic retries
-@host.set_idempotence_mode(true)
+fn make_payment(amount : Double) -> String {
+  @api.with_idempotence_mode(false, fn() {
+    // At-most-once semantics for this non-idempotent call
+    charge_payment(amount)
+  })
+}
 ```
 
-Use `@host.get_idempotence_mode()` to read the current setting.
+For manual control:
+
+```moonbit
+@api.set_idempotence_mode(false)
+let result = charge_payment(amount)
+@api.set_idempotence_mode(true)
+```
+
+Use `@api.get_idempotence_mode()` to read the current setting.
 
 ## Oplog Commit
 
@@ -118,7 +96,7 @@ Wait until the oplog is replicated to a specified number of replicas before cont
 
 ```moonbit
 // Ensure oplog is replicated to 3 replicas before proceeding
-@host.oplog_commit(3)
+@api.oplog_commit(b'\x03')
 ```
 
 The argument is the desired replica count (`Byte` type).
@@ -128,40 +106,66 @@ The argument is the desired replica count (`Byte` type).
 Generate a durable idempotency key that persists across agent restarts — safe for payment APIs and other exactly-once operations:
 
 ```moonbit
-let key = @host.generate_idempotency_key()
+let key = @api.generate_idempotency_key()
 // key is a @types.Uuid — use it with external APIs for exactly-once processing
+
+// Or get it as a string directly:
+let key_str = @api.generate_idempotency_key_string()
 ```
 
 ## Retry Policy
 
-Override the default retry policy for a block of code:
+Override the default retry policy for a block of code. Use `with_retry_policy` for scoped control:
 
 ```moonbit
-// Save current policy
-let original = @host.get_retry_policy()
-
-// Set a custom retry policy
-@host.set_retry_policy(
-  @host.RetryPolicy::{
-    max_attempts: 5,
-    min_delay: 100UL,         // milliseconds
-    max_delay: 5000UL,        // milliseconds
-    multiplier: 2.0,
-    max_jitter_factor: Some(0.1),
-  },
-)
-
-// Code with custom retry behavior
-do_flaky_operation()
-
-// Restore original policy
-@host.set_retry_policy(original)
+fn do_flaky_work() -> Unit {
+  @api.with_retry_policy(
+    @api.RetryPolicy::{
+      max_attempts: 5U,
+      min_delay: 100UL,         // milliseconds
+      max_delay: 5000UL,        // milliseconds
+      multiplier: 2.0,
+      max_jitter_factor: Some(0.1),
+    },
+    fn() { do_flaky_operation() },
+  )
+}
 ```
 
-## Import Paths
+For manual control, use `get_retry_policy` / `set_retry_policy`:
 
-The APIs come from two WIT-generated packages in the Golem MoonBit SDK:
+```moonbit
+let original = @api.get_retry_policy()
+@api.set_retry_policy(@api.RetryPolicy::{
+  max_attempts: 5U,
+  min_delay: 100UL,
+  max_delay: 5000UL,
+  multiplier: 2.0,
+  max_jitter_factor: Some(0.1),
+})
+do_flaky_operation()
+@api.set_retry_policy(original)
+```
 
-- **`@durability`** — `golem:durability/durability` — `begin_durable_function`, `end_durable_function`, `current_durable_execution_state`, `persist_*`, `read_persisted_*`
-- **`@host`** — `golem:api/host` — `oplog_commit`, `get/set_idempotence_mode`, `get/set_oplog_persistence_level`, `get/set_retry_policy`, `generate_idempotency_key`
-- **`@oplog`** — `golem:api/oplog` — `WrappedFunctionType` enum
+## Import Path
+
+Add the `api` package to your `moon.pkg` imports:
+
+```json
+import {
+  "golemcloud/golem_sdk/api" @api,
+}
+```
+
+All durability, persistence, idempotency, retry, and oplog APIs are available from `@api`.
+
+## Low-Level Durability API
+
+For advanced use cases (e.g., manually persisting function invocations for replay), the raw durability APIs are available in `golemcloud/golem_sdk/interface/golem/durability/durability`:
+
+- `begin_durable_function(function_type)` / `end_durable_function(function_type, begin_index, forced_commit)`
+- `current_durable_execution_state()` — returns `DurableExecutionState { is_live, persistence_level }`
+- `persist_durable_function_invocation(function_name, request, response, function_type)`
+- `read_persisted_durable_function_invocation()`
+
+These are rarely needed — prefer the `@api` wrappers above.

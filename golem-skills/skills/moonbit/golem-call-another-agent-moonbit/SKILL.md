@@ -1,17 +1,13 @@
 ---
 name: golem-call-another-agent-moonbit
-description: "Calling another MoonBit Golem agent and awaiting the result (RPC). Use when the user asks to invoke, call, or communicate with another agent from within agent code."
+description: "Calling another agent and awaiting the result in a MoonBit Golem project. Use when the user asks about agent-to-agent RPC, calling remote agents, or inter-component communication."
 ---
 
 # Calling Another Agent (MoonBit)
 
 ## Overview
 
-The `agents` code generation tool auto-generates a `<AgentName>Client` struct for each agent, enabling agent-to-agent communication via RPC. Each method on the client has three variants:
-
-- `client.method(args)` — awaited call (blocks until result)
-- `client.trigger_method(args)` — fire-and-forget (returns immediately)
-- `client.schedule_method(scheduled_at, args)` — scheduled invocation at a future time
+The `#derive.agent` code generation tool auto-generates a `<AgentName>Client` struct for each agent, enabling agent-to-agent communication via RPC. An awaited call blocks the calling agent until the target agent returns a result.
 
 ## Getting a Client (Scoped)
 
@@ -27,6 +23,8 @@ CounterClient::scoped("my-counter", fn(counter) raise @common.AgentError {
 ```
 
 This is the **recommended** pattern — it ensures the client resource is cleaned up automatically.
+
+Note: agents with no constructor parameters omit the parameter from `scoped` / `get`.
 
 ## Getting a Client (Manual)
 
@@ -55,31 +53,9 @@ CounterClient::scoped("my-counter", fn(counter) raise @common.AgentError {
 
 The calling agent **blocks** until the target agent processes the request and returns. This is the standard RPC pattern.
 
-## Fire-and-Forget
-
-Use `trigger_` prefixed methods to invoke without waiting for the result:
-
-```moonbit
-CounterClient::scoped("my-counter", fn(counter) raise @common.AgentError {
-  counter.trigger_increment()
-})
-```
-
-The call returns immediately. Use this to break RPC cycles or start background work.
-
-## Scheduled Call
-
-Use `schedule_` prefixed methods to invoke at a future time:
-
-```moonbit
-CounterClient::scoped("my-counter", fn(counter) raise @common.AgentError {
-  counter.schedule_increment(scheduled_at)
-})
-```
-
 ## Passing Complex Types
 
-Agent methods accept custom types defined in your WIT interfaces:
+Agent methods accept custom types defined in your agent code:
 
 ```moonbit
 TaskManagerClient::scoped(fn(tm) raise @common.AgentError {
@@ -94,18 +70,9 @@ TaskManagerClient::scoped(fn(tm) raise @common.AgentError {
 })
 ```
 
-Note: agents with no constructor parameters omit the parameter from `scoped` / `get`.
-
 ## Phantom Agents
 
-To create multiple distinct instances with the same constructor parameters, use phantom agents:
-
-```moonbit
-let phantom = CounterClient::new_phantom("my-counter")
-let id = phantom.phantom_id()
-// Later, reconnect to the same phantom:
-let same = CounterClient::get_phantom("my-counter", id.unwrap())
-```
+To create multiple distinct instances with the same constructor parameters, use phantom agents. See the `golem-multi-instance-agent-moonbit` skill.
 
 ## Cross-Component RPC
 
@@ -113,16 +80,4 @@ When calling agents defined in a **different component**, the generated client t
 
 ## Avoiding Deadlocks
 
-**Never create RPC cycles** where A awaits B and B awaits A — this deadlocks both agents. Use `trigger_` (fire-and-forget) to break cycles:
-
-```moonbit
-// WRONG: Agent A calls B, Agent B calls A — deadlock!
-// Agent A:
-BClient::scoped("b", fn(b) raise @common.AgentError { b.do_work() })
-// Agent B:
-AClient::scoped("a", fn(a) raise @common.AgentError { a.do_work() })
-
-// CORRECT: Break the cycle with trigger_
-// Agent B:
-AClient::scoped("a", fn(a) raise @common.AgentError { a.trigger_do_work() })
-```
+**Never create RPC cycles** where A awaits B and B awaits A — this deadlocks both agents. Use `trigger_` (fire-and-forget) to break cycles. See the `golem-fire-and-forget-moonbit` skill.
