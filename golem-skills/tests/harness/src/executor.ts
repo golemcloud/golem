@@ -1809,15 +1809,20 @@ export class ScenarioExecutor {
     } finally {
       try {
         if (connected) {
-          await transport.terminateSession();
+          await client.close();
         }
+      } catch {
+        // ignore client close errors
+      }
+      try {
+        await transport.terminateSession();
       } catch {
         // ignore terminateSession errors — server may not support it
       }
       try {
         await transport.close();
       } catch {
-        // ignore close errors
+        // ignore transport close errors
       }
     }
   }
