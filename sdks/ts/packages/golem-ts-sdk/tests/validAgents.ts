@@ -608,6 +608,58 @@ class ComplexHttpAgent extends BaseAgent {
   async rootPathFun() {}
 }
 
+@agent({ mount: '/test' })
+class AllHttpMethodsAgent extends BaseAgent {
+  constructor() {
+    super();
+  }
+
+  @endpoint({ get: '/get' })
+  async getMethod(): Promise<string> {
+    return Promise.resolve('GET');
+  }
+
+  @endpoint({ post: '/post' })
+  async postMethod(): Promise<string> {
+    return Promise.resolve('POST');
+  }
+
+  @endpoint({ put: '/put' })
+  async putMethod(): Promise<string> {
+    return Promise.resolve('PUT');
+  }
+
+  @endpoint({ delete: '/delete' })
+  async deleteMethod(): Promise<string> {
+    return Promise.resolve('DELETE');
+  }
+
+  @endpoint({ patch: '/patch' })
+  async patchMethod(): Promise<string> {
+    return Promise.resolve('PATCH');
+  }
+
+  @endpoint({ head: '/head' })
+  async headMethod(): Promise<string> {
+    return Promise.resolve('HEAD');
+  }
+
+  @endpoint({ options: '/options' })
+  async optionsMethod(): Promise<string> {
+    return Promise.resolve('OPTIONS');
+  }
+
+  @endpoint({ connect: '/connect' })
+  async connectMethod(): Promise<string> {
+    return Promise.resolve('CONNECT');
+  }
+
+  @endpoint({ trace: '/trace' })
+  async traceMethod(): Promise<string> {
+    return Promise.resolve('TRACE');
+  }
+}
+
 @agent()
 class WebhookAgent extends BaseAgent {
   constructor(
