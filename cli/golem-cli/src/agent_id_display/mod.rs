@@ -40,6 +40,7 @@ pub enum SourceLanguage {
     Rust,
     TypeScript,
     Scala,
+    MoonBit,
     Other(String),
 }
 
@@ -54,7 +55,10 @@ impl SourceLanguage {
     pub fn is_known(&self) -> bool {
         matches!(
             self,
-            SourceLanguage::Rust | SourceLanguage::TypeScript | SourceLanguage::Scala
+            SourceLanguage::Rust
+                | SourceLanguage::TypeScript
+                | SourceLanguage::Scala
+                | SourceLanguage::MoonBit
         )
     }
 }
@@ -68,6 +72,8 @@ impl From<&str> for SourceLanguage {
             SourceLanguage::TypeScript
         } else if trimmed.eq_ignore_ascii_case("scala") {
             SourceLanguage::Scala
+        } else if trimmed.eq_ignore_ascii_case("moonbit") {
+            SourceLanguage::MoonBit
         } else {
             SourceLanguage::Other(trimmed.to_string())
         }
@@ -86,6 +92,7 @@ impl std::fmt::Display for SourceLanguage {
             SourceLanguage::Rust => write!(f, "rust"),
             SourceLanguage::TypeScript => write!(f, "typescript"),
             SourceLanguage::Scala => write!(f, "scala"),
+            SourceLanguage::MoonBit => write!(f, "moonbit"),
             SourceLanguage::Other(s) => write!(f, "{s}"),
         }
     }
@@ -100,7 +107,7 @@ pub fn render_data_value(data_value: &DataValue, source_language: &SourceLanguag
     match source_language {
         SourceLanguage::Rust => render_rust::render_data_value_rust(data_value),
         SourceLanguage::Scala => render_scala::render_data_value_scala(data_value),
-        SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
+        SourceLanguage::TypeScript | SourceLanguage::MoonBit | SourceLanguage::Other(_) => {
             render_ts::render_data_value_ts(data_value)
         }
     }
@@ -114,7 +121,7 @@ pub fn render_value_and_type(vat: &ValueAndType, source_language: &SourceLanguag
     match source_language {
         SourceLanguage::Rust => render_rust::render_value_and_type_rust(vat),
         SourceLanguage::Scala => render_scala::render_value_and_type_scala(vat),
-        SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
+        SourceLanguage::TypeScript | SourceLanguage::MoonBit | SourceLanguage::Other(_) => {
             render_ts::render_value_and_type_ts(vat)
         }
     }
@@ -144,7 +151,7 @@ pub fn render_type_for_language(
     match lang {
         SourceLanguage::Rust => render_rust::render_type_rust(typ, prefer_name),
         SourceLanguage::Scala => render_scala::render_type_scala(typ, prefer_name),
-        SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
+        SourceLanguage::TypeScript | SourceLanguage::MoonBit | SourceLanguage::Other(_) => {
             render_ts::render_type_ts(typ, prefer_name)
         }
     }
@@ -162,7 +169,7 @@ pub fn parse_type_for_language(
         SourceLanguage::Rust => parse_type_rust::parse_type_rust(input),
         SourceLanguage::TypeScript => parse_type_ts::parse_type_ts(input),
         SourceLanguage::Scala => parse_type_scala::parse_type_scala(input),
-        SourceLanguage::Other(_) => parse_type_ts::parse_type_ts(input)
+        SourceLanguage::MoonBit | SourceLanguage::Other(_) => parse_type_ts::parse_type_ts(input)
             .or_else(|_| parse_type_rust::parse_type_rust(input))
             .or_else(|_| parse_type_scala::parse_type_scala(input))
             .map_err(|_| ParseError {
@@ -202,13 +209,15 @@ pub fn parse_value_for_language(
         SourceLanguage::Rust => try_parse::<parse_rust::RustDialect>(input, typ),
         SourceLanguage::TypeScript => try_parse::<parse_ts::TsDialect>(input, typ),
         SourceLanguage::Scala => try_parse::<parse_scala::ScalaDialect>(input, typ),
-        SourceLanguage::Other(_) => try_parse::<parse_ts::TsDialect>(input, typ)
-            .or_else(|_| try_parse::<parse_rust::RustDialect>(input, typ))
-            .or_else(|_| try_parse::<parse_scala::ScalaDialect>(input, typ))
-            .map_err(|_| ParseError {
-                position: 0,
-                message: format!("could not parse value '{input}'"),
-            }),
+        SourceLanguage::MoonBit | SourceLanguage::Other(_) => {
+            try_parse::<parse_ts::TsDialect>(input, typ)
+                .or_else(|_| try_parse::<parse_rust::RustDialect>(input, typ))
+                .or_else(|_| try_parse::<parse_scala::ScalaDialect>(input, typ))
+                .map_err(|_| ParseError {
+                    position: 0,
+                    message: format!("could not parse value '{input}'"),
+                })
+        }
     }
 }
 

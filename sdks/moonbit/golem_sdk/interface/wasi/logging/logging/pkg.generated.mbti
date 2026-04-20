@@ -1,0 +1,24 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/wasi/logging/logging"
+
+// Values
+pub fn log(Level, String, String) -> Unit
+
+// Errors
+
+// Types and methods
+pub(all) enum Level {
+  TRACE
+  DEBUG
+  INFO
+  WARN
+  ERROR
+  CRITICAL
+} derive(Eq, Show)
+pub fn Level::from(Int) -> Self
+pub fn Level::ordinal(Self) -> Int
+
+// Type aliases
+
+// Traits
+

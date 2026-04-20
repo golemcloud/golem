@@ -22,7 +22,7 @@ cargo build -p <crate>    # Build specific crate
 
 Always run `cargo make build` before starting work to ensure all dependencies are compiled.
 
-**Note:** The SDKs in `sdks/` are not part of the main build flow. Load `sdk-development` when working on the Rust or TypeScript SDKs, and `golem-scala-development` when working on the Scala SDK.
+**Note:** The SDKs in `sdks/` are not part of the main build flow. Load `sdk-development` when working on the Rust or TypeScript SDKs, `golem-scala-development` when working on the Scala SDK, and see `sdks/moonbit/AGENTS.md` when working on the MoonBit SDK.
 
 ## Testing
 
@@ -67,7 +67,7 @@ Load these skills for guided workflows on complex tasks:
 | `modifying-test-components` | Building or modifying test WASM components, or rebuilding after SDK changes |
 | `modifying-wit-interfaces` | Adding or modifying WIT interfaces and synchronizing across sub-projects |
 | `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
-| `sdk-development` | Working on the Rust or TypeScript SDKs in `sdks/` |
+| `sdk-development` | Working on the Rust, TypeScript, or MoonBit SDKs in `sdks/` |
 | `golem-scala-development` | Compile, publish, and test the Golem Scala SDK in `sdks/scala/` |
 | `golem-scala-integration-tests` | Running and debugging Scala SDK integration tests |
 | `golem-scala-base-image` | WIT folder structure and regenerating `agent_guest.wasm` for the Scala SDK |
@@ -107,7 +107,7 @@ All crate dependencies must have their versions specified in the root workspace 
 - `golem-wasm/` - WASM utilities
 - `golem-rib/` - Rib language implementation
 - `cli/` - CLI tools (golem-cli, golem)
-- `sdks/` - Language-specific SDKs (Rust, TypeScript, Scala) - **not part of main build flow, see SDK-specific AGENTS.md**
+- `sdks/` - Language-specific SDKs (Rust, TypeScript, Scala, MoonBit) - **not part of main build flow, see SDK-specific AGENTS.md**
 - `golem-skills/` - Skill definitions and skill testing harness
 - `integration-tests/` - Integration test suite
 - `test-components/` - Test WASM components

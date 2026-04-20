@@ -31,6 +31,7 @@ Choose tests based on what you changed. **Do not run `cargo make test`** — it 
 | gRPC API endpoints | `cargo make api-tests-grpc` |
 | Rust SDK (`sdks/rust/`) | `cargo test -p golem-rust` + `cargo make worker-executor-tests` |
 | TypeScript SDK (`sdks/ts/`) | `npx pnpm run test` (in `sdks/ts/`) + `cargo make cli-tests` |
+| MoonBit SDK (`sdks/moonbit/`) | `moon test` (in `sdks/moonbit/golem_sdk/`) |
 
 If your change spans multiple areas, run multiple test suites.
 

@@ -97,6 +97,7 @@ enum Transform {
     TsSdk,
     RustSdk,
     ScalaSdk,
+    MoonBitSdk,
     ApplicationName,
 }
 
@@ -281,13 +282,20 @@ fn generate_directory<T: TemplateGeneratorTargetFs>(
                     name.as_str(),
                 ) {
                     (true, "golem.yaml") => {
-                        vec![Transform::ManifestHints, Transform::ApplicationName]
+                        vec![
+                            Transform::ManifestHints,
+                            Transform::ApplicationName,
+                            Transform::MoonBitSdk,
+                        ]
                     }
                     (true, "package.json") => vec![Transform::TsSdk],
                     (true, "Cargo.toml") => vec![Transform::RustSdk],
                     (true, "build.sbt") => vec![Transform::ScalaSdk, Transform::ApplicationName],
                     (true, "plugins.sbt") => vec![Transform::ScalaSdk],
                     (true, "build.properties") => vec![Transform::ScalaSdk],
+                    (true, "moon.mod.json") => {
+                        vec![Transform::MoonBitSdk, Transform::ApplicationName]
+                    }
                     (true, _) => vec![],
                     (false, "golem.yaml") => {
                         vec![
@@ -444,6 +452,25 @@ fn transform(
                 replacements.insert(
                     "GOLEM_SCALA_SBT_VERSION",
                     versions::scala_dep::SBT_VERSION.to_string(),
+                );
+            }
+            Transform::MoonBitSdk => {
+                replacements.insert("GOLEM_MOONBIT_DEP_SDK_DEP", sdk_overrides.moonbit_sdk_dep());
+                replacements.insert(
+                    "GOLEM_MOONBIT_DEP_SDK_VERSION",
+                    versions::sdk::MOONBIT.to_string(),
+                );
+                replacements.insert(
+                    "GOLEM_MOONBIT_DEP_TOOLS_BIN_DEPS",
+                    sdk_overrides.moonbit_sdk_tools_bin_deps(),
+                );
+                replacements.insert(
+                    "GOLEM_MOONBIT_BUILD_TOOLS_PATH",
+                    sdk_overrides.moonbit_sdk_tools_build_path(),
+                );
+                replacements.insert(
+                    "GOLEM_MOONBIT_BUILD_SDK_PATH",
+                    sdk_overrides.moonbit_sdk_build_path(),
                 );
             }
             Transform::TsSdk => {

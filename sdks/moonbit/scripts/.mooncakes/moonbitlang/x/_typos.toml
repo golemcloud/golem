@@ -1,0 +1,12 @@
+[files]
+extend-exclude = ["**/*_gen.mbt"]
+
+[default.extend-identifiers]
+IDentifier = "IDentifier"
+
+[default]
+extend-ignore-re = [
+    # ignore string literals
+    "\"(.*?)\"",
+    ".*#|.*",
+]

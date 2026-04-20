@@ -27,14 +27,18 @@ const GOLEM_RUST_VERSION: &str = "GOLEM_RUST_VERSION";
 const GOLEM_TS_PACKAGES_PATH: &str = "GOLEM_TS_PACKAGES_PATH";
 const GOLEM_TS_VERSION: &str = "GOLEM_TS_VERSION";
 const GOLEM_SCALA_SDK_VERSION: &str = "GOLEM_SCALA_SDK_VERSION";
+const GOLEM_MOONBIT_SDK_PATH: &str = "GOLEM_MOONBIT_SDK_PATH";
+const GOLEM_MOONBIT_SDK_VERSION: &str = "GOLEM_MOONBIT_SDK_VERSION";
 
-const SDK_OVERRIDE_KEYS: [&str; 6] = [
+const SDK_OVERRIDE_KEYS: [&str; 8] = [
     GOLEM_PATH,
     GOLEM_RUST_PATH,
     GOLEM_RUST_VERSION,
     GOLEM_TS_PACKAGES_PATH,
     GOLEM_TS_VERSION,
     GOLEM_SCALA_SDK_VERSION,
+    GOLEM_MOONBIT_SDK_PATH,
+    GOLEM_MOONBIT_SDK_VERSION,
 ];
 
 pub const SDK_OVERRIDES_FILE_NAME: &str = ".golem-sdk-overrides";
@@ -59,6 +63,8 @@ pub struct SdkOverrides {
     pub ts_packages_path: Option<String>,
     pub ts_version: Option<String>,
     pub scala_sdk_version: Option<String>,
+    pub moonbit_sdk_path: Option<String>,
+    pub moonbit_sdk_version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +92,10 @@ impl SdkOverrides {
             ),
             ts_version: None,
             scala_sdk_version: Some("0.0.0-SNAPSHOT".to_string()),
+            moonbit_sdk_path: Some(
+                fs::path_to_str(&workspace_dir.join("sdks/moonbit/golem_sdk"))?.to_string(),
+            ),
+            moonbit_sdk_version: None,
         }
         .to_env_vars())
     }
@@ -110,6 +120,58 @@ impl SdkOverrides {
             .as_deref()
             .unwrap_or(versions::sdk::SCALA)
             .to_string()
+    }
+
+    pub fn moonbit_sdk_dep(&self) -> String {
+        match &self.moonbit_sdk_path {
+            Some(path) => format!(r#"{{ "path": "{path}" }}"#),
+            None => {
+                let version = self
+                    .moonbit_sdk_version
+                    .as_deref()
+                    .unwrap_or(versions::sdk::MOONBIT);
+                format!(r#""{version}""#)
+            }
+        }
+    }
+
+    pub fn moonbit_sdk_tools_bin_deps(&self) -> String {
+        match &self.moonbit_sdk_path {
+            Some(_) => String::new(),
+            None => {
+                let version = self
+                    .moonbit_sdk_version
+                    .as_deref()
+                    .unwrap_or(versions::sdk::MOONBIT);
+                format!(
+                    r#",
+  "bin-deps": {{
+    "golemcloud/golem_sdk_tools": "{version}"
+  }}"#
+                )
+            }
+        }
+    }
+
+    pub fn moonbit_sdk_build_path(&self) -> String {
+        match &self.moonbit_sdk_path {
+            Some(path) => path.clone(),
+            None => ".mooncakes/golemcloud/golem_sdk".to_string(),
+        }
+    }
+
+    pub fn moonbit_sdk_tools_build_path(&self) -> String {
+        match &self.moonbit_sdk_path {
+            Some(path) => {
+                let sdk_path = Path::new(path);
+                sdk_path
+                    .parent()
+                    .map(|p| p.join("golem_sdk_tools"))
+                    .and_then(|p| p.to_str().map(|s| s.to_string()))
+                    .unwrap_or_else(|| ".mooncakes/golemcloud/golem_sdk_tools".to_string())
+            }
+            None => ".mooncakes/golemcloud/golem_sdk_tools".to_string(),
+        }
     }
 
     pub fn golem_rust_dep(&self) -> anyhow::Result<String> {
@@ -244,6 +306,13 @@ impl SdkOverrides {
             )?,
             ts_version: get_normalized_value_by_key(&values, GOLEM_TS_VERSION),
             scala_sdk_version: get_normalized_value_by_key(&values, GOLEM_SCALA_SDK_VERSION),
+            moonbit_sdk_path: resolved_path_override(
+                &values,
+                GOLEM_MOONBIT_SDK_PATH,
+                golem_path.as_deref(),
+                "sdks/moonbit/golem_sdk",
+            )?,
+            moonbit_sdk_version: get_normalized_value_by_key(&values, GOLEM_MOONBIT_SDK_VERSION),
         })
     }
 
@@ -263,6 +332,12 @@ impl SdkOverrides {
         }
         if let Some(value) = &self.scala_sdk_version {
             values.insert(GOLEM_SCALA_SDK_VERSION.to_string(), value.clone());
+        }
+        if let Some(value) = &self.moonbit_sdk_path {
+            values.insert(GOLEM_MOONBIT_SDK_PATH.to_string(), value.clone());
+        }
+        if let Some(value) = &self.moonbit_sdk_version {
+            values.insert(GOLEM_MOONBIT_SDK_VERSION.to_string(), value.clone());
         }
         values
     }
@@ -400,7 +475,10 @@ fn parse_dotenv_with_relative_paths(path: &Path) -> anyhow::Result<HashMap<Strin
 }
 
 fn is_path_override_key(key: &str) -> bool {
-    matches!(key, GOLEM_PATH | GOLEM_RUST_PATH | GOLEM_TS_PACKAGES_PATH)
+    matches!(
+        key,
+        GOLEM_PATH | GOLEM_RUST_PATH | GOLEM_TS_PACKAGES_PATH | GOLEM_MOONBIT_SDK_PATH
+    )
 }
 
 fn resolve_relative_path(base_dir: &Path, value: &str) -> anyhow::Result<String> {
@@ -498,6 +576,16 @@ mod tests {
                     .to_string()
             )
         );
+        assert_eq!(
+            overrides.moonbit_sdk_path,
+            Some(
+                Path::new("/repo")
+                    .join("sdks/moonbit/golem_sdk")
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            )
+        );
     }
 
     #[test]
@@ -525,6 +613,8 @@ mod tests {
             ts_packages_path: Some("/repo/sdks/ts/packages".to_string()),
             ts_version: None,
             scala_sdk_version: None,
+            moonbit_sdk_path: None,
+            moonbit_sdk_version: None,
         };
 
         assert_eq!(
@@ -542,6 +632,8 @@ mod tests {
             ts_packages_path: Some("/repo/sdks/ts/packages".to_string()),
             ts_version: None,
             scala_sdk_version: None,
+            moonbit_sdk_path: None,
+            moonbit_sdk_version: None,
         }
         .to_env_vars();
 

@@ -1534,4 +1534,129 @@ mod tests {
             .expect("missing MultiTuple payload node");
         assert_eq!(multi_tuple_node.name.as_deref(), Some("MultiTuple"));
     }
+
+    #[agent_definition(mount = "/test")]
+    trait AllHttpMethodsAgent {
+        fn new() -> Self;
+
+        #[endpoint(get = "/get")]
+        fn get_method(&self) -> String;
+
+        #[endpoint(post = "/post")]
+        fn post_method(&self) -> String;
+
+        #[endpoint(put = "/put")]
+        fn put_method(&self) -> String;
+
+        #[endpoint(delete = "/delete")]
+        fn delete_method(&self) -> String;
+
+        #[endpoint(patch = "/patch")]
+        fn patch_method(&self) -> String;
+
+        #[endpoint(head = "/head")]
+        fn head_method(&self) -> String;
+
+        #[endpoint(options = "/options")]
+        fn options_method(&self) -> String;
+
+        #[endpoint(connect = "/connect")]
+        fn connect_method(&self) -> String;
+
+        #[endpoint(trace = "/trace")]
+        fn trace_method(&self) -> String;
+    }
+
+    struct AllHttpMethodsAgentImpl;
+
+    #[agent_implementation]
+    impl AllHttpMethodsAgent for AllHttpMethodsAgentImpl {
+        fn new() -> Self {
+            AllHttpMethodsAgentImpl
+        }
+
+        fn get_method(&self) -> String {
+            "GET".to_string()
+        }
+
+        fn post_method(&self) -> String {
+            "POST".to_string()
+        }
+
+        fn put_method(&self) -> String {
+            "PUT".to_string()
+        }
+
+        fn delete_method(&self) -> String {
+            "DELETE".to_string()
+        }
+
+        fn patch_method(&self) -> String {
+            "PATCH".to_string()
+        }
+
+        fn head_method(&self) -> String {
+            "HEAD".to_string()
+        }
+
+        fn options_method(&self) -> String {
+            "OPTIONS".to_string()
+        }
+
+        fn connect_method(&self) -> String {
+            "CONNECT".to_string()
+        }
+
+        fn trace_method(&self) -> String {
+            "TRACE".to_string()
+        }
+    }
+
+    #[test]
+    fn test_all_http_methods_supported() {
+        use golem_rust::agentic::get_all_agent_types;
+
+        let agent_types = get_all_agent_types();
+
+        let agent = agent_types
+            .iter()
+            .find(|a| a.type_name == "AllHttpMethodsAgent")
+            .expect("AllHttpMethodsAgent not found");
+
+        let expected_methods = vec![
+            ("get_method", "HttpMethod::Get"),
+            ("post_method", "HttpMethod::Post"),
+            ("put_method", "HttpMethod::Put"),
+            ("delete_method", "HttpMethod::Delete"),
+            ("patch_method", "HttpMethod::Patch"),
+            ("head_method", "HttpMethod::Head"),
+            ("options_method", "HttpMethod::Options"),
+            ("connect_method", "HttpMethod::Connect"),
+            ("trace_method", "HttpMethod::Trace"),
+        ];
+
+        for (method_name, expected_http_method) in expected_methods {
+            let method = agent
+                .methods
+                .iter()
+                .find(|m| m.name == method_name)
+                .unwrap_or_else(|| panic!("Method {} not found", method_name));
+
+            assert_eq!(
+                method.http_endpoint.len(),
+                1,
+                "Method {} should have exactly one HTTP endpoint",
+                method_name
+            );
+
+            let endpoint = &method.http_endpoint[0];
+            // Convert HttpMethod enum to string representation for comparison
+            let method_str = format!("{:?}", endpoint.http_method);
+            assert_eq!(
+                method_str, expected_http_method,
+                "HTTP method mismatch for {}",
+                method_name
+            );
+        }
+    }
 }

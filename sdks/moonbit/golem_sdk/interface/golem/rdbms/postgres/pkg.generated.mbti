@@ -1,0 +1,303 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/rdbms/postgres"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/rdbms/types",
+}
+
+// Values
+
+// Errors
+pub(all) suberror Error_ {
+  ConnectionFailure(String)
+  QueryParameterFailure(String)
+  QueryExecutionFailure(String)
+  QueryResponseFailure(String)
+  Other(String)
+} derive(Eq, Show)
+
+// Types and methods
+pub(all) struct Composite {
+  name : String
+  values : Array[LazyDbValue]
+} derive(Eq, Show)
+
+pub(all) struct CompositeType {
+  name : String
+  attributes : Array[(String, LazyDbColumnType)]
+} derive(Eq, Show)
+
+pub(all) enum Datebound {
+  Included(@types.Date)
+  Excluded(@types.Date)
+  Unbounded
+} derive(Eq, Show)
+
+pub(all) struct Daterange {
+  start : Datebound
+  end : Datebound
+} derive(Eq, Show)
+
+pub(all) struct DbColumn {
+  ordinal : UInt64
+  name : String
+  db_type : DbColumnType
+  db_type_name : String
+} derive(Eq, Show)
+
+pub(all) enum DbColumnType {
+  Character
+  Int2
+  Int4
+  Int8
+  Float4
+  Float8
+  Numeric
+  Boolean
+  Text
+  Varchar
+  Bpchar
+  Timestamp
+  Timestamptz
+  Date
+  Time
+  Timetz
+  Interval
+  Bytea
+  Uuid
+  Xml
+  Json
+  Jsonb
+  Jsonpath
+  Inet
+  Cidr
+  Macaddr
+  Bit
+  Varbit
+  Int4range
+  Int8range
+  Numrange
+  Tsrange
+  Tstzrange
+  Daterange
+  Money
+  Oid
+  Enumeration(EnumerationType)
+  Composite(CompositeType)
+  Domain(DomainType)
+  Array(LazyDbColumnType)
+  Range(RangeType)
+  Vector
+  Halfvec
+  Sparsevec
+} derive(Eq, Show)
+
+pub(all) struct DbConnection(Int) derive(Eq, Show)
+pub fn DbConnection::begin_transaction(Self) -> Result[DbTransaction, Error_]
+pub fn DbConnection::drop(Self) -> Unit
+pub fn DbConnection::execute(Self, String, Array[DbValue]) -> Result[UInt64, Error_]
+#deprecated
+pub fn DbConnection::inner(Self) -> Int
+pub fn DbConnection::open(String) -> Result[Self, Error_]
+pub fn DbConnection::query(Self, String, Array[DbValue]) -> Result[DbResult, Error_]
+pub fn DbConnection::query_stream(Self, String, Array[DbValue]) -> Result[DbResultStream, Error_]
+
+pub(all) struct DbResult {
+  columns : Array[DbColumn]
+  rows : Array[DbRow]
+} derive(Eq, Show)
+
+pub(all) struct DbResultStream(Int) derive(Eq, Show)
+pub fn DbResultStream::drop(Self) -> Unit
+pub fn DbResultStream::get_columns(Self) -> Array[DbColumn]
+pub fn DbResultStream::get_next(Self) -> Array[DbRow]?
+#deprecated
+pub fn DbResultStream::inner(Self) -> Int
+
+pub(all) struct DbRow {
+  values : Array[DbValue]
+} derive(Eq, Show)
+
+pub(all) struct DbTransaction(Int) derive(Eq, Show)
+pub fn DbTransaction::commit(Self) -> Result[Unit, Error_]
+pub fn DbTransaction::drop(Self) -> Unit
+pub fn DbTransaction::execute(Self, String, Array[DbValue]) -> Result[UInt64, Error_]
+#deprecated
+pub fn DbTransaction::inner(Self) -> Int
+pub fn DbTransaction::query(Self, String, Array[DbValue]) -> Result[DbResult, Error_]
+pub fn DbTransaction::query_stream(Self, String, Array[DbValue]) -> Result[DbResultStream, Error_]
+pub fn DbTransaction::rollback(Self) -> Result[Unit, Error_]
+
+pub(all) enum DbValue {
+  Character(Int)
+  Int2(Int)
+  Int4(Int)
+  Int8(Int64)
+  Float4(Float)
+  Float8(Double)
+  Numeric(String)
+  Boolean(Bool)
+  Text(String)
+  Varchar(String)
+  Bpchar(String)
+  Timestamp(@types.Timestamp)
+  Timestamptz(@types.Timestamptz)
+  Date(@types.Date)
+  Time(@types.Time)
+  Timetz(@types.Timetz)
+  Interval(Interval)
+  Bytea(FixedArray[Byte])
+  Json(String)
+  Jsonb(String)
+  Jsonpath(String)
+  Xml(String)
+  Uuid(@types.Uuid)
+  Inet(@types.IpAddress)
+  Cidr(@types.IpAddress)
+  Macaddr(@types.MacAddress)
+  Bit(Array[Bool])
+  Varbit(Array[Bool])
+  Int4range(Int4range)
+  Int8range(Int8range)
+  Numrange(Numrange)
+  Tsrange(Tsrange)
+  Tstzrange(Tstzrange)
+  Daterange(Daterange)
+  Money(Int64)
+  Oid(UInt)
+  Enumeration(Enumeration)
+  Composite(Composite)
+  Domain(Domain)
+  Array(Array[LazyDbValue])
+  Range(Range)
+  Null
+  Vector(FixedArray[Float])
+  Halfvec(FixedArray[Float])
+  Sparsevec(SparseVec)
+} derive(Eq, Show)
+
+pub(all) struct Domain {
+  name : String
+  value : LazyDbValue
+} derive(Eq, Show)
+
+pub(all) struct DomainType {
+  name : String
+  base_type : LazyDbColumnType
+} derive(Eq, Show)
+
+pub(all) struct Enumeration {
+  name : String
+  value : String
+} derive(Eq, Show)
+
+pub(all) struct EnumerationType {
+  name : String
+} derive(Eq, Show)
+
+pub(all) enum Int4bound {
+  Included(Int)
+  Excluded(Int)
+  Unbounded
+} derive(Eq, Show)
+
+pub(all) struct Int4range {
+  start : Int4bound
+  end : Int4bound
+} derive(Eq, Show)
+
+pub(all) enum Int8bound {
+  Included(Int64)
+  Excluded(Int64)
+  Unbounded
+} derive(Eq, Show)
+
+pub(all) struct Int8range {
+  start : Int8bound
+  end : Int8bound
+} derive(Eq, Show)
+
+pub(all) struct Interval {
+  months : Int
+  days : Int
+  microseconds : Int64
+} derive(Eq, Show)
+
+pub(all) struct LazyDbColumnType(Int) derive(Eq, Show)
+pub fn LazyDbColumnType::drop(Self) -> Unit
+pub fn LazyDbColumnType::get(Self) -> DbColumnType
+#deprecated
+pub fn LazyDbColumnType::inner(Self) -> Int
+pub fn LazyDbColumnType::lazy_db_column_type(DbColumnType) -> Self
+
+pub(all) struct LazyDbValue(Int) derive(Eq, Show)
+pub fn LazyDbValue::drop(Self) -> Unit
+pub fn LazyDbValue::get(Self) -> DbValue
+#deprecated
+pub fn LazyDbValue::inner(Self) -> Int
+pub fn LazyDbValue::lazy_db_value(DbValue) -> Self
+
+pub(all) enum Numbound {
+  Included(String)
+  Excluded(String)
+  Unbounded
+} derive(Eq, Show)
+
+pub(all) struct Numrange {
+  start : Numbound
+  end : Numbound
+} derive(Eq, Show)
+
+pub(all) struct Range {
+  name : String
+  value : ValuesRange
+} derive(Eq, Show)
+
+pub(all) struct RangeType {
+  name : String
+  base_type : LazyDbColumnType
+} derive(Eq, Show)
+
+pub(all) struct SparseVec {
+  dim : Int
+  indices : FixedArray[Int]
+  values : FixedArray[Float]
+} derive(Eq, Show)
+
+pub(all) enum Tsbound {
+  Included(@types.Timestamp)
+  Excluded(@types.Timestamp)
+  Unbounded
+} derive(Eq, Show)
+
+pub(all) struct Tsrange {
+  start : Tsbound
+  end : Tsbound
+} derive(Eq, Show)
+
+pub(all) enum Tstzbound {
+  Included(@types.Timestamptz)
+  Excluded(@types.Timestamptz)
+  Unbounded
+} derive(Eq, Show)
+
+pub(all) struct Tstzrange {
+  start : Tstzbound
+  end : Tstzbound
+} derive(Eq, Show)
+
+pub(all) enum ValueBound {
+  Included(LazyDbValue)
+  Excluded(LazyDbValue)
+  Unbounded
+} derive(Eq, Show)
+
+pub(all) struct ValuesRange {
+  start : ValueBound
+  end : ValueBound
+} derive(Eq, Show)
+
+// Type aliases
+
+// Traits
+
