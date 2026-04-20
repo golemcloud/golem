@@ -41,7 +41,7 @@ pub struct DomainRegistrationService {
     domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
     environment_service: Arc<EnvironmentService>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
-    config: DomainRegistrationConfig,
+    domain_matcher: DomainMatcher,
 }
 
 impl DomainRegistrationService {
@@ -50,13 +50,13 @@ impl DomainRegistrationService {
         environment_service: Arc<EnvironmentService>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
         config: DomainRegistrationConfig,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
             domain_registration_repo,
             environment_service,
             registry_change_notifier,
-            config,
-        }
+            domain_matcher: DomainMatcher::new(&config.available_domains)?,
+        })
     }
 
     pub async fn create(
@@ -82,7 +82,10 @@ impl DomainRegistrationService {
             EnvironmentAction::CreateEnvironmentPluginGrant,
         )?;
 
-        if !domain_available_to_provision(&data.domain, &self.config.available_domains) {
+        if !self
+            .domain_matcher
+            .domain_available_to_provision(&data.domain)
+        {
             return Err(DomainRegistrationError::DomainCannotBeProvisioned(
                 data.domain,
             ));
@@ -185,7 +188,7 @@ impl DomainRegistrationService {
         &self,
         domain: &Domain,
     ) -> Result<(), DomainRegistrationError> {
-        if domain_valid_for_http_api(&domain.0, &self.config.available_domains) {
+        if self.domain_matcher.domain_valid_for_http_api(domain) {
             Ok(())
         } else {
             Err(DomainRegistrationError::DomainNotValidForHttpApi(
@@ -195,7 +198,7 @@ impl DomainRegistrationService {
     }
 
     pub fn validate_domain_for_mcp(&self, domain: &Domain) -> Result<(), DomainRegistrationError> {
-        if domain_valid_for_mcp(&domain.0, &self.config.available_domains) {
+        if self.domain_matcher.domain_valid_for_mcp(domain) {
             Ok(())
         } else {
             Err(DomainRegistrationError::DomainNotValidForMcp(
@@ -275,48 +278,67 @@ impl DomainRegistrationService {
     }
 }
 
-fn domain_valid_for_http_api(domain: &str, config: &AvailableDomainsConfig) -> bool {
-    match config {
-        AvailableDomainsConfig::Unrestricted(_) => true,
-        AvailableDomainsConfig::Restricted(restricted) => domain_matches_base(
-            domain,
-            &restricted.golem_apps_domain,
-            restricted.allow_arbitary_subdomains,
-        ),
+enum DomainMatcher {
+    Unrestricted,
+    Restricted {
+        golem_apps_domain_regex: Regex,
+        golem_mcps_domain_regex: Regex,
+    },
+}
+
+impl DomainMatcher {
+    fn new(config: &AvailableDomainsConfig) -> anyhow::Result<Self> {
+        match config {
+            AvailableDomainsConfig::Unrestricted(_) => Ok(Self::Unrestricted),
+            AvailableDomainsConfig::Restricted(restricted) => {
+                let make_regex = |base| {
+                    let escaped = regex::escape(base);
+                    let pattern = if restricted.allow_arbitary_subdomains {
+                        format!("^([^\\.]+\\.)+{escaped}$")
+                    } else {
+                        format!("^[^\\.]+\\.{escaped}$")
+                    };
+                    Regex::new(&pattern)
+                };
+
+                Ok(Self::Restricted {
+                    golem_apps_domain_regex: make_regex(&restricted.golem_apps_domain)?,
+                    golem_mcps_domain_regex: make_regex(&restricted.golem_mcps_domain)?,
+                })
+            }
+        }
     }
-}
 
-fn domain_valid_for_mcp(domain: &str, config: &AvailableDomainsConfig) -> bool {
-    match config {
-        AvailableDomainsConfig::Unrestricted(_) => true,
-        AvailableDomainsConfig::Restricted(restricted) => domain_matches_base(
-            domain,
-            &restricted.golem_mcps_domain,
-            restricted.allow_arbitary_subdomains,
-        ),
+    fn domain_valid_for_http_api(&self, domain: &Domain) -> bool {
+        match self {
+            Self::Unrestricted => true,
+            Self::Restricted {
+                golem_apps_domain_regex,
+                ..
+            } => golem_apps_domain_regex.is_match(&domain.0),
+        }
     }
-}
 
-fn domain_matches_base(domain: &str, base: &str, allow_arbitrary_subdomains: bool) -> bool {
-    let escaped = regex::escape(base);
-    let pattern = if allow_arbitrary_subdomains {
-        format!("^([^\\.]+\\.)+{escaped}$")
-    } else {
-        format!("^[^\\.]+\\.{escaped}$")
-    };
-    Regex::new(&pattern).unwrap().is_match(domain)
-}
+    fn domain_valid_for_mcp(&self, domain: &Domain) -> bool {
+        match self {
+            Self::Unrestricted => true,
+            Self::Restricted {
+                golem_mcps_domain_regex,
+                ..
+            } => golem_mcps_domain_regex.is_match(&domain.0),
+        }
+    }
 
-fn domain_available_to_provision(domain: &Domain, config: &AvailableDomainsConfig) -> bool {
-    match config {
-        AvailableDomainsConfig::Unrestricted(_) => true,
-        AvailableDomainsConfig::Restricted(restricted) => {
-            let allow_arbitrary = restricted.allow_arbitary_subdomains;
-            let matches_apps =
-                domain_matches_base(&domain.0, &restricted.golem_apps_domain, allow_arbitrary);
-            let matches_mcps =
-                domain_matches_base(&domain.0, &restricted.golem_mcps_domain, allow_arbitrary);
-            matches_apps || matches_mcps
+    fn domain_available_to_provision(&self, domain: &Domain) -> bool {
+        match self {
+            Self::Unrestricted => true,
+            Self::Restricted {
+                golem_apps_domain_regex,
+                golem_mcps_domain_regex,
+            } => {
+                golem_apps_domain_regex.is_match(&domain.0)
+                    || golem_mcps_domain_regex.is_match(&domain.0)
+            }
         }
     }
 }
@@ -328,279 +350,200 @@ mod tests {
     use golem_common::model::Empty;
     use golem_common::model::domain_registration::Domain;
 
-    use super::{
-        AvailableDomainsConfig, RestrictedAvailableDomainsConfig, domain_available_to_provision,
-        domain_valid_for_http_api, domain_valid_for_mcp,
-    };
+    use super::{AvailableDomainsConfig, DomainMatcher, RestrictedAvailableDomainsConfig};
 
     fn domain(s: &str) -> Domain {
         Domain(s.to_string())
     }
 
-    fn unrestricted() -> AvailableDomainsConfig {
-        AvailableDomainsConfig::Unrestricted(Empty {})
+    fn unrestricted() -> DomainMatcher {
+        DomainMatcher::new(&AvailableDomainsConfig::Unrestricted(Empty {})).unwrap()
     }
 
-    fn restricted(
-        apps_base: &str,
-        mcps_base: &str,
-        allow_arbitrary: bool,
-    ) -> AvailableDomainsConfig {
-        AvailableDomainsConfig::Restricted(RestrictedAvailableDomainsConfig {
-            golem_apps_domain: apps_base.to_string(),
-            golem_mcps_domain: mcps_base.to_string(),
-            allow_arbitary_subdomains: allow_arbitrary,
-        })
+    fn restricted(apps_base: &str, mcps_base: &str, allow_arbitrary: bool) -> DomainMatcher {
+        DomainMatcher::new(&AvailableDomainsConfig::Restricted(
+            RestrictedAvailableDomainsConfig {
+                golem_apps_domain: apps_base.to_string(),
+                golem_mcps_domain: mcps_base.to_string(),
+                allow_arbitary_subdomains: allow_arbitrary,
+            },
+        ))
+        .unwrap()
     }
 
     #[test]
     fn unrestricted_allows_any_domain() {
-        let config = unrestricted();
-        assert!(domain_available_to_provision(
-            &domain("anything.example.com"),
-            &config
-        ));
-        assert!(domain_available_to_provision(
-            &domain("foo.bar.baz"),
-            &config
-        ));
-        assert!(domain_available_to_provision(&domain("x"), &config));
+        let domain_matcher = unrestricted();
+        assert!(domain_matcher.domain_available_to_provision(&domain("anything.example.com")));
+        assert!(domain_matcher.domain_available_to_provision(&domain("foo.bar.baz")));
+        assert!(domain_matcher.domain_available_to_provision(&domain("x")));
     }
 
     #[test]
     fn restricted_no_arbitrary_allows_apps_subdomain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(domain_available_to_provision(
-            &domain("myapp.apps.golem.cloud"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(domain_matcher.domain_available_to_provision(&domain("myapp.apps.golem.cloud")));
     }
 
     #[test]
     fn restricted_no_arbitrary_allows_mcps_subdomain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(domain_available_to_provision(
-            &domain("mymcp.mcps.golem.cloud"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(domain_matcher.domain_available_to_provision(&domain("mymcp.mcps.golem.cloud")));
     }
 
     #[test]
     fn restricted_no_arbitrary_rejects_bare_apps_domain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_available_to_provision(
-            &domain("apps.golem.cloud"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(!domain_matcher.domain_available_to_provision(&domain("apps.golem.cloud")));
     }
 
     #[test]
     fn restricted_no_arbitrary_rejects_bare_mcps_domain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_available_to_provision(
-            &domain("mcps.golem.cloud"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(!domain_matcher.domain_available_to_provision(&domain("mcps.golem.cloud")));
     }
 
     #[test]
     fn restricted_no_arbitrary_rejects_deep_subdomain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_available_to_provision(
-            &domain("a.b.apps.golem.cloud"),
-            &config
-        ));
-        assert!(!domain_available_to_provision(
-            &domain("a.b.mcps.golem.cloud"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(!domain_matcher.domain_available_to_provision(&domain("a.b.apps.golem.cloud")));
+        assert!(!domain_matcher.domain_available_to_provision(&domain("a.b.mcps.golem.cloud")));
     }
 
     #[test]
     fn restricted_no_arbitrary_rejects_different_base() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_available_to_provision(
-            &domain("myapp.other.com"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(!domain_matcher.domain_available_to_provision(&domain("myapp.other.com")));
     }
 
     #[test]
     fn restricted_no_arbitrary_rejects_subdomain_with_dot_in_label() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_available_to_provision(
-            &domain(".apps.golem.cloud"),
-            &config
-        ));
-        assert!(!domain_available_to_provision(
-            &domain(".mcps.golem.cloud"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(!domain_matcher.domain_available_to_provision(&domain(".apps.golem.cloud")));
+        assert!(!domain_matcher.domain_available_to_provision(&domain(".mcps.golem.cloud")));
     }
 
     #[test]
     fn restricted_no_arbitrary_escapes_regex_special_chars_in_base() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_available_to_provision(
-            &domain("myapp.appsXgolemYcloud"),
-            &config
-        ));
-        assert!(!domain_available_to_provision(
-            &domain("mymcp.mcpsXgolemYcloud"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(!domain_matcher.domain_available_to_provision(&domain("myapp.appsXgolemYcloud")));
+        assert!(!domain_matcher.domain_available_to_provision(&domain("mymcp.mcpsXgolemYcloud")));
     }
 
     #[test]
     fn restricted_arbitrary_allows_apps_single_subdomain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
-        assert!(domain_available_to_provision(
-            &domain("myapp.apps.golem.cloud"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
+        assert!(domain_matcher.domain_available_to_provision(&domain("myapp.apps.golem.cloud")));
     }
 
     #[test]
     fn restricted_arbitrary_allows_mcps_single_subdomain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
-        assert!(domain_available_to_provision(
-            &domain("mymcp.mcps.golem.cloud"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
+        assert!(domain_matcher.domain_available_to_provision(&domain("mymcp.mcps.golem.cloud")));
     }
 
     #[test]
     fn restricted_arbitrary_allows_deep_subdomain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
-        assert!(domain_available_to_provision(
-            &domain("a.b.apps.golem.cloud"),
-            &config
-        ));
-        assert!(domain_available_to_provision(
-            &domain("x.y.z.apps.golem.cloud"),
-            &config
-        ));
-        assert!(domain_available_to_provision(
-            &domain("a.b.mcps.golem.cloud"),
-            &config
-        ));
-        assert!(domain_available_to_provision(
-            &domain("x.y.z.mcps.golem.cloud"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
+        assert!(domain_matcher.domain_available_to_provision(&domain("a.b.apps.golem.cloud")));
+        assert!(domain_matcher.domain_available_to_provision(&domain("x.y.z.apps.golem.cloud")));
+        assert!(domain_matcher.domain_available_to_provision(&domain("a.b.mcps.golem.cloud")));
+        assert!(domain_matcher.domain_available_to_provision(&domain("x.y.z.mcps.golem.cloud")));
     }
 
     #[test]
     fn restricted_arbitrary_rejects_bare_base_domain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
-        assert!(!domain_available_to_provision(
-            &domain("apps.golem.cloud"),
-            &config
-        ));
-        assert!(!domain_available_to_provision(
-            &domain("mcps.golem.cloud"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
+        assert!(!domain_matcher.domain_available_to_provision(&domain("apps.golem.cloud")));
+        assert!(!domain_matcher.domain_available_to_provision(&domain("mcps.golem.cloud")));
     }
 
     #[test]
     fn restricted_arbitrary_rejects_different_base() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
-        assert!(!domain_available_to_provision(
-            &domain("myapp.other.com"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
+        assert!(!domain_matcher.domain_available_to_provision(&domain("myapp.other.com")));
     }
 
     #[test]
     fn restricted_arbitrary_escapes_regex_special_chars_in_base() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
-        assert!(!domain_available_to_provision(
-            &domain("myapp.appsXgolemYcloud"),
-            &config
-        ));
-        assert!(!domain_available_to_provision(
-            &domain("mymcp.mcpsXgolemYcloud"),
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
+        assert!(!domain_matcher.domain_available_to_provision(&domain("myapp.appsXgolemYcloud")));
+        assert!(!domain_matcher.domain_available_to_provision(&domain("mymcp.mcpsXgolemYcloud")));
     }
 
     #[test]
     fn http_api_valid_unrestricted() {
-        let config = unrestricted();
-        assert!(domain_valid_for_http_api("myapp.apps.golem.cloud", &config));
-        assert!(domain_valid_for_http_api("mymcp.mcps.golem.cloud", &config));
-        assert!(domain_valid_for_http_api("anything.example.com", &config));
+        let domain_matcher = unrestricted();
+        assert!(domain_matcher.domain_valid_for_http_api(&domain("myapp.apps.golem.cloud")));
+        assert!(domain_matcher.domain_valid_for_http_api(&domain("mymcp.mcps.golem.cloud")));
+        assert!(domain_matcher.domain_valid_for_http_api(&domain("anything.example.com")));
     }
 
     #[test]
     fn http_api_valid_apps_domain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(domain_valid_for_http_api("myapp.apps.golem.cloud", &config));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(domain_matcher.domain_valid_for_http_api(&domain("myapp.apps.golem.cloud")));
     }
 
     #[test]
     fn http_api_invalid_mcps_domain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_valid_for_http_api(
-            "mymcp.mcps.golem.cloud",
-            &config
-        ));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(!domain_matcher.domain_valid_for_http_api(&domain("mymcp.mcps.golem.cloud")));
     }
 
     #[test]
     fn http_api_invalid_unrelated_domain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_valid_for_http_api("myapp.other.com", &config));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(!domain_matcher.domain_valid_for_http_api(&domain("myapp.other.com")));
     }
 
     #[test]
     fn http_api_valid_apps_deep_subdomain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
-        assert!(domain_valid_for_http_api("a.b.apps.golem.cloud", &config));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
+        assert!(domain_matcher.domain_valid_for_http_api(&domain("a.b.apps.golem.cloud")));
     }
 
     #[test]
     fn http_api_invalid_apps_deep_subdomain_when_arbitrary_disallowed() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_valid_for_http_api("a.b.apps.golem.cloud", &config));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(!domain_matcher.domain_valid_for_http_api(&domain("a.b.apps.golem.cloud")));
     }
 
     #[test]
     fn mcp_valid_unrestricted() {
-        let config = unrestricted();
-        assert!(domain_valid_for_mcp("mymcp.mcps.golem.cloud", &config));
-        assert!(domain_valid_for_mcp("myapp.apps.golem.cloud", &config));
-        assert!(domain_valid_for_mcp("anything.example.com", &config));
+        let domain_matcher = unrestricted();
+        assert!(domain_matcher.domain_valid_for_mcp(&domain("mymcp.mcps.golem.cloud")));
+        assert!(domain_matcher.domain_valid_for_mcp(&domain("myapp.apps.golem.cloud")));
+        assert!(domain_matcher.domain_valid_for_mcp(&domain("anything.example.com")));
     }
 
     #[test]
     fn mcp_valid_mcps_domain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(domain_valid_for_mcp("mymcp.mcps.golem.cloud", &config));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(domain_matcher.domain_valid_for_mcp(&domain("mymcp.mcps.golem.cloud")));
     }
 
     #[test]
     fn mcp_invalid_apps_domain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_valid_for_mcp("myapp.apps.golem.cloud", &config));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(!domain_matcher.domain_valid_for_mcp(&domain("myapp.apps.golem.cloud")));
     }
 
     #[test]
     fn mcp_invalid_unrelated_domain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_valid_for_mcp("myapp.other.com", &config));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(!domain_matcher.domain_valid_for_mcp(&domain("myapp.other.com")));
     }
 
     #[test]
     fn mcp_valid_mcps_deep_subdomain() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
-        assert!(domain_valid_for_mcp("a.b.mcps.golem.cloud", &config));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", true);
+        assert!(domain_matcher.domain_valid_for_mcp(&domain("a.b.mcps.golem.cloud")));
     }
 
     #[test]
     fn mcp_invalid_mcps_deep_subdomain_when_arbitrary_disallowed() {
-        let config = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
-        assert!(!domain_valid_for_mcp("a.b.mcps.golem.cloud", &config));
+        let domain_matcher = restricted("apps.golem.cloud", "mcps.golem.cloud", false);
+        assert!(!domain_matcher.domain_valid_for_mcp(&domain("a.b.mcps.golem.cloud")));
     }
 }
