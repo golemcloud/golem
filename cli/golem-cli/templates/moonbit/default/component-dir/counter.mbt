@@ -1,15 +1,15 @@
 ///|
 /// Counter agent in MoonBit
 #derive.agent
-#derive.mount("/moonbit-counters/{name}")
-struct Counter {
+#derive.mount("/counters/{name}")
+struct CounterAgent {
   name : String
   mut value : UInt64
 }
 
 ///|
 /// Creates a new counter with the given name
-fn Counter::new(name : String) -> Counter {
+fn CounterAgent::new(name : String) -> CounterAgent {
   { name, value: 0 }
 }
 
@@ -17,7 +17,7 @@ fn Counter::new(name : String) -> Counter {
 /// Increments the counter and returns the new value
 #derive.prompt_hint("Increase the count by one")
 #derive.endpoint(post="/increment")
-pub fn Counter::increment(self : Self) -> UInt64 {
+pub fn CounterAgent::increment(self : Self) -> UInt64 {
   self.value += 1
   self.value
 }
@@ -25,7 +25,7 @@ pub fn Counter::increment(self : Self) -> UInt64 {
 ///|
 /// Returns the current value of the counter
 #derive.endpoint(get="/value")
-pub fn Counter::get_value(self : Self) -> UInt64 {
+pub fn CounterAgent::get_value(self : Self) -> UInt64 {
   self.value
 }
 

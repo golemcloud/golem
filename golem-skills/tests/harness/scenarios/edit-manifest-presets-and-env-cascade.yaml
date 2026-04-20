@@ -51,5 +51,6 @@ steps:
         rust: "get_mode"
         ts: "getMode"
         scala: "getMode"
+        moonbit: "get_mode"
     expect:
       stdout_contains: "development"

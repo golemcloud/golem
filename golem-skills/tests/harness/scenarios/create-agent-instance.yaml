@@ -19,6 +19,8 @@ steps:
         - "golem-create-agent-instance-ts"
       scala:
         - "golem-create-agent-instance-scala"
+      moonbit:
+        - "golem-create-agent-instance-moonbit"
 
   - id: "verify-agent-created"
     shell:
