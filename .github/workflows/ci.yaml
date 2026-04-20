@@ -242,10 +242,6 @@ jobs:
         if: matrix.group.name == 'cli-integration-tests-group2'
         uses: hustcer/setup-moonbit@v1
 
-      - name: Checkout MoonBit formatter submodule
-        if: matrix.group.name == 'cli-integration-tests-group2'
-        run: git submodule update --init sdks/moonbit/moonbit-formatter
-
       - name: Install MoonBit SDK tools dependencies
         if: matrix.group.name == 'cli-integration-tests-group2'
         working-directory: sdks/moonbit/golem_sdk_tools
@@ -476,8 +472,6 @@ jobs:
         uses: hustcer/setup-moonbit@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Checkout formatter submodule
-        run: git submodule update --init sdks/moonbit/moonbit-formatter
       - name: Check SDK
         run: moon check --target wasm
         working-directory: sdks/moonbit/golem_sdk
