@@ -1,0 +1,34 @@
+import {
+  "golemcloud/golem_sdk/gen/interface/golem/agent/guest" @guest,
+  "golemcloud/golem_sdk/gen/interface/golem/api/loadSnapshot" @loadSnapshot,
+  "golemcloud/golem_sdk/gen/interface/golem/api/saveSnapshot" @saveSnapshot,
+  "golemcloud/golem_sdk/interface/golem/agent/common" @common,
+  "golemcloud/golem_sdk/interface/golem/api/host" @host,
+  "golemcloud/golem_sdk/interface/golem/core/types" @types,
+}
+
+warnings = "-44"
+
+options(
+  link: {
+    "wasm": {
+      "export-memory-name": "memory",
+      "exports": [
+        "mbt_ffi_cabi_realloc:cabi_realloc",
+        "wasmExportDiscoverAgentTypes:golem:agent/guest@1.5.0#discover-agent-types",
+        "wasmExportDiscoverAgentTypesPostReturn:cabi_post_golem:agent/guest@1.5.0#discover-agent-types",
+        "wasmExportGetDefinition:golem:agent/guest@1.5.0#get-definition",
+        "wasmExportGetDefinitionPostReturn:cabi_post_golem:agent/guest@1.5.0#get-definition",
+        "wasmExportInitialize:golem:agent/guest@1.5.0#initialize",
+        "wasmExportInitializePostReturn:cabi_post_golem:agent/guest@1.5.0#initialize",
+        "wasmExportInvoke:golem:agent/guest@1.5.0#invoke",
+        "wasmExportInvokePostReturn:cabi_post_golem:agent/guest@1.5.0#invoke",
+        "wasmExportLoad:golem:api/load-snapshot@1.5.0#load",
+        "wasmExportLoadPostReturn:cabi_post_golem:api/load-snapshot@1.5.0#load",
+        "wasmExportSave:golem:api/save-snapshot@1.5.0#save",
+        "wasmExportSavePostReturn:cabi_post_golem:api/save-snapshot@1.5.0#save",
+      ],
+      "heap-start-address": 16,
+    },
+  },
+)

@@ -1,0 +1,143 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/rdbms/mysql"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/rdbms/types",
+}
+
+// Values
+
+// Errors
+pub(all) suberror Error_ {
+  ConnectionFailure(String)
+  QueryParameterFailure(String)
+  QueryExecutionFailure(String)
+  QueryResponseFailure(String)
+  Other(String)
+} derive(Eq, Show)
+
+// Types and methods
+pub(all) struct DbColumn {
+  ordinal : UInt64
+  name : String
+  db_type : DbColumnType
+  db_type_name : String
+} derive(Eq, Show)
+
+pub(all) enum DbColumnType {
+  Boolean
+  Tinyint
+  Smallint
+  Mediumint
+  Int
+  Bigint
+  TinyintUnsigned
+  SmallintUnsigned
+  MediumintUnsigned
+  IntUnsigned
+  BigintUnsigned
+  Float
+  Double
+  Decimal
+  Date
+  Datetime
+  Timestamp
+  Time
+  Year
+  Fixchar
+  Varchar
+  Tinytext
+  Text
+  Mediumtext
+  Longtext
+  Binary
+  Varbinary
+  Tinyblob
+  Blob
+  Mediumblob
+  Longblob
+  Enumeration
+  Set
+  Bit
+  Json
+} derive(Eq, Show)
+
+pub(all) struct DbConnection(Int) derive(Eq, Show)
+pub fn DbConnection::begin_transaction(Self) -> Result[DbTransaction, Error_]
+pub fn DbConnection::drop(Self) -> Unit
+pub fn DbConnection::execute(Self, String, Array[DbValue]) -> Result[UInt64, Error_]
+#deprecated
+pub fn DbConnection::inner(Self) -> Int
+pub fn DbConnection::open(String) -> Result[Self, Error_]
+pub fn DbConnection::query(Self, String, Array[DbValue]) -> Result[DbResult, Error_]
+pub fn DbConnection::query_stream(Self, String, Array[DbValue]) -> Result[DbResultStream, Error_]
+
+pub(all) struct DbResult {
+  columns : Array[DbColumn]
+  rows : Array[DbRow]
+} derive(Eq, Show)
+
+pub(all) struct DbResultStream(Int) derive(Eq, Show)
+pub fn DbResultStream::drop(Self) -> Unit
+pub fn DbResultStream::get_columns(Self) -> Array[DbColumn]
+pub fn DbResultStream::get_next(Self) -> Array[DbRow]?
+#deprecated
+pub fn DbResultStream::inner(Self) -> Int
+
+pub(all) struct DbRow {
+  values : Array[DbValue]
+} derive(Eq, Show)
+
+pub(all) struct DbTransaction(Int) derive(Eq, Show)
+pub fn DbTransaction::commit(Self) -> Result[Unit, Error_]
+pub fn DbTransaction::drop(Self) -> Unit
+pub fn DbTransaction::execute(Self, String, Array[DbValue]) -> Result[UInt64, Error_]
+#deprecated
+pub fn DbTransaction::inner(Self) -> Int
+pub fn DbTransaction::query(Self, String, Array[DbValue]) -> Result[DbResult, Error_]
+pub fn DbTransaction::query_stream(Self, String, Array[DbValue]) -> Result[DbResultStream, Error_]
+pub fn DbTransaction::rollback(Self) -> Result[Unit, Error_]
+
+pub(all) enum DbValue {
+  Boolean(Bool)
+  Tinyint(Int)
+  Smallint(Int)
+  Mediumint(Int)
+  Int(Int)
+  Bigint(Int64)
+  TinyintUnsigned(Byte)
+  SmallintUnsigned(UInt)
+  MediumintUnsigned(UInt)
+  IntUnsigned(UInt)
+  BigintUnsigned(UInt64)
+  Float(Float)
+  Double(Double)
+  Decimal(String)
+  Date(@types.Date)
+  Datetime(@types.Timestamp)
+  Timestamp(@types.Timestamp)
+  Time(@types.Time)
+  Year(UInt)
+  Fixchar(String)
+  Varchar(String)
+  Tinytext(String)
+  Text(String)
+  Mediumtext(String)
+  Longtext(String)
+  Binary(FixedArray[Byte])
+  Varbinary(FixedArray[Byte])
+  Tinyblob(FixedArray[Byte])
+  Blob(FixedArray[Byte])
+  Mediumblob(FixedArray[Byte])
+  Longblob(FixedArray[Byte])
+  Enumeration(String)
+  Set(String)
+  Bit(Array[Bool])
+  Json(String)
+  Null
+} derive(Eq, Show)
+
+// Type aliases
+
+// Traits
+

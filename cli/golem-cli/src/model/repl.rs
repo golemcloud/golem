@@ -86,6 +86,7 @@ impl TryFrom<GuestLanguage> for ReplLanguage {
             GuestLanguage::Rust => Ok(ReplLanguage::Rust),
             GuestLanguage::TypeScript => Ok(ReplLanguage::TypeScript),
             GuestLanguage::Scala => Err(anyhow::anyhow!("REPL is not yet supported for Scala")),
+            GuestLanguage::MoonBit => Err(anyhow::anyhow!("REPL is not yet supported for MoonBit")),
         }
     }
 }

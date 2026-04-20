@@ -1,0 +1,704 @@
+///|
+/// Generates `HasElementSchema`, `FromExtractor`, `FromElementValue`, and
+/// `ToElementValue` trait implementations for all parsed value types.
+pub fn generate_value_type_impls(
+  types : Array[ValueTypeInfo],
+) -> @list.List[@syntax.Impl] {
+  let all : Array[@syntax.Impl] = []
+  for t in types {
+    match t.kind {
+      Record(fields) => {
+        all.push(build_record_has_element_schema(t.name, fields))
+        all.push(build_record_from_extractor(t.name, fields))
+        all.push(build_from_element_value(t.name))
+        all.push(build_record_to_element_value(t.name, fields))
+      }
+      SimpleEnum(cases) => {
+        all.push(build_enum_has_element_schema(t.name, cases))
+        all.push(build_enum_from_extractor(t.name, cases))
+        all.push(build_from_element_value(t.name))
+        all.push(build_enum_to_element_value(t.name, cases))
+      }
+      VariantEnum(cases) => {
+        all.push(build_variant_has_element_schema(t.name, cases))
+        all.push(build_variant_from_extractor(t.name, cases))
+        all.push(build_from_element_value(t.name))
+        all.push(build_variant_to_element_value(t.name, cases))
+      }
+    }
+  }
+  to_list(all)
+}
+
+// --- Shared helpers ---
+
+///|
+/// Creates a punned field definition `{ name }` for record construction.
+fn make_pun_field(name : String) -> @syntax.FieldDef {
+  @syntax.FieldDef::{
+    label: make_label(name),
+    expr: make_ident_expr(name),
+    is_pun: true,
+    loc: dummy_loc,
+  }
+}
+
+///|
+/// Creates an integer literal pattern for match arms.
+fn make_int_pattern(n : Int) -> @syntax.Pattern {
+  @syntax.Pattern::Constant(
+    c=@syntax.Constant::Int(n.to_string()),
+    loc=dummy_loc,
+  )
+}
+
+///|
+/// Creates a wildcard `_` pattern for match arms.
+fn make_wildcard_pattern() -> @syntax.Pattern {
+  @syntax.Pattern::Any(loc=dummy_loc)
+}
+
+///|
+/// Creates a constructor pattern with positional arguments for match arms.
+fn make_constr_pattern(
+  name : String,
+  args : Array[@syntax.Pattern],
+) -> @syntax.Pattern {
+  let constr = @syntax.Constructor::{
+    name: @syntax.ConstrName::{ name, loc: dummy_loc },
+    extra_info: @syntax.ConstructorExtraInfo::NoExtraInfo,
+    loc: dummy_loc,
+  }
+  if args.is_empty() {
+    @syntax.Pattern::Constr(constr~, args=None, is_open=false, loc=dummy_loc)
+  } else {
+    let pat_args = args.map(fn(p) {
+      @syntax.ConstrPatArg::{ pat: p, kind: @syntax.ArgumentKind::Positional }
+    })
+    @syntax.Pattern::Constr(
+      constr~,
+      args=Some(to_list(pat_args)),
+      is_open=false,
+      loc=dummy_loc,
+    )
+  }
+}
+
+///|
+/// Creates a constructor pattern with labelled arguments for match arms.
+fn make_labelled_constr_pattern(
+  name : String,
+  fields : Array[(String, @syntax.Pattern)],
+) -> @syntax.Pattern {
+  let constr = @syntax.Constructor::{
+    name: @syntax.ConstrName::{ name, loc: dummy_loc },
+    extra_info: @syntax.ConstructorExtraInfo::NoExtraInfo,
+    loc: dummy_loc,
+  }
+  let pat_args = fields.map(fn(f) {
+    @syntax.ConstrPatArg::{
+      pat: f.1,
+      kind: @syntax.ArgumentKind::Labelled(make_label(f.0)),
+    }
+  })
+  @syntax.Pattern::Constr(
+    constr~,
+    args=Some(to_list(pat_args)),
+    is_open=false,
+    loc=dummy_loc,
+  )
+}
+
+///|
+/// Creates an unsigned integer literal expression.
+fn make_uint_expr(n : Int) -> @syntax.Expr {
+  @syntax.Expr::Constant(c=@syntax.Constant::UInt(n.to_string()), loc=dummy_loc)
+}
+
+///|
+/// Generates the `FromElementValue` impl that delegates to `FromExtractor` via `extract_component_model_value`.
+fn build_from_element_value(type_name : String) -> @syntax.Impl {
+  // @schema.FromExtractor::from_extractor(@extractor.extract_component_model_value(v))
+  let body = make_apply(make_qualified_expr("schema", "from_extractor_as"), [
+    make_apply(
+      make_qualified_expr("extractor", "extract_component_model_value"),
+      [make_ident_expr("v")],
+    ),
+  ])
+  make_top_impl(
+    type_name,
+    "schema",
+    "FromElementValue",
+    "from_element_value",
+    ["v"],
+    body,
+  )
+}
+
+// --- Record ---
+
+///|
+/// Generates the `HasElementSchema` impl for a record type.
+fn build_record_has_element_schema(
+  type_name : String,
+  fields : Array[(String, ParamType)],
+) -> @syntax.Impl {
+  let field_exprs = fields.map(fn(field) {
+    let (name, pt) = field
+    make_tuple([make_string_expr(name), param_type_to_schema_expr(pt)])
+  })
+  let body = make_apply(make_qualified_expr("schema", "make_record_schema"), [
+    make_array(field_exprs),
+  ])
+  make_top_impl(
+    type_name,
+    "schema",
+    "HasElementSchema",
+    "element_schema",
+    [],
+    body,
+  )
+}
+
+///|
+/// Generates the `FromExtractor` impl for a record type with field-by-field extraction.
+fn build_record_from_extractor(
+  type_name : String,
+  fields : Array[(String, ParamType)],
+) -> @syntax.Impl {
+  // Build record construction { field1, field2, ... }
+  let record_fields = fields.map(fn(field) { make_pun_field(field.0) })
+  let mut body : @syntax.Expr = make_record(record_fields)
+  // Build let bindings from last to first
+  for idx in 0..<fields.length() {
+    let i = fields.length() - 1 - idx
+    let (name, pt) = fields[i]
+    body = make_let_typed(
+      name,
+      param_type_to_ast_type(pt),
+      make_apply(make_qualified_expr("schema", "extract_field"), [
+        make_ident_expr("e"),
+        make_int_expr(i),
+      ]),
+      body,
+    )
+  }
+  make_top_impl(
+    type_name,
+    "schema",
+    "FromExtractor",
+    "from_extractor",
+    ["e"],
+    body,
+  )
+}
+
+///|
+/// Generates the `ToElementValue` impl for a record type with field-by-field serialization.
+fn build_record_to_element_value(
+  type_name : String,
+  fields : Array[(String, ParamType)],
+) -> @syntax.Impl {
+  let field_exprs = fields.map(fn(field) {
+    let (name, _pt) = field
+    make_apply(make_qualified_expr("schema", "to_element_value_as"), [
+      make_field_access(make_ident_expr("self"), name),
+    ])
+  })
+  let body = make_apply(make_qualified_expr("schema", "make_record_value"), [
+    make_array(field_exprs),
+  ])
+  make_top_impl(
+    type_name,
+    "schema",
+    "ToElementValue",
+    "to_element_value",
+    ["self"],
+    body,
+  )
+}
+
+// --- SimpleEnum ---
+
+///|
+/// Generates the `HasElementSchema` impl for a simple enum type.
+fn build_enum_has_element_schema(
+  type_name : String,
+  cases : Array[String],
+) -> @syntax.Impl {
+  let case_exprs = cases.map(fn(name) { make_string_expr(name) })
+  let body = make_apply(make_qualified_expr("schema", "make_enum_schema"), [
+    make_array(case_exprs),
+  ])
+  make_top_impl(
+    type_name,
+    "schema",
+    "HasElementSchema",
+    "element_schema",
+    [],
+    body,
+  )
+}
+
+///|
+/// Generates the `FromExtractor` impl for a simple enum type with index-based matching.
+fn build_enum_from_extractor(
+  type_name : String,
+  cases : Array[String],
+) -> @syntax.Impl {
+  // match idx { 0 => Low, 1 => Medium, ... _ => raise ... }
+  let match_cases : Array[@syntax.Case] = []
+  for i, name in cases {
+    match_cases.push(make_case(make_int_pattern(i), make_constr_no_args(name)))
+  }
+  // Wildcard case
+  match_cases.push(
+    make_case(
+      make_wildcard_pattern(),
+      make_raise(
+        make_apply(
+          make_qualified_constr("common", "AgentError", "InvalidInput"),
+          [
+            make_infix(
+              "+",
+              make_string_expr("Unknown \{type_name} case: "),
+              make_dot_apply(make_ident_expr("idx"), "to_string", []),
+            ),
+          ],
+        ),
+      ),
+    ),
+  )
+  let match_expr = make_match(make_ident_expr("idx"), match_cases)
+  let body = make_let(
+    "idx",
+    make_apply(make_qualified_expr("schema", "extract_enum"), [
+      make_ident_expr("e"),
+    ]),
+    match_expr,
+  )
+  make_top_impl(
+    type_name,
+    "schema",
+    "FromExtractor",
+    "from_extractor",
+    ["e"],
+    body,
+  )
+}
+
+///|
+/// Generates the `ToElementValue` impl for a simple enum type.
+fn build_enum_to_element_value(
+  type_name : String,
+  cases : Array[String],
+) -> @syntax.Impl {
+  let match_cases : Array[@syntax.Case] = []
+  for i, name in cases {
+    match_cases.push(
+      make_case(
+        make_constr_pattern(name, []),
+        make_apply(make_qualified_expr("schema", "make_enum_value"), [
+          make_uint_expr(i),
+        ]),
+      ),
+    )
+  }
+  let body = make_match(make_ident_expr("self"), match_cases)
+  make_top_impl(
+    type_name,
+    "schema",
+    "ToElementValue",
+    "to_element_value",
+    ["self"],
+    body,
+  )
+}
+
+// --- VariantEnum ---
+
+///|
+/// Generates the schema expression for a variant payload (None, Single, or Multi).
+fn variant_payload_schema_expr(payload : VariantPayload) -> @syntax.Expr {
+  match payload {
+    None => make_constr_no_args("None")
+    Single(pt) =>
+      make_apply(make_constr_no_args("Some"), [param_type_to_schema_expr(pt)])
+    Multi(fields, _) => {
+      let field_exprs = fields.map(fn(f) {
+        let (name, pt) = f
+        make_tuple([make_string_expr(name), param_type_to_schema_expr(pt)])
+      })
+      make_apply(make_constr_no_args("Some"), [
+        make_apply(make_qualified_expr("schema", "make_record_schema"), [
+          make_array(field_exprs),
+        ]),
+      ])
+    }
+  }
+}
+
+///|
+/// Generates the `HasElementSchema` impl for a variant enum type.
+fn build_variant_has_element_schema(
+  type_name : String,
+  cases : Array[(String, VariantPayload)],
+) -> @syntax.Impl {
+  let case_exprs = cases.map(fn(c) {
+    let (name, payload) = c
+    make_tuple([make_string_expr(name), variant_payload_schema_expr(payload)])
+  })
+  let body = make_apply(make_qualified_expr("schema", "make_variant_schema"), [
+    make_array(case_exprs),
+  ])
+  make_top_impl(
+    type_name,
+    "schema",
+    "HasElementSchema",
+    "element_schema",
+    [],
+    body,
+  )
+}
+
+///|
+/// Generates a single match case for the `FromExtractor` impl of a variant enum.
+fn build_variant_from_extractor_case(
+  type_name : String,
+  idx : Int,
+  case_name : String,
+  payload : VariantPayload,
+) -> @syntax.Case {
+  match payload {
+    None => make_case(make_int_pattern(idx), make_constr_no_args(case_name))
+    Single(pt) => {
+      // guard payload is Some(p) else { raise ... }
+      // let field0 : T = @schema.FromExtractor::from_extractor(p)
+      // CaseName(field0)
+      let result = make_apply(make_constr_no_args(case_name), [
+        make_ident_expr("field0"),
+      ])
+      let body = make_let_typed(
+        "field0",
+        param_type_to_ast_type(pt),
+        make_apply(make_qualified_expr("schema", "from_extractor_as"), [
+          make_ident_expr("p"),
+        ]),
+        result,
+      )
+      let guarded = make_guard_else(
+        @syntax.Expr::Is(
+          expr=make_ident_expr("payload"),
+          pat=make_constr_pattern("Some", [make_var_pattern("p")]),
+          loc=dummy_loc,
+        ),
+        make_raise(
+          make_apply(
+            make_qualified_constr("common", "AgentError", "InvalidInput"),
+            [
+              make_string_expr(
+                "Expected payload for \{type_name}::\{case_name}",
+              ),
+            ],
+          ),
+        ),
+        body,
+      )
+      make_case(make_int_pattern(idx), guarded)
+    }
+    Multi(fields, labelled) => {
+      // guard payload is Some(p) else { raise ... }
+      // let v0 : T0 = @schema.extract_field(p, 0)
+      // let v1 : T1 = @schema.extract_field(p, 1)
+      // CaseName(v0, v1)  or  CaseName(label0=v0, label1=v1)
+      let var_name = fn(i : Int, f : (String, ParamType)) -> String {
+        if labelled {
+          f.0
+        } else {
+          "field\{i}"
+        }
+      }
+      let result = if labelled {
+        let args = fields.mapi(fn(i, f) {
+          make_labelled_arg(f.0, make_ident_expr(var_name(i, f)))
+        })
+        make_apply_with_args(make_constr_no_args(case_name), args)
+      } else {
+        let field_args = fields.mapi(fn(i, f) {
+          make_ident_expr(var_name(i, f))
+        })
+        make_apply(make_constr_no_args(case_name), field_args)
+      }
+      let mut body = result
+      for rev_idx in 0..<fields.length() {
+        let i = fields.length() - 1 - rev_idx
+        let (name, pt) = fields[i]
+        body = make_let_typed(
+          var_name(i, (name, pt)),
+          param_type_to_ast_type(pt),
+          make_apply(make_qualified_expr("schema", "extract_field"), [
+            make_ident_expr("p"),
+            make_int_expr(i),
+          ]),
+          body,
+        )
+      }
+      let guarded = make_guard_else(
+        @syntax.Expr::Is(
+          expr=make_ident_expr("payload"),
+          pat=make_constr_pattern("Some", [make_var_pattern("p")]),
+          loc=dummy_loc,
+        ),
+        make_raise(
+          make_apply(
+            make_qualified_constr("common", "AgentError", "InvalidInput"),
+            [
+              make_string_expr(
+                "Expected payload for \{type_name}::\{case_name}",
+              ),
+            ],
+          ),
+        ),
+        body,
+      )
+      make_case(make_int_pattern(idx), guarded)
+    }
+  }
+}
+
+///|
+/// Generates the `FromExtractor` impl for a variant enum type.
+fn build_variant_from_extractor(
+  type_name : String,
+  cases : Array[(String, VariantPayload)],
+) -> @syntax.Impl {
+  let match_cases : Array[@syntax.Case] = []
+  for i, c in cases {
+    let (name, payload) = c
+    match_cases.push(
+      build_variant_from_extractor_case(type_name, i, name, payload),
+    )
+  }
+  // Wildcard case
+  match_cases.push(
+    make_case(
+      make_wildcard_pattern(),
+      make_raise(
+        make_apply(
+          make_qualified_constr("common", "AgentError", "InvalidInput"),
+          [make_string_expr("Unknown \{type_name} case")],
+        ),
+      ),
+    ),
+  )
+  let match_expr = make_match(make_ident_expr("idx"), match_cases)
+  let body = make_let_tuple(
+    ["idx", "payload"],
+    make_apply(make_qualified_expr("schema", "extract_variant"), [
+      make_ident_expr("e"),
+    ]),
+    match_expr,
+  )
+  make_top_impl(
+    type_name,
+    "schema",
+    "FromExtractor",
+    "from_extractor",
+    ["e"],
+    body,
+  )
+}
+
+///|
+/// Generates the `ToElementValue` impl for a variant enum type.
+fn build_variant_to_element_value(
+  type_name : String,
+  cases : Array[(String, VariantPayload)],
+) -> @syntax.Impl {
+  let match_cases : Array[@syntax.Case] = []
+  for i, c in cases {
+    let (name, payload) = c
+    match payload {
+      None =>
+        match_cases.push(
+          make_case(
+            make_constr_pattern(name, []),
+            make_apply(make_qualified_expr("schema", "make_variant_value"), [
+              make_uint_expr(i),
+              make_constr_no_args("None"),
+            ]),
+          ),
+        )
+      Single(_pt) =>
+        match_cases.push(
+          make_case(
+            make_constr_pattern(name, [make_var_pattern("field0")]),
+            make_apply(make_qualified_expr("schema", "make_variant_value"), [
+              make_uint_expr(i),
+              make_apply(make_constr_no_args("Some"), [
+                make_apply(
+                  make_qualified_expr("schema", "to_element_value_as"),
+                  [make_ident_expr("field0")],
+                ),
+              ]),
+            ]),
+          ),
+        )
+      Multi(fields, labelled) => {
+        let var_name = fn(j : Int, f : (String, ParamType)) -> String {
+          if labelled {
+            f.0
+          } else {
+            "field\{j}"
+          }
+        }
+        let pat = if labelled {
+          let labelled_pats = fields.mapi(fn(j, f) {
+            (f.0, make_var_pattern(var_name(j, f)))
+          })
+          make_labelled_constr_pattern(name, labelled_pats)
+        } else {
+          let field_pats = fields.mapi(fn(j, f) {
+            make_var_pattern(var_name(j, f))
+          })
+          make_constr_pattern(name, field_pats)
+        }
+        let field_value_exprs = fields.mapi(fn(j, f) {
+          make_apply(make_qualified_expr("schema", "to_element_value_as"), [
+            make_ident_expr(var_name(j, f)),
+          ])
+        })
+        match_cases.push(
+          make_case(
+            pat,
+            make_apply(make_qualified_expr("schema", "make_variant_value"), [
+              make_uint_expr(i),
+              make_apply(make_constr_no_args("Some"), [
+                make_apply(make_qualified_expr("schema", "make_record_value"), [
+                  make_array(field_value_exprs),
+                ]),
+              ]),
+            ]),
+          ),
+        )
+      }
+    }
+  }
+  let body = make_match(make_ident_expr("self"), match_cases)
+  make_top_impl(
+    type_name,
+    "schema",
+    "ToElementValue",
+    "to_element_value",
+    ["self"],
+    body,
+  )
+}
+
+// --- MultimodalEnum ---
+
+///|
+/// Generates `MultimodalModality` trait implementations for all parsed multimodal enums.
+pub fn generate_multimodal_impls(
+  enums : Array[MultimodalEnumInfo],
+) -> @list.List[@syntax.Impl] {
+  let all : Array[@syntax.Impl] = []
+  for e in enums {
+    all.push(build_multimodal_schema(e))
+    all.push(build_multimodal_to_named_element(e))
+    all.push(build_multimodal_from_named_element(e))
+  }
+  to_list(all)
+}
+
+///|
+/// Generates the `MultimodalModality::multimodal_schema` impl for a multimodal enum.
+fn build_multimodal_schema(e : MultimodalEnumInfo) -> @syntax.Impl {
+  let tuple_exprs = e.variants.map(fn(v) {
+    let (name, pt) = v
+    make_tuple([make_string_expr(name), param_type_to_schema_expr(pt)])
+  })
+  let body = make_array(tuple_exprs)
+  make_top_impl(
+    e.name,
+    "types",
+    "MultimodalModality",
+    "multimodal_schema",
+    [],
+    body,
+  )
+}
+
+///|
+/// Generates the `MultimodalModality::to_named_element` impl for a multimodal enum.
+fn build_multimodal_to_named_element(e : MultimodalEnumInfo) -> @syntax.Impl {
+  let match_cases : Array[@syntax.Case] = []
+  for v in e.variants {
+    let (name, _pt) = v
+    match_cases.push(
+      make_case(
+        make_constr_pattern(name, [make_var_pattern("v")]),
+        make_tuple([
+          make_string_expr(name),
+          make_apply(make_qualified_expr("schema", "to_element_value_as"), [
+            make_ident_expr("v"),
+          ]),
+        ]),
+      ),
+    )
+  }
+  let body = make_match(make_ident_expr("self"), match_cases)
+  make_top_impl(
+    e.name,
+    "types",
+    "MultimodalModality",
+    "to_named_element",
+    ["self"],
+    body,
+  )
+}
+
+///|
+/// Generates the `MultimodalModality::from_named_element` impl for a multimodal enum.
+fn build_multimodal_from_named_element(e : MultimodalEnumInfo) -> @syntax.Impl {
+  let match_cases : Array[@syntax.Case] = []
+  for v in e.variants {
+    let (name, _pt) = v
+    match_cases.push(
+      make_case(
+        make_string_pattern(name),
+        make_apply(make_constr_no_args(name), [
+          make_apply(make_qualified_expr("schema", "from_element_value_as"), [
+            make_ident_expr("value"),
+          ]),
+        ]),
+      ),
+    )
+  }
+  match_cases.push(
+    make_case(
+      make_wildcard_pattern(),
+      make_raise(
+        make_apply(
+          make_qualified_constr("common", "AgentError", "InvalidInput"),
+          [
+            make_infix(
+              "+",
+              make_string_expr("Unknown modality: "),
+              make_ident_expr("name"),
+            ),
+          ],
+        ),
+      ),
+    ),
+  )
+  let body = make_match(make_ident_expr("name"), match_cases)
+  make_top_impl(
+    e.name,
+    "types",
+    "MultimodalModality",
+    "from_named_element",
+    ["name", "value"],
+    body,
+  )
+}

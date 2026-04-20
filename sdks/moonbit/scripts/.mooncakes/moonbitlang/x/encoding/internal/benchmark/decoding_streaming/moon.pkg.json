@@ -1,0 +1,8 @@
+{
+  "is-main": true,
+  "import": [
+    "moonbitlang/x/encoding",
+    "moonbitlang/x/sys",
+    { "path": "moonbitlang/x/encoding/internal/benchmark", "alias": "bench" }
+  ]
+}

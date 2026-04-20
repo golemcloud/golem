@@ -19,6 +19,11 @@ async fn build_and_deploy_all_templates_for_rust() {
     build_and_deploy_all_templates_for_lang(GuestLanguage::Rust).await;
 }
 
+#[test]
+async fn build_and_deploy_all_templates_for_moonbit() {
+    build_and_deploy_all_templates_for_lang(GuestLanguage::MoonBit).await;
+}
+
 async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
     let mut ctx = TestContext::new();
 
@@ -119,6 +124,9 @@ async fn build_mixed_language_app() {
             }
             GuestLanguage::Scala => {
                 vec!["scala"]
+            }
+            GuestLanguage::MoonBit => {
+                vec!["moonbit"]
             }
         })
         .collect::<Vec<_>>();

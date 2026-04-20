@@ -31,7 +31,7 @@ use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
 use regex::Regex;
 use semver::{Version as SemVerVersion, VersionReq};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -234,25 +234,28 @@ fn check_rust_target(
     requirement: ToolRequirement,
     target: &str,
 ) -> anyhow::Result<()> {
-    let output = Command::new(which("rustup")?)
+    let output = Command::new(which("rustc")?)
         .current_dir(project_dir)
-        .args(["target", "list", "--installed"])
+        .args(["--target", target, "--print", "target-libdir"])
         .output()
         .map_err(|err| {
             anyhow!(
                 "{} is not available: {}\nHint: {}",
-                "rustup".log_color_error_highlight(),
+                "rustc".log_color_error_highlight(),
                 err,
                 requirement.install_hint
             )
         })?;
 
     if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let detail = if stderr.is_empty() {
-            "rustup target list --installed failed".to_string()
-        } else {
+        let detail = if !stderr.is_empty() {
             stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            format!("rustc could not resolve target library path for {target}")
         };
         bail!(
             "{} check failed: {}\nHint: {}",
@@ -262,21 +265,73 @@ fn check_rust_target(
         );
     }
 
-    let installed_targets_output = String::from_utf8_lossy(&output.stdout);
-    let installed_targets = installed_targets_output
-        .lines()
-        .map(|line| line.trim())
-        .collect::<HashSet<_>>();
+    let target_libdir = parse_target_libdir(output.stdout.as_slice())
+        .map_err(|err| {
+            anyhow!(
+                "{} check failed: {}\nHint: {}",
+                requirement.name.log_color_error_highlight(),
+                err,
+                requirement.install_hint
+            )
+        })?
+        .ok_or_else(|| {
+            anyhow!(
+                "{} check failed: rustc returned an empty target library path for {}\nHint: {}",
+                requirement.name.log_color_error_highlight(),
+                target,
+                requirement.install_hint
+            )
+        })?;
 
-    if installed_targets.contains(target) {
-        Ok(())
-    } else {
+    let target_libdir_path = PathBuf::from(target_libdir);
+    if !target_libdir_path.is_dir() {
         bail!(
-            "{} is missing\nHint: {}",
+            "{} is missing (target library directory does not exist: {})\nHint: {}",
             requirement.name.log_color_error_highlight(),
+            target_libdir_path.display(),
             requirement.install_hint
-        )
+        );
     }
+
+    if !target_libdir_has_rust_target_libs(&target_libdir_path)? {
+        bail!(
+            "{} is missing (target library directory has no Rust target libraries: {})\nHint: {}",
+            requirement.name.log_color_error_highlight(),
+            target_libdir_path.display(),
+            requirement.install_hint
+        );
+    }
+
+    Ok(())
+}
+
+fn parse_target_libdir(stdout: &[u8]) -> anyhow::Result<Option<String>> {
+    let text = String::from_utf8(stdout.to_vec()).map_err(|err| {
+        anyhow!(
+            "rustc returned non-UTF-8 output for target library path: {}",
+            err
+        )
+    })?;
+
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.to_string()))
+}
+
+fn target_libdir_has_rust_target_libs(path: &Path) -> anyhow::Result<bool> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+
+        if file_name.ends_with(".rlib") || file_name.ends_with(".rmeta") {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 fn extract_version(output: &str) -> Option<String> {

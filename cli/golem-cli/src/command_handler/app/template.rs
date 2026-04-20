@@ -753,6 +753,25 @@ impl TemplateHandler {
                     target: target_root.join("src"),
                 });
             }
+            GuestLanguage::MoonBit => {
+                let target_root = application_path.join(new_component_dir);
+
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                    source: application_path.join("moon.pkg"),
+                    target: target_root.join("moon.pkg"),
+                });
+                for entry in std::fs::read_dir(application_path)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("mbt") {
+                        let file_name = entry.file_name();
+                        upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::Move {
+                            source: path.clone(),
+                            target: target_root.join(&file_name),
+                        });
+                    }
+                }
+            }
         }
 
         Ok(upgrade_plan)

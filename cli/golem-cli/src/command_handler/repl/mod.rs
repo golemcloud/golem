@@ -226,6 +226,9 @@ impl ReplHandler {
             GuestLanguage::Scala => {
                 bail!("REPL is not yet supported for Scala")
             }
+            GuestLanguage::MoonBit => {
+                bail!("REPL is not yet supported for MoonBit")
+            }
         }
     }
 

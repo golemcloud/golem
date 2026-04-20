@@ -1,0 +1,27 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/x/codec/base64"
+
+// Values
+pub fn decode(StringView, url_safe? : Bool) -> Bytes raise DecodeError
+
+pub fn encode(BytesView, url_safe? : Bool) -> String
+
+// Errors
+pub suberror DecodeError {
+  InvalidChar(Char)
+}
+pub impl Show for DecodeError
+
+// Types and methods
+type Decoder
+pub fn Decoder::decode_to(Self, StringView, (Byte) -> Unit, url_safe? : Bool) -> Unit raise DecodeError
+pub fn Decoder::new() -> Self
+
+type Encoder
+pub fn Encoder::encode_to(Self, BytesView, (Char) -> Unit, url_safe? : Bool, padding? : Bool) -> Unit
+pub fn Encoder::new() -> Self
+
+// Type aliases
+
+// Traits
+

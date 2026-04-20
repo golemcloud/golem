@@ -1,0 +1,40 @@
+package golem:agent-guest;
+
+world agent-guest {
+  import golem:api/host@1.5.0;
+  import golem:core/types@1.5.0;
+  import golem:agent/host@1.5.0;
+
+  import golem:rdbms/postgres@1.5.0;
+  import golem:rdbms/mysql@1.5.0;
+  import golem:rdbms/ignite2@1.5.0;
+  import golem:rdbms/types@1.5.0;
+
+  import golem:websocket/client@1.5.0;
+
+  import golem:api/context@1.5.0;
+  import golem:api/oplog@1.5.0;
+  import golem:durability/durability@1.5.0;
+
+  import wasi:blobstore/blobstore;
+  import wasi:blobstore/container;
+  import wasi:blobstore/types;
+
+  import wasi:logging/logging;
+
+  import wasi:keyvalue/atomic@0.1.0;
+  import wasi:keyvalue/eventual@0.1.0;
+  import wasi:keyvalue/eventual-batch@0.1.0;
+  import wasi:keyvalue/cache@0.1.0;
+  import wasi:keyvalue/types@0.1.0;
+  import wasi:keyvalue/wasi-keyvalue-error@0.1.0;
+
+  import wasi:config/store@0.2.0-draft;
+
+  import wasi:cli/environment@0.2.3;
+
+  include golem:agent/agent-guest@1.5.0;
+
+  export golem:api/save-snapshot@1.5.0;
+  export golem:api/load-snapshot@1.5.0;
+}
