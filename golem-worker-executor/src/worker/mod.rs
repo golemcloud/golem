@@ -359,9 +359,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // first action.  We might have crashed between creating the oplog and
         // writing it, so guard with last_oplog_idx <= 2.
         //
-        // Ephemeral agents skip this: prepare_instance re-enqueues initialize on
-        // every WASM reload (including the very first one), so enqueueing here
-        // would result in a duplicate on the first invocation.
+        // Ephemeral agents skip this: prepare_instance calls initialize directly
+        // in live mode on every WASM reload, so enqueueing here is not needed.
         if let Some(agent_id) = &agent_id
             && last_oplog_idx <= OplogIndex::from_u64(2)
             && worker.agent_mode() != AgentMode::Ephemeral
