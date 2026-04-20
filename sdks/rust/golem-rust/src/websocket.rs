@@ -28,12 +28,8 @@ pub struct WebsocketConnection {
 impl WebsocketConnection {
     /// Connect to a WebSocket server at the given URL (ws:// or wss://).
     /// Optional headers for auth, subprotocols, etc.
-    pub fn connect(
-        url: &str,
-        headers: Option<Vec<(String, String)>>,
-    ) -> Result<Self, Error> {
-        RawWebsocketConnection::connect(url, headers.as_deref())
-            .map(|inner| Self { inner })
+    pub fn connect(url: &str, headers: Option<Vec<(String, String)>>) -> Result<Self, Error> {
+        RawWebsocketConnection::connect(url, headers.as_deref()).map(|inner| Self { inner })
     }
 
     /// Send a message (text or binary).
@@ -48,10 +44,7 @@ impl WebsocketConnection {
 
     /// Receive the next message, blocking with a timeout in milliseconds.
     /// Returns `None` if the timeout expires before a message arrives.
-    pub fn blocking_receive_with_timeout(
-        &self,
-        timeout_ms: u64,
-    ) -> Result<Option<Message>, Error> {
+    pub fn blocking_receive_with_timeout(&self, timeout_ms: u64) -> Result<Option<Message>, Error> {
         self.inner.receive_with_timeout(timeout_ms)
     }
 

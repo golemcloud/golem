@@ -230,10 +230,10 @@ pub use bindings::golem::api::host::{
 };
 
 pub mod websocket;
-pub use websocket::{WebSocketCloseInfo, WebSocketError, WebSocketMessage, WebsocketConnection};
 pub use checkpoint::*;
 pub use quota::*;
 pub use transaction::*;
+pub use websocket::{WebSocketCloseInfo, WebSocketError, WebSocketMessage, WebsocketConnection};
 
 #[cfg(feature = "macro")]
 pub use golem_rust_macro::*;
