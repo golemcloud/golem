@@ -1,7 +1,7 @@
 ///|
 /// Counter agent in MoonBit
 #derive.agent
-#derive.mount("/counters/{name}")
+#derive.mount("/moonbit-counters/{name}")
 struct Counter {
   name : String
   mut value : UInt64
