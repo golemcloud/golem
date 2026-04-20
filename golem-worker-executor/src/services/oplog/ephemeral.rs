@@ -37,6 +37,11 @@ pub struct EphemeralOplog {
 
 struct EphemeralOplogState {
     buffer: VecDeque<OplogEntry>,
+    /// Entries that have been logically committed (assigned oplog indices and
+    /// removed from `buffer`) but whose blob/S3 write is still in-flight as a
+    /// background task.  Reads consult this map before going to S3 so that the
+    /// invocation loop is never blocked waiting for a storage round-trip.
+    pending_background: BTreeMap<OplogIndex, OplogEntry>,
     last_oplog_idx: OplogIndex,
     last_committed_idx: OplogIndex,
     max_operations_before_commit: u64,
@@ -45,11 +50,11 @@ struct EphemeralOplogState {
 }
 
 impl EphemeralOplogState {
-    async fn add(&mut self, entry: OplogEntry) -> OplogIndex {
+    fn add(&mut self, entry: OplogEntry) -> OplogIndex {
         let is_hint = entry.is_hint();
         self.buffer.push_back(entry);
         if self.buffer.len() > self.max_operations_before_commit as usize {
-            self.commit().await;
+            self.commit();
         }
         self.last_oplog_idx = self.last_oplog_idx.next();
         if !is_hint {
@@ -58,7 +63,10 @@ impl EphemeralOplogState {
         self.last_oplog_idx
     }
 
-    async fn commit(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
+    /// Flush the in-memory buffer: assigns oplog indices, caches entries in
+    /// `pending_background` for immediate reads, and spawns a background task
+    /// to write them to the blob archive.  Returns immediately — no S3 wait.
+    fn commit(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
         let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
 
         let mut result = BTreeMap::new();
@@ -66,11 +74,18 @@ impl EphemeralOplogState {
         for entry in entries {
             let oplog_idx = self.last_committed_idx.next();
             result.insert(oplog_idx, entry.clone());
+            self.pending_background.insert(oplog_idx, entry.clone());
             pairs.push((oplog_idx, entry));
             self.last_committed_idx = oplog_idx;
         }
 
-        self.target.append(pairs).await;
+        if !pairs.is_empty() {
+            let target = self.target.clone();
+            tokio::spawn(async move {
+                target.append(pairs).await;
+            });
+        }
+
         result
     }
 }
@@ -82,6 +97,7 @@ impl EphemeralOplog {
         max_operations_before_commit: u64,
         primary: Arc<dyn Oplog>,
         target: Arc<dyn OplogArchive + Send + Sync>,
+        initial_pending: BTreeMap<OplogIndex, OplogEntry>,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         Self {
@@ -90,6 +106,7 @@ impl EphemeralOplog {
             target: target.clone(),
             state: Arc::new(Mutex::new(EphemeralOplogState {
                 buffer: VecDeque::new(),
+                pending_background: initial_pending,
                 last_oplog_idx,
                 last_committed_idx: last_oplog_idx,
                 max_operations_before_commit,
@@ -122,7 +139,7 @@ impl Oplog for EphemeralOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
         record_oplog_call("add");
         let mut state = self.state.lock().await;
-        state.add(entry).await
+        state.add(entry)
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -135,7 +152,7 @@ impl Oplog for EphemeralOplog {
         match level {
             CommitLevel::Always => {
                 let mut state = self.state.lock().await;
-                state.commit().await
+                state.commit()
             }
             CommitLevel::DurableOnly => BTreeMap::new(),
         }
@@ -161,6 +178,24 @@ impl Oplog for EphemeralOplog {
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         record_oplog_call("read");
+        // Check in-memory caches first to avoid blocking on a background S3 write.
+        {
+            let state = self.state.lock().await;
+            if let Some(entry) = state.pending_background.get(&oplog_index) {
+                return entry.clone();
+            }
+            // Also check the uncommitted buffer.
+            let committed_base: u64 = state.last_committed_idx.into();
+            let target_idx: u64 = oplog_index.into();
+            if target_idx > committed_base {
+                let offset = (target_idx - committed_base - 1) as usize;
+                if let Some(entry) = state.buffer.get(offset) {
+                    return entry.clone();
+                }
+            }
+        }
+        // Fall back to S3 for older entries already persisted and evicted from the
+        // in-memory window.
         let entries = self.target.read(oplog_index, 1).await;
         if let Some(entry) = entries.get(&oplog_index) {
             entry.clone()
@@ -178,29 +213,44 @@ impl Oplog for EphemeralOplog {
 
         let last_idx = oplog_index.range_end(n);
 
-        if last_idx < state.last_committed_idx {
-            // The whole range is already committed no further action needed
-            self.target.read(oplog_index, n).await
-        } else {
-            // There can be some uncommitted entries in the buffer
-            let mut result = self
-                .target
-                .read_range(oplog_index, state.last_committed_idx)
-                .await;
+        // Collect from pending_background (committed but S3 write still in-flight).
+        let mut result: BTreeMap<OplogIndex, OplogEntry> = state
+            .pending_background
+            .range(oplog_index..=last_idx)
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
 
-            let uncommitted_count = last_idx.distance_from(state.last_committed_idx);
-            let buffered_to_take =
-                min(max(0, uncommitted_count), state.buffer.len() as i64) as usize;
-
-            let mut current = state.last_committed_idx;
-            for idx in 0..buffered_to_take {
-                current = current.next();
-                let entry = state.buffer[idx].clone();
-                result.insert(current, entry);
+        // Collect uncommitted buffer entries.
+        let uncommitted_count = last_idx.distance_from(state.last_committed_idx);
+        let buffered_to_take = min(max(0, uncommitted_count), state.buffer.len() as i64) as usize;
+        let mut current = state.last_committed_idx;
+        for idx in 0..buffered_to_take {
+            current = current.next();
+            if current >= oplog_index && current <= last_idx {
+                result
+                    .entry(current)
+                    .or_insert_with(|| state.buffer[idx].clone());
             }
-
-            result
         }
+
+        // For indices that predate the in-memory window, fall back to S3.
+        let first_in_memory: u64 = state
+            .pending_background
+            .keys()
+            .next()
+            .copied()
+            .map(Into::into)
+            .unwrap_or_else(|| Into::<u64>::into(state.last_committed_idx) + 1);
+        let oplog_index_u64: u64 = oplog_index.into();
+        if oplog_index_u64 < first_in_memory {
+            let fetch_end = OplogIndex::from_u64(first_in_memory.saturating_sub(1));
+            let s3_entries = self.target.read_range(oplog_index, fetch_end).await;
+            for (k, v) in s3_entries {
+                result.entry(k).or_insert(v);
+            }
+        }
+
+        result
     }
 
     async fn length(&self) -> u64 {

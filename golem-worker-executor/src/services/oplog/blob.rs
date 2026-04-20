@@ -64,6 +64,17 @@ impl OplogArchiveService for BlobOplogArchiveService {
         )
     }
 
+    async fn open_ephemeral(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
+        Arc::new(BlobOplogArchive::new_ephemeral(
+            owned_agent_id.clone(),
+            self.blob_storage.clone(),
+            self.level,
+        ))
+    }
+
     async fn delete(&self, owned_agent_id: &OwnedAgentId) {
         self.blob_storage
             .delete_dir(
@@ -238,6 +249,26 @@ impl BlobOplogArchive {
             level,
             created,
             entries,
+            cache: RwLock::new(EvictingCacheMap::new()),
+        }
+    }
+
+    /// Constructs a `BlobOplogArchive` without issuing any remote storage reads.
+    ///
+    /// Used for ephemeral workers whose oplog is write-only (observability) and
+    /// is never read back by the executor.  Skipping the `exists`/`list_dir`
+    /// discovery calls eliminates the blocking S3 round-trips on the hot path.
+    fn new_ephemeral(
+        owned_agent_id: OwnedAgentId,
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        level: usize,
+    ) -> Self {
+        BlobOplogArchive {
+            owned_agent_id,
+            blob_storage,
+            level,
+            created: Arc::new(async_lock::RwLock::new(false)),
+            entries: Arc::new(RwLock::new(BTreeMap::new())),
             cache: RwLock::new(EvictingCacheMap::new()),
         }
     }

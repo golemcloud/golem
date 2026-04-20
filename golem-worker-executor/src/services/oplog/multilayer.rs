@@ -51,6 +51,22 @@ pub trait OplogArchiveService: Debug + Send + Sync {
     /// Opens an oplog archive for reading and writing
     async fn open(&self, owned_agent_id: &OwnedAgentId) -> Arc<dyn OplogArchive + Send + Sync>;
 
+    /// Opens an oplog archive for an ephemeral worker.
+    ///
+    /// Unlike `open`, this must **not** issue any remote storage reads
+    /// (e.g. S3 `exists` / `list_dir`) during construction.  Ephemeral-agent
+    /// oplogs are purely for observability and are never read back by the
+    /// executor, so pre-loading the entry index is unnecessary.
+    ///
+    /// The default implementation delegates to `open` for archive services
+    /// that do not distinguish between the two cases.
+    async fn open_ephemeral(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
+        self.open(owned_agent_id).await
+    }
+
     /// Deletes the oplog archive for a worker completely
     async fn delete(&self, owned_agent_id: &OwnedAgentId);
 
@@ -304,9 +320,17 @@ impl CreateOplogConstructor {
 impl OplogConstructor for CreateOplogConstructor {
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
         let agent_mode = self.execution_status.read().agent_mode();
-        let last_oplog_index = match self.last_oplog_index {
-            Some(idx) => idx,
-            None => self.service.get_last_index(&self.owned_agent_id).await,
+
+        // Ephemeral-agent oplogs are write-only for observability and are never
+        // read back by the executor.  Always start fresh at NONE (empty oplog) —
+        // no need to discover the previous last index from S3 (which would block).
+        let last_oplog_index = if agent_mode == AgentMode::Ephemeral {
+            OplogIndex::NONE
+        } else {
+            match self.last_oplog_index {
+                Some(idx) => idx,
+                None => self.service.get_last_index(&self.owned_agent_id).await,
+            }
         };
 
         let account_id = self.initial_worker_metadata.created_by;
@@ -356,21 +380,38 @@ impl OplogConstructor for CreateOplogConstructor {
                     .await;
 
                 let target_layer = self.service.lower.last();
-                let target = target_layer.open(&self.owned_agent_id).await;
+                // Use open_ephemeral: skips S3 exists/list_dir since ephemeral
+                // oplogs are write-only for observability and never read back.
+                let target = target_layer.open_ephemeral(&self.owned_agent_id).await;
 
-                if let Some(initial_entry) = self.initial_entry {
-                    target
-                        .append(vec![(OplogIndex::INITIAL, initial_entry)])
-                        .await;
-                }
+                // If a brand-new worker has an initial entry (create path), write it
+                // to the archive as a fire-and-forget background task.
+                // EphemeralOplog::new is seeded with last_oplog_idx = INITIAL and
+                // the entry in pending_background so reads are served from memory.
+                // For the open path (no initial_entry) last_oplog_idx stays NONE
+                // and entries start at INITIAL(1) as normal.
+                let (ephemeral_start_idx, initial_pending) =
+                    if let Some(initial_entry) = self.initial_entry {
+                        let pairs = vec![(OplogIndex::INITIAL, initial_entry.clone())];
+                        let bg_target = target.clone();
+                        tokio::spawn(async move {
+                            bg_target.append(pairs).await;
+                        });
+                        let mut map = std::collections::BTreeMap::new();
+                        map.insert(OplogIndex::INITIAL, initial_entry);
+                        (OplogIndex::INITIAL, map)
+                    } else {
+                        (OplogIndex::NONE, std::collections::BTreeMap::new())
+                    };
 
                 Arc::new(
                     EphemeralOplog::new(
                         self.owned_agent_id,
-                        last_oplog_index,
+                        ephemeral_start_idx,
                         self.service.max_operations_before_commit_ephemeral,
                         primary,
                         target,
+                        initial_pending,
                         close,
                     )
                     .await,

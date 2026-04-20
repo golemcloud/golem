@@ -20,6 +20,7 @@ use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use assert2::check;
+use async_trait::async_trait;
 use golem_common::config::RedisConfig;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, Principal, UntypedDataValue, UntypedElementValue};
@@ -33,15 +34,322 @@ use golem_common::redis::RedisPool;
 use golem_common::tracing::{TracingConfig, init_tracing};
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+use golem_service_base::storage::blob::{
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult,
+};
 use golem_wasm::{FromValue, FromValueAndType, IntoValue, IntoValueAndType};
 use nonempty_collections::nev;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::time::Instant;
 use test_r::{test, test_dep};
 use tracing::{debug, info};
 use uuid::Uuid;
+
+/// A `BlobStorage` wrapper that introduces an artificial delay on read-discovery
+/// operations (`exists`, `list_dir`).  Used to verify that opening an
+/// `EphemeralOplog` does **not** block on S3 discovery reads.
+#[derive(Debug)]
+struct SlowReadBlobStorage {
+    inner: Arc<InMemoryBlobStorage>,
+    read_delay: std::time::Duration,
+}
+
+impl SlowReadBlobStorage {
+    fn new(delay: std::time::Duration) -> Self {
+        Self {
+            inner: Arc::new(InMemoryBlobStorage::new()),
+            read_delay: delay,
+        }
+    }
+}
+
+#[async_trait]
+impl BlobStorage for SlowReadBlobStorage {
+    async fn get_raw(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<Vec<u8>>, anyhow::Error> {
+        self.inner
+            .get_raw(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<
+        Option<futures::stream::BoxStream<'static, Result<bytes::Bytes, anyhow::Error>>>,
+        anyhow::Error,
+    > {
+        self.inner
+            .get_stream(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_metadata(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<BlobMetadata>, anyhow::Error> {
+        self.inner
+            .get_metadata(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn put_raw(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<(), anyhow::Error> {
+        self.inner
+            .put_raw(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn put_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn golem_service_base::replayable_stream::ErasedReplayableStream<
+            Item = Result<Vec<u8>, anyhow::Error>,
+            Error = anyhow::Error,
+        >,
+    ) -> Result<(), anyhow::Error> {
+        self.inner
+            .put_stream(target_label, op_label, namespace, path, stream)
+            .await
+    }
+
+    async fn delete(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<(), anyhow::Error> {
+        self.inner
+            .delete(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn create_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<(), anyhow::Error> {
+        self.inner
+            .create_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<PathBuf>, anyhow::Error> {
+        tokio::time::sleep(self.read_delay).await;
+        self.inner
+            .list_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn delete_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<bool, anyhow::Error> {
+        self.inner
+            .delete_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn exists(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<ExistsResult, anyhow::Error> {
+        tokio::time::sleep(self.read_delay).await;
+        self.inner
+            .exists(target_label, op_label, namespace, path)
+            .await
+    }
+}
+
+/// A `BlobStorage` wrapper that introduces an artificial delay on write
+/// operations (`put_raw`, `create_dir`).  Used in tests to verify that
+/// `EphemeralOplog::commit` does **not** block on the underlying S3 write.
+#[derive(Debug)]
+struct SlowWriteBlobStorage {
+    inner: Arc<InMemoryBlobStorage>,
+    write_delay: std::time::Duration,
+}
+
+impl SlowWriteBlobStorage {
+    fn new(delay: std::time::Duration) -> Self {
+        Self {
+            inner: Arc::new(InMemoryBlobStorage::new()),
+            write_delay: delay,
+        }
+    }
+}
+
+#[async_trait]
+impl BlobStorage for SlowWriteBlobStorage {
+    async fn get_raw(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<Vec<u8>>, anyhow::Error> {
+        self.inner
+            .get_raw(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<
+        Option<futures::stream::BoxStream<'static, Result<bytes::Bytes, anyhow::Error>>>,
+        anyhow::Error,
+    > {
+        self.inner
+            .get_stream(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_metadata(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<BlobMetadata>, anyhow::Error> {
+        self.inner
+            .get_metadata(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn put_raw(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<(), anyhow::Error> {
+        tokio::time::sleep(self.write_delay).await;
+        self.inner
+            .put_raw(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn put_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn golem_service_base::replayable_stream::ErasedReplayableStream<
+            Item = Result<Vec<u8>, anyhow::Error>,
+            Error = anyhow::Error,
+        >,
+    ) -> Result<(), anyhow::Error> {
+        tokio::time::sleep(self.write_delay).await;
+        self.inner
+            .put_stream(target_label, op_label, namespace, path, stream)
+            .await
+    }
+
+    async fn delete(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<(), anyhow::Error> {
+        self.inner
+            .delete(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn create_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<(), anyhow::Error> {
+        tokio::time::sleep(self.write_delay).await;
+        self.inner
+            .create_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<PathBuf>, anyhow::Error> {
+        self.inner
+            .list_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn delete_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<bool, anyhow::Error> {
+        self.inner
+            .delete_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn exists(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<ExistsResult, anyhow::Error> {
+        self.inner
+            .exists(target_label, op_label, namespace, path)
+            .await
+    }
+}
 
 struct Tracing;
 
@@ -247,6 +555,8 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     oplog.add(entry3.clone()).await;
     oplog.commit(CommitLevel::Always).await;
 
+    // Reads through the live oplog object are served from the in-memory cache —
+    // no S3 round-trip needed, even though the background write is still in-flight.
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
     let r3 = oplog.read(last_oplog_idx.next().next().next()).await;
@@ -254,14 +564,10 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     assert_eq!(r1, entry1);
     assert_eq!(r2, entry2);
     assert_eq!(r3, entry3);
-
-    let entries = oplog_service
-        .read(&owned_agent_id, last_oplog_idx.next(), 3)
-        .await;
-    assert_eq!(
-        entries.into_values().collect::<Vec<_>>(),
-        vec![entry1, entry2, entry3]
-    );
+    // Note: oplog_service.read() bypasses the in-memory cache and goes to S3 directly.
+    // For ephemeral agents, blob writes are background/fire-and-forget so the data may
+    // not yet be visible via oplog_service.read() immediately after commit.  Ephemeral
+    // agents are never recovered from the oplog, so this eventual-consistency is acceptable.
 }
 
 #[test]
@@ -2059,5 +2365,143 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
         failures, 0,
         "Got {failures} unique key violations from concurrent oplog access — \
          the get_or_open initial flag race caused duplicate oplog instances"
+    );
+}
+
+/// Ephemeral-agent S3 writes must be fire-and-forget.
+///
+/// The product owner requirement: writes to the blob archive for ephemeral agents
+/// are background operations; the agent must NOT wait for them to complete.
+///
+/// This test proves the contract: `commit(Always)` on an EphemeralOplog returns
+/// in well under the artificial write delay injected by `SlowWriteBlobStorage`.
+/// Before the fix this test will FAIL because commit blocks on the S3 put.
+#[test]
+async fn ephemeral_oplog_commit_does_not_block_on_blob_write(_tracing: &Tracing) {
+    // 500 ms artificial write delay simulates a slow S3 round-trip.
+    let write_delay = std::time::Duration::from_millis(500);
+    let blob_storage = Arc::new(SlowWriteBlobStorage::new(write_delay));
+
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            // primary layer uses fast in-memory storage; only the archive is slow
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    // The slow blob storage is only on the archive (tertiary) layer — the layer
+    // that ephemeral agents write to directly.
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+        10,
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "ephemeral-perf-test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            None,
+            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    oplog.add(OplogEntry::suspend().rounded()).await;
+
+    // Commit must return WITHOUT waiting for the slow S3 write.
+    let start = Instant::now();
+    oplog.commit(CommitLevel::Always).await;
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_millis(200),
+        "commit(Always) on EphemeralOplog blocked for {elapsed:?}; \
+         expected fire-and-forget (< 200ms) but blob write delay is {write_delay:?}"
+    );
+}
+
+/// Opening an ephemeral oplog must not block on S3 `exists` / `list_dir` calls.
+///
+/// The product owner requirement: the ephemeral-agent oplog is purely for
+/// observability and is NEVER read back by the worker executor.  Therefore
+/// `BlobOplogArchive::new` must not issue discovery reads (HeadObject /
+/// ListObjectsV2) when opening the archive for an ephemeral worker.
+///
+/// Before the fix this test FAILS because `BlobOplogArchive::new` calls
+/// `exists` (500 ms) + `list_dir` (500 ms) = ~1 s of blocking S3 reads.
+#[test]
+async fn ephemeral_oplog_open_does_not_block_on_blob_reads(_tracing: &Tracing) {
+    let read_delay = std::time::Duration::from_millis(500);
+    let blob_storage = Arc::new(SlowReadBlobStorage::new(read_delay));
+
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+        10,
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "ephemeral-read-perf-test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+
+    // Opening the ephemeral oplog must not block on S3 discovery reads.
+    let start = Instant::now();
+    let _oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            None,
+            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_millis(200),
+        "Opening EphemeralOplog blocked for {elapsed:?}; \
+         expected no S3 discovery reads (< 200ms) but read delay is {read_delay:?}"
     );
 }

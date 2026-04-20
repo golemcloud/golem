@@ -2827,36 +2827,21 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         store.as_context_mut().data_mut().set_running();
 
         let prepare_result = if store.as_context().data().agent_mode() == AgentMode::Ephemeral {
-            // Ephemeral workers cannot be recovered
+            // Ephemeral workers are stateless: their oplog is write-only for
+            // observability and is never read back by the executor.
+            // `initialize` is always enqueued as a live call in Worker::new, so
+            // there is nothing to replay.  Switch directly to live mode.
+            store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .state
+                .replay_state
+                .switch_to_live()
+                .await;
 
-            // We have to replay the initialize call for agents:
-            let replay_decision = Self::resume_replay(store, instance, false).await;
             record_resume_worker(start.elapsed());
-
-            if replay_decision == Ok(None) {
-                // Moving to the end of the oplog
-                store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .state
-                    .replay_state
-                    .switch_to_live()
-                    .await;
-
-                // Appending a Restart marker
-                store
-                    .as_context_mut()
-                    .data_mut()
-                    .get_public_state()
-                    .oplog()
-                    .add(OplogEntry::restart())
-                    .await;
-
-                Ok(None)
-            } else {
-                replay_decision
-            }
+            Ok(None)
         } else {
             let pending_update = store
                 .as_context_mut()
