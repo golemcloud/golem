@@ -58,24 +58,50 @@ function createDriver(agent: SupportedAgent): AgentDriver {
   }
 }
 
+async function collectScenarioReports(dir: string): Promise<ScenarioReport[]> {
+  const reports: ScenarioReport[] = [];
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      reports.push(...(await collectScenarioReports(fullPath)));
+    } else if (
+      entry.name.endsWith(".json") &&
+      entry.name !== "summary.json" &&
+      !entry.name.endsWith("-summary.json") &&
+      !entry.name.startsWith("merged-")
+    ) {
+      try {
+        const content = await fs.readFile(fullPath, "utf8");
+        const parsed = JSON.parse(content) as Record<string, unknown>;
+        if (parsed.scenario && parsed.matrix && parsed.status && Array.isArray(parsed.results)) {
+          reports.push(parsed as unknown as ScenarioReport);
+        }
+      } catch {
+        // skip non-report JSON files
+      }
+    }
+  }
+  return reports;
+}
+
 async function mergeReports(reportsDir: string, outputDir: string): Promise<void> {
   await fs.mkdir(outputDir, { recursive: true });
 
-  const files: string[] = [];
+  const summaryFiles: string[] = [];
   const topLevel = (await fs.readdir(reportsDir)).filter(
     (f) => f === "summary.json" || f.endsWith("-summary.json"),
   );
   if (topLevel.length > 0) {
-    files.push(...topLevel);
+    summaryFiles.push(...topLevel);
   } else {
-    // Try reading summary.json from subdirectories
     const entries = await fs.readdir(reportsDir, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isDirectory()) {
         try {
           const summaryPath = path.join(reportsDir, entry.name, "summary.json");
           await fs.access(summaryPath);
-          files.push(path.join(entry.name, "summary.json"));
+          summaryFiles.push(path.join(entry.name, "summary.json"));
         } catch {
           // no summary in this dir
         }
@@ -84,7 +110,7 @@ async function mergeReports(reportsDir: string, outputDir: string): Promise<void
   }
 
   const summaries: Summary[] = [];
-  for (const file of files) {
+  for (const file of summaryFiles) {
     const content = await fs.readFile(path.join(reportsDir, file), "utf8");
     summaries.push(JSON.parse(content) as Summary);
   }
@@ -93,6 +119,9 @@ async function mergeReports(reportsDir: string, outputDir: string): Promise<void
     log.error("No summary.json files found in the reports directory");
     process.exit(1);
   }
+
+  const scenarioReports = await collectScenarioReports(reportsDir);
+  log.info(`Found ${summaries.length} summary files and ${scenarioReports.length} scenario reports`);
 
   const agents = new Set<string>();
   const languages = new Set<string>();
@@ -133,8 +162,7 @@ async function mergeReports(reportsDir: string, outputDir: string): Promise<void
   await fs.writeFile(mergedPath, JSON.stringify(merged, null, 2));
   log.success(`Merged summary written to ${mergedPath}`);
 
-  // Generate HTML for merged report
-  const htmlContent = generateHtmlReport(merged, []);
+  const htmlContent = generateHtmlReport(merged, scenarioReports as HtmlScenarioReport[]);
   const htmlPath = path.join(outputDir, "report.html");
   await fs.writeFile(htmlPath, htmlContent);
   log.success(`HTML report written to ${htmlPath}`);
