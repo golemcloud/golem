@@ -197,7 +197,6 @@ impl ComponentWriteService {
                 agent_type_name.clone(),
                 AgentTypeProvisionConfig {
                     env: creation.env.clone(),
-                    wasi_config: creation.wasi_config.clone(),
                     config,
                     plugins,
                     files,
@@ -712,9 +711,6 @@ impl ComponentWriteService {
         // Env
         let env = update.env.unwrap_or(existing.env);
 
-        // Wasi config
-        let wasi_config = update.wasi_config.unwrap_or(existing.wasi_config);
-
         // Config entries: validate and transform new ones, or keep existing
         let config = if let Some(new_config) = update.config {
             validate_and_transform_config_entries(agent_type, new_config)?
@@ -764,7 +760,6 @@ impl ComponentWriteService {
 
         Ok(AgentTypeProvisionConfig {
             env,
-            wasi_config,
             config,
             plugins,
             files,
@@ -848,10 +843,14 @@ fn validate_and_transform_config_entries(
     agent_type: &AgentType,
     config_entries: Vec<AgentConfigEntryDto>,
 ) -> Result<Vec<TypedAgentConfigEntry>, ComponentError> {
+    validate_agent_config_declarations(agent_type)?;
+
     let mut results = Vec::new();
     let mut seen_keys = HashSet::new();
 
     for config_value in config_entries {
+        validate_agent_config_path(&agent_type.type_name, &config_value.path)?;
+
         let matching_declaration = agent_type
             .config
             .iter()
@@ -898,7 +897,11 @@ fn check_config_entries_match(
     agent_type: &AgentType,
     config: &[TypedAgentConfigEntry],
 ) -> Result<(), ComponentError> {
+    validate_agent_config_declarations(agent_type)?;
+
     for entry in config {
+        validate_agent_config_path(&agent_type.type_name, &entry.path)?;
+
         let matching_declaration = agent_type
             .config
             .iter()
@@ -933,6 +936,10 @@ async fn analyze_and_validate_component_wasm(
     wasm: Arc<[u8]>,
     agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
 ) -> Result<ComponentMetadata, ComponentError> {
+    for agent_type in &agent_types {
+        validate_agent_config_declarations(agent_type)?;
+    }
+
     let component_metadata = run_cpu_bound_work(move || {
         ComponentMetadata::analyse_component(&wasm, agent_types, agent_type_provision_configs)
     })
@@ -948,4 +955,23 @@ async fn analyze_and_validate_component_wasm(
     }
 
     Ok(component_metadata)
+}
+
+fn validate_agent_config_declarations(agent_type: &AgentType) -> Result<(), ComponentError> {
+    for declaration in &agent_type.config {
+        validate_agent_config_path(&agent_type.type_name, &declaration.path)?;
+    }
+
+    Ok(())
+}
+
+fn validate_agent_config_path(agent: &AgentTypeName, path: &[String]) -> Result<(), ComponentError> {
+    if path.iter().any(|segment| segment.contains('.')) {
+        return Err(ComponentError::AgentConfigPathSegmentContainsDot {
+            agent: agent.clone(),
+            key: path.to_vec(),
+        });
+    }
+
+    Ok(())
 }

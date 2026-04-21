@@ -15,13 +15,15 @@
 use crate::model::component::{CanonicalFilePath, ComponentRevision};
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
+use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
     AccountId, AgentFilter, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, ComponentId,
     FilterComparator, IdempotencyKey, StringFilterComparator, Timestamp,
 };
 use desert_rust::BinaryCodec;
+use golem_wasm::ValueAndType;
+use golem_wasm::analysis::analysed_type::str;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::vec;
 use test_r::test;
@@ -214,8 +216,10 @@ fn worker_filter_matches() {
         ],
         environment_id: EnvironmentId::new(),
         created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
-        wasi_config: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
-        config: Vec::new(),
+        config: vec![TypedAgentConfigEntry {
+            path: vec!["var1".to_string()],
+            value: ValueAndType::new(golem_wasm::Value::String("value1".to_string()), str()),
+        }],
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: AgentStatusRecord {
@@ -297,19 +301,19 @@ fn worker_filter_matches() {
     );
 
     assert!(
-        AgentFilter::new_wasi_config(
+        AgentFilter::new_config(
             "var1".to_string(),
             StringFilterComparator::Equal,
-            "value1".to_string(),
+            "\"value1\"".to_string(),
         )
         .matches(&worker_metadata)
     );
 
     assert!(
-        !AgentFilter::new_wasi_config(
+        !AgentFilter::new_config(
             "var1".to_string(),
             StringFilterComparator::Equal,
-            "value2".to_string(),
+            "\"value2\"".to_string(),
         )
         .matches(&worker_metadata)
     );

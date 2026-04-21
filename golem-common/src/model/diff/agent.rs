@@ -67,8 +67,6 @@ pub struct AgentTypeProvisionConfig {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub wasi_config: BTreeMap<String, String>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub config: BTreeMap<String, NormalizedJsonValue>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(serialize_with = "serialize_with_mode")]
@@ -89,8 +87,6 @@ pub struct AgentTypeProvisionConfigDiff {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub env_changes: BTreeMapDiff<String, String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub wasi_config_changes: BTreeMapDiff<String, String>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub file_changes: BTreeMapDiff<String, HashOf<AgentFile>>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plugin_changes: BTreeMapDiff<Uuid, PluginInstallation>,
@@ -103,10 +99,6 @@ impl Diffable for AgentTypeProvisionConfig {
 
     fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
         let env_changes = new.env.diff_with_current(&current.env)?.unwrap_or_default();
-        let wasi_config_changes = new
-            .wasi_config
-            .diff_with_current(&current.wasi_config)?
-            .unwrap_or_default();
         let file_changes = new
             .files_by_path
             .diff_with_current(&current.files_by_path)?
@@ -122,14 +114,12 @@ impl Diffable for AgentTypeProvisionConfig {
 
         Ok(
             if !env_changes.is_empty()
-                || !wasi_config_changes.is_empty()
                 || !file_changes.is_empty()
                 || !plugin_changes.is_empty()
                 || !config_changes.is_empty()
             {
                 Some(AgentTypeProvisionConfigDiff {
                     env_changes,
-                    wasi_config_changes,
                     file_changes,
                     plugin_changes,
                     config_changes,

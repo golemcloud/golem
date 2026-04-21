@@ -17,6 +17,31 @@ use super::component_metadata::ComponentMetadata;
 pub use crate::base_model::worker::*;
 use crate::model::agent::AgentConfigSource;
 use golem_wasm::ValueAndType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
+use std::collections::BTreeMap;
+
+pub fn render_agent_config_path(path: &[String]) -> String {
+    path.join(".")
+}
+
+pub fn typed_agent_config_entry_to_flat_pair(
+    entry: &TypedAgentConfigEntry,
+) -> Option<(String, String)> {
+    entry
+        .value
+        .to_json_value()
+        .ok()
+        .map(|json| (render_agent_config_path(&entry.path), json.to_string()))
+}
+
+pub fn typed_agent_config_to_flat_map(
+    entries: &[TypedAgentConfigEntry],
+) -> BTreeMap<String, String> {
+    entries
+        .iter()
+        .filter_map(typed_agent_config_entry_to_flat_pair)
+        .collect()
+}
 
 impl UntypedAgentConfigEntry {
     pub fn enrich_with_type(
@@ -90,7 +115,6 @@ mod protobuf {
                     .try_into()?,
                 created_by: value.created_by.ok_or("Missing account_id")?.try_into()?,
                 env: value.env,
-                wasi_config: value.wasi_config.into_iter().collect(),
                 config: value
                     .config
                     .into_iter()
@@ -146,7 +170,6 @@ mod protobuf {
                 environment_id: Some(value.environment_id.into()),
                 created_by: Some(value.created_by.into()),
                 env: value.env,
-                wasi_config: value.wasi_config.into_iter().collect(),
                 config: value.config.into_iter().map(Into::into).collect(),
                 status: value.status.into(),
                 component_revision: value.component_revision.into(),

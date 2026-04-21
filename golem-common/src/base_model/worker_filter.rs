@@ -174,11 +174,7 @@ impl AgentConfigVarsFilter {
 
 impl Display for AgentConfigVarsFilter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "wasi_config.{} {} {}",
-            self.name, self.comparator, self.value
-        )
+        write!(f, "config.{} {} {}", self.name, self.comparator, self.value)
     }
 }
 
@@ -289,7 +285,7 @@ pub enum AgentFilter {
     And(AgentAndFilter),
     Or(AgentOrFilter),
     Not(AgentNotFilter),
-    WasiConfig(AgentConfigVarsFilter),
+    Config(AgentConfigVarsFilter),
 }
 
 impl AgentFilter {
@@ -335,12 +331,12 @@ impl AgentFilter {
         AgentFilter::Env(AgentEnvFilter::new(name, comparator, value))
     }
 
-    pub fn new_wasi_config(
+    pub fn new_config(
         name: String,
         comparator: StringFilterComparator,
         value: String,
     ) -> Self {
-        AgentFilter::WasiConfig(AgentConfigVarsFilter::new(name, comparator, value))
+        AgentFilter::Config(AgentConfigVarsFilter::new(name, comparator, value))
     }
 
     pub fn new_revision(comparator: FilterComparator, value: ComponentRevision) -> Self {
@@ -382,7 +378,7 @@ impl Display for AgentFilter {
             AgentFilter::Env(filter) => {
                 write!(f, "{filter}")
             }
-            AgentFilter::WasiConfig(filter) => {
+            AgentFilter::Config(filter) => {
                 write!(f, "{filter}")
             }
             AgentFilter::Not(filter) => {
@@ -427,6 +423,14 @@ impl FromStr for AgentFilter {
                 _ if arg.starts_with("env.") => {
                     let name = &arg[4..];
                     Ok(AgentFilter::new_env(
+                        name.to_string(),
+                        comparator.parse()?,
+                        value.to_string(),
+                    ))
+                }
+                _ if arg.starts_with("config.") => {
+                    let name = &arg[7..];
+                    Ok(AgentFilter::new_config(
                         name.to_string(),
                         comparator.parse()?,
                         value.to_string(),

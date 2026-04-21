@@ -8,8 +8,7 @@ import "golem/worker/worker_id.proto";
 message InvocationContext {
   golem.worker.AgentId parent = 1;
   map<string, string> env = 2;
-  map<string, string> wasi_config = 3;
-  optional TracingInvocationContext tracing = 4;
+  optional TracingInvocationContext tracing = 3;
 }
 
 message TracingInvocationContext {

@@ -1070,9 +1070,6 @@ pub mod worker {
             /// of the agent will fail.
             #[arg(short, long, value_parser = parse_agent_config, verbatim_doc_comment)]
             config: Vec<AgentConfigEntryDto>,
-            /// wasi:config entries visible for the agent
-            #[arg(short, long, value_parser = parse_key_val, value_name = "VAR=VAL")]
-            wasi_config: Vec<(String, String)>,
         },
         // TODO: json args
         /// Invoke (or enqueue invocation for) agent

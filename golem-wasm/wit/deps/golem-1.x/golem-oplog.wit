@@ -105,7 +105,6 @@ interface oplog {
         component-size: u64,
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<plugin-installation-description>,
-        config-vars: list<tuple<string, string>>,
         local-agent-config: list<local-agent-config-entry>,
         original-phantom-id: option<uuid>
     }
@@ -453,7 +452,6 @@ interface oplog {
         component-size: u64,
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<environment-plugin-grant-id>,
-        config-vars: list<tuple<string, string>>,
         local-agent-config: list<raw-local-agent-config-entry>,
         original-phantom-id: option<uuid>
     }

@@ -58,7 +58,7 @@ pub use retry_policy::{
 use self::component::ComponentId;
 use self::component::{AgentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
-use self::worker::TypedAgentConfigEntry;
+use self::worker::{TypedAgentConfigEntry, typed_agent_config_entry_to_flat_pair};
 use crate::base_model::agent::ParsedAgentId;
 use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -81,7 +81,7 @@ use http::Uri;
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::ops::Add;
@@ -513,7 +513,6 @@ pub struct AgentMetadata {
     pub env: Vec<(String, String)>,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
-    pub wasi_config: BTreeMap<String, String>,
     pub config: Vec<TypedAgentConfigEntry>,
     pub created_at: Timestamp,
     pub parent: Option<AgentId>,
@@ -532,7 +531,6 @@ impl AgentMetadata {
             env: vec![],
             environment_id,
             created_by,
-            wasi_config: BTreeMap::new(),
             config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,
@@ -572,13 +570,17 @@ impl AgentFilter {
                 }
                 result
             }
-            AgentFilter::WasiConfig(AgentConfigVarsFilter {
+            AgentFilter::Config(AgentConfigVarsFilter {
                 name,
                 comparator,
                 value,
             }) => {
-                let env_value = metadata.wasi_config.get(&name);
-                env_value
+                let config_value = metadata.config.iter().find_map(|entry| {
+                    typed_agent_config_entry_to_flat_pair(entry)
+                        .and_then(|(key, rendered_value)| (key == name).then_some(rendered_value))
+                });
+                config_value
+                    .as_ref()
                     .map(|ev| comparator.matches(ev, &value))
                     .unwrap_or(false)
             }

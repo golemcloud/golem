@@ -23,7 +23,7 @@ use crate::base_model::{AgentId, AgentResourceDescription, AgentStatus, OplogInd
 use crate::{declare_enums, declare_structs, declare_unions};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm_derive::{FromValue, IntoValue};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 declare_enums! {
     pub enum AgentFileSystemNodeKind {
@@ -81,8 +81,6 @@ declare_structs! {
         pub name: String,
         pub env: HashMap<String, String>,
         #[cfg_attr(feature = "full", oai(default))]
-        pub wasi_config: BTreeMap<String, String>,
-        #[cfg_attr(feature = "full", oai(default))]
         pub config: Vec<AgentConfigEntryDto>
     }
 
@@ -112,7 +110,6 @@ declare_structs! {
         pub environment_id: EnvironmentId,
         pub created_by: AccountId,
         pub env: HashMap<String, String>,
-        pub wasi_config: BTreeMap<String, String>,
         pub config: Vec<TypedAgentConfigEntry>,
         pub status: AgentStatus,
         pub component_revision: ComponentRevision,

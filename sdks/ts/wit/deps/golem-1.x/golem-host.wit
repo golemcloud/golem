@@ -115,7 +115,7 @@ interface host {
         version(agent-version-filter),
         created-at(agent-created-at-filter),
         env(agent-env-filter),
-        wasi-config-vars(agent-config-vars-filter)
+        config(agent-config-vars-filter)
     }
 
     /// Combines multiple filter conditions with an `AND` relationship for enumerating agents

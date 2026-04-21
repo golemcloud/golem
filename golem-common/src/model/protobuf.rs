@@ -295,8 +295,8 @@ impl TryFrom<golem::worker::AgentFilter> for AgentFilter {
                     filter.comparator.try_into()?,
                     filter.value,
                 )),
-                golem::worker::agent_filter::Filter::WasiConfig(filter) => {
-                    Ok(AgentFilter::new_wasi_config(
+                golem::worker::agent_filter::Filter::Config(filter) => {
+                    Ok(AgentFilter::new_config(
                         filter.name,
                         filter.comparator.try_into()?,
                         filter.value,
@@ -358,11 +358,11 @@ impl From<AgentFilter> for golem::worker::AgentFilter {
                 comparator: comparator.into(),
                 value,
             }),
-            AgentFilter::WasiConfig(AgentConfigVarsFilter {
+            AgentFilter::Config(AgentConfigVarsFilter {
                 name,
                 comparator,
                 value,
-            }) => golem::worker::agent_filter::Filter::WasiConfig(
+            }) => golem::worker::agent_filter::Filter::Config(
                 golem::worker::AgentConfigVarsFilter {
                     name,
                     comparator: comparator.into(),

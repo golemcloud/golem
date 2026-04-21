@@ -147,14 +147,6 @@ impl ComponentMetadata {
             .map(|config| config.config.as_slice())
     }
 
-    pub fn agent_type_wasi_config(
-        &self,
-        name: &AgentTypeName,
-    ) -> Option<&BTreeMap<String, String>> {
-        self.agent_type_provision_config(name)
-            .map(|config| &config.wasi_config)
-    }
-
     pub fn agent_type_files(&self, name: &AgentTypeName) -> Option<&[InitialAgentFile]> {
         self.agent_type_provision_config(name)
             .map(|config| config.files.as_slice())
@@ -1062,7 +1054,7 @@ mod protobuf {
             use crate::base_model::worker::TypedAgentConfigEntry;
 
             let config = proto
-                .config_values
+                .config
                 .into_iter()
                 .map(TypedAgentConfigEntry::try_from)
                 .collect::<Result<Vec<_>, _>>()?;
@@ -1081,7 +1073,6 @@ mod protobuf {
 
             Ok(AgentTypeProvisionConfig {
                 env: proto.env.into_iter().collect(),
-                wasi_config: proto.wasi_config.into_iter().collect(),
                 config,
                 plugins,
                 files,
@@ -1097,8 +1088,7 @@ mod protobuf {
 
             Self {
                 env: config.env.into_iter().collect(),
-                wasi_config: config.wasi_config.into_iter().collect(),
-                config_values: config
+                config: config
                     .config
                     .into_iter()
                     .map(golem_api_grpc::proto::golem::worker::TypedAgentConfigEntry::from)

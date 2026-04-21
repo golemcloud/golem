@@ -497,7 +497,7 @@ impl IntoValue for AgentPropertyFilter {
                 let builder = builder.variant(4u32);
                 inner.add_to_builder(builder).finish()
             }
-            AgentPropertyFilter::WasiConfigVars(inner) => {
+            AgentPropertyFilter::Config(inner) => {
                 let builder = builder.variant(5u32);
                 inner.add_to_builder(builder).finish()
             }
@@ -514,7 +514,7 @@ impl IntoValue for AgentPropertyFilter {
         builder = <AgentVersionFilter>::add_to_type_builder(builder.case("version"));
         builder = <AgentCreatedAtFilter>::add_to_type_builder(builder.case("CreatedAt"));
         builder = <AgentEnvFilter>::add_to_type_builder(builder.case("env"));
-        builder = <AgentConfigVarsFilter>::add_to_type_builder(builder.case("WasiConfigVars"));
+        builder = <AgentConfigVarsFilter>::add_to_type_builder(builder.case("config"));
         builder.finish()
     }
 }
@@ -561,9 +561,9 @@ impl FromValueAndType for AgentPropertyFilter {
             }
             5 => {
                 let value = <AgentConfigVarsFilter>::from_extractor(&inner.ok_or_else(|| {
-                    "Missing AgentPropertyFilter::WasiConfigVars body".to_string()
+                    "Missing AgentPropertyFilter::Config body".to_string()
                 })?)?;
-                Ok(AgentPropertyFilter::WasiConfigVars(value))
+                Ok(AgentPropertyFilter::Config(value))
             }
             _ => Err(format!(
                 "Invalid AgentPropertyFilter variant index: {}",

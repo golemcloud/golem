@@ -61,12 +61,6 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
                 |env| format_env(view.show_sensitive, env),
             )
             .fmt_field_optional(
-                &format!("{}WASI config", prefix),
-                &provision_config.wasi_config,
-                !provision_config.wasi_config.is_empty(),
-                format_wasi_config,
-            )
-            .fmt_field_optional(
                 &format!("{}Agent config", prefix),
                 provision_config.config.as_slice(),
                 !provision_config.config.is_empty(),

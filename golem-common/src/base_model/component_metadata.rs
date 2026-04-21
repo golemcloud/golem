@@ -165,7 +165,7 @@ pub struct ComponentMetadataInnerData {
     #[cfg_attr(feature = "full", oai(default))]
     pub agent_types: Vec<AgentType>,
 
-    /// Per-agent-type provisioning configuration: env, wasi_config, config, plugins, files.
+    /// Per-agent-type provisioning configuration: env, config, plugins, files.
     /// Kept separate from agent type declarations so AgentType stays a pure declaration type.
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
@@ -187,9 +187,6 @@ pub struct AgentTypeProvisionConfig {
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub env: BTreeMap<String, String>,
-    #[serde(default)]
-    #[cfg_attr(feature = "full", oai(default))]
-    pub wasi_config: BTreeMap<String, String>,
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub config: Vec<TypedAgentConfigEntry>,

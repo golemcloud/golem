@@ -212,9 +212,6 @@ fn log_provision_config_diff(diff: &AgentTypeProvisionConfigDiff) {
     if !diff.env_changes.is_empty() {
         logln("        - env");
     }
-    if !diff.wasi_config_changes.is_empty() {
-        logln("        - wasi config");
-    }
     if !diff.config_changes.is_empty() {
         logln("        - agent config");
     }

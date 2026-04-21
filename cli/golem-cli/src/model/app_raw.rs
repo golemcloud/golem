@@ -510,10 +510,6 @@ pub struct AgentLayerProperties {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasi_config_merge_mode: Option<MapMergeMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasi_config: Option<IndexMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<Vec<PluginInstallation>>,
