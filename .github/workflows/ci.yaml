@@ -238,6 +238,15 @@ jobs:
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         uses: sbt/setup-sbt@v1
 
+      - name: Setup MoonBit
+        if: matrix.group.name == 'cli-integration-tests-group2'
+        uses: hustcer/setup-moonbit@v1
+
+      - name: Install MoonBit SDK tools dependencies
+        if: matrix.group.name == 'cli-integration-tests-group2'
+        working-directory: sdks/moonbit/golem_sdk_tools
+        run: moon update && moon install
+
       - name: Sync WIT dependencies
         if: matrix.group.name == 'cli-integration-tests-group2'
         run: cargo make wit
@@ -454,6 +463,30 @@ jobs:
       - name: Compile sbt plugin (Scala 2.12)
         working-directory: sdks/scala
         run: sbt "++2.12.21!; sbtPlugin/compile"
+
+  build-golem-moonbit:
+    runs-on: blacksmith
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup MoonBit
+        uses: hustcer/setup-moonbit@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check SDK
+        run: moon check --target wasm
+        working-directory: sdks/moonbit/golem_sdk
+      - name: Test SDK
+        run: moon test --target wasm
+        working-directory: sdks/moonbit/golem_sdk
+      - name: Install tools dependencies
+        run: moon update && moon install
+        working-directory: sdks/moonbit/golem_sdk_tools
+      - name: Check tools
+        run: moon check
+        working-directory: sdks/moonbit/golem_sdk_tools
+      - name: Test tools
+        run: moon test
+        working-directory: sdks/moonbit/golem_sdk_tools
 
   build-golem-rust:
     runs-on: blacksmith
@@ -743,7 +776,7 @@ jobs:
       fail-fast: false
       matrix:
         agent: [claude-code, codex]
-        language: [ts, rust, scala]
+        language: [ts, rust, scala, moonbit]
         model: ['']
         include:
           - agent: opencode
@@ -756,6 +789,9 @@ jobs:
             language: scala
             model: google/gemini-3-pro-preview
           - agent: opencode
+            language: moonbit
+            model: google/gemini-3-pro-preview
+          - agent: opencode
             language: ts
             model: openai/gpt-5.4
           - agent: opencode
@@ -765,6 +801,9 @@ jobs:
             language: scala
             model: openai/gpt-5.4
           - agent: opencode
+            language: moonbit
+            model: openai/gpt-5.4
+          - agent: opencode
             language: ts
             model: anthropic/claude-opus-4-6
           - agent: opencode
@@ -772,6 +811,9 @@ jobs:
             model: anthropic/claude-opus-4-6
           - agent: opencode
             language: scala
+            model: anthropic/claude-opus-4-6
+          - agent: opencode
+            language: moonbit
             model: anthropic/claude-opus-4-6
     steps:
       - uses: actions/checkout@v5
@@ -863,6 +905,10 @@ jobs:
         working-directory: sdks/scala
         run: |
           sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
+
+      - name: Setup MoonBit
+        if: matrix.language == 'moonbit'
+        uses: hustcer/setup-moonbit@v1
 
       - name: Install Harness Dependencies
         working-directory: golem-skills/tests/harness
@@ -1145,6 +1191,24 @@ jobs:
           # Save keychain path for cleanup
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
 
+      - name: Create entitlements
+        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+        run: |
+          ENTITLEMENTS_PATH=$RUNNER_TEMP/entitlements.plist
+
+          cat > $ENTITLEMENTS_PATH << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN">
+          <plist version="1.0">
+            <dict>
+              <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+              <true/>
+            </dict>
+          </plist>
+          EOF
+
+          echo "ENTITLEMENTS_PATH=$ENTITLEMENTS_PATH" >> $GITHUB_ENV
+
       - name: Code Sign Binary
         if: contains(matrix.cfg.rust-target, 'apple-darwin')
         env:
@@ -1156,12 +1220,13 @@ jobs:
           codesign --force \
             --options runtime \
             --timestamp \
+            --entitlements "$ENTITLEMENTS_PATH" \
             --sign "$APPLE_SIGNING_IDENTITY" \
             "$BINARY_PATH"
 
           # Verify signature
           codesign --verify --verbose "$BINARY_PATH"
-          codesign --display --verbose=4 "$BINARY_PATH"
+          codesign --display --verbose=4 --entitlements - "$BINARY_PATH"
 
       - name: Create Notarization Archive
         if: contains(matrix.cfg.rust-target, 'apple-darwin')

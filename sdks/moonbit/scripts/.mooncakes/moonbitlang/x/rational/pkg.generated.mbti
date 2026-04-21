@@ -1,0 +1,62 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "moonbitlang/x/rational"
+
+import {
+  "moonbitlang/core/bigint",
+  "moonbitlang/core/quickcheck",
+  "moonbitlang/core/quickcheck/splitmix",
+}
+
+// Values
+pub fn from_double(Double) -> Rational[Int64] raise RationalError
+
+pub fn[T : Integral] new(T, T) -> Rational[T]?
+
+// Errors
+pub(all) suberror RationalError {
+  RationalError(String)
+}
+pub impl Eq for RationalError
+pub impl Show for RationalError
+pub impl ToJson for RationalError
+
+// Types and methods
+type Rational[T]
+#as_free_fn
+pub fn[T : Integral] Rational::abs(Self[T]) -> Self[T]
+#as_free_fn
+pub fn[T : Integral] Rational::ceil(Self[T]) -> T
+#as_free_fn
+pub fn[T : Integral] Rational::floor(Self[T]) -> T
+#as_free_fn
+pub fn[T : Integral] Rational::fract(Self[T]) -> Self[T]
+#as_free_fn
+pub fn[T : Integral] Rational::is_integer(Self[T]) -> Bool
+#as_free_fn
+pub fn[T : Integral] Rational::reciprocal(Self[T]) -> Self[T]
+pub fn Rational::to_double(Self[Int64]) -> Double
+#as_free_fn
+pub fn[T : Integral] Rational::trunc(Self[T]) -> T
+pub impl[T : Integral] Add for Rational[T]
+pub impl[T : Integral] Compare for Rational[T]
+pub impl[T : Integral] Div for Rational[T]
+pub impl[T : Eq] Eq for Rational[T]
+pub impl[T : Integral] Mul for Rational[T]
+pub impl[T : Integral] Neg for Rational[T]
+pub impl[T : Integral] Show for Rational[T]
+pub impl[T : Integral] Sub for Rational[T]
+pub impl[T : Integral] @quickcheck.Arbitrary for Rational[T]
+
+// Type aliases
+pub type BigRational = Rational[@bigint.BigInt]
+
+pub type Rational32 = Rational[Int]
+
+pub type Rational64 = Rational[Int64]
+
+// Traits
+trait Integral : Add + Sub + Mul + Div + Neg + Mod + Show + Eq + Compare + @quickcheck.Arbitrary
+pub impl Integral for Int
+pub impl Integral for Int64
+pub impl Integral for @bigint.BigInt
+

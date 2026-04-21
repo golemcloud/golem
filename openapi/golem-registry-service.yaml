@@ -11437,18 +11437,18 @@ components:
       required:
       - name
       - priority
-      - predicateJson
-      - policyJson
+      - predicate
+      - policy
       properties:
         name:
           type: string
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
     RetryPolicyDto:
       type: object
       title: RetryPolicyDto
@@ -11458,8 +11458,8 @@ components:
       - name
       - revision
       - priority
-      - predicateJson
-      - policyJson
+      - predicate
+      - policy
       properties:
         id:
           type: string
@@ -11475,10 +11475,10 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
     RetryPolicyUpdate:
       type: object
       title: RetryPolicyUpdate
@@ -11491,10 +11491,10 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
     SecuritySchemeAgentSecurity:
       type: object
       title: SecuritySchemeAgentSecurity
@@ -11965,6 +11965,9 @@ components:
             type: string
         value:
           $ref: '#/components/schemas/ValueAndType'
+    UntypedJsonBody:
+      type: object
+      description: A json body without a static schema
     ValueAndType:
       type: object
       required:

@@ -1,0 +1,176 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/core/types"
+
+// Values
+pub fn parse_uuid(String) -> Result[Uuid, String]
+
+pub fn uuid_to_string(Uuid) -> String
+
+// Errors
+
+// Types and methods
+pub(all) struct AccountId {
+  uuid : Uuid
+} derive(Eq, Show)
+
+pub(all) struct AgentId {
+  component_id : ComponentId
+  agent_id : String
+} derive(Eq, Show)
+
+pub(all) struct BinaryDescriptor {
+  restrictions : Array[BinaryType]?
+} derive(Eq, Show)
+
+pub(all) enum BinaryReference {
+  Url(String)
+  Inline(BinarySource)
+} derive(Eq, Show)
+
+pub(all) struct BinarySource {
+  data : FixedArray[Byte]
+  binary_type : BinaryType
+} derive(Eq, Show)
+
+pub(all) struct BinaryType {
+  mime_type : String
+} derive(Eq, Show)
+
+pub(all) struct ComponentId {
+  uuid : Uuid
+} derive(Eq, Show)
+
+pub(all) enum DataSchema {
+  Tuple(Array[(String, ElementSchema)])
+  Multimodal(Array[(String, ElementSchema)])
+} derive(Eq, Show)
+
+pub(all) enum DataValue {
+  Tuple(Array[ElementValue])
+  Multimodal(Array[(String, ElementValue)])
+} derive(Eq, Show)
+
+pub(all) enum ElementSchema {
+  ComponentModel(WitType)
+  UnstructuredText(TextDescriptor)
+  UnstructuredBinary(BinaryDescriptor)
+} derive(Eq, Show)
+
+pub(all) enum ElementValue {
+  ComponentModel(WitValue)
+  UnstructuredText(TextReference)
+  UnstructuredBinary(BinaryReference)
+} derive(Eq, Show)
+
+pub(all) struct NamedWitTypeNode {
+  name : String?
+  owner : String?
+  type_ : WitTypeNode
+} derive(Eq, Show)
+
+pub(all) struct PromiseId {
+  agent_id : AgentId
+  oplog_idx : UInt64
+} derive(Eq, Show)
+
+pub(all) enum ResourceMode {
+  OWNED
+  BORROWED
+} derive(Eq, Show)
+pub fn ResourceMode::from(Int) -> Self
+pub fn ResourceMode::ordinal(Self) -> Int
+
+pub(all) struct TextDescriptor {
+  restrictions : Array[TextType]?
+} derive(Eq, Show)
+
+pub(all) enum TextReference {
+  Url(String)
+  Inline(TextSource)
+} derive(Eq, Show)
+
+pub(all) struct TextSource {
+  data : String
+  text_type : TextType?
+} derive(Eq, Show)
+
+pub(all) struct TextType {
+  language_code : String
+} derive(Eq, Show)
+
+pub(all) struct Uri {
+  value : String
+} derive(Eq, Show)
+
+pub(all) struct Uuid {
+  high_bits : UInt64
+  low_bits : UInt64
+} derive(Eq, Show)
+
+pub(all) struct ValueAndType {
+  value : WitValue
+  typ : WitType
+} derive(Eq, Show)
+
+pub(all) enum WitNode {
+  RecordValue(Array[Int])
+  VariantValue((UInt, Int?))
+  EnumValue(UInt)
+  FlagsValue(Array[Bool])
+  TupleValue(Array[Int])
+  ListValue(Array[Int])
+  OptionValue(Int?)
+  ResultValue(Result[Int?, Int?])
+  PrimU8(Byte)
+  PrimU16(UInt)
+  PrimU32(UInt)
+  PrimU64(UInt64)
+  PrimS8(Int)
+  PrimS16(Int)
+  PrimS32(Int)
+  PrimS64(Int64)
+  PrimFloat32(Float)
+  PrimFloat64(Double)
+  PrimChar(Char)
+  PrimBool(Bool)
+  PrimString(String)
+  Handle((Uri, UInt64))
+} derive(Eq, Show)
+
+pub(all) struct WitType {
+  nodes : Array[NamedWitTypeNode]
+} derive(Eq, Show)
+
+pub(all) enum WitTypeNode {
+  RecordType(Array[(String, Int)])
+  VariantType(Array[(String, Int?)])
+  EnumType(Array[String])
+  FlagsType(Array[String])
+  TupleType(Array[Int])
+  ListType(Int)
+  OptionType(Int)
+  ResultType((Int?, Int?))
+  PrimU8Type
+  PrimU16Type
+  PrimU32Type
+  PrimU64Type
+  PrimS8Type
+  PrimS16Type
+  PrimS32Type
+  PrimS64Type
+  PrimF32Type
+  PrimF64Type
+  PrimCharType
+  PrimBoolType
+  PrimStringType
+  HandleType((UInt64, ResourceMode))
+} derive(Eq, Show)
+
+pub(all) struct WitValue {
+  nodes : Array[WitNode]
+} derive(Eq, Show)
+
+// Type aliases
+
+// Traits
+

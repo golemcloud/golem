@@ -1,0 +1,215 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/api/host"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/wasi/io/poll",
+}
+
+// Values
+pub fn complete_promise(@types.PromiseId, FixedArray[Byte]) -> Bool
+
+pub fn create_promise() -> @types.PromiseId
+
+pub fn fork() -> ForkResult
+
+pub fn fork_agent(@types.AgentId, @types.AgentId, UInt64) -> Unit
+
+pub fn generate_idempotency_key() -> @types.Uuid
+
+pub fn get_agent_metadata(@types.AgentId) -> AgentMetadata?
+
+pub fn get_idempotence_mode() -> Bool
+
+pub fn get_oplog_index() -> UInt64
+
+pub fn get_oplog_persistence_level() -> PersistenceLevel
+
+pub fn get_promise(@types.PromiseId) -> GetPromiseResult
+
+pub fn get_retry_policy() -> RetryPolicy
+
+pub fn get_self_metadata() -> AgentMetadata
+
+pub fn mark_begin_operation() -> UInt64
+
+pub fn mark_end_operation(UInt64) -> Unit
+
+pub fn oplog_commit(Byte) -> Unit
+
+pub fn resolve_agent_id(String, String) -> @types.AgentId?
+
+pub fn resolve_agent_id_strict(String, String) -> @types.AgentId?
+
+pub fn resolve_component_id(String) -> @types.ComponentId?
+
+pub fn revert_agent(@types.AgentId, RevertAgentTarget) -> Unit
+
+pub fn set_idempotence_mode(Bool) -> Unit
+
+pub fn set_oplog_index(UInt64) -> Unit
+
+pub fn set_oplog_persistence_level(PersistenceLevel) -> Unit
+
+pub fn set_retry_policy(RetryPolicy) -> Unit
+
+pub fn update_agent(@types.AgentId, UInt64, UpdateMode) -> Unit
+
+// Errors
+
+// Types and methods
+pub(all) struct AgentAllFilter {
+  filters : Array[AgentPropertyFilter]
+} derive(Eq, Show)
+
+pub(all) struct AgentAnyFilter {
+  filters : Array[AgentAllFilter]
+} derive(Eq, Show)
+
+pub(all) struct AgentConfigVarsFilter {
+  name : String
+  comparator : StringFilterComparator
+  value : String
+} derive(Eq, Show)
+
+pub(all) struct AgentCreatedAtFilter {
+  comparator : FilterComparator
+  value : UInt64
+} derive(Eq, Show)
+
+pub(all) struct AgentEnvFilter {
+  name : String
+  comparator : StringFilterComparator
+  value : String
+} derive(Eq, Show)
+
+pub(all) struct AgentMetadata {
+  agent_id : @types.AgentId
+  args : Array[String]
+  env : Array[(String, String)]
+  config_vars : Array[(String, String)]
+  status : AgentStatus
+  component_revision : UInt64
+  retry_count : UInt64
+  environment_id : EnvironmentId
+} derive(Eq, Show)
+
+pub(all) struct AgentNameFilter {
+  comparator : StringFilterComparator
+  value : String
+} derive(Eq, Show)
+
+pub(all) enum AgentPropertyFilter {
+  Name(AgentNameFilter)
+  Status(AgentStatusFilter)
+  Version(AgentVersionFilter)
+  CreatedAt(AgentCreatedAtFilter)
+  Env(AgentEnvFilter)
+  WasiConfigVars(AgentConfigVarsFilter)
+} derive(Eq, Show)
+
+pub(all) enum AgentStatus {
+  RUNNING
+  IDLE
+  SUSPENDED
+  INTERRUPTED
+  RETRYING
+  FAILED
+  EXITED
+} derive(Eq, Show)
+pub fn AgentStatus::from(Int) -> Self
+pub fn AgentStatus::ordinal(Self) -> Int
+
+pub(all) struct AgentStatusFilter {
+  comparator : FilterComparator
+  value : AgentStatus
+} derive(Eq, Show)
+
+pub(all) struct AgentVersionFilter {
+  comparator : FilterComparator
+  value : UInt64
+} derive(Eq, Show)
+
+pub(all) struct EnvironmentId {
+  uuid : @types.Uuid
+} derive(Eq, Show)
+
+pub(all) enum FilterComparator {
+  EQUAL
+  NOT_EQUAL
+  GREATER_EQUAL
+  GREATER
+  LESS_EQUAL
+  LESS
+} derive(Eq, Show)
+pub fn FilterComparator::from(Int) -> Self
+pub fn FilterComparator::ordinal(Self) -> Int
+
+pub(all) struct ForkDetails {
+  forked_phantom_id : @types.Uuid
+} derive(Eq, Show)
+
+pub(all) enum ForkResult {
+  Original(ForkDetails)
+  Forked(ForkDetails)
+} derive(Eq, Show)
+
+pub(all) struct GetAgents(Int) derive(Eq, Show)
+pub fn GetAgents::drop(Self) -> Unit
+pub fn GetAgents::get_agents(@types.ComponentId, AgentAnyFilter?, Bool) -> Self
+pub fn GetAgents::get_next(Self) -> Array[AgentMetadata]?
+#deprecated
+pub fn GetAgents::inner(Self) -> Int
+
+pub(all) struct GetPromiseResult(Int) derive(Eq, Show)
+pub fn GetPromiseResult::drop(Self) -> Unit
+pub fn GetPromiseResult::get(Self) -> FixedArray[Byte]?
+#deprecated
+pub fn GetPromiseResult::inner(Self) -> Int
+pub fn GetPromiseResult::subscribe(Self) -> @poll.Pollable
+
+pub(all) enum PersistenceLevel {
+  PersistNothing
+  PersistRemoteSideEffects
+  Smart
+} derive(Eq, Show)
+
+pub(all) struct RetryPolicy {
+  max_attempts : UInt
+  min_delay : UInt64
+  max_delay : UInt64
+  multiplier : Double
+  max_jitter_factor : Double?
+} derive(Eq, Show)
+
+pub(all) enum RevertAgentTarget {
+  RevertToOplogIndex(UInt64)
+  RevertLastInvocations(UInt64)
+} derive(Eq, Show)
+
+pub(all) struct Snapshot {
+  data : FixedArray[Byte]
+  mime_type : String
+} derive(Eq, Show)
+
+pub(all) enum StringFilterComparator {
+  EQUAL
+  NOT_EQUAL
+  LIKE
+  NOT_LIKE
+  STARTS_WITH
+} derive(Eq, Show)
+pub fn StringFilterComparator::from(Int) -> Self
+pub fn StringFilterComparator::ordinal(Self) -> Int
+
+pub(all) enum UpdateMode {
+  AUTOMATIC
+  SNAPSHOT_BASED
+} derive(Eq, Show)
+pub fn UpdateMode::from(Int) -> Self
+pub fn UpdateMode::ordinal(Self) -> Int
+
+// Type aliases
+
+// Traits
+
