@@ -268,10 +268,6 @@ pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasi_config_merge_mode: Option<MapMergeMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasi_config: Option<IndexMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<Vec<PluginInstallation>>,
@@ -331,10 +327,6 @@ pub struct Component {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasi_config_merge_mode: Option<MapMergeMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasi_config: Option<IndexMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<Vec<PluginInstallation>>,
@@ -392,10 +384,6 @@ pub struct ComponentPreset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasi_config_merge_mode: Option<MapMergeMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasi_config: Option<IndexMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<Vec<PluginInstallation>>,
@@ -439,10 +427,6 @@ pub struct Agent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasi_config_merge_mode: Option<MapMergeMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasi_config: Option<IndexMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins: Option<Vec<PluginInstallation>>,
@@ -479,10 +463,6 @@ pub struct AgentPreset {
     pub env_merge_mode: Option<MapMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<IndexMap<String, String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasi_config_merge_mode: Option<MapMergeMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasi_config: Option<IndexMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugins_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1175,8 +1155,6 @@ mod test {
                 arb_opt(arb_json_value()),
                 arb_opt(arb_map_merge_mode_model()),
                 arb_opt(arb_string_index_map_model()),
-                arb_opt(arb_map_merge_mode_model()),
-                arb_opt(arb_string_index_map_model()),
             ),
             (
                 arb_opt(arb_vec_merge_mode_model()),
@@ -1191,7 +1169,7 @@ mod test {
                     component_wasm,
                     output_wasm,
                     (build_merge_mode, build, custom_commands, clean),
-                    (config, env_merge_mode, env, wasi_config_merge_mode, wasi_config),
+                    (config, env_merge_mode, env),
                     (plugins_merge_mode, plugins, files_merge_mode, files),
                 )| ComponentPreset {
                     default: is_default.then_some(Marker),
@@ -1204,8 +1182,6 @@ mod test {
                     config,
                     env_merge_mode,
                     env,
-                    wasi_config_merge_mode,
-                    wasi_config,
                     plugins_merge_mode,
                     plugins,
                     files_merge_mode,
@@ -1237,8 +1213,6 @@ mod test {
                 arb_opt(arb_json_value()),
                 arb_opt(arb_map_merge_mode_model()),
                 arb_opt(arb_string_index_map_model()),
-                arb_opt(arb_map_merge_mode_model()),
-                arb_opt(arb_string_index_map_model()),
             ),
             (
                 arb_opt(arb_vec_merge_mode_model()),
@@ -1255,7 +1229,7 @@ mod test {
                     component_wasm,
                     output_wasm,
                     (build_merge_mode, build, custom_commands, clean),
-                    (config, env_merge_mode, env, wasi_config_merge_mode, wasi_config),
+                    (config, env_merge_mode, env),
                     (plugins_merge_mode, plugins, files_merge_mode, files),
                     presets,
                 )| ComponentTemplate {
@@ -1269,8 +1243,6 @@ mod test {
                     config,
                     env_merge_mode,
                     env,
-                    wasi_config_merge_mode,
-                    wasi_config,
                     plugins_merge_mode,
                     plugins,
                     files_merge_mode,
@@ -1304,8 +1276,6 @@ mod test {
                 arb_opt(arb_json_value()),
                 arb_opt(arb_map_merge_mode_model()),
                 arb_opt(arb_string_index_map_model()),
-                arb_opt(arb_map_merge_mode_model()),
-                arb_opt(arb_string_index_map_model()),
             ),
             (
                 arb_opt(arb_vec_merge_mode_model()),
@@ -1323,7 +1293,7 @@ mod test {
                     component_wasm,
                     output_wasm,
                     (build_merge_mode, build, custom_commands, clean),
-                    (config, env_merge_mode, env, wasi_config_merge_mode, wasi_config),
+                    (config, env_merge_mode, env),
                     (plugins_merge_mode, plugins, files_merge_mode, files),
                     presets,
                 )| Component {
@@ -1338,8 +1308,6 @@ mod test {
                     config,
                     env_merge_mode,
                     env,
-                    wasi_config_merge_mode,
-                    wasi_config,
                     plugins_merge_mode,
                     plugins,
                     files_merge_mode,
@@ -1356,8 +1324,6 @@ mod test {
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
-            arb_opt(arb_map_merge_mode_model()),
-            arb_opt(arb_string_index_map_model()),
             arb_opt(arb_vec_merge_mode_model()),
             arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
             arb_opt(arb_vec_merge_mode_model()),
@@ -1369,8 +1335,6 @@ mod test {
                     config,
                     env_merge_mode,
                     env,
-                    wasi_config_merge_mode,
-                    wasi_config,
                     plugins_merge_mode,
                     plugins,
                     files_merge_mode,
@@ -1380,8 +1344,6 @@ mod test {
                     config,
                     env_merge_mode,
                     env,
-                    wasi_config_merge_mode,
-                    wasi_config,
                     plugins_merge_mode,
                     plugins,
                     files_merge_mode,
@@ -1397,8 +1359,6 @@ mod test {
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
-            arb_opt(arb_map_merge_mode_model()),
-            arb_opt(arb_string_index_map_model()),
             arb_opt(arb_vec_merge_mode_model()),
             arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
             arb_opt(arb_vec_merge_mode_model()),
@@ -1412,8 +1372,6 @@ mod test {
                     config,
                     env_merge_mode,
                     env,
-                    wasi_config_merge_mode,
-                    wasi_config,
                     plugins_merge_mode,
                     plugins,
                     files_merge_mode,
@@ -1424,8 +1382,6 @@ mod test {
                     config,
                     env_merge_mode,
                     env,
-                    wasi_config_merge_mode,
-                    wasi_config,
                     plugins_merge_mode,
                     plugins,
                     files_merge_mode,
