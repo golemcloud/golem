@@ -1533,7 +1533,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             lowered,
                             store,
                             instance,
-                            &component_metadata,
                             InvocationMode::Replay,
                         )
                         .await;
@@ -1747,14 +1746,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .data_mut()
             .begin_call_snapshotting_function();
 
-        let load_result = invoke_observed_and_traced(
-            lowered,
-            store,
-            instance,
-            &component_metadata,
-            InvocationMode::Replay,
-        )
-        .await;
+        let load_result =
+            invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
 
         store
             .as_context_mut()
@@ -2701,7 +2694,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             lowered,
                             store,
                             instance,
-                            &component_metadata,
                             InvocationMode::Replay,
                         )
                         .instrument(span)

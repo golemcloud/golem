@@ -776,7 +776,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         idempotency_key: IdempotencyKey,
         invocation: AgentInvocation,
     ) -> Result<InvokeResult, WorkerExecutorError> {
-        let (lowered, local_span_ids, inherited_span_ids, component_metadata) = async {
+        let (lowered, local_span_ids, inherited_span_ids) = async {
             self.store
                 .data_mut()
                 .set_current_idempotency_key(idempotency_key.clone())
@@ -814,12 +814,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 self.parent.parsed_agent_id.as_ref(),
             )?;
 
-            Ok::<_, WorkerExecutorError>((
-                lowered,
-                local_span_ids,
-                inherited_span_ids,
-                component_metadata,
-            ))
+            Ok::<_, WorkerExecutorError>((lowered, local_span_ids, inherited_span_ids))
         }
         .instrument(span!(Level::INFO, "prepare_invocation_context"))
         .await?;
@@ -828,7 +823,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             lowered,
             self.store,
             self.instance,
-            &component_metadata,
             InvocationMode::Live(invocation),
         )
         .await;
@@ -977,14 +971,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         self.store.data_mut().begin_call_snapshotting_function();
 
-        let result = invoke_observed_and_traced(
-            lowered,
-            self.store,
-            self.instance,
-            &component_metadata,
-            InvocationMode::Replay,
-        )
-        .await;
+        let result =
+            invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
+                .await;
         self.store.data_mut().end_call_snapshotting_function();
 
         match result {
@@ -1187,14 +1176,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         self.store.data_mut().begin_call_snapshotting_function();
 
-        let result = invoke_observed_and_traced(
-            lowered,
-            self.store,
-            self.instance,
-            &component_metadata,
-            InvocationMode::Replay,
-        )
-        .await;
+        let result =
+            invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
+                .await;
         self.store.data_mut().end_call_snapshotting_function();
 
         match result {
