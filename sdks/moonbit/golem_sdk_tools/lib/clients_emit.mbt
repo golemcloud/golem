@@ -37,13 +37,19 @@ pub fn generate_client_code(
     }
     let client_name = agent.name + "Client"
     impls.push(build_client_struct(client_name))
-    impls.push(build_client_get(agent, client_name))
+    match agent.mode {
+      Durable => impls.push(build_client_get(agent, client_name))
+      Ephemeral => ()
+    }
     impls.push(build_client_new_phantom(agent, client_name))
     impls.push(build_client_get_phantom(agent, client_name))
     impls.push(build_client_get_agent_id(client_name))
     impls.push(build_client_phantom_id(client_name))
     impls.push(build_client_drop(client_name))
-    impls.push(build_client_scoped(agent, client_name))
+    match agent.mode {
+      Durable => impls.push(build_client_scoped(agent, client_name))
+      Ephemeral => ()
+    }
     impls.push(build_client_scoped_new_phantom(agent, client_name))
     impls.push(build_client_scoped_get_phantom(agent, client_name))
     for meth in agent.methods {
@@ -63,11 +69,15 @@ pub fn generate_client_code(
         if has_non_secret_config_fields(ct) {
           let override_name = ct.name + "Override"
           let walker_name = "collect_" + pascal_to_snake(ct.name) + "_overrides"
-          impls.push(
-            build_client_get_with_config(
-              agent, client_name, override_name, walker_name,
-            ),
-          )
+          match agent.mode {
+            Durable =>
+              impls.push(
+                build_client_get_with_config(
+                  agent, client_name, override_name, walker_name,
+                ),
+              )
+            Ephemeral => ()
+          }
           impls.push(
             build_client_new_phantom_with_config(
               agent, client_name, override_name, walker_name,
@@ -78,9 +88,13 @@ pub fn generate_client_code(
               agent, client_name, override_name, walker_name,
             ),
           )
-          impls.push(
-            build_client_scoped_with_config(agent, client_name, override_name),
-          )
+          match agent.mode {
+            Durable =>
+              impls.push(
+                build_client_scoped_with_config(agent, client_name, override_name),
+              )
+            Ephemeral => ()
+          }
           impls.push(
             build_client_scoped_new_phantom_with_config(
               agent, client_name, override_name,

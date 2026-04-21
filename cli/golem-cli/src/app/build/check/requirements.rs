@@ -58,16 +58,6 @@ pub struct ToolRequirement {
 
 const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
     ToolRequirement {
-        key: "rustup",
-        name: "rustup",
-        check: ToolRequirementCheck::CommandVersion {
-            command: "rustup",
-            args: &["--version"],
-        },
-        version_range: Some(VersionRange::at_least(versions::build_tool::RUSTUP_MIN)),
-        install_hint: "Install Rust tooling using rustup: https://www.rust-lang.org/tools/install",
-    },
-    ToolRequirement {
         key: "rustc",
         name: "rustc",
         check: ToolRequirementCheck::CommandVersion {
@@ -75,7 +65,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             args: &["--version"],
         },
         version_range: Some(VersionRange::at_least(versions::build_tool::RUSTC_MIN)),
-        install_hint: "Install stable Rust with rustup: rustup install stable && rustup default stable",
+        install_hint: "Install stable Rust using your system package manager or rustup (example: rustup install stable && rustup default stable)",
     },
     ToolRequirement {
         key: "cargo",
@@ -85,7 +75,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             args: &["version"],
         },
         version_range: Some(VersionRange::at_least(versions::build_tool::CARGO_MIN)),
-        install_hint: "Cargo is installed with Rust toolchain from rustup",
+        install_hint: "Cargo is installed together with a Rust toolchain",
     },
     ToolRequirement {
         key: "rust-target-wasm32-wasip2",
@@ -94,7 +84,7 @@ const RUST_TOOL_REQUIREMENTS: &[ToolRequirement] = &[
             target: "wasm32-wasip2",
         },
         version_range: None,
-        install_hint: "Install the Rust target: rustup target add wasm32-wasip2",
+        install_hint: "Install the Rust target wasm32-wasip2 using your toolchain manager (for rustup: rustup target add wasm32-wasip2)",
     },
 ];
 

@@ -45,7 +45,7 @@ pub async fn invoke_tool(
             },
         )?;
 
-    let parsed_agent_id = ParsedAgentId::new(
+    let parsed_agent_id = ParsedAgentId::new_auto_phantom(
         mcp_tool.agent_type_name.clone(),
         DataValue::Tuple(ElementValues {
             elements: constructor_params
@@ -54,6 +54,7 @@ pub async fn invoke_tool(
                 .collect(),
         }),
         None,
+        mcp_tool.agent_mode,
     )
     .map_err(|e| {
         tracing::error!("Failed to parse agent id: {}", e);
@@ -309,13 +310,20 @@ fn convert_elem_value_to_mcp_tool_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mcp::agent_mcp_tool::AgentMcpTool;
+    use crate::mcp::invoke::test_support::{InvocationHarness, phantom_id};
     use golem_common::base_model::agent::{
-        BinaryDescriptor, ComponentModelElementSchema, ElementSchema, NamedElementSchema,
+        AgentConstructor, AgentMethod, AgentMode, AgentTypeName, BinaryDescriptor,
+        ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
         NamedElementSchemas, TextDescriptor, TextType, UntypedNamedElementValue, Url,
     };
+    use golem_common::model::AgentInvocationOutput;
     use golem_wasm::Value;
     use golem_wasm::analysis::{AnalysedType, TypeStr};
+    use rmcp::model::Tool;
     use serde_json::json;
+    use std::borrow::Cow;
+    use std::sync::Arc;
     use test_r::test;
 
     fn str_output_schema() -> DataSchema {
@@ -474,5 +482,54 @@ mod tests {
         });
         let err = convert_elem_value_to_mcp_tool_response(&elem).unwrap_err();
         assert!(err.message.contains("URL"), "got: {}", err.message);
+    }
+
+    #[test]
+    async fn invoke_tool_auto_generates_phantom_for_ephemeral_agents() {
+        let harness = InvocationHarness::new(AgentInvocationOutput {
+            result: golem_common::model::AgentInvocationResult::AgentInitialization,
+            consumed_fuel: None,
+            invocation_status: None,
+            component_revision: None,
+        });
+        let tool = AgentMcpTool {
+            tool: Tool {
+                name: Cow::Borrowed("mcp-agent-run"),
+                title: None,
+                description: None,
+                input_schema: Arc::new(JsonObject::default()),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            environment_id: harness.environment_id,
+            account_id: harness.account_id,
+            constructor: AgentConstructor {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+            },
+            raw_method: AgentMethod {
+                name: "run".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                http_endpoint: vec![],
+            },
+            component_id: harness.component_id,
+            agent_type_name: AgentTypeName("mcp-agent".to_string()),
+            agent_mode: AgentMode::Ephemeral,
+        };
+
+        let result = invoke_tool(JsonObject::default(), &tool, &harness.worker_service).await;
+
+        assert!(result.is_ok());
+        let agent_id = harness.recorded_agent_id();
+        assert_eq!(agent_id.component_id, harness.component_id);
+        assert!(phantom_id(&agent_id).is_some());
     }
 }

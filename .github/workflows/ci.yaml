@@ -976,6 +976,24 @@ jobs:
           # Save keychain path for cleanup
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
 
+      - name: Create entitlements
+        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+        run: |
+          ENTITLEMENTS_PATH=$RUNNER_TEMP/entitlements.plist
+
+          cat > $ENTITLEMENTS_PATH << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN">
+          <plist version="1.0">
+            <dict>
+              <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+              <true/>
+            </dict>
+          </plist>
+          EOF
+
+          echo "ENTITLEMENTS_PATH=$ENTITLEMENTS_PATH" >> $GITHUB_ENV
+
       - name: Code Sign Binary
         if: contains(matrix.cfg.rust-target, 'apple-darwin')
         env:
@@ -987,12 +1005,13 @@ jobs:
           codesign --force \
             --options runtime \
             --timestamp \
+            --entitlements "$ENTITLEMENTS_PATH" \
             --sign "$APPLE_SIGNING_IDENTITY" \
             "$BINARY_PATH"
 
           # Verify signature
           codesign --verify --verbose "$BINARY_PATH"
-          codesign --display --verbose=4 "$BINARY_PATH"
+          codesign --display --verbose=4 --entitlements - "$BINARY_PATH"
 
       - name: Create Notarization Archive
         if: contains(matrix.cfg.rust-target, 'apple-darwin')

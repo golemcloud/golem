@@ -9992,11 +9992,15 @@ components:
       title: AgentInvocationResult
       type: object
       properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
         result:
           $ref: '#/components/schemas/UntypedJsonDataValue'
         componentRevision:
           type: integer
           format: uint64
+      required:
+      - agentId
     AgentMetadataDto:
       title: AgentMetadataDto
       type: object
@@ -16841,15 +16845,15 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
       required:
       - name
       - priority
-      - predicateJson
-      - policyJson
+      - predicate
+      - policy
     RetryPolicyDto:
       title: RetryPolicyDto
       type: object
@@ -16868,18 +16872,18 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
       required:
       - id
       - environmentId
       - name
       - revision
       - priority
-      - predicateJson
-      - policyJson
+      - predicate
+      - policy
     RetryPolicyUpdate:
       title: RetryPolicyUpdate
       type: object
@@ -16890,10 +16894,10 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
       required:
       - currentRevision
     SecuritySchemeAgentSecurity:
@@ -17176,6 +17180,9 @@ components:
       - accountId
       - createdAt
       - expiresAt
+    UntypedJsonBody:
+      description: A json body without a static schema
+      type: object
     VersionedName:
       title: VersionedName
       type: object

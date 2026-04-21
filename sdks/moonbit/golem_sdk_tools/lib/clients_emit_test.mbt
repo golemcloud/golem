@@ -638,6 +638,56 @@ test "generate_client_code - mixed config generates with_config methods" {
 }
 
 ///|
+test "generate_client_code - ephemeral agent skips non-phantom constructors" {
+  let agent : @lib.AgentInfo = {
+    name: "EphemeralWorker",
+    description: "An ephemeral worker",
+    mode: @lib.AgentMode::Ephemeral,
+    constructor_params: [("name", @lib.ParamType::Simple("String"))],
+    constructor_description: "Creates an ephemeral worker",
+    constructor_prompt_hint: None,
+    methods: [],
+    has_init: false,
+    constructor_schema_options: {},
+    has_snapshottable: false,
+    has_json_derives: false,
+    snapshotting: Disabled,
+    fields: [],
+    http_mount: None,
+    config_type: Some("MixedConfig"),
+  }
+  let config_types : Array[@lib.ConfigTypeInfo] = [
+    {
+      name: "MixedConfig",
+      package: "",
+      fields: [
+        (
+          "api_key",
+          @lib.ParamType::Parameterized("Secret", [
+            @lib.ParamType::Simple("String"),
+          ]),
+        ),
+        ("timeout", @lib.ParamType::Simple("UInt64")),
+      ],
+    },
+  ]
+  let impls = @lib.generate_client_code(
+    [agent],
+    config_types~,
+    agent_package="",
+  )
+  let output = @formatter.impls_to_string(impls)
+
+  assert_false(output.contains("pub fn EphemeralWorkerClient::get("))
+  assert_false(output.contains("get_with_config"))
+  assert_false(output.contains("scoped_with_config"))
+  assert_true(output.contains("new_phantom_with_config"))
+  assert_true(output.contains("get_phantom_with_config"))
+  assert_true(output.contains("scoped_new_phantom_with_config"))
+  assert_true(output.contains("scoped_get_phantom_with_config"))
+}
+
+///|
 test "generate_config_override_types - flat config" {
   let config_types : Array[@lib.ConfigTypeInfo] = [
     {
