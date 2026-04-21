@@ -1181,6 +1181,7 @@ fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
 mod tests {
     use super::normalize_agent_name_with_latest_component;
     use chrono::Utc;
+    use golem_common::model::AgentId;
     use golem_common::model::Empty;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::{
@@ -1192,7 +1193,6 @@ mod tests {
     use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::AgentId;
     use golem_service_base::model::component::Component;
     use test_r::test;
     use uuid::Uuid;
