@@ -2608,6 +2608,83 @@ async fn ephemeral_oplog_commit_does_not_block_on_blob_write(_tracing: &Tracing)
     );
 }
 
+/// `EphemeralOplog::length()` must reflect all logically present entries
+/// (committed + uncommitted), not just what has been flushed to the archive.
+///
+/// Concretely: after adding N entries and committing, `length()` must equal
+/// `current_oplog_index()`, even if the background archive write is still
+/// in-flight.  Callers inspecting an open oplog must see a consistent view.
+///
+/// Before the fix `length()` delegates to `target.length()` which is 0 until
+/// the background write lands — inconsistent with `current_oplog_index()`.
+#[test]
+async fn ephemeral_oplog_length_is_consistent_with_current_oplog_index(_tracing: &Tracing) {
+    // Use a slow archive so the background write is still in-flight when we
+    // check length().
+    let write_delay = std::time::Duration::from_millis(500);
+    let blob_storage = Arc::new(SlowWriteBlobStorage::new(write_delay));
+
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+        10,
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "ephemeral-length-test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            None,
+            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    oplog.add(OplogEntry::suspend().rounded()).await;
+    oplog.add(OplogEntry::suspend().rounded()).await;
+    oplog.add(OplogEntry::suspend().rounded()).await;
+    oplog.commit(CommitLevel::Always).await;
+    // Add a 4th entry that stays in the buffer (not yet committed).
+    oplog.add(OplogEntry::suspend().rounded()).await;
+
+    // The background write for entries 1-3 is still in-flight (slow archive).
+    // length() must equal current_oplog_index() — both must reflect all 4 entries.
+    let current_idx: u64 = oplog.current_oplog_index().await.into();
+    let length = oplog.length().await;
+
+    assert_eq!(
+        length, current_idx,
+        "length() ({length}) must equal current_oplog_index() ({current_idx}) \
+         even while background archive write is in-flight"
+    );
+    assert_eq!(length, 4, "expected 4 entries (3 committed + 1 buffered)");
+}
+
 /// Opening an ephemeral oplog must make exactly one `get_last_index` call
 /// (one `exists` + optional `list_dir`) to discover the S3 high-water mark
 /// for index continuity after executor failover.  The old code issued 3×

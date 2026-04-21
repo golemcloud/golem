@@ -318,7 +318,13 @@ impl Oplog for EphemeralOplog {
 
     async fn length(&self) -> u64 {
         record_oplog_call("length");
-        self.target.length().await
+        // Return the count of all logically present entries — committed entries
+        // in pending_background/archive plus uncommitted entries in the buffer.
+        // Using the current oplog index (1-based sequential) ensures consistency
+        // with current_oplog_index() and read() regardless of whether the
+        // background archive write has completed.
+        let state = self.state.lock().await;
+        state.last_oplog_idx.into()
     }
 
     async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
