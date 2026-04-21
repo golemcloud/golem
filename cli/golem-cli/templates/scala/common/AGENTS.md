@@ -45,6 +45,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-cors-scala` | Configuring CORS allowed origins for HTTP endpoints |
 | `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
 | `golem-configure-mcp-server` | Configuring MCP (Model Context Protocol) server deployments in golem.yaml |
+| `golem-manage-plugins` | Managing Golem plugins — listing available plugins, installing and configuring plugins via golem.yaml or CLI, and understanding built-in plugins like the OTLP exporter |
 | `golem-add-config-scala` | Adding typed configuration to Scala Golem agents |
 | `golem-add-secret-scala` | Adding secrets to Scala Golem agents |
 | `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
