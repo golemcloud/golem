@@ -45,6 +45,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-configure-mcp-server` | Configuring MCP (Model Context Protocol) server deployments in golem.yaml |
 | `golem-add-config-scala` | Adding typed configuration to Scala Golem agents |
 | `golem-add-secret-scala` | Adding secrets to Scala Golem agents |
+| `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
 | `golem-file-io-scala` | Reading and writing files from agent code |
@@ -61,6 +62,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-test-crash-recovery` | Simulating a crash on an agent for testing crash recovery |
 | `golem-cancel-queued-invocation` | Canceling a pending (queued) invocation on an agent |
 | `golem-delete-agent` | Deleting an agent instance |
+| `golem-interactive-repl-scala` | Using the Golem REPL for interactive testing and scripting of agents |
 
 # Golem Application Development Guide (Scala)
 

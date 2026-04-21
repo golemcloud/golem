@@ -560,6 +560,11 @@ languages, so a plain `args` string suffices:
   casing or naming style. MoonBit uses `snake_case` (same as Rust).
 - When writing prompts for new agents, it is fine to describe the intended public behavior in
   kebab-case, but the verification steps should invoke the real method names used in code.
+- **Avoid repetitive per-language prompts.** Only use language-conditional `prompt` when the
+  wording genuinely differs between languages (e.g., different file names, different syntax).
+  If the prompt is essentially the same for all languages, use a single `prompt` string and
+  let the skill handle language-specific details. The agent already knows the project language
+  from the AGENTS.md guide and will pick the right REPL language, file extension, etc.
 - **Helper agents with HTTP APIs for observable side effects**: Some skills (atomic blocks,
   transactions, durability controls) need an external service to observe side effects — e.g., to
   verify that operations were retried, compensated, or executed in the correct order. The harness

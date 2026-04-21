@@ -650,6 +650,10 @@ This table shows where each property can be defined:
 | `componentWasm` | — | ✅ | ✅ | — | ✅ | — |
 | `outputWasm` | — | ✅ | ✅ | — | ✅ | — |
 
+## Related Skills
+
+- Load `golem-profiles-and-environments` for detailed guidance on CLI profiles, app environments, component presets, and how they interact
+
 ## Edit Guardrails
 
 - **Do not invent fields**: most manifest objects use `additionalProperties: false` — only use fields documented above.
