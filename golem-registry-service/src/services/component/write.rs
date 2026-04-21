@@ -849,8 +849,6 @@ fn validate_and_transform_config_entries(
     let mut seen_keys = HashSet::new();
 
     for config_value in config_entries {
-        validate_agent_config_path(&agent_type.type_name, &config_value.path)?;
-
         let matching_declaration = agent_type
             .config
             .iter()
@@ -900,8 +898,6 @@ fn check_config_entries_match(
     validate_agent_config_declarations(agent_type)?;
 
     for entry in config {
-        validate_agent_config_path(&agent_type.type_name, &entry.path)?;
-
         let matching_declaration = agent_type
             .config
             .iter()
