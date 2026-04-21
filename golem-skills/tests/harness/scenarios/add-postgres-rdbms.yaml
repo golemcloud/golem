@@ -11,37 +11,13 @@ steps:
       deploy: true
 
   - id: "add-postgres-method"
-    prompt:
-      rust: >
-        In the test-app project, modify the existing CounterAgent so it adds a new method called
-        `check_postgres` that returns a string. Implement it using `golem:rdbms/postgres` from the
-        Rust SDK. Hardcode the PostgreSQL connection string `{{postgres_url}}`, open a connection,
-        run `SELECT 'postgres-ok'::text`, read the first row and first column, and return that
-        string. Keep the existing increment method unchanged. Do not change the method signature to
-        `Result<String, _>`; it must return a plain string. Make sure the project builds and deploys
-        successfully.
-      ts: >
-        In the test-app project, modify the existing CounterAgent so it adds a new method called
-        `checkPostgres` that returns a string. Implement it using `golem:rdbms/postgres@1.5.0`
-        from the TypeScript SDK. Hardcode the PostgreSQL connection string `{{postgres_url}}`,
-        open a connection, run `SELECT 'postgres-ok'::text`, read the first row and first column,
-        and return that string. Keep the existing increment method unchanged. Make sure the project
-        builds and deploys successfully.
-      scala: >
-        In the test-app project, modify the existing CounterAgent so it adds a new method called
-        `checkPostgres` that returns a string. Implement it using `golem.host.Rdbms.Postgres`
-        from the Scala SDK. Hardcode the PostgreSQL connection string `{{postgres_url}}`, open a
-        connection, run `SELECT 'postgres-ok'::text`, read the first row and first column, and
-        return that string. Keep the existing increment method unchanged. Make sure the project
-        builds and deploys successfully.
-      moonbit: >
-        In the test-app project, modify the existing CounterAgent so it adds a new method called
-        `check_postgres` that returns a string. Implement it using the MoonBit package
-        `golemcloud/golem_sdk/interface/golem/rdbms/postgres`. Add the required import to the
-        component's `moon.pkg`, hardcode the PostgreSQL connection string `{{postgres_url}}`, open
-        a connection, run `SELECT 'postgres-ok'::text`, read the first row and first column, and
-        return that string. Keep the existing increment method unchanged. Make sure the project
-        builds and deploys successfully.
+    prompt: >
+      In the test-app project, modify the existing CounterAgent so it adds a new method called
+      `check-postgres` that returns a string. Implement it using the Golem RDBMS PostgreSQL API.
+      Hardcode the PostgreSQL connection string `{{postgres_url}}`, open a connection, run
+      `SELECT 'postgres-ok'::text`, read the first row and first column, and return that string.
+      Keep the existing increment method unchanged. The method must return a plain string, not a
+      result type. Make sure the project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-add-postgres-rust"

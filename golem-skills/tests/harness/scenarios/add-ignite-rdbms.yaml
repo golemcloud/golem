@@ -13,30 +13,13 @@ steps:
       deploy: true
 
   - id: "add-ignite-method"
-    prompt:
-      rust: >
-        In the test-app project, modify the existing CounterAgent so it adds a new method called
-        `check_ignite` that returns a string. Implement it using `golem:rdbms/ignite2` from the
-        Rust SDK. Hardcode the Ignite connection string `{{ignite_url}}`, open a connection, run
-        `SELECT 'ignite-ok'`, read the first row and first column, and return that string. Keep the
-        existing increment method unchanged. Do not change the method signature to
-        `Result<String, _>`; it must return a plain string. Make sure the project builds and deploys
-        successfully.
-      ts: >
-        In the test-app project, modify the existing CounterAgent so it adds a new method called
-        `checkIgnite` that returns a string. Implement it using `golem:rdbms/ignite2@1.5.0` from
-        the TypeScript SDK. Hardcode the Ignite connection string `{{ignite_url}}`, open a
-        connection, run `SELECT 'ignite-ok'`, read the first row and first column, and return that
-        string. Keep the existing increment method unchanged. Make sure the project builds and deploys
-        successfully.
-      moonbit: >
-        In the test-app project, modify the existing CounterAgent so it adds a new method called
-        `check_ignite` that returns a string. Implement it using the MoonBit package
-        `golemcloud/golem_sdk/interface/golem/rdbms/ignite2`. Add the required import to the
-        component's `moon.pkg`, hardcode the Ignite connection string `{{ignite_url}}`, open a
-        connection, run `SELECT 'ignite-ok'`, read the first row and first column, and return that
-        string. Keep the existing increment method unchanged. Make sure the project builds and deploys
-        successfully.
+    prompt: >
+      In the test-app project, modify the existing CounterAgent so it adds a new method called
+      `check-ignite` that returns a string. Implement it using the Golem RDBMS Ignite API.
+      Hardcode the Ignite connection string `{{ignite_url}}`, open a connection, run
+      `SELECT 'ignite-ok'`, read the first row and first column, and return that string. Keep the
+      existing increment method unchanged. The method must return a plain string, not a result
+      type. Make sure the project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-add-ignite-rust"

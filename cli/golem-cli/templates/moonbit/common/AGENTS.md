@@ -43,6 +43,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
 | `golem-file-io-moonbit` | Reading and writing files from agent code |
+| `golem-add-llm-moonbit` | Adding LLM and AI capabilities by calling provider APIs with WASI HTTP |
 | `golem-make-http-request-moonbit` | Making outgoing HTTP requests from agent code |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
 | `golem-view-agent-files` | Listing files in an agent's virtual filesystem |

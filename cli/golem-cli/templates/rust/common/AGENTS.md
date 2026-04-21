@@ -43,6 +43,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
 | `golem-file-io-rust` | Reading and writing files from agent code |
+| `golem-add-llm-rust` | Adding LLM and AI capabilities using golem-ai libraries |
 | `golem-make-http-request-rust` | Making outgoing HTTP requests from agent code using wstd |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
 | `golem-view-agent-files` | Listing files in an agent's virtual filesystem |

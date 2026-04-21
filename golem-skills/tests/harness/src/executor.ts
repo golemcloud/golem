@@ -253,7 +253,7 @@ const SettingsSchema = z
     cleanup: z.boolean().optional(),
   })
   .optional();
-const ServiceNameSchema = z.enum(["postgres", "mysql", "ignite"]);
+const ServiceNameSchema = z.enum(["postgres", "mysql", "ignite", "openai-mock"]);
 const PrerequisitesSchema = z
   .object({
     env: z.record(z.string()).optional(),

@@ -44,6 +44,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
 | `golem-file-io-scala` | Reading and writing files from agent code |
 | `golem-js-runtime` | JavaScript runtime environment: available Web APIs, Node.js modules, and npm compatibility |
+| `golem-add-llm-scala` | Adding LLM and AI capabilities by calling provider APIs with fetch or ZIO HTTP |
 | `golem-make-http-request-scala` | Making outgoing HTTP requests from agent code using fetch or ZIO HTTP |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
 | `golem-view-agent-files` | Listing files in an agent's virtual filesystem |

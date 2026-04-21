@@ -1,9 +1,12 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { Socket } from "node:net";
+import * as path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import * as log from "./log.js";
 
-export type PrerequisiteServiceName = "postgres" | "mysql" | "ignite";
+export type PrerequisiteServiceName = "postgres" | "mysql" | "ignite" | "openai-mock";
 
 interface ManagedService {
   readonly name: PrerequisiteServiceName;
@@ -21,6 +24,7 @@ export interface StartedPrerequisiteServices {
 const POSTGRES_IMAGE = "postgres:16";
 const MYSQL_IMAGE = "mysql:8";
 const IGNITE_IMAGE = "apacheignite/ignite:2.17.0";
+const WIREMOCK_IMAGE = "wiremock/wiremock:3.13.0";
 
 export async function startPrerequisiteServices(
   names: PrerequisiteServiceName[] | undefined,
@@ -74,6 +78,8 @@ async function startService(name: PrerequisiteServiceName): Promise<ManagedServi
       return startMySqlService();
     case "ignite":
       return startIgniteService();
+    case "openai-mock":
+      return startOpenAiMockService();
   }
 }
 
@@ -196,6 +202,54 @@ async function startIgniteService(): Promise<ManagedService> {
     };
   } catch (error) {
     await stopManagedServices([{ name: "ignite", containerId }]);
+    throw error;
+  }
+}
+
+async function startOpenAiMockService(): Promise<ManagedService> {
+  log.info(`Starting prerequisite service openai-mock with ${WIREMOCK_IMAGE}`);
+
+  // Resolve the harness root directory. When running via `npx tsx src/run.ts`, import.meta.url
+  // points to `src/services.ts` (one level deep). When running compiled JS from `dist/src/`,
+  // it is two levels deep. We walk up from the current file until we find `package.json`.
+  const thisDir = path.dirname(fileURLToPath(import.meta.url));
+  let harnessRoot = thisDir;
+  while (!existsSync(path.join(harnessRoot, "package.json"))) {
+    const parent = path.dirname(harnessRoot);
+    if (parent === harnessRoot) break; // safety: filesystem root
+    harnessRoot = parent;
+  }
+  const mappingsDir = path.resolve(harnessRoot, "docker", "openai-mock", "mappings");
+
+  const containerId = await dockerRunDetached([
+    "run",
+    "-d",
+    "--rm",
+    "-p",
+    "127.0.0.1::8080",
+    "-v",
+    `${mappingsDir}:/home/wiremock/mappings:ro`,
+    WIREMOCK_IMAGE,
+  ]);
+
+  try {
+    const hostPort = await getMappedPort(containerId, 8080);
+    await waitForTcpReady("127.0.0.1", hostPort, 30_000);
+
+    const url = `http://127.0.0.1:${hostPort}`;
+    return {
+      name: "openai-mock",
+      containerId,
+      env: {
+        OPENAI_API_KEY: "test-mock-key",
+        OPENAI_BASE_URL: `${url}/v1`,
+      },
+      variables: {
+        openai_mock_url: url,
+      },
+    };
+  } catch (error) {
+    await stopManagedServices([{ name: "openai-mock", containerId }]);
     throw error;
   }
 }
