@@ -12,6 +12,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-edit-manifest` | Editing the Golem Application Manifest (golem.yaml) — components, agents, templates, environments, httpApi, mcp, bridge SDKs, plugins, and more |
 | `golem-build` | Building a Golem application with `golem build` |
 | `golem-deploy` | Deploying a Golem application with `golem deploy` |
+| `golem-local-dev-server` | Starting and managing the local Golem development server with `golem server` |
 | `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
 | `golem-redeploy-agents` | Redeploying existing agents by deleting and recreating them |
 | `golem-create-agent-instance-scala` | Creating a new agent instance with `golem agent new` |
