@@ -162,7 +162,6 @@ declare module 'golem:api/oplog@1.5.0' {
     componentSize: bigint;
     initialTotalLinearMemorySize: bigint;
     initialActivePlugins: PluginInstallationDescription[];
-    configVars: [string, string][];
     localAgentConfig: LocalAgentConfigEntry[];
     originalPhantomId?: Uuid;
   };
@@ -536,7 +535,6 @@ declare module 'golem:api/oplog@1.5.0' {
     componentSize: bigint;
     initialTotalLinearMemorySize: bigint;
     initialActivePlugins: EnvironmentPluginGrantId[];
-    configVars: [string, string][];
     localAgentConfig: RawLocalAgentConfigEntry[];
     originalPhantomId?: Uuid;
   };
