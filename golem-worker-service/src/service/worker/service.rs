@@ -1068,6 +1068,7 @@ mod tests {
     use chrono::Utc;
     use futures::Stream;
     use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
+    use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::AgentInvocationOutput;
     use golem_common::model::Empty;
     use golem_common::model::account::AccountId;
@@ -1777,7 +1778,7 @@ mod tests {
             account_id,
             component_size: 0,
             metadata: ComponentMetadata::from_parts(
-                vec![],
+                KnownExports::default(),
                 vec![],
                 None,
                 None,
