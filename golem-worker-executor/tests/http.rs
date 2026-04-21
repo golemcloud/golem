@@ -83,7 +83,6 @@ async fn http_client(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -158,7 +157,6 @@ async fn http_client_using_reqwest(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -242,7 +240,6 @@ async fn http_client_using_reqwest_async(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -325,7 +322,6 @@ async fn http_client_using_reqwest_async_parallel(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -436,7 +432,6 @@ async fn outgoing_http_contains_idempotency_key(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;

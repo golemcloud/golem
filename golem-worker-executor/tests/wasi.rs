@@ -21,7 +21,9 @@ use bytes::Bytes;
 use futures::stream;
 use golem_common::agent_id;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
-use golem_common::model::worker::{AgentFileSystemNode, AgentFileSystemNodeKind};
+use golem_common::model::worker::{
+    AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
+};
 use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_test_framework::dsl::{TestDsl, drain_connection, stderr_events, stdout_events};
 use golem_test_framework::model::IFSEntry;
@@ -346,7 +348,6 @@ async fn initial_file_read_write(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -547,7 +548,6 @@ async fn initial_file_reading_through_api(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1103,7 +1103,6 @@ async fn environment_variables(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1201,7 +1200,6 @@ async fn http_client_response_persisted_between_invocations(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1296,7 +1294,6 @@ async fn http_client_interrupting_response_stream(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1428,7 +1425,6 @@ async fn http_client_interrupting_response_stream_async(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -3060,11 +3056,16 @@ async fn wasi_config_initial_worker_config(
             &component.id,
             agent_id.clone(),
             HashMap::new(),
-            HashMap::from_iter(vec![
-                ("k1".to_string(), "v1".to_string()),
-                ("k2".to_string(), "v2".to_string()),
-            ]),
-            Vec::new(),
+            vec![
+                AgentConfigEntryDto {
+                    path: vec!["k1".to_string()],
+                    value: serde_json::Value::String("v1".to_string()).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["k2".to_string()],
+                    value: serde_json::Value::String("v2".to_string()).into(),
+                },
+            ],
         )
         .await?;
 
@@ -3077,10 +3078,7 @@ async fn wasi_config_initial_worker_config(
             .into_return_value()
             .ok_or_else(|| anyhow!("expected return value"))?;
 
-        assert_eq!(
-            result,
-            Value::Option(Some(Box::new(Value::String("v1".to_string()))))
-        )
+        assert_eq!(result, Value::Option(Some(Box::new(Value::String("\"v1\"".to_string())))))
     }
 
     {
@@ -3109,11 +3107,11 @@ async fn wasi_config_initial_worker_config(
             Value::List(vec![
                 Value::Tuple(vec![
                     Value::String("k1".to_string()),
-                    Value::String("v1".to_string())
+                    Value::String("\"v1\"".to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("k2".to_string()),
-                    Value::String("v2".to_string())
+                    Value::String("\"v2\"".to_string())
                 ])
             ])
         )
@@ -3139,11 +3137,17 @@ async fn wasi_config_component_update(
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
-        .with_config_vars(
+        .with_agent_config(
             "WasiConfig",
             vec![
-                ("k1".to_string(), "v0".to_string()),
-                ("k3".to_string(), "v3".to_string()),
+                AgentConfigEntryDto {
+                    path: vec!["k1".to_string()],
+                    value: serde_json::Value::String("v0".to_string()).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["k3".to_string()],
+                    value: serde_json::Value::String("v3".to_string()).into(),
+                },
             ],
         )
         .store()
@@ -3156,11 +3160,16 @@ async fn wasi_config_component_update(
             &component.id,
             agent_id.clone(),
             HashMap::new(),
-            HashMap::from_iter(vec![
-                ("k1".to_string(), "v1".to_string()),
-                ("k2".to_string(), "v2".to_string()),
-            ]),
-            Vec::new(),
+            vec![
+                AgentConfigEntryDto {
+                    path: vec!["k1".to_string()],
+                    value: serde_json::Value::String("v1".to_string()).into(),
+                },
+                AgentConfigEntryDto {
+                    path: vec!["k2".to_string()],
+                    value: serde_json::Value::String("v2".to_string()).into(),
+                },
+            ],
         )
         .await?;
 
@@ -3176,15 +3185,15 @@ async fn wasi_config_component_update(
             Value::List(vec![
                 Value::Tuple(vec![
                     Value::String("k1".to_string()),
-                    Value::String("v1".to_string())
+                    Value::String("\"v1\"".to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("k2".to_string()),
-                    Value::String("v2".to_string())
+                    Value::String("\"v2\"".to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("k3".to_string()),
-                    Value::String("v3".to_string())
+                    Value::String("\"v3\"".to_string())
                 ]),
             ])
         )
@@ -3198,11 +3207,20 @@ async fn wasi_config_component_update(
             Some(BTreeMap::from([(
                 golem_common::model::agent::AgentTypeName("WasiConfig".to_string()),
                 golem_common::model::component::AgentTypeProvisionConfigUpdate {
-                    wasi_config: Some(BTreeMap::from_iter(vec![
-                        ("k1".to_string(), "v2".to_string()),
-                        ("k3".to_string(), "v4".to_string()),
-                        ("k4".to_string(), "v4".to_string()),
-                    ])),
+                    config: Some(vec![
+                        AgentConfigEntryDto {
+                            path: vec!["k1".to_string()],
+                            value: serde_json::Value::String("v2".to_string()).into(),
+                        },
+                        AgentConfigEntryDto {
+                            path: vec!["k3".to_string()],
+                            value: serde_json::Value::String("v4".to_string()).into(),
+                        },
+                        AgentConfigEntryDto {
+                            path: vec!["k4".to_string()],
+                            value: serde_json::Value::String("v4".to_string()).into(),
+                        },
+                    ]),
                     ..Default::default()
                 },
             )])),
@@ -3226,19 +3244,19 @@ async fn wasi_config_component_update(
             Value::List(vec![
                 Value::Tuple(vec![
                     Value::String("k1".to_string()),
-                    Value::String("v1".to_string())
+                    Value::String("\"v1\"".to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("k2".to_string()),
-                    Value::String("v2".to_string())
+                    Value::String("\"v2\"".to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("k3".to_string()),
-                    Value::String("v4".to_string())
+                    Value::String("\"v4\"".to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("k4".to_string()),
-                    Value::String("v4".to_string())
+                    Value::String("\"v4\"".to_string())
                 ]),
             ])
         )
@@ -3551,7 +3569,6 @@ async fn http_connection_pool_contention_between_agents(
             &component.id,
             agent_id_slow.clone(),
             env.clone(),
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -3560,7 +3577,6 @@ async fn http_connection_pool_contention_between_agents(
             &component.id,
             agent_id_fast.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -3731,7 +3747,6 @@ async fn http_connection_pool_contention_with_restart(
             &component.id,
             agent_id_slow.clone(),
             env.clone(),
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -3740,7 +3755,6 @@ async fn http_connection_pool_contention_with_restart(
             &component.id,
             agent_id_fast.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -3917,7 +3931,6 @@ async fn http_timeout_and_restart(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -4057,7 +4070,6 @@ async fn oplog_replay_after_streaming_http_read(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -4167,7 +4179,6 @@ async fn oplog_replay_streaming_http_then_sleep_future_trailers_bug(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -4276,7 +4287,6 @@ async fn oplog_replay_after_parallel_streaming_http_reads(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -4384,7 +4394,6 @@ async fn oplog_replay_after_raw_streaming_http_read(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -4500,7 +4509,6 @@ async fn oplog_replay_after_parallel_raw_streaming_http_reads(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;

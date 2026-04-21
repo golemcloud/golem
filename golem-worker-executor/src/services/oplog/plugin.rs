@@ -284,7 +284,6 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 .get_or_create_running(
                     &target_owned,
                     None,
-                    None,
                     Vec::new(),
                     Some(running_plugin.component_revision),
                     None,
@@ -318,7 +317,6 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                     agent_id: Some(worker_metadata.agent_id.clone().into()),
                     environment_id: Some(worker_metadata.environment_id.into()),
                     env: HashMap::from_iter(worker_metadata.env.iter().cloned()),
-                    wasi_config: worker_metadata.wasi_config.clone().into_iter().collect(),
                     config: worker_metadata
                         .config
                         .clone()
@@ -2049,7 +2047,6 @@ mod tests {
             env: vec![],
             environment_id,
             created_by: account_id,
-            wasi_config: BTreeMap::new(),
             config: Vec::new(),
             created_at: Timestamp::now_utc(),
             parent: None,

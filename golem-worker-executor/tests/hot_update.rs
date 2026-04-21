@@ -173,7 +173,6 @@ async fn auto_update_on_running(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -313,7 +312,6 @@ async fn failing_auto_update_on_idle(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -445,7 +443,6 @@ async fn failing_auto_update_on_running(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -539,7 +536,6 @@ async fn manual_update_on_idle(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -613,7 +609,6 @@ async fn manual_update_on_idle_without_save_snapshot(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -683,7 +678,6 @@ async fn auto_update_on_running_followed_by_manual(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -788,7 +782,6 @@ async fn manual_update_on_idle_with_failing_load(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -857,7 +850,6 @@ async fn manual_update_on_idle_using_v11(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -931,7 +923,6 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1170,7 +1161,6 @@ async fn auto_update_with_disable_wakeup_keeps_worker_interrupted(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;

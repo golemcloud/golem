@@ -113,7 +113,6 @@ async fn custom_durability_1(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -215,7 +214,6 @@ async fn lazy_pollable(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;

@@ -649,7 +649,6 @@ async fn http_zone1_inline_retry_on_transient_connection_failure(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -719,7 +718,6 @@ async fn http_zone1_falls_back_to_trap_when_delay_exceeds_threshold(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1026,7 +1024,6 @@ async fn http_output_stream_inline_retry_on_body_write_failure(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1107,7 +1104,6 @@ async fn http_post_fails_permanently_when_idempotence_disabled(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1176,7 +1172,6 @@ async fn http_get_retried_inline_even_when_idempotence_disabled(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1553,7 +1548,6 @@ async fn http_resuming_response_body_inline_retry_on_body_read_failure(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1646,7 +1640,6 @@ async fn http_resuming_response_body_inline_retry_accepts_matching_non_partial_s
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1732,7 +1725,6 @@ async fn http_write_zeroes_body_reconstruction(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1815,7 +1807,6 @@ async fn http_no_output_stream_retry_when_subscribe_used(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1894,7 +1885,6 @@ async fn http_no_retry_when_trailers_present(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1976,7 +1966,6 @@ async fn http_no_resuming_response_body_retry_when_body_skip_used(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;

@@ -44,7 +44,6 @@ use golem_common::model::{AgentFilter, AgentId, IdempotencyKey, ScanCursor};
 use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
-use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 
@@ -85,7 +84,6 @@ impl WorkerService {
         &self,
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
-        wasi_config: BTreeMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
@@ -101,7 +99,6 @@ impl WorkerService {
             agent_id,
             component,
             environment_variables,
-            wasi_config,
             config,
             ignore_already_existing,
             auth_ctx,
@@ -117,7 +114,6 @@ impl WorkerService {
         agent_id: &AgentId,
         component: Component,
         environment_variables: HashMap<String, String>,
-        wasi_config: BTreeMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         auth_ctx: AuthCtx,
@@ -139,7 +135,6 @@ impl WorkerService {
             .create(
                 agent_id,
                 environment_variables,
-                wasi_config,
                 config,
                 ignore_already_existing,
                 environment_auth_details.account_id_owning_environment,
@@ -844,7 +839,6 @@ impl WorkerService {
                 &agent_id,
                 component,
                 HashMap::new(),
-                BTreeMap::new(),
                 request.config,
                 true,
                 auth,

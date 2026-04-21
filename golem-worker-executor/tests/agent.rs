@@ -138,7 +138,6 @@ async fn agent_env_inheritance(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;

@@ -1150,7 +1150,6 @@ async fn component_env_and_worker_env_priority(
             &component.id,
             agent_id.clone(),
             worker_env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1873,7 +1872,6 @@ async fn long_running_poll_loop_works_as_expected(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1980,7 +1978,6 @@ async fn long_running_poll_loop_http_failures_are_retried(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -2101,7 +2098,6 @@ async fn long_running_poll_loop_works_as_expected_async_http(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -2176,7 +2172,6 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -2319,7 +2314,6 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -2409,7 +2403,6 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -2520,7 +2513,6 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -2687,7 +2679,6 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -2876,7 +2867,6 @@ async fn invocation_queue_is_persistent(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -3656,7 +3646,6 @@ async fn worker_created_by_reflects_component_owner_not_caller(
             component_owner_account_id: Some(component_owner_account_id.into()),
             environment_id: Some(component.environment_id.into()),
             env: Default::default(),
-            wasi_config: Default::default(),
             config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),
@@ -3749,7 +3738,6 @@ async fn worker_environment_reflects_component_not_caller(
             component_owner_account_id: Some(caller_account_id.into()),
             environment_id: Some(caller_environment_id.into()),
             env: Default::default(),
-            wasi_config: Default::default(),
             config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),
@@ -3886,7 +3874,6 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
             component_owner_account_id: Some(component_owner_account_id.into()),
             environment_id: Some(component.environment_id.into()),
             env: Default::default(),
-            wasi_config: Default::default(),
             config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),

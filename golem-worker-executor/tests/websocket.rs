@@ -104,7 +104,6 @@ async fn websocket_echo_rust(
             &component.id,
             agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -186,7 +185,6 @@ async fn websocket_echo_rust_oplog_replay(
             &component.id,
             agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -315,7 +313,6 @@ async fn websocket_reconnect_replays_completed_steps_and_continues_live(
             &component.id,
             agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -496,7 +493,6 @@ async fn websocket_reconnect_failure_returns_guest_error(
             &component.id,
             agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -616,7 +612,6 @@ async fn websocket_subscribe_does_not_reconnect_during_replay(
             &component.id,
             agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -740,7 +735,6 @@ async fn websocket_closed_connection_stays_terminal_after_replay(
             &component.id,
             agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -867,7 +861,6 @@ async fn websocket_successful_close_terminalizes_handle_and_prevents_reconnect(
             &component.id,
             agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1060,7 +1053,6 @@ async fn websocket_receive_with_timeout(
             &component.id,
             agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1130,7 +1122,6 @@ async fn websocket_polling_test(
             &component.id,
             agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1204,7 +1195,6 @@ async fn websocket_polling_survives_repeated_timeouts(
             &component.id,
             agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1283,7 +1273,6 @@ async fn websocket_async_bidirectional_test(
             &component.id,
             agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1369,7 +1358,6 @@ async fn websocket_async_bidirectional_test_oplog_replay(
             &component.id,
             agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1473,7 +1461,6 @@ async fn websocket_echo_ts(
             &component.id,
             agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;

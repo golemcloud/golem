@@ -15,14 +15,50 @@
 use super::DurableWorkerCtx;
 use crate::preview2::wasi::config::store::{Error, Host};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::worker::{
+    TypedAgentConfigEntry, typed_agent_config_entry_to_flat_pair, typed_agent_config_to_flat_map,
+};
 
 /// `wasi:config/store` implementation
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get(&mut self, key: String) -> anyhow::Result<Result<Option<String>, Error>> {
-        Ok(Ok(self.state.wasi_config.get(&key).cloned()))
+        let path: Vec<String> = key
+            .split('.')
+            .map(ToOwned::to_owned)
+            .collect();
+
+        if path.is_empty() {
+            return Ok(Ok(None));
+        }
+
+        let value = self
+            .state
+            .agent_config
+            .get(&path)
+            .and_then(|value| {
+                typed_agent_config_entry_to_flat_pair(&TypedAgentConfigEntry {
+                    path,
+                    value: value.clone(),
+                })
+                .map(|(_, rendered_value)| rendered_value)
+            });
+
+        Ok(Ok(value))
     }
 
     async fn get_all(&mut self) -> anyhow::Result<Result<Vec<(String, String)>, Error>> {
-        Ok(Ok(self.state.wasi_config.clone().into_iter().collect()))
+        let entries = self
+            .state
+            .agent_config
+            .iter()
+            .map(|(path, value)| TypedAgentConfigEntry {
+                path: path.clone(),
+                value: value.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        Ok(Ok(typed_agent_config_to_flat_map(&entries)
+            .into_iter()
+            .collect()))
     }
 }

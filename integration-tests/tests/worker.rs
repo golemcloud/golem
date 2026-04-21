@@ -495,7 +495,6 @@ async fn get_running_workers(
                 &component.id,
                 aid.clone(),
                 env.clone(),
-                HashMap::new(),
                 Vec::new(),
             )
             .await?;
@@ -1079,7 +1078,6 @@ async fn worker_use_initial_files(
             &component.id,
             parsed_agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1278,7 +1276,6 @@ async fn worker_read_files(
             &component.id,
             parsed_agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -1619,7 +1616,6 @@ async fn worker_suspends_when_running_out_of_fuel(
             &component.id,
             http_agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -2014,7 +2010,6 @@ async fn worker_suspends_when_monthly_http_call_limit_exhausted(
             &component.id,
             http_agent_id.clone(),
             env_vars,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;

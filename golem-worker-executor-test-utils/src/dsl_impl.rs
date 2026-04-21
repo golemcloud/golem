@@ -158,7 +158,6 @@ impl TestDsl for TestWorkerExecutor {
                         agent_type_name,
                         AgentTypeProvisionConfig {
                             env: creation.env,
-                            wasi_config: creation.wasi_config,
                             files,
                             // config requires parse_with_type — not supported in executor tests
                             config: vec![],
@@ -318,7 +317,6 @@ impl TestDsl for TestWorkerExecutor {
                 let existing = configs.get(&agent_type_name).cloned().unwrap_or_default();
 
                 let new_env = update.env.unwrap_or(existing.env);
-                let new_wasi_config = update.wasi_config.unwrap_or(existing.wasi_config);
 
                 let mut files: std::collections::HashMap<AgentFilePath, InitialAgentFile> =
                     existing
@@ -347,7 +345,6 @@ impl TestDsl for TestWorkerExecutor {
                     agent_type_name,
                     AgentTypeProvisionConfig {
                         env: new_env,
-                        wasi_config: new_wasi_config,
                         files: files.into_values().collect(),
                         config: existing.config,
                         plugins: existing.plugins,
@@ -379,7 +376,6 @@ impl TestDsl for TestWorkerExecutor {
         component_id: &ComponentId,
         id: ParsedAgentId,
         env: HashMap<String, String>,
-        wasi_config: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, WorkerExecutorError>> {
         let latest_revision = self.get_latest_component_revision(component_id).await?;
@@ -397,7 +393,6 @@ impl TestDsl for TestWorkerExecutor {
                 component_owner_account_id: Some(latest_revision.account_id.into()),
                 environment_id: Some(latest_revision.environment_id.into()),
                 env,
-                wasi_config,
                 config: config.into_iter().map(|lac| lac.into()).collect(),
                 ignore_already_existing: false,
                 auth_ctx: Some(self.auth_ctx().into()),

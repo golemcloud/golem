@@ -168,7 +168,6 @@ async fn golem_rust_jump(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -246,7 +245,6 @@ async fn golem_rust_checkpoint(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -431,7 +429,6 @@ async fn golem_rust_atomic_region(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -484,7 +481,6 @@ async fn golem_rust_idempotence_on(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -534,7 +530,6 @@ async fn golem_rust_idempotence_off(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -591,7 +586,6 @@ async fn golem_rust_persist_nothing(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -650,7 +644,6 @@ async fn golem_rust_fallible_transaction(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -725,7 +718,6 @@ async fn golem_rust_infallible_transaction(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -795,7 +787,6 @@ async fn golem_rust_atomic_region_async(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -848,7 +839,6 @@ async fn golem_rust_persist_nothing_async(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -905,7 +895,6 @@ async fn golem_rust_checkpoint_async(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;

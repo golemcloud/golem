@@ -388,7 +388,6 @@ async fn invocation_context_test(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;

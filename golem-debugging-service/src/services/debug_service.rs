@@ -214,7 +214,6 @@ impl DebugServiceDefault {
             &self.all,
             &owned_agent_id,
             None,
-            None,
             Vec::new(),
             None,
             None,
@@ -398,7 +397,6 @@ impl DebugService for DebugServiceDefault {
             &self.all,
             owned_agent_id,
             None,
-            None,
             Vec::new(),
             None,
             None,
@@ -515,7 +513,6 @@ impl DebugService for DebugServiceDefault {
         let worker = Worker::get_or_create_suspended(
             &self.all,
             owned_agent_id,
-            None,
             None,
             Vec::new(),
             None,

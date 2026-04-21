@@ -62,7 +62,6 @@ async fn fork_interrupted_worker(
             &component.id,
             source_agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -215,7 +214,6 @@ async fn fork_running_worker_2(
             &component.id,
             parsed_source_agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -734,7 +732,6 @@ async fn fork_self(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> anyho
             &component.id,
             parsed_source_agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;

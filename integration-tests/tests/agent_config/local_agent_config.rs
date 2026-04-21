@@ -145,7 +145,6 @@ async fn agent_with_only_worker_agent_config(
         &component.id,
         agent_id.clone(),
         HashMap::new(),
-        HashMap::new(),
         vec![
             AgentConfigEntryDto {
                 path: vec!["foo".to_string()],
@@ -241,7 +240,6 @@ async fn agent_with_mixed_agent_config(
         &component.id,
         agent_id.clone(),
         HashMap::new(),
-        HashMap::new(),
         vec![
             AgentConfigEntryDto {
                 path: vec!["foo".to_string()],
@@ -334,7 +332,6 @@ async fn agent_with_mixed_agent_config_update(
         .start_agent_with(
             &component.id,
             agent_id.clone(),
-            HashMap::new(),
             HashMap::new(),
             vec![
                 AgentConfigEntryDto {
@@ -444,7 +441,6 @@ async fn missing_agent_config_key(
             &component.id,
             agent_id.clone(),
             HashMap::new(),
-            HashMap::new(),
             vec![
                 AgentConfigEntryDto {
                     path: vec!["bar".to_string()],
@@ -500,7 +496,6 @@ async fn mistyped_agent_config_key(
         .try_start_agent_with(
             &component.id,
             agent_id.clone(),
-            HashMap::new(),
             HashMap::new(),
             vec![
                 AgentConfigEntryDto {
@@ -559,7 +554,6 @@ async fn optional_agent_config_does_not_need_to_be_provided(
     user.start_agent_with(
         &component.id,
         agent_id.clone(),
-        HashMap::new(),
         HashMap::new(),
         vec![
             AgentConfigEntryDto {

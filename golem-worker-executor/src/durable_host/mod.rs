@@ -122,7 +122,7 @@ use golem_service_base::model::{
 use golem_wasm::Uri;
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
 use replay_state::ReplayEvent;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -321,14 +321,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
         }
 
-        let wasi_config = effective_config_vars(
-            worker_config.initial_wasi_config.clone(),
-            agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.wasi_config.clone())
-                .unwrap_or_default(),
-        );
-
         let agent_config = if agent_id.is_some() {
             effective_agent_config(
                 worker_config.initial_agent_config.clone(),
@@ -398,8 +390,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 TRwLock::new(files),
                 file_loader,
                 worker_config.created_by,
-                worker_config.initial_wasi_config,
-                wasi_config,
                 worker_config.initial_agent_config,
                 agent_config,
                 shard_service,
@@ -1953,14 +1943,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mut read_only_paths = self.state.read_only_paths.write().unwrap();
         *read_only_paths = compute_read_only_paths(&current_files);
 
-        self.state.wasi_config = effective_config_vars(
-            self.state.initial_config_vars.clone(),
-            new_agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.wasi_config.clone())
-                .unwrap_or_default(),
-        );
-
         if let Some(agent_id) = self.parsed_agent_id() {
             let agent_type = new_metadata
                 .metadata
@@ -3005,7 +2987,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         this,
                         &owned_agent_id,
                         None,
-                        None,
                         Vec::new(),
                         None,
                         None,
@@ -3567,11 +3548,6 @@ struct PrivateDurableWorkerState {
 
     shard_service: Arc<dyn ShardService>,
 
-    /// The initial config vars that the worker was configured with
-    initial_config_vars: BTreeMap<String, String>,
-    /// The current config vars of the worker, taking into account component version, etc.
-    wasi_config: BTreeMap<String, String>,
-
     // The initial local agent config that the worker was configured with
     initial_agent_config: Vec<TypedAgentConfigEntry>,
     /// The current local agent config of the worker, taking the component revision into account
@@ -3663,8 +3639,6 @@ impl PrivateDurableWorkerState {
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
-        initial_config_vars: BTreeMap<String, String>,
-        wasi_config: BTreeMap<String, String>,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         agent_config: HashMap<Vec<String>, golem_wasm::ValueAndType>,
         shard_service: Arc<dyn ShardService>,
@@ -3740,8 +3714,6 @@ impl PrivateDurableWorkerState {
             files,
             file_loader,
             created_by,
-            initial_config_vars,
-            wasi_config,
             initial_agent_config,
             config,
             cached_agent_config_retry_policies: None,
@@ -4466,23 +4438,6 @@ fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<P
         _ => None,
     });
     HashSet::from_iter(ro_paths)
-}
-
-fn effective_config_vars(
-    worker_config_vars: BTreeMap<String, String>,
-    component_config_vars: BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    let mut result = BTreeMap::new();
-
-    for (k, v) in component_config_vars {
-        result.insert(k, v);
-    }
-
-    for (k, v) in worker_config_vars {
-        result.insert(k, v);
-    }
-
-    result
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during

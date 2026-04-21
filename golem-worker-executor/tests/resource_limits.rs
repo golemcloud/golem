@@ -222,7 +222,6 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
             &http_component.id,
             a1.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -358,7 +357,6 @@ async fn concurrent_agent_idle_releases_permit(
             &http_component.id,
             a1.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;
@@ -481,7 +479,6 @@ async fn http_call_limit_exceeded_traps_invocation(
             &component.id,
             agent_id.clone(),
             env,
-            HashMap::new(),
             Vec::new(),
         )
         .await?;

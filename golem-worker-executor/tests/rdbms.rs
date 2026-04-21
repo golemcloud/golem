@@ -1832,7 +1832,6 @@ async fn start_workers<T: RdbmsType>(
                 &component.id,
                 agent_id.clone(),
                 env.clone(),
-                HashMap::new(),
                 Vec::new(),
             )
             .await?;

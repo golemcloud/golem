@@ -887,19 +887,6 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
-    pub fn with_config_vars(
-        mut self,
-        agent_type: &str,
-        config_vars: Vec<(String, String)>,
-    ) -> Self {
-        let entry = self.provision_config_entry_mut(agent_type);
-        entry.config.extend(config_vars.into_iter().map(|(key, value)| AgentConfigEntryDto {
-            path: key.split('.').map(ToOwned::to_owned).collect(),
-            value: serde_json::Value::String(value).into(),
-        }));
-        self
-    }
-
     pub fn with_agent_config(mut self, agent_type: &str, config: Vec<AgentConfigEntryDto>) -> Self {
         let entry = self.provision_config_entry_mut(agent_type);
         entry.config = config;
