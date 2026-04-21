@@ -95,7 +95,7 @@ object HostApiCompileSpec extends ZIOSpecDefault {
         agentId = null.asInstanceOf[HostApi.AgentIdLiteral],
         args = List("arg1", "arg2"),
         env = Map("KEY" -> "VALUE"),
-        configVars = Map("cfg" -> "val"),
+        config = Map("cfg" -> "val"),
         status = null.asInstanceOf[HostApi.AgentStatus],
         componentRevision = BigInt(3),
         retryCount = BigInt(0),
@@ -247,9 +247,9 @@ object HostApiCompileSpec extends ZIOSpecDefault {
       assertTrue(f != null)
     },
 
-    test("AgentConfigVarsFilter construction") {
-      val f: HostApi.AgentConfigVarsFilter =
-        HostApi.AgentConfigVarsFilter("config-key", HostApi.StringFilterComparator.StartsWith, "prefix")
+    test("AgentConfigFilter construction") {
+      val f: HostApi.AgentConfigFilter =
+        HostApi.AgentConfigFilter("config-key", HostApi.StringFilterComparator.StartsWith, "prefix")
       assertTrue(f != null)
     },
 
@@ -283,9 +283,9 @@ object HostApiCompileSpec extends ZIOSpecDefault {
       assertTrue(pf != null)
     },
 
-    test("AgentPropertyFilter.wasiConfigVars wraps AgentConfigVarsFilter") {
-      val configFilter                    = HostApi.AgentConfigVarsFilter("cfg", HostApi.StringFilterComparator.Equal, "v")
-      val pf: HostApi.AgentPropertyFilter = HostApi.AgentPropertyFilter.wasiConfigVars(configFilter)
+    test("AgentPropertyFilter.config wraps AgentConfigFilter") {
+      val configFilter                    = HostApi.AgentConfigFilter("cfg", HostApi.StringFilterComparator.Equal, "v")
+      val pf: HostApi.AgentPropertyFilter = HostApi.AgentPropertyFilter.config(configFilter)
       assertTrue(pf != null)
     },
 

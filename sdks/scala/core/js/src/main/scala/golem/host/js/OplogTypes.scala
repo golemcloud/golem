@@ -64,7 +64,6 @@ sealed trait JsCreateParameters extends js.Object {
   def componentSize: js.BigInt                                        = js.native
   def initialTotalLinearMemorySize: js.BigInt                         = js.native
   def initialActivePlugins: js.Array[JsPluginInstallationDescription] = js.native
-  def configVars: js.Array[js.Tuple2[String, String]]                 = js.native
   def localAgentConfig: js.Array[JsLocalAgentConfigEntry]             = js.native
 }
 

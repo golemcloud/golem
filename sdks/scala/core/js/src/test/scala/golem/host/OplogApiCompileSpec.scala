@@ -143,8 +143,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           None,
           BigInt(1024),
           BigInt(65536),
-          List(pluginDesc),
-          Map("cfg" -> "v")
+          List(pluginDesc)
         )
       ),
       OplogEntry.Suspend(ts),
