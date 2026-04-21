@@ -21,6 +21,7 @@ use crate::service::worker::{WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
+use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::oplog::OplogCursor;
@@ -1107,12 +1108,7 @@ impl WorkerApi {
             })?;
 
         let agent_id =
-            AgentId::from_agent_name_string(component_id, agent_id).map_err(|error| {
-                ApiEndpointError::bad_request(
-                    api::error_code::INVALID_WORKER_ID,
-                    golem_common::safe(format!("Invalid worker id: {error}")),
-                )
-            })?;
+            normalize_agent_name_with_latest_component(component_id, agent_id, &latest_component)?;
         Ok((agent_id, latest_component))
     }
 
@@ -1130,6 +1126,42 @@ impl WorkerApi {
     }
 }
 
+fn normalize_agent_name_with_latest_component(
+    component_id: ComponentId,
+    agent_id: &str,
+    latest_component: &Component,
+) -> Result<AgentId> {
+    if latest_component.metadata.is_agent()
+        && let Ok((parsed_agent_id, agent_type)) =
+            ParsedAgentId::parse_and_resolve_type(agent_id, &latest_component.metadata)
+    {
+        let normalized_agent_id = ParsedAgentId::new_auto_phantom(
+            parsed_agent_id.agent_type,
+            parsed_agent_id.parameters,
+            parsed_agent_id.phantom_id,
+            agent_type.mode,
+        )
+        .map_err(|error| {
+            ApiEndpointError::bad_request(
+                api::error_code::INVALID_WORKER_ID,
+                golem_common::safe(format!("Invalid worker id: {error}")),
+            )
+        })?;
+
+        return Ok(AgentId {
+            component_id,
+            agent_id: normalized_agent_id.to_string(),
+        });
+    }
+
+    AgentId::from_agent_name_string(component_id, agent_id).map_err(|error| {
+        ApiEndpointError::bad_request(
+            api::error_code::INVALID_WORKER_ID,
+            golem_common::safe(format!("Invalid worker id: {error}")),
+        )
+    })
+}
+
 fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
     CanonicalFilePath::from_rel_str(&name).map_err(|error| {
         ApiEndpointError::bad_request(
@@ -1137,4 +1169,117 @@ fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
             golem_common::safe(format!("Invalid file name: {error}")),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_agent_name_with_latest_component;
+    use chrono::Utc;
+    use golem_common::model::AgentId;
+    use golem_common::model::Empty;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::{
+        AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema,
+        NamedElementSchemas, Snapshotting,
+    };
+    use golem_common::model::application::ApplicationId;
+    use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+    use golem_common::model::component_metadata::ComponentMetadata;
+    use golem_common::model::diff::Hash;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_service_base::model::component::Component;
+    use test_r::test;
+    use uuid::Uuid;
+
+    fn test_agent_type(mode: AgentMode) -> AgentType {
+        AgentType {
+            type_name: AgentTypeName("weather-agent".to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            constructor: AgentConstructor {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+            },
+            methods: vec![AgentMethod {
+                name: "run".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                http_endpoint: vec![],
+            }],
+            dependencies: vec![],
+            mode,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        }
+    }
+
+    fn test_component(mode: AgentMode) -> Component {
+        Component {
+            id: ComponentId(Uuid::new_v4()),
+            revision: ComponentRevision::INITIAL,
+            environment_id: EnvironmentId(Uuid::new_v4()),
+            component_name: ComponentName("weather-component".to_string()),
+            hash: Hash::empty(),
+            application_id: ApplicationId(Uuid::new_v4()),
+            account_id: AccountId(Uuid::new_v4()),
+            component_size: 0,
+            metadata: ComponentMetadata::from_parts(
+                vec![],
+                vec![],
+                None,
+                None,
+                vec![test_agent_type(mode)],
+                std::collections::BTreeMap::new(),
+            ),
+            created_at: Utc::now(),
+            wasm_hash: Hash::empty(),
+            object_store_key: String::new(),
+        }
+    }
+
+    fn phantom_id(agent_id: &AgentId) -> Option<Uuid> {
+        agent_id
+            .agent_id
+            .rsplit_once('[')
+            .and_then(|(_, phantom_id)| phantom_id.strip_suffix(']'))
+            .and_then(|phantom_id| Uuid::parse_str(phantom_id).ok())
+    }
+
+    #[test]
+    fn latest_component_normalization_auto_generates_phantom_for_ephemeral_agents() {
+        let component = test_component(AgentMode::Ephemeral);
+
+        let agent_id =
+            normalize_agent_name_with_latest_component(component.id, "weather-agent()", &component)
+                .unwrap();
+
+        assert!(phantom_id(&agent_id).is_some());
+    }
+
+    #[test]
+    fn latest_component_normalization_keeps_durable_agents_non_phantom() {
+        let component = test_component(AgentMode::Durable);
+
+        let agent_id =
+            normalize_agent_name_with_latest_component(component.id, "weather-agent()", &component)
+                .unwrap();
+
+        assert!(phantom_id(&agent_id).is_none());
+    }
+
+    #[test]
+    fn latest_component_normalization_preserves_non_agent_worker_names() {
+        let component = test_component(AgentMode::Ephemeral);
+
+        let agent_id =
+            normalize_agent_name_with_latest_component(component.id, "custom-worker", &component)
+                .unwrap();
+
+        assert_eq!(agent_id.agent_id, "custom-worker");
+    }
 }
