@@ -324,7 +324,6 @@ impl WorkerClient for RecordingWorkerClient {
         &self,
         _: &AgentId,
         _: HashMap<String, String>,
-        _: BTreeMap<String, String>,
         _: Vec<AgentConfigEntryDto>,
         _: bool,
         _: AccountId,
