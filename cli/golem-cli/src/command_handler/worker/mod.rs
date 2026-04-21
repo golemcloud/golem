@@ -263,7 +263,13 @@ impl WorkerCommandHandler {
 
         let agent_name =
             self.try_recanonicalize_agent_name(&agent_name_match.agent_name, &component);
-        self.validate_worker_and_function_names(&component, &agent_name, None)?;
+        let agent_name =
+            match self.validate_worker_and_function_names(&component, &agent_name, None)? {
+                Some((agent_id, agent_type)) => {
+                    RawAgentId(normalize_public_agent_id(&agent_id, &agent_type)?.to_string())
+                }
+                None => agent_name,
+            };
 
         log_action(
             "Creating",
@@ -353,6 +359,7 @@ impl WorkerCommandHandler {
 
         let (agent_id, agent_type) =
             agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
+        let agent_id = normalize_public_agent_id(&agent_id, &agent_type)?;
 
         // If the function name is fully qualified (e.g., "rust:agent/foo-agent.{fun-string}"),
         // extract the simple method name for fuzzy matching.
@@ -583,16 +590,14 @@ impl WorkerCommandHandler {
             bail!("Agent type not found: {}", agent_type_name);
         };
 
-        let agent_type_name = agent_type.agent_type.type_name;
         let typed_parameters = DataValue::try_from_untyped_json(
             parameters,
-            agent_type.agent_type.constructor.input_schema,
+            agent_type.agent_type.constructor.input_schema.clone(),
         )
         .map_err(|err| {
             anyhow!("Failed to match agent type parameters to the latest metadata: {err}")
         })?;
-        let agent_id = ParsedAgentId::new(agent_type_name, typed_parameters, phantom_id)
-            .map_err(|e| anyhow!("Failed to format agent ID: {e}"))?;
+        let agent_id = build_repl_agent_id(&agent_type.agent_type, typed_parameters, phantom_id)?;
         let agent_name = RawAgentId(agent_id.to_string());
 
         let connection = WorkerConnection::new(
@@ -2422,11 +2427,72 @@ fn split_agent_name(agent_name: &str) -> Vec<&str> {
     }
 }
 
+fn build_repl_agent_id(
+    agent_type: &AgentType,
+    typed_parameters: DataValue,
+    phantom_id: Option<Uuid>,
+) -> anyhow::Result<ParsedAgentId> {
+    ParsedAgentId::new_auto_phantom(
+        agent_type.type_name.clone(),
+        typed_parameters,
+        phantom_id,
+        agent_type.mode,
+    )
+    .map_err(|e| anyhow!("Failed to format agent ID: {e}"))
+}
+
+fn normalize_public_agent_id(
+    agent_id: &ParsedAgentId,
+    agent_type: &AgentType,
+) -> anyhow::Result<ParsedAgentId> {
+    build_repl_agent_id(agent_type, agent_id.parameters.clone(), agent_id.phantom_id)
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::command_handler::worker::split_agent_name;
+    use super::{
+        build_repl_agent_id, extract_simple_method_name, normalize_public_agent_id,
+        split_agent_name,
+    };
+    use golem_common::model::Empty;
+    use golem_common::model::agent::{
+        AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema,
+        ElementValues, NamedElementSchemas, ParsedAgentId, Snapshotting,
+    };
     use pretty_assertions::assert_eq;
     use test_r::test;
+    use uuid::Uuid;
+
+    fn test_agent_type(mode: AgentMode) -> AgentType {
+        AgentType {
+            type_name: AgentTypeName("repl-agent".to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            constructor: AgentConstructor {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+            },
+            methods: vec![AgentMethod {
+                name: "run".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                http_endpoint: vec![],
+            }],
+            dependencies: vec![],
+            mode,
+            http_mount: None,
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        }
+    }
+
+    fn empty_tuple() -> golem_common::model::agent::DataValue {
+        golem_common::model::agent::DataValue::Tuple(ElementValues { elements: vec![] })
+    }
 
     #[test]
     fn test_split_agent_name() {
@@ -2445,15 +2511,11 @@ mod tests {
 
     #[test]
     fn test_extract_simple_method_name_simple() {
-        use super::extract_simple_method_name;
-
         assert_eq!(extract_simple_method_name("fun_string"), "fun_string");
     }
 
     #[test]
     fn test_extract_simple_method_name_qualified_kebab() {
-        use super::extract_simple_method_name;
-
         assert_eq!(
             extract_simple_method_name("rust:agent/FooAgent.{fun-string}"),
             "fun-string"
@@ -2462,11 +2524,50 @@ mod tests {
 
     #[test]
     fn test_extract_simple_method_name_qualified_underscore() {
-        use super::extract_simple_method_name;
-
         assert_eq!(
             extract_simple_method_name("rust:agent/FooAgent.{fun_string}"),
             "fun_string"
         );
+    }
+
+    #[test]
+    fn repl_agent_id_auto_generates_phantom_for_ephemeral_agents() {
+        let agent_id =
+            build_repl_agent_id(&test_agent_type(AgentMode::Ephemeral), empty_tuple(), None)
+                .unwrap();
+
+        assert!(agent_id.phantom_id.is_some());
+    }
+
+    #[test]
+    fn repl_agent_id_keeps_durable_agents_non_phantom() {
+        let agent_id =
+            build_repl_agent_id(&test_agent_type(AgentMode::Durable), empty_tuple(), None).unwrap();
+
+        assert!(agent_id.phantom_id.is_none());
+    }
+
+    #[test]
+    fn repl_agent_id_preserves_explicit_phantom_id() {
+        let explicit_phantom_id = Uuid::new_v4();
+        let agent_id = build_repl_agent_id(
+            &test_agent_type(AgentMode::Ephemeral),
+            empty_tuple(),
+            Some(explicit_phantom_id),
+        )
+        .unwrap();
+
+        assert_eq!(agent_id.phantom_id, Some(explicit_phantom_id));
+    }
+
+    #[test]
+    fn normalize_public_agent_id_auto_generates_phantom_for_ephemeral_agents() {
+        let agent_id =
+            ParsedAgentId::new(AgentTypeName("repl-agent".to_string()), empty_tuple(), None)
+                .unwrap();
+        let normalized =
+            normalize_public_agent_id(&agent_id, &test_agent_type(AgentMode::Ephemeral)).unwrap();
+
+        assert!(normalized.phantom_id.is_some());
     }
 }

@@ -164,6 +164,7 @@ pub async fn get_agent_capabilities(
                 &account_id,
                 &environment_id,
                 &agent_type.type_name,
+                agent_type.mode,
                 method,
                 &agent_type.constructor,
                 component_id,
