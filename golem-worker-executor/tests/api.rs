@@ -513,7 +513,9 @@ async fn concurrent_ephemeral_invocations_all_complete(
         .await?;
 
     let agent_id = agent_id!("EphemeralCounter", "concurrent-test");
-    executor.start_agent(&component.id, agent_id.clone()).await?;
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
 
     let mut handles: Vec<JoinHandle<anyhow::Result<Option<Value>>>> = Vec::with_capacity(N);
     for _ in 0..N {

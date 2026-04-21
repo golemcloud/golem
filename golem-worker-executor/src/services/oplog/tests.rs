@@ -3158,20 +3158,106 @@ async fn ephemeral_oplog_length_reflects_all_internal_states(_tracing: &Tracing)
     }
     #[async_trait]
     impl BlobStorage for GatedBlobStorage {
-        async fn get_raw(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<Vec<u8>>, anyhow::Error> { self.inner.get_raw(tl, ol, ns, path).await }
-        async fn get_stream(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<futures::stream::BoxStream<'static, Result<bytes::Bytes, anyhow::Error>>>, anyhow::Error> { self.inner.get_stream(tl, ol, ns, path).await }
-        async fn get_metadata(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<BlobMetadata>, anyhow::Error> { self.inner.get_metadata(tl, ol, ns, path).await }
-        async fn put_raw(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path, data: &[u8]) -> Result<(), anyhow::Error> {
+        async fn get_raw(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<Option<Vec<u8>>, anyhow::Error> {
+            self.inner.get_raw(tl, ol, ns, path).await
+        }
+        async fn get_stream(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<
+            Option<futures::stream::BoxStream<'static, Result<bytes::Bytes, anyhow::Error>>>,
+            anyhow::Error,
+        > {
+            self.inner.get_stream(tl, ol, ns, path).await
+        }
+        async fn get_metadata(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<Option<BlobMetadata>, anyhow::Error> {
+            self.inner.get_metadata(tl, ol, ns, path).await
+        }
+        async fn put_raw(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+            data: &[u8],
+        ) -> Result<(), anyhow::Error> {
             self.at_gate.notify_one();
             self.gate.notified().await;
             self.inner.put_raw(tl, ol, ns, path, data).await
         }
-        async fn put_stream(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path, stream: &dyn golem_service_base::replayable_stream::ErasedReplayableStream<Item = Result<Vec<u8>, anyhow::Error>, Error = anyhow::Error>) -> Result<(), anyhow::Error> { self.inner.put_stream(tl, ol, ns, path, stream).await }
-        async fn delete(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<(), anyhow::Error> { self.inner.delete(tl, ol, ns, path).await }
-        async fn create_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<(), anyhow::Error> { self.inner.create_dir(tl, ol, ns, path).await }
-        async fn list_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Vec<PathBuf>, anyhow::Error> { self.inner.list_dir(tl, ol, ns, path).await }
-        async fn delete_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<bool, anyhow::Error> { self.inner.delete_dir(tl, ol, ns, path).await }
-        async fn exists(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<ExistsResult, anyhow::Error> { self.inner.exists(tl, ol, ns, path).await }
+        async fn put_stream(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+            stream: &dyn golem_service_base::replayable_stream::ErasedReplayableStream<
+                Item = Result<Vec<u8>, anyhow::Error>,
+                Error = anyhow::Error,
+            >,
+        ) -> Result<(), anyhow::Error> {
+            self.inner.put_stream(tl, ol, ns, path, stream).await
+        }
+        async fn delete(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<(), anyhow::Error> {
+            self.inner.delete(tl, ol, ns, path).await
+        }
+        async fn create_dir(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<(), anyhow::Error> {
+            self.inner.create_dir(tl, ol, ns, path).await
+        }
+        async fn list_dir(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<Vec<PathBuf>, anyhow::Error> {
+            self.inner.list_dir(tl, ol, ns, path).await
+        }
+        async fn delete_dir(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<bool, anyhow::Error> {
+            self.inner.delete_dir(tl, ol, ns, path).await
+        }
+        async fn exists(
+            &self,
+            tl: &'static str,
+            ol: &'static str,
+            ns: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<ExistsResult, anyhow::Error> {
+            self.inner.exists(tl, ol, ns, path).await
+        }
     }
 
     let at_gate = Arc::new(Notify::new());
@@ -3187,7 +3273,9 @@ async fn ephemeral_oplog_length_reflects_all_internal_states(_tracing: &Tracing)
         PrimaryOplogService::new(
             indexed_storage.clone(),
             Arc::new(InMemoryBlobStorage::new()),
-            1, 1, 100,
+            1,
+            1,
+            100,
             RetryConfig::default(),
         )
         .await,
@@ -3200,7 +3288,8 @@ async fn ephemeral_oplog_length_reflects_all_internal_states(_tracing: &Tracing)
     let oplog_service = Arc::new(MultiLayerOplogService::new(
         primary_oplog_service.clone(),
         nev![secondary_layer.clone(), tertiary_layer.clone()],
-        10, 10,
+        10,
+        10,
     ));
 
     let account_id = AccountId::new();
