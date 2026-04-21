@@ -19,6 +19,9 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-trigger-agent-scala` | Triggering a fire-and-forget invocation on a Golem agent |
 | `golem-schedule-agent-scala` | Scheduling a future invocation on a Golem agent |
 | `golem-add-scala-dependency` | Adding a library dependency to the project |
+| `golem-add-postgres-scala` | Connecting to PostgreSQL with `golem.host.Rdbms.Postgres` from Scala agents |
+| `golem-add-mysql-scala` | Connecting to MySQL with `golem.host.Rdbms.Mysql` from Scala agents |
+| `golem-add-ignite-scala` | Current Apache Ignite limitation in the Scala SDK and the SDK work required before using `golem:rdbms/ignite2` |
 | `golem-add-agent-scala` | Adding a new agent type to a Scala Golem component |
 | `golem-configure-durability-scala` | Choosing between durable and ephemeral agents |
 | `golem-stateless-agent-scala` | Creating ephemeral (stateless) agents with a fresh instance per invocation |

@@ -19,6 +19,9 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-trigger-agent-ts` | Triggering a fire-and-forget invocation on a Golem agent |
 | `golem-schedule-agent-ts` | Scheduling a future invocation on a Golem agent |
 | `golem-add-npm-package` | Adding an npm package dependency to the project |
+| `golem-add-postgres-ts` | Connecting to PostgreSQL with `golem:rdbms/postgres` from TypeScript agents |
+| `golem-add-mysql-ts` | Connecting to MySQL with `golem:rdbms/mysql` from TypeScript agents |
+| `golem-add-ignite-ts` | Connecting to Apache Ignite 2 with `golem:rdbms/ignite2` from TypeScript agents |
 | `golem-add-agent-ts` | Adding a new agent type to a TypeScript Golem component |
 | `golem-configure-durability-ts` | Choosing between durable and ephemeral agents |
 | `golem-stateless-agent-ts` | Creating ephemeral (stateless) agents with a fresh instance per invocation |

@@ -8,6 +8,10 @@ import { SkillWatcher } from "./watcher.js";
 import { evaluate, ExpectSchema, type AssertionContext } from "./assertions.js";
 import { classifyFailure, type FailureClassification } from "./failure-classification.js";
 import { findGolemAppDir } from "./workspace.js";
+import {
+  startPrerequisiteServices,
+  type PrerequisiteServiceName,
+} from "./services.js";
 import * as log from "./log.js";
 
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 1800;
@@ -249,9 +253,11 @@ const SettingsSchema = z
     cleanup: z.boolean().optional(),
   })
   .optional();
+const ServiceNameSchema = z.enum(["postgres", "mysql", "ignite"]);
 const PrerequisitesSchema = z
   .object({
     env: z.record(z.string()).optional(),
+    services: z.array(ServiceNameSchema).optional(),
   })
   .optional();
 
@@ -365,6 +371,7 @@ export interface ScenarioSpec {
   };
   prerequisites?: {
     env?: Record<string, string>;
+    services?: PrerequisiteServiceName[];
   };
   skip_if?: StepCondition;
   steps: StepSpec[];
@@ -554,13 +561,17 @@ export class ScenarioExecutor {
     this.options = options ?? {};
   }
 
-  private buildVariables(scenarioName: string): Record<string, string> {
+  private buildVariables(
+    scenarioName: string,
+    extraVariables?: Record<string, string>,
+  ): Record<string, string> {
     const vars: Record<string, string> = {
       workspace: this.workspace,
       scenario: scenarioName,
     };
     if (this.options.agent) vars["agent"] = this.options.agent;
     if (this.options.language) vars["language"] = this.options.language;
+    if (extraVariables) Object.assign(vars, extraVariables);
     return vars;
   }
 
@@ -885,6 +896,7 @@ export class ScenarioExecutor {
 
     const results: StepResult[] = [];
     const savedEnv: Record<string, string | undefined> = {};
+    const startedServices = await startPrerequisiteServices(spec.prerequisites?.services);
     // Validate resumeFromStepId if set
     if (this.options.resumeFromStepId) {
       const found = spec.steps.some((s) => s.id === this.options.resumeFromStepId);
@@ -895,10 +907,21 @@ export class ScenarioExecutor {
       }
     }
 
+    // Set prerequisite service env vars first, then scenario-provided env vars so
+    // the scenario can override defaults when needed.
+    for (const [key, value] of Object.entries(startedServices.env)) {
+      if (!(key in savedEnv)) {
+        savedEnv[key] = process.env[key];
+      }
+      process.env[key] = value;
+    }
+
     // Set prerequisites env vars
     if (spec.prerequisites?.env) {
       for (const [key, value] of Object.entries(spec.prerequisites.env)) {
-        savedEnv[key] = process.env[key];
+        if (!(key in savedEnv)) {
+          savedEnv[key] = process.env[key];
+        }
         process.env[key] = value;
       }
     }
@@ -910,9 +933,9 @@ export class ScenarioExecutor {
     await this.verifyGolemConnectivity(spec);
 
     // Build extra env for commands from settings
-    const commandEnv = this.buildCommandEnv(spec);
+    const commandEnv = this.buildCommandEnv(spec, startedServices.env);
     this.routerPort = spec.settings?.golem_server?.router_port ?? 9881;
-    const variables = this.buildVariables(spec.name);
+    const variables = this.buildVariables(spec.name, startedServices.variables);
     const conditionContext = {
       agent: this.options.agent,
       language: this.options.language,
@@ -1024,6 +1047,8 @@ export class ScenarioExecutor {
         if (!finalResult!.success) break; // Stop on failure
       }
     } finally {
+      await startedServices.stopAll();
+
       // Restore env vars
       for (const [key, value] of Object.entries(savedEnv)) {
         if (value === undefined) {
@@ -2016,8 +2041,11 @@ export class ScenarioExecutor {
     return undefined;
   }
 
-  private buildCommandEnv(spec: ScenarioSpec): Record<string, string> {
-    const env: Record<string, string> = {};
+  private buildCommandEnv(
+    spec: ScenarioSpec,
+    serviceEnv?: Record<string, string>,
+  ): Record<string, string> {
+    const env: Record<string, string> = { ...(serviceEnv ?? {}) };
     if (spec.settings?.golem_server?.router_port) {
       env["GOLEM_ROUTER_PORT"] = String(spec.settings.golem_server.router_port);
     }

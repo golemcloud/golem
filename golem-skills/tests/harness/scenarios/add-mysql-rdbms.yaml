@@ -1,0 +1,67 @@
+name: "add-mysql-rdbms"
+prerequisites:
+  services:
+    - mysql
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-mysql-method"
+    prompt:
+      rust: >
+        In the test-app project, modify the existing CounterAgent so it adds a new method called
+        `check_mysql` that returns a string. Implement it using `golem:rdbms/mysql` from the Rust
+        SDK. Hardcode the MySQL connection string `{{mysql_url}}`, open a connection, run
+        `SELECT 'mysql-ok'`, read the first row and first column, and return that string. Keep the
+        existing increment method unchanged. Do not change the method signature to
+        `Result<String, _>`; it must return a plain string. Make sure the project builds and deploys
+        successfully.
+      ts: >
+        In the test-app project, modify the existing CounterAgent so it adds a new method called
+        `checkMysql` that returns a string. Implement it using `golem:rdbms/mysql@1.5.0` from the
+        TypeScript SDK. Hardcode the MySQL connection string `{{mysql_url}}`, open a connection,
+        run `SELECT 'mysql-ok'`, read the first row and first column, and return that string. Keep
+        the existing increment method unchanged. Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, modify the existing CounterAgent so it adds a new method called
+        `checkMysql` that returns a string. Implement it using `golem.host.Rdbms.Mysql` from the
+        Scala SDK. Hardcode the MySQL connection string `{{mysql_url}}`, open a connection, run
+        `SELECT 'mysql-ok'`, read the first row and first column, and return that string. Keep the
+        existing increment method unchanged. Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, modify the existing CounterAgent so it adds a new method called
+        `check_mysql` that returns a string. Implement it using the MoonBit package
+        `golemcloud/golem_sdk/interface/golem/rdbms/mysql`. Add the required import to the
+        component's `moon.pkg`, hardcode the MySQL connection string `{{mysql_url}}`, open a
+        connection, run `SELECT 'mysql-ok'`, read the first row and first column, and return that
+        string. Keep the existing increment method unchanged. Make sure the project builds and deploys
+        successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-mysql-rust"
+      ts:
+        - "golem-add-mysql-ts"
+      scala:
+        - "golem-add-mysql-scala"
+      moonbit:
+        - "golem-add-mysql-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "invoke-mysql-check"
+    invoke_json:
+      agent: 'CounterAgent("db-test")'
+      method:
+        rust: "check_mysql"
+        ts: "checkMysql"
+        scala: "checkMysql"
+        moonbit: "check_mysql"
+    expect:
+      result_json:
+        - path: "$"
+          equals: "mysql-ok"

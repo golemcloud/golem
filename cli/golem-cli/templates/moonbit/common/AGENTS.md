@@ -19,6 +19,9 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-trigger-agent-moonbit` | Triggering a fire-and-forget invocation on a Golem agent |
 | `golem-schedule-agent-moonbit` | Scheduling a future invocation on a Golem agent |
 | `golem-add-moonbit-package` | Adding a MoonBit mooncakes dependency to the project |
+| `golem-add-postgres-moonbit` | Connecting to PostgreSQL with `golem:rdbms/postgres` from MoonBit agents |
+| `golem-add-mysql-moonbit` | Connecting to MySQL with `golem:rdbms/mysql` from MoonBit agents |
+| `golem-add-ignite-moonbit` | Connecting to Apache Ignite 2 with `golem:rdbms/ignite2` from MoonBit agents |
 | `golem-add-agent-moonbit` | Adding a new agent type to a MoonBit Golem component |
 | `golem-stateless-agent-moonbit` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
 | `golem-annotate-agent-moonbit` | Adding prompt and description annotations to agent methods |

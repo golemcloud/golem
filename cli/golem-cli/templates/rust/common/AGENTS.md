@@ -19,6 +19,9 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-trigger-agent-rust` | Triggering a fire-and-forget invocation on a Golem agent |
 | `golem-schedule-agent-rust` | Scheduling a future invocation on a Golem agent |
 | `golem-add-rust-crate` | Adding a Rust crate dependency to the project |
+| `golem-add-postgres-rust` | Connecting to PostgreSQL with `golem:rdbms/postgres` from Rust agents |
+| `golem-add-mysql-rust` | Connecting to MySQL with `golem:rdbms/mysql` from Rust agents |
+| `golem-add-ignite-rust` | Connecting to Apache Ignite 2 with `golem:rdbms/ignite2` from Rust agents |
 | `golem-add-agent-rust` | Adding a new agent type to a Rust Golem component |
 | `golem-configure-durability-rust` | Choosing between durable and ephemeral agents |
 | `golem-stateless-agent-rust` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
