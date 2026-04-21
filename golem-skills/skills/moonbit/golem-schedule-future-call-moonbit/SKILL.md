@@ -58,6 +58,23 @@ let scheduled_at = @wallClock.Datetime::{
 }
 ```
 
+## Cancelable Variant
+
+Every method also has a `schedule_cancelable_` variant that returns a `CancellationToken`. Call `.cancel()` on the token to prevent the scheduled invocation from firing:
+
+```moonbit
+AgentClient::scoped("my-counter", fn(client) raise @common.AgentError {
+  let now = @wallClock.now()
+  let scheduled_at = @wallClock.Datetime::{
+    seconds: now.seconds + 60,
+    nanoseconds: 0,
+  }
+  let token = client.schedule_cancelable_increment(scheduled_at)
+  // Later, to cancel: token.cancel()
+  // If not cancelling, release with: token.drop()
+})
+```
+
 ## Use Cases
 
 - **Periodic tasks**: Schedule the next run at the end of each invocation

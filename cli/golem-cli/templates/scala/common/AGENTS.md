@@ -31,6 +31,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-fire-and-forget-scala` | Triggering an agent invocation without waiting for the result |
 | `golem-parallel-workers-scala` | Fan out work to multiple parallel agents and collect results |
 | `golem-schedule-future-call-scala` | Scheduling a future agent invocation |
+| `golem-recurring-task-scala` | Implementing recurring (cron-like) tasks via self-scheduling — periodic polling, cleanup, heartbeats, backoff, and cancellation |
 | `golem-wait-for-external-input-scala` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-scala` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
 | `golem-multi-instance-agent-scala` | Creating multiple agent instances with the same constructor parameters using phantom agents |

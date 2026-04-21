@@ -45,6 +45,7 @@ export * from './newTypes/multimodalAdvanced';
 export { Principal } from './principal';
 export { Client } from './baseAgent';
 export { AgentClassName } from './agentClassName';
+export { CancellationToken } from 'golem:agent/host@1.5.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
 export * from './webhook';

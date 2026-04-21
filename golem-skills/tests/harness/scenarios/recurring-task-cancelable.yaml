@@ -1,0 +1,115 @@
+name: "recurring-task-cancelable"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-cancelable-ticker"
+    prompt: >
+      In the test-app project, add a second durable agent type called `Ticker`
+      identified by a single name constructor parameter.
+
+      `Ticker` must have mutable state:
+      - `tick_count` (u64, initially 0): how many times `tick` has executed
+      - `running` (bool, initially false): whether the recurring loop is active
+
+      It must expose these externally invokable methods:
+
+      - `start` — sets `running` to true and immediately calls `tick`. Returns nothing.
+
+      - `tick` — if `running` is false, returns without doing anything. Otherwise,
+        increments `tick_count` by 1. If `tick_count` is less than 5, it schedules
+        itself (the same agent's `tick` method) to run again 5 seconds in the future
+        using the cancelable schedule variant. The cancelable schedule variant returns
+        a CancellationToken. Store the cancellation token in agent state so it can be
+        used later. Returns nothing.
+
+      - `cancel` — sets `running` to false. If a cancellation token is stored from a
+        previous `tick`, cancel it (call cancel() on the token) so the pending scheduled
+        invocation is dropped immediately without waiting for it to fire. Returns nothing.
+
+      - `get-tick-count` — returns `tick_count` as a u64.
+
+      The self-scheduling must use the generated RPC client to schedule a future
+      invocation on the same agent instance. Use the cancelable schedule variant
+      (schedule_cancelable_ in Rust/MoonBit, .scheduleCancelable() in TypeScript,
+      .scheduleCancelableAt() in Scala) which returns a CancellationToken.
+
+      Make sure the project builds successfully.
+    expectedSkills:
+      rust:
+        - "golem-recurring-task-rust"
+      ts:
+        - "golem-recurring-task-ts"
+      scala:
+        - "golem-recurring-task-scala"
+      moonbit:
+        - "golem-recurring-task-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "start-ticker"
+    invoke:
+      agent: 'Ticker("t1")'
+      method:
+        rust: "start"
+        ts: "start"
+        scala: "start"
+        moonbit: "start"
+
+  - id: "verify-first-tick"
+    invoke_json:
+      agent: 'Ticker("t1")'
+      method:
+        rust: "get_tick_count"
+        ts: "getTickCount"
+        scala: "getTickCount"
+        moonbit: "get_tick_count"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  - id: "wait-for-second-tick"
+    sleep: 6
+
+  - id: "verify-second-tick"
+    invoke_json:
+      agent: 'Ticker("t1")'
+      method:
+        rust: "get_tick_count"
+        ts: "getTickCount"
+        scala: "getTickCount"
+        moonbit: "get_tick_count"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2
+
+  - id: "cancel-ticker"
+    invoke:
+      agent: 'Ticker("t1")'
+      method:
+        rust: "cancel"
+        ts: "cancel"
+        scala: "cancel"
+        moonbit: "cancel"
+
+  - id: "wait-past-would-be-third-tick"
+    sleep: 8
+
+  - id: "verify-no-more-ticks-after-cancel"
+    invoke_json:
+      agent: 'Ticker("t1")'
+      method:
+        rust: "get_tick_count"
+        ts: "getTickCount"
+        scala: "getTickCount"
+        moonbit: "get_tick_count"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2

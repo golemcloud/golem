@@ -54,6 +54,7 @@ pub fn generate_client_code(
       impls.push(build_client_method_invoke(agent, meth, client_name))
       impls.push(build_client_method_trigger(agent, meth, client_name))
       impls.push(build_client_method_schedule(agent, meth, client_name))
+      impls.push(build_client_method_schedule_cancelable(agent, meth, client_name))
     }
     // Generate _with_config variants for agents with non-secret config fields
     let resolved_ct = resolve_config_type(agent, config_types, agent_package)
@@ -555,6 +556,42 @@ fn build_client_method_schedule(
     "schedule_" + meth.name,
     params,
     Some(make_type("Unit")),
+    has_params,
+    body,
+  )
+}
+
+///|
+/// Generates a cancelable scheduled invocation method on the client that returns a CancellationToken.
+fn build_client_method_schedule_cancelable(
+  agent : AgentInfo,
+  meth : MethodInfo,
+  client_name : String,
+) -> @syntax.Impl {
+  let rpc_name = rpc_function_name(agent.name, meth.name)
+  let vis = visible_params(meth.params)
+  let has_params = vis.length() > 0
+  let params : Array[@syntax.Parameter] = [make_self_param(client_name)]
+  params.push(
+    make_typed_param(
+      "scheduled_at",
+      make_qualified_parameterized_type("wallClock", "Datetime", []),
+    ),
+  )
+  for p in vis {
+    params.push(make_typed_param(p.0, param_type_to_ast_type(p.1)))
+  }
+  let rpc_params = build_rpc_params_expr(meth)
+  let body = make_dot_apply(
+    make_field_access(make_ident_expr("self"), "client"),
+    "schedule_cancelable_invocation",
+    [make_ident_expr("scheduled_at"), make_string_expr(rpc_name), rpc_params],
+  )
+  make_top_func(
+    Some(client_name),
+    "schedule_cancelable_" + meth.name,
+    params,
+    Some(make_qualified_parameterized_type("agentHost", "CancellationToken", [])),
     has_params,
     body,
   )

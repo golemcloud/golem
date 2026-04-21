@@ -84,6 +84,13 @@ object RemoteAgentClient {
       input: JsDataValue
     ): Either[String, Unit] =
       invokeWithFallback(functionName)(fn => client.scheduleInvocation(datetime, fn, input).left.map(_.toString))
+
+    override def scheduleCancelableInvocation(
+      datetime: Datetime,
+      functionName: String,
+      input: JsDataValue
+    ): Either[String, CancellationToken] =
+      invokeWithFallback(functionName)(fn => client.scheduleCancelableInvocation(datetime, fn, input).left.map(_.toString))
   }
 
   private def invokeWithFallback[A](functionName: String)(call: String => Either[String, A]): Either[String, A] =

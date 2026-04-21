@@ -252,6 +252,10 @@ object RpcCodegen {
     sb.append(s"    def scheduleAt($scheduleParamDecls): _root_.scala.concurrent.Future[_root_.scala.Unit] =\n")
     sb.append(s"      scheduleWith($packExpr, when)\n\n")
 
+    val scheduleCancelableParamDecls = scheduleParamDecls
+    sb.append(s"    def scheduleCancelableAt($scheduleCancelableParamDecls): _root_.scala.concurrent.Future[_root_.golem.runtime.rpc.CancellationToken] =\n")
+    sb.append(s"      scheduleCancelableWith($packExpr, when)\n\n")
+
     sb.append(s"  }\n\n")
   }
 
