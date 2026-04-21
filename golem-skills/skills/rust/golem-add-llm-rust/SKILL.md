@@ -9,7 +9,7 @@ description: "Adding LLM and AI capabilities to a Rust Golem agent. Use when the
 
 Golem provides the **golem-ai** library collection — a set of Rust crates from [golemcloud/golem-ai](https://github.com/golemcloud/golem-ai) that provide unified, provider-agnostic APIs for AI capabilities. Each domain has a **core crate** (shared types and traits) plus **provider crates** (concrete backends). You add them as regular Cargo dependencies and call them directly from your agent code.
 
-> **These crates are not on crates.io yet.** Use git dependencies pointing to the `dev` branch.
+> **These crates are not on crates.io yet.** Use git dependencies pointing to the `v0.5.0-dev.2` tag.
 
 ## Available Libraries
 
@@ -140,8 +140,8 @@ Add the core crate plus your chosen provider to the component's `Cargo.toml`:
 ```toml
 [dependencies]
 # LLM — core + provider
-golem-ai-llm = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
-golem-ai-llm-openai = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
+golem-ai-llm = { git = "https://github.com/golemcloud/golem-ai", tag = "v0.5.0-dev.2" }
+golem-ai-llm-openai = { git = "https://github.com/golemcloud/golem-ai", tag = "v0.5.0-dev.2" }
 ```
 
 Store the required API key as a **secret** using Golem's typed config system. Load the `golem-add-secret-rust` skill for full details. In brief:
@@ -355,7 +355,7 @@ impl ChatAgent for ChatAgentImpl {
 
 ## Key Constraints
 
-- All golem-ai crates must be added as git dependencies from `https://github.com/golemcloud/golem-ai` with `branch = "dev"` — they are not on crates.io yet
+- All golem-ai crates must be added as git dependencies from `https://github.com/golemcloud/golem-ai` with `tag = "v0.5.0-dev.2"` — they are not on crates.io yet
 - Always add both the core crate and a provider crate (e.g., `golem-ai-llm` + `golem-ai-llm-openai`)
 - Provider API keys should be stored as secrets using Golem's typed config system (load the `golem-add-secret-rust` skill)
 - The `Durable*` provider types (e.g., `DurableOpenAI`) automatically integrate with Golem's durable execution — responses are recorded in the oplog and replayed on recovery
