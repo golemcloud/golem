@@ -495,6 +495,71 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+async fn concurrent_ephemeral_invocations_all_complete(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    // Regression test: concurrent invocations on the same ephemeral agent must all
+    // complete, and each must observe fresh state (counter starts at 0 each time).
+    const N: usize = 8;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("EphemeralCounter", "concurrent-test");
+    executor.start_agent(&component.id, agent_id.clone()).await?;
+
+    let mut handles: Vec<JoinHandle<anyhow::Result<Option<Value>>>> = Vec::with_capacity(N);
+    for _ in 0..N {
+        let executor_clone = executor.clone();
+        let component_clone = component.clone();
+        let agent_id_clone = agent_id.clone();
+        handles.push(tokio::spawn(
+            async move {
+                let result = executor_clone
+                    .invoke_and_await_agent(
+                        &component_clone,
+                        &agent_id_clone,
+                        "increment",
+                        data_value!(),
+                    )
+                    .await?;
+                Ok(result.into_return_value())
+            }
+            .in_current_span(),
+        ));
+    }
+
+    let mut results = Vec::with_capacity(N);
+    for handle in handles {
+        results.push(handle.await??);
+    }
+
+    drop(executor);
+
+    // Every concurrent invocation must complete and return 1 — ephemeral agents
+    // start with fresh state for every invocation.
+    assert_eq!(results.len(), N, "all concurrent invocations must complete");
+    for result in &results {
+        assert_eq!(
+            *result,
+            Some(Value::U32(1)),
+            "each ephemeral invocation must see fresh state"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
 async fn promise(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

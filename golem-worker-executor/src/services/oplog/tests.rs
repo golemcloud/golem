@@ -3137,3 +3137,172 @@ async fn ephemeral_oplog_continues_index_after_executor_failover(_tracing: &Trac
         );
     }
 }
+
+/// `EphemeralOplog::length()` must equal `current_oplog_index()` at every
+/// stage: after adding to the buffer, after committing (entries move to
+/// `pending_background`), and after the archive write completes (entries
+/// move to the archive).
+///
+/// This pins the invariant across all three internal states so regressions
+/// are caught immediately.
+#[test]
+async fn ephemeral_oplog_length_reflects_all_internal_states(_tracing: &Tracing) {
+    use tokio::sync::Notify;
+
+    // Gated archive so we can control exactly when the background write lands.
+    #[derive(Debug)]
+    struct GatedBlobStorage {
+        inner: Arc<InMemoryBlobStorage>,
+        at_gate: Arc<Notify>,
+        gate: Arc<Notify>,
+    }
+    #[async_trait]
+    impl BlobStorage for GatedBlobStorage {
+        async fn get_raw(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<Vec<u8>>, anyhow::Error> { self.inner.get_raw(tl, ol, ns, path).await }
+        async fn get_stream(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<futures::stream::BoxStream<'static, Result<bytes::Bytes, anyhow::Error>>>, anyhow::Error> { self.inner.get_stream(tl, ol, ns, path).await }
+        async fn get_metadata(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Option<BlobMetadata>, anyhow::Error> { self.inner.get_metadata(tl, ol, ns, path).await }
+        async fn put_raw(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path, data: &[u8]) -> Result<(), anyhow::Error> {
+            self.at_gate.notify_one();
+            self.gate.notified().await;
+            self.inner.put_raw(tl, ol, ns, path, data).await
+        }
+        async fn put_stream(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path, stream: &dyn golem_service_base::replayable_stream::ErasedReplayableStream<Item = Result<Vec<u8>, anyhow::Error>, Error = anyhow::Error>) -> Result<(), anyhow::Error> { self.inner.put_stream(tl, ol, ns, path, stream).await }
+        async fn delete(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<(), anyhow::Error> { self.inner.delete(tl, ol, ns, path).await }
+        async fn create_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<(), anyhow::Error> { self.inner.create_dir(tl, ol, ns, path).await }
+        async fn list_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<Vec<PathBuf>, anyhow::Error> { self.inner.list_dir(tl, ol, ns, path).await }
+        async fn delete_dir(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<bool, anyhow::Error> { self.inner.delete_dir(tl, ol, ns, path).await }
+        async fn exists(&self, tl: &'static str, ol: &'static str, ns: BlobStorageNamespace, path: &Path) -> Result<ExistsResult, anyhow::Error> { self.inner.exists(tl, ol, ns, path).await }
+    }
+
+    let at_gate = Arc::new(Notify::new());
+    let gate = Arc::new(Notify::new());
+    let blob_storage = Arc::new(GatedBlobStorage {
+        inner: Arc::new(InMemoryBlobStorage::new()),
+        at_gate: at_gate.clone(),
+        gate: gate.clone(),
+    });
+
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1, 1, 100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10, 10,
+    ));
+
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "ephemeral-length-states-test".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &owned_agent_id,
+            None,
+            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Ephemeral),
+        )
+        .await;
+
+    let ephemeral_oplog = crate::services::oplog::downcast_oplog::<
+        crate::services::oplog::ephemeral::EphemeralOplog,
+    >(&oplog)
+    .expect("expected EphemeralOplog");
+
+    // Helper: assert length() == current_oplog_index() == expected.
+    let check_length = |label: &'static str, length: u64, current_idx: u64, expected: u64| {
+        assert_eq!(
+            length, current_idx,
+            "[{label}] length() ({length}) != current_oplog_index() ({current_idx})"
+        );
+        assert_eq!(
+            length, expected,
+            "[{label}] length() ({length}) != expected ({expected})"
+        );
+    };
+
+    // State 0: empty — both zero.
+    check_length(
+        "empty",
+        oplog.length().await,
+        oplog.current_oplog_index().await.into(),
+        0,
+    );
+
+    // State 1: 2 entries in buffer only (not yet committed).
+    oplog.add(OplogEntry::suspend().rounded()).await; // idx 1
+    oplog.add(OplogEntry::suspend().rounded()).await; // idx 2
+    check_length(
+        "2 in buffer",
+        oplog.length().await,
+        oplog.current_oplog_index().await.into(),
+        2,
+    );
+
+    // State 2: commit entries 1+2 — they move to pending_background (write gated).
+    // Add entry 3 into buffer while write is in-flight.
+    oplog.commit(CommitLevel::Always).await; // 1+2 → pending_background, write blocked
+    oplog.add(OplogEntry::suspend().rounded()).await; // idx 3 → buffer
+    check_length(
+        "2 in pending_background + 1 in buffer (write gated)",
+        oplog.length().await,
+        oplog.current_oplog_index().await.into(),
+        3,
+    );
+
+    // State 3: release gate — background write lands, pending_background evicts.
+    at_gate.notified().await;
+    gate.notify_one();
+    while ephemeral_oplog.confirmed_written_up_to() < 2 {
+        tokio::task::yield_now().await;
+    }
+    // One more yield to let fetch_max complete before next commit picks it up.
+    tokio::task::yield_now().await;
+
+    // Commit entry 3 — triggers eviction of {1,2} and flushes {3}.
+    oplog.commit(CommitLevel::Always).await;
+    check_length(
+        "3 in pending_background after eviction (write gated)",
+        oplog.length().await,
+        oplog.current_oplog_index().await.into(),
+        3,
+    );
+
+    // Release gate for entry 3's write.
+    at_gate.notified().await;
+    gate.notify_one();
+    while ephemeral_oplog.confirmed_written_up_to() < 3 {
+        tokio::task::yield_now().await;
+    }
+    tokio::task::yield_now().await;
+
+    // State 4: all in archive, trigger eviction via next commit.
+    oplog.add(OplogEntry::suspend().rounded()).await; // idx 4 — buffer
+    oplog.commit(CommitLevel::Always).await; // evicts {3}, flushes {4}
+    check_length(
+        "4 after all archive writes, entry 4 pending",
+        oplog.length().await,
+        oplog.current_oplog_index().await.into(),
+        4,
+    );
+
+    // Clean up: release gate for entry 4's write.
+    at_gate.notified().await;
+    gate.notify_one();
+}
