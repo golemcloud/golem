@@ -58,12 +58,7 @@ async fn fork_interrupted_worker(
 
     let source_agent_id = agent_id!("HttpClient2");
     let agent_id = user
-        .start_agent_with(
-            &component.id,
-            source_agent_id.clone(),
-            env,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, source_agent_id.clone(), env, Vec::new())
         .await?;
 
     let target_agent_id = phantom_agent_id!("HttpClient2", Uuid::new_v4());

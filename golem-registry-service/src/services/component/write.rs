@@ -961,7 +961,10 @@ fn validate_agent_config_declarations(agent_type: &AgentType) -> Result<(), Comp
     Ok(())
 }
 
-fn validate_agent_config_path(agent: &AgentTypeName, path: &[String]) -> Result<(), ComponentError> {
+fn validate_agent_config_path(
+    agent: &AgentTypeName,
+    path: &[String],
+) -> Result<(), ComponentError> {
     if path.iter().any(|segment| segment.contains('.')) {
         return Err(ComponentError::AgentConfigPathSegmentContainsDot {
             agent: agent.clone(),

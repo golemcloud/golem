@@ -491,12 +491,7 @@ async fn get_running_workers(
     for _i in 0..workers_count {
         let aid = phantom_agent_id!("HttpClient2", Uuid::new_v4());
         let agent_id = user
-            .start_agent_with(
-                &component.id,
-                aid.clone(),
-                env.clone(),
-                Vec::new(),
-            )
+            .start_agent_with(&component.id, aid.clone(), env.clone(), Vec::new())
             .await?;
 
         workers.push((agent_id, aid));
@@ -1074,12 +1069,7 @@ async fn worker_use_initial_files(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let parsed_agent_id = agent_id!("FileReadWrite", "initial-file-read-write-1");
     let agent_id = user
-        .start_agent_with(
-            &component.id,
-            parsed_agent_id.clone(),
-            env,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, parsed_agent_id.clone(), env, Vec::new())
         .await?;
 
     let result = user
@@ -1272,12 +1262,7 @@ async fn worker_read_files(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let parsed_agent_id = agent_id!("FileReadWrite", "initial-file-read-write-3");
     let agent_id = user
-        .start_agent_with(
-            &component.id,
-            parsed_agent_id.clone(),
-            env,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, parsed_agent_id.clone(), env, Vec::new())
         .await?;
 
     // run the worker so it can update the files.
@@ -1612,12 +1597,7 @@ async fn worker_suspends_when_running_out_of_fuel(
 
     let http_agent_id = agent_id!("HttpClient");
     let agent_id = user
-        .start_agent_with(
-            &component.id,
-            http_agent_id.clone(),
-            env,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, http_agent_id.clone(), env, Vec::new())
         .await?;
 
     let invoker_task = tokio::spawn({
@@ -2006,12 +1986,7 @@ async fn worker_suspends_when_monthly_http_call_limit_exhausted(
 
     let http_agent_id = agent_id!("HttpClient");
     let agent_id = user
-        .start_agent_with(
-            &component.id,
-            http_agent_id.clone(),
-            env_vars,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, http_agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     // First `run` succeeds — consumes the 1 available HTTP call (remaining → 0).

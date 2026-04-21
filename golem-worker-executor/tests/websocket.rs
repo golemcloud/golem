@@ -100,12 +100,7 @@ async fn websocket_echo_rust(
 
     let agent_id = agent_id!("WebsocketTest", "ws-echo-test");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let result = executor
@@ -181,12 +176,7 @@ async fn websocket_echo_rust_oplog_replay(
 
     let agent_id = agent_id!("WebsocketTest", "ws-echo-oplog-replay");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     // First invocation: full WebSocket session (connect/send/receive/drop) and
@@ -309,12 +299,7 @@ async fn websocket_reconnect_replays_completed_steps_and_continues_live(
 
     let agent_id = agent_id!("WebsocketTest", "ws-phase2-reconnect");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let promise_id_value = executor
@@ -489,12 +474,7 @@ async fn websocket_reconnect_failure_returns_guest_error(
 
     let agent_id = agent_id!("WebsocketTest", "ws-reconnect-failure");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let promise_id_value = executor
@@ -619,12 +599,7 @@ async fn websocket_closed_connection_stays_terminal_after_replay(
 
     let agent_id = agent_id!("WebsocketTest", "ws-terminal-close-replay");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let first = executor
@@ -745,12 +720,7 @@ async fn websocket_successful_close_terminalizes_handle_and_prevents_reconnect(
 
     let agent_id = agent_id!("WebsocketTest", "ws-close-terminal-replay");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let first = executor
@@ -937,12 +907,7 @@ async fn websocket_receive_with_timeout(
 
     let agent_id = agent_id!("WebsocketTest", "ws-timeout-test");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let result = executor
@@ -1006,12 +971,7 @@ async fn websocket_polling_test(
 
     let agent_id = agent_id!("WebsocketTest", "websocket-polling-test");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let result = executor
@@ -1079,12 +1039,7 @@ async fn websocket_polling_survives_repeated_timeouts(
 
     let agent_id = agent_id!("WebsocketTest", "websocket-polling-timeout-race-test");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let result = executor
@@ -1157,12 +1112,7 @@ async fn websocket_async_bidirectional_test(
 
     let agent_id = agent_id!("WebsocketTest", "websocket-async-bidi-test");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let result = executor
@@ -1242,12 +1192,7 @@ async fn websocket_async_bidirectional_test_oplog_replay(
 
     let agent_id = agent_id!("WebsocketTest", "websocket-async-bidi-oplog-replay");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let first_result = executor
@@ -1345,12 +1290,7 @@ async fn websocket_echo_ts(
 
     let agent_id = agent_id!("WebSocketTest", "ws-echo-test");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env_vars,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     let result = executor

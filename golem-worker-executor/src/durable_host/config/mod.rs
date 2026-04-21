@@ -20,27 +20,20 @@ use golem_common::model::worker::TypedAgentConfigEntry;
 /// `wasi:config/store` implementation
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get(&mut self, key: String) -> anyhow::Result<Result<Option<String>, Error>> {
-        let path: Vec<String> = key
-            .split('.')
-            .map(ToOwned::to_owned)
-            .collect();
+        let path: Vec<String> = key.split('.').map(ToOwned::to_owned).collect();
 
         if path.is_empty() {
             return Ok(Ok(None));
         }
 
-        let value = self
-            .state
-            .agent_config
-            .get(&path)
-            .and_then(|value| {
-                TypedAgentConfigEntry {
-                    path,
-                    value: value.clone(),
-                }
-                .to_flat_pair()
-                .map(|(_, rendered_value)| rendered_value)
-            });
+        let value = self.state.agent_config.get(&path).and_then(|value| {
+            TypedAgentConfigEntry {
+                path,
+                value: value.clone(),
+            }
+            .to_flat_pair()
+            .map(|(_, rendered_value)| rendered_value)
+        });
 
         Ok(Ok(value))
     }

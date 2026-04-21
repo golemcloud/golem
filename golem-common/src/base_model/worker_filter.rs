@@ -331,11 +331,7 @@ impl AgentFilter {
         AgentFilter::Env(AgentEnvFilter::new(name, comparator, value))
     }
 
-    pub fn new_config(
-        name: String,
-        comparator: StringFilterComparator,
-        value: String,
-    ) -> Self {
+    pub fn new_config(name: String, comparator: StringFilterComparator, value: String) -> Self {
         AgentFilter::Config(AgentConfigVarsFilter::new(name, comparator, value))
     }
 

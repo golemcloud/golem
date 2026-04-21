@@ -218,12 +218,7 @@ async fn concurrent_agent_limit_waits_for_running_agent_to_finish(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let a1_id = executor
-        .start_agent_with(
-            &http_component.id,
-            a1.clone(),
-            env,
-            Vec::new(),
-        )
+        .start_agent_with(&http_component.id, a1.clone(), env, Vec::new())
         .await?;
 
     // Enqueue start_polling (fire-and-forget). a1 immediately starts Running,
@@ -353,12 +348,7 @@ async fn concurrent_agent_idle_releases_permit(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
     let a1_id = executor
-        .start_agent_with(
-            &http_component.id,
-            a1.clone(),
-            env,
-            Vec::new(),
-        )
+        .start_agent_with(&http_component.id, a1.clone(), env, Vec::new())
         .await?;
 
     // Fire-and-forget: a1 starts polling the gated server.
@@ -475,12 +465,7 @@ async fn http_call_limit_exceeded_traps_invocation(
 
     let agent_id = agent_id!("HttpClient");
     executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     // The invocation must fail because the HTTP limit is 0.

@@ -297,7 +297,9 @@ pub trait TestDsl {
         env: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<AgentId> {
-        let result = self.try_start_agent_with(component_id, id, env, config).await?;
+        let result = self
+            .try_start_agent_with(component_id, id, env, config)
+            .await?;
         Ok(result?)
     }
 

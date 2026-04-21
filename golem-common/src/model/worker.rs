@@ -33,7 +33,10 @@ impl TypedAgentConfigEntry {
     }
 
     pub fn to_flat_map(entries: &[TypedAgentConfigEntry]) -> BTreeMap<String, String> {
-        entries.iter().filter_map(TypedAgentConfigEntry::to_flat_pair).collect()
+        entries
+            .iter()
+            .filter_map(TypedAgentConfigEntry::to_flat_pair)
+            .collect()
     }
 }
 

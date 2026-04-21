@@ -59,9 +59,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
-use golem_common::model::worker::{
-    AgentConfigEntryDto, AgentMetadataDto, TypedAgentConfigEntry,
-};
+use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, TypedAgentConfigEntry};
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,

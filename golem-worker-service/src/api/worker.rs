@@ -110,11 +110,7 @@ impl WorkerApi {
     ) -> Result<Json<WorkerCreationResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
-        let AgentCreationRequest {
-            name,
-            env,
-            ..
-        } = request;
+        let AgentCreationRequest { name, env, .. } = request;
 
         let (agent_id, component) = self
             .normalize_agent_id_by_latest_version(component_id, &name)
