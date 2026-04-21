@@ -1020,7 +1020,7 @@ async fn options_resource_methods(agent: &HttpTestContext) -> anyhow::Result<()>
         json!({
             "allowedMethods": ["GET", "POST", "PATCH", "HEAD", "OPTIONS", "DELETE"],
             "allowedHeaders": ["Content-Type", "Authorization", "X-Request-ID"],
-            "maxAge": 86400
+            "maxAge": 86400.0
         })
     );
 

@@ -243,7 +243,7 @@ system-interface = "0.27.3"
 tap = "1.0.1"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
-test-r = { version = "3.0.3", default-features = true }
+test-r = { version = "3.0.4", default-features = true }
 testcontainers = { version = "0.27.1" }
 testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "minio", "mysql", ] }
 textwrap = "0.16.1"

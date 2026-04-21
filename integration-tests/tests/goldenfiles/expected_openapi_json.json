@@ -47,6 +47,14 @@
           "204": {
             "description": "Response 204",
             "headers": {
+              "Access-Control-Allow-Credentials": {
+                "description": "Response header: Access-Control-Allow-Credentials",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "style": "simple"
+              },
               "Access-Control-Allow-Headers": {
                 "description": "Response header: Access-Control-Allow-Headers",
                 "required": true,
@@ -85,6 +93,14 @@
           "204": {
             "description": "Response 204",
             "headers": {
+              "Access-Control-Allow-Credentials": {
+                "description": "Response header: Access-Control-Allow-Credentials",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "style": "simple"
+              },
               "Access-Control-Allow-Headers": {
                 "description": "Response header: Access-Control-Allow-Headers",
                 "required": true,
@@ -220,6 +236,14 @@
           "204": {
             "description": "Response 204",
             "headers": {
+              "Access-Control-Allow-Credentials": {
+                "description": "Response header: Access-Control-Allow-Credentials",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "style": "simple"
+              },
               "Access-Control-Allow-Headers": {
                 "description": "Response header: Access-Control-Allow-Headers",
                 "required": true,

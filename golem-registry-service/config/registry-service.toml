@@ -60,7 +60,7 @@ type = "Disabled"
 
 [grpc.tls.config]
 
-[initial_accounts.builtin-plugin-owner]
+[initial_accounts.builtin_plugin_owner]
 email = "builtin-plugin-owner@golem.cloud"
 id = "adb2694f-cd9f-425d-905d-ca2888c9c5de"
 name = "Builtin Plugin Owner"
