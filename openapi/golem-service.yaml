@@ -13771,10 +13771,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
-        configVars:
-          type: object
-          additionalProperties:
-            type: string
         localAgentConfig:
           type: array
           items:
@@ -13792,7 +13788,6 @@ components:
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
-      - configVars
       - localAgentConfig
     r#CreateResourceParams:
       title: r#CreateResourceParams

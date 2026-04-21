@@ -5832,7 +5832,6 @@ components:
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
-      - configVars
       - localAgentConfig
       properties:
         timestamp:
@@ -5865,10 +5864,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
-        configVars:
-          type: object
-          additionalProperties:
-            type: string
         localAgentConfig:
           type: array
           items:
