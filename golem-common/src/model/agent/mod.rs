@@ -343,6 +343,21 @@ impl ParsedAgentId {
         })
     }
 
+    pub fn new_auto_phantom(
+        agent_type: AgentTypeName,
+        parameters: DataValue,
+        phantom_id: Option<Uuid>,
+        mode: AgentMode,
+    ) -> Result<Self, String> {
+        let phantom_id = match (mode, phantom_id) {
+            (_, Some(id)) => Some(id),
+            (AgentMode::Ephemeral, None) => Some(Uuid::new_v4()),
+            (AgentMode::Durable, None) => None,
+        };
+
+        Self::new(agent_type, parameters, phantom_id)
+    }
+
     pub fn parse(s: impl AsRef<str>, resolver: impl AgentTypeResolver) -> Result<Self, String> {
         Self::parse_and_resolve_type(s, resolver).map(|(agent_id, _)| agent_id)
     }

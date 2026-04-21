@@ -22,8 +22,8 @@ use golem_cli::bridge_gen::rust::{RustBridgeGenerator, RustTypeName};
 use golem_cli::model::GuestLanguage;
 use golem_common::model::Empty;
 use golem_common::model::agent::{
-    AgentConstructor, AgentMethod, AgentMode, AgentType, AgentTypeName,
-    ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
+    AgentConfigDeclaration, AgentConfigSource, AgentConstructor, AgentMethod, AgentMode, AgentType,
+    AgentTypeName, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
     NamedElementSchemas, Snapshotting,
 };
 use golem_wasm::analysis::analysed_type::{f64, str};
@@ -188,6 +188,72 @@ fn bridge_rust_compiles_rust_code_first_snippets_bar_agent(
     #[tagged_as("rust_code_first_snippets_bar_agent")] _pkg: &GeneratedPackage,
 ) {
     // The test_dep ensures it was compiled successfully in generate_and_compile
+}
+
+#[test]
+fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+
+    let mut generator =
+        RustBridgeGenerator::new(ephemeral_config_agent(), target_dir, true).unwrap();
+    generator
+        .generate()
+        .expect("Failed to generate Rust bridge");
+
+    let lib_rs = std::fs::read_to_string(target_dir.join("src/lib.rs")).unwrap();
+
+    assert!(!lib_rs.contains("pub async fn get("));
+    assert!(!lib_rs.contains("pub async fn get_with_config("));
+    assert!(lib_rs.contains("pub async fn new_phantom("));
+    assert!(lib_rs.contains("pub async fn get_phantom("));
+    assert!(lib_rs.contains("pub async fn new_phantom_with_config("));
+    assert!(lib_rs.contains("pub async fn get_phantom_with_config("));
+}
+
+fn ephemeral_config_agent() -> AgentType {
+    AgentType {
+        type_name: AgentTypeName("EphemeralBridgeAgent".to_string()),
+        description: "Constructs an ephemeral bridge agent".to_string(),
+        source_language: "rust".to_string(),
+        constructor: AgentConstructor {
+            name: Some("EphemeralBridgeAgent".to_string()),
+            description: "Constructs an ephemeral bridge agent".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "name".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: str(),
+                    }),
+                }],
+            }),
+        },
+        methods: vec![AgentMethod {
+            name: "ping".to_string(),
+            description: "Returns the name".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "return_value".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: str(),
+                    }),
+                }],
+            }),
+            http_endpoint: vec![],
+        }],
+        dependencies: vec![],
+        mode: AgentMode::Ephemeral,
+        http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
+        config: vec![AgentConfigDeclaration {
+            source: AgentConfigSource::Local,
+            path: vec!["timeout".to_string()],
+            value_type: str(),
+        }],
+    }
 }
 
 fn generate_and_compile(agent_type: AgentType, target_dir: &Utf8Path) {
