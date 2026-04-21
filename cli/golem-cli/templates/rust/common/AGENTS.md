@@ -27,8 +27,10 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-stateless-agent-rust` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
 | `golem-annotate-agent-rust` | Adding prompt and description annotations to agent methods |
 | `golem-call-another-agent-rust` | Calling another agent and awaiting the result (RPC) |
+| `golem-call-from-external-rust` | Calling agents from external Rust applications using generated bridge SDKs |
 | `golem-fire-and-forget-rust` | Triggering an agent invocation without waiting for the result |
 | `golem-schedule-future-call-rust` | Scheduling a future agent invocation |
+| `golem-wait-for-external-input-rust` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-multi-instance-agent-rust` | Creating multiple agent instances with the same constructor parameters using phantom agents |
 | `golem-atomic-block-rust` | Atomic blocks, persistence control, and idempotency |
 | `golem-add-transactions-rust` | Saga-pattern transactions with compensation |

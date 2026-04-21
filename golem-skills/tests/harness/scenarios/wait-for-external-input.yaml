@@ -1,0 +1,109 @@
+name: "wait-for-external-input"
+settings:
+  golem_server:
+    custom_request_port: 9006
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-approval-workflow"
+    prompt: >
+      In the test-app project, build a human-in-the-loop approval workflow using two
+      new durable agent types: `ApprovalAgent` and `DeciderAgent`. Both are identified
+      by a single name constructor parameter.
+
+      Give `ApprovalAgent` an HTTP mount under `/approvals/{name}` and `DeciderAgent`
+      an HTTP mount under `/deciders/{name}`. Make sure both are exposed through the
+      app HTTP API on `test-app.localhost:9006`.
+
+      **ApprovalAgent** must have a mutable state field `result` of type string, initially
+      empty. It must expose these HTTP endpoints:
+
+      - `POST /request` — starts an approval request. The agent must durably suspend
+        and wait for an external decision to arrive from the `DeciderAgent`. It should
+        hand off the waiting handle to DeciderAgent (identified by the same name) via
+        RPC so the decider can deliver the decision later. Once the decision arrives,
+        store the decision string in the `result` field and return it.
+
+      - `GET /result` — returns the current value of `result` as a plain string.
+
+      **DeciderAgent** must be able to receive a pending approval handle from
+      `ApprovalAgent` and store it. It must expose these HTTP endpoints:
+
+      - `POST /receive` — receives and stores the waiting handle from an ApprovalAgent.
+        Returns nothing.
+
+      - `POST /decide` — accepts a JSON body with a `decision` field (a string).
+        Delivers it to the waiting ApprovalAgent by completing the stored handle.
+        Returns a boolean indicating success.
+
+      The expected flow is: ApprovalAgent starts a request, hands off a handle to
+      DeciderAgent, and suspends. Later, someone calls DeciderAgent's decide endpoint
+      with a decision string, which wakes up the ApprovalAgent.
+
+      Make sure the project builds successfully.
+    expectedSkills:
+      rust:
+        - "golem-wait-for-external-input-rust"
+      ts:
+        - "golem-wait-for-external-input-ts"
+      scala:
+        - "golem-wait-for-external-input-scala"
+      moonbit:
+        - "golem-wait-for-external-input-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "trigger-approval-request"
+    shell:
+      command: "golem"
+      args:
+        rust: ["agent", "invoke", "--trigger", "ApprovalAgent(\"a1\")", "request"]
+        ts: ["agent", "invoke", "--trigger", "ApprovalAgent(\"a1\")", "request"]
+        scala: ["agent", "invoke", "--trigger", "ApprovalAgent(\"a1\")", "request"]
+        moonbit: ["agent", "invoke", "--trigger", "ApprovalAgent(\"a1\")", "request"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+
+  - id: "wait-for-promise-setup"
+    sleep: 5
+
+  - id: "verify-approval-agent-suspended"
+    shell:
+      command: "golem"
+      args: ["agent", "get", "ApprovalAgent(\"a1\")"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_contains: "Suspended"
+
+  - id: "submit-decision"
+    http:
+      url: "http://test-app.localhost:9006/deciders/a1/decide"
+      method: "POST"
+      body: '{"decision": "approved"}'
+      headers:
+        Content-Type: "application/json"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: true
+
+  - id: "wait-for-completion"
+    sleep: 3
+
+  - id: "verify-result"
+    http:
+      url: "http://test-app.localhost:9006/approvals/a1/result"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: "approved"

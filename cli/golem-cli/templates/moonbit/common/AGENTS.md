@@ -27,8 +27,10 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-annotate-agent-moonbit` | Adding prompt and description annotations to agent methods |
 | `golem-configure-durability-moonbit` | Choosing between durable and ephemeral agents |
 | `golem-call-another-agent-moonbit` | Calling another agent and awaiting the result (RPC) |
+| `golem-call-from-external-moonbit` | Calling agents from external applications (no bridge generator yet — use the REST API or a TS/Rust bridge) |
 | `golem-fire-and-forget-moonbit` | Triggering an agent invocation without waiting for the result |
 | `golem-schedule-future-call-moonbit` | Scheduling a future agent invocation from within agent code |
+| `golem-wait-for-external-input-moonbit` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-multi-instance-agent-moonbit` | Creating multiple agent instances with the same constructor parameters using phantom agents |
 | `golem-atomic-block-moonbit` | Atomic blocks, persistence control, and idempotency |
 | `golem-add-transactions-moonbit` | Saga-pattern transactions with compensation |

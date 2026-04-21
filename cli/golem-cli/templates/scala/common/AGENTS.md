@@ -27,8 +27,10 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-stateless-agent-scala` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
 | `golem-annotate-agent-scala` | Adding prompt and description annotations to agent methods |
 | `golem-call-another-agent-scala` | Calling another agent and awaiting the result (RPC) |
+| `golem-call-from-external-scala` | Calling agents from external applications (no bridge generator yet — use the REST API or a TS/Rust bridge) |
 | `golem-fire-and-forget-scala` | Triggering an agent invocation without waiting for the result |
 | `golem-schedule-future-call-scala` | Scheduling a future agent invocation |
+| `golem-wait-for-external-input-scala` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-multi-instance-agent-scala` | Creating multiple agent instances with the same constructor parameters using phantom agents |
 | `golem-atomic-block-scala` | Atomic blocks, persistence control, and oplog management |
 | `golem-add-transactions-scala` | Saga-pattern transactions with compensation |
