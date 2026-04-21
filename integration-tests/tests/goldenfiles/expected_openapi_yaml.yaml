@@ -358,6 +358,102 @@ paths:
                 required:
                 - id
                 - limit
+  /http-agents/{agent-name}/resource/{id}:
+    patch:
+      parameters:
+      - in: path
+        name: agent-name
+        description: 'Path parameter: agent-name'
+        required: true
+        schema:
+          type: string
+        explode: false
+        style: simple
+      - in: path
+        name: id
+        description: 'Path parameter: id'
+        required: true
+        schema:
+          type: string
+        explode: false
+        style: simple
+      requestBody:
+        description: JSON body
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                update:
+                  type: object
+                  properties:
+                    name:
+                      nullable: true
+                      type: string
+                    description:
+                      nullable: true
+                      type: string
+                    enabled:
+                      nullable: true
+                      type: boolean
+              required:
+              - update
+        required: true
+      responses:
+        '200':
+          description: Response 200
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  updated:
+                    type: boolean
+                  method:
+                    type: string
+                required:
+                - id
+                - updated
+                - method
+  /http-agents/{agent-name}/resource/{id}/partial:
+    patch:
+      parameters:
+      - in: path
+        name: agent-name
+        description: 'Path parameter: agent-name'
+        required: true
+        schema:
+          type: string
+        explode: false
+        style: simple
+      - in: path
+        name: id
+        description: 'Path parameter: id'
+        required: true
+        schema:
+          type: string
+        explode: false
+        style: simple
+      responses:
+        '200':
+          description: Response 200
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  updated:
+                    type: boolean
+                  method:
+                    type: string
+                required:
+                - id
+                - updated
+                - method
   /http-agents/{agent-name}/resp/binary:
     get:
       parameters:

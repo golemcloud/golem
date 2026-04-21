@@ -119,8 +119,8 @@ function handlePrincipal(): Either.Either<AnalysedType, string> {
   const analysedType = variant(
     'Principal',
     [
-      { tagLiteralName: 'oidc', valueType: [ 'val', undefined as any ] },
-      { tagLiteralName: 'agent', valueType: ['val', undefined  as any] },
+      { tagLiteralName: 'oidc', valueType: ['val', undefined as any] },
+      { tagLiteralName: 'agent', valueType: ['val', undefined as any] },
       { tagLiteralName: 'golem-user', valueType: ['val', undefined as any] },
       { tagLiteralName: 'anonymous', valueType: undefined },
     ],

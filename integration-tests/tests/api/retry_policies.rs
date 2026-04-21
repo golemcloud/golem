@@ -17,10 +17,10 @@ use golem_common::base_model::retry_policy::{
     ApiCountBoxPolicy, ApiPeriodicPolicy, ApiPredicate, ApiPredicateTrue, ApiPredicateValue,
     ApiPropertyComparison, ApiRetryPolicy, ApiTextValue,
 };
-use golem_common::model::UntypedJsonBody;
 use golem_common::model::retry_policy::{
     RetryPolicyCreation, RetryPolicyRevision, RetryPolicyUpdate,
 };
+use golem_common::model::{Predicate, RetryPolicy, UntypedJsonBody};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -31,11 +31,15 @@ use test_r::{inherit_test_dep, test};
 inherit_test_dep!(EnvBasedTestDependencies);
 
 fn predicate(predicate: ApiPredicate) -> UntypedJsonBody {
-    UntypedJsonBody(serde_json::to_value(predicate).expect("API predicate must serialize"))
+    UntypedJsonBody(
+        serde_json::to_value(Predicate::from(predicate)).expect("API predicate must serialize"),
+    )
 }
 
 fn policy(policy: ApiRetryPolicy) -> UntypedJsonBody {
-    UntypedJsonBody(serde_json::to_value(policy).expect("API retry policy must serialize"))
+    UntypedJsonBody(
+        serde_json::to_value(RetryPolicy::from(policy)).expect("API retry policy must serialize"),
+    )
 }
 
 fn simple_predicate() -> UntypedJsonBody {
@@ -450,7 +454,7 @@ async fn runtime_overlay_overrides_environment_policy_same_name(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(count, Value::U64(1));
+    assert_eq!(count, Value::U64(2));
 
     Ok(())
 }
@@ -482,7 +486,7 @@ async fn environment_policy_created_while_agent_running(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(count, Value::U64(0));
+    assert_eq!(count, Value::U64(1));
 
     let creation = RetryPolicyCreation {
         name: "late-arrival".to_string(),
@@ -630,7 +634,7 @@ async fn environment_policy_updated_while_agent_running(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(count, Value::U64(1));
+    assert_eq!(count, Value::U64(2));
 
     Ok(())
 }

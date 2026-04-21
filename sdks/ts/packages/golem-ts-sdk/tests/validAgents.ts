@@ -638,26 +638,6 @@ class AllHttpMethodsAgent extends BaseAgent {
   async patchMethod(): Promise<string> {
     return Promise.resolve('PATCH');
   }
-
-  @endpoint({ head: '/head' })
-  async headMethod(): Promise<string> {
-    return Promise.resolve('HEAD');
-  }
-
-  @endpoint({ options: '/options' })
-  async optionsMethod(): Promise<string> {
-    return Promise.resolve('OPTIONS');
-  }
-
-  @endpoint({ connect: '/connect' })
-  async connectMethod(): Promise<string> {
-    return Promise.resolve('CONNECT');
-  }
-
-  @endpoint({ trace: '/trace' })
-  async traceMethod(): Promise<string> {
-    return Promise.resolve('TRACE');
-  }
 }
 
 @agent()
