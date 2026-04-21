@@ -22,9 +22,9 @@ mod parse_type_moonbit;
 mod parse_type_rust;
 mod parse_type_scala;
 mod parse_type_ts;
+mod render_moonbit;
 mod render_rust;
 mod render_scala;
-mod render_moonbit;
 mod render_ts;
 
 #[cfg(test)]
@@ -218,16 +218,14 @@ pub fn parse_value_for_language(
         SourceLanguage::TypeScript => try_parse::<parse_ts::TsDialect>(input, typ),
         SourceLanguage::Scala => try_parse::<parse_scala::ScalaDialect>(input, typ),
         SourceLanguage::MoonBit => try_parse::<parse_moonbit::MoonBitDialect>(input, typ),
-        SourceLanguage::Other(_) => {
-            try_parse::<parse_ts::TsDialect>(input, typ)
-                .or_else(|_| try_parse::<parse_rust::RustDialect>(input, typ))
-                .or_else(|_| try_parse::<parse_scala::ScalaDialect>(input, typ))
-                .or_else(|_| try_parse::<parse_moonbit::MoonBitDialect>(input, typ))
-                .map_err(|_| ParseError {
-                    position: 0,
-                    message: format!("could not parse value '{input}'"),
-                })
-        }
+        SourceLanguage::Other(_) => try_parse::<parse_ts::TsDialect>(input, typ)
+            .or_else(|_| try_parse::<parse_rust::RustDialect>(input, typ))
+            .or_else(|_| try_parse::<parse_scala::ScalaDialect>(input, typ))
+            .or_else(|_| try_parse::<parse_moonbit::MoonBitDialect>(input, typ))
+            .map_err(|_| ParseError {
+                position: 0,
+                message: format!("could not parse value '{input}'"),
+            }),
     }
 }
 
@@ -274,20 +272,16 @@ pub fn parse_agent_id_params(
                 ),
             }),
         },
-        SourceLanguage::MoonBit => {
-            match parse_moonbit::parse_data_value_moonbit(input, schema) {
-                Ok(value) => Ok(value),
-                Err(lang_err) => {
-                    parse_structural(input, schema).map_err(|structural_err| ParseError {
-                        position: 0,
-                        message: format!(
-                            "MoonBit parser: {}; Structural parser: {}",
-                            lang_err, structural_err
-                        ),
-                    })
-                }
-            }
-        }
+        SourceLanguage::MoonBit => match parse_moonbit::parse_data_value_moonbit(input, schema) {
+            Ok(value) => Ok(value),
+            Err(lang_err) => parse_structural(input, schema).map_err(|structural_err| ParseError {
+                position: 0,
+                message: format!(
+                    "MoonBit parser: {}; Structural parser: {}",
+                    lang_err, structural_err
+                ),
+            }),
+        },
         SourceLanguage::Other(_) => parse_structural(input, schema).map_err(|e| ParseError {
             position: 0,
             message: e.to_string(),

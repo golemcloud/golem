@@ -1706,8 +1706,8 @@ fn moonbit_parse_record_without_type_prefix() {
         }],
     });
     let schema = cm_schema(typ.clone());
-    let parsed = parse_agent_id_params("{ field_one: 42 }", &schema, &SourceLanguage::MoonBit)
-        .unwrap();
+    let parsed =
+        parse_agent_id_params("{ field_one: 42 }", &schema, &SourceLanguage::MoonBit).unwrap();
     let expected = cm_value(Value::Record(vec![Value::U32(42)]), typ);
     assert_eq!(parsed, expected);
 }
@@ -1741,8 +1741,7 @@ fn canonical_fallback_for_moonbit_language() {
 #[test]
 fn combined_error_on_both_failures_moonbit() {
     let schema = cm_schema(AnalysedType::U32(TypeU32));
-    let result =
-        parse_agent_id_params("not_a_number_at_all!!!", &schema, &SourceLanguage::MoonBit);
+    let result = parse_agent_id_params("not_a_number_at_all!!!", &schema, &SourceLanguage::MoonBit);
     let err = result.unwrap_err();
     assert!(
         err.message.contains("MoonBit parser"),

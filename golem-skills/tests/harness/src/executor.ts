@@ -540,7 +540,7 @@ export class ScenarioExecutor {
   private watcherStarted = false;
   private currentSkillSessionBaseline: number | undefined;
   private workspace: string;
-  private bootstrapSkillSourceDir: string;
+  private bootstrapSkillSourceDirs: string[];
   private options: ScenarioExecutorOptions;
   private routerPort: number = 9881;
 
@@ -548,13 +548,13 @@ export class ScenarioExecutor {
     driver: AgentDriver,
     watcher: SkillWatcher,
     workspace: string,
-    bootstrapSkillSourceDir: string,
+    bootstrapSkillSourceDirs: string[],
     options?: ScenarioExecutorOptions,
   ) {
     this.driver = driver;
     this.watcher = watcher;
     this.workspace = workspace;
-    this.bootstrapSkillSourceDir = bootstrapSkillSourceDir;
+    this.bootstrapSkillSourceDirs = bootstrapSkillSourceDirs;
     this.options = options ?? {};
   }
 
@@ -926,7 +926,7 @@ export class ScenarioExecutor {
     // Setup workspace (each run gets a unique ID so no cleanup needed)
     this.currentSkillSessionBaseline = undefined;
     await fs.mkdir(this.workspace, { recursive: true });
-    await this.driver.setup(this.workspace, this.bootstrapSkillSourceDir);
+    await this.driver.setup(this.workspace, this.bootstrapSkillSourceDirs);
     await this.verifyGolemConnectivity(spec);
 
     // Build extra env for commands from settings

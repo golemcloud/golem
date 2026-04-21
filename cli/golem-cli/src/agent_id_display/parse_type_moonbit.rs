@@ -35,7 +35,7 @@ fn parse_type_inner(s: &str) -> Result<AnalysedType, ParseError> {
         let parts = split_all_top_level_commas(inner)?;
         let types = parts
             .into_iter()
-            .map(|p| parse_type_inner(p))
+            .map(parse_type_inner)
             .collect::<Result<Vec<_>, _>>()?;
         return Ok(analysed_type::tuple(types));
     }

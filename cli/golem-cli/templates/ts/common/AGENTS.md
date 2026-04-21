@@ -7,6 +7,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 
 | Skill | Description |
 |-------|-------------|
+| `golem-cloud-account-setup` | Setting up a Golem Cloud account — authentication, cloud profiles, API tokens, and first cloud deployment |
 | `golem-new-project` | Creating a new Golem application project with `golem new` |
 | `golem-add-component` | Adding a new component or agent templates to an existing application |
 | `golem-edit-manifest` | Editing the Golem Application Manifest (golem.yaml) — components, agents, templates, environments, httpApi, mcp, bridge SDKs, plugins, and more |

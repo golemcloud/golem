@@ -22,10 +22,7 @@ use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{Value, ValueAndType};
 use heck::{ToSnakeCase, ToUpperCamelCase};
 
-pub fn parse_data_value_moonbit(
-    input: &str,
-    schema: &DataSchema,
-) -> Result<DataValue, ParseError> {
+pub fn parse_data_value_moonbit(input: &str, schema: &DataSchema) -> Result<DataValue, ParseError> {
     parse_common::parse_data_value::<MoonBitDialect>(input, schema)
 }
 

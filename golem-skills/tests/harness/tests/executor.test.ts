@@ -45,7 +45,7 @@ const tempDirs: string[] = [];
 
 async function createTempHarnessDirs(): Promise<{
   workspace: string;
-  bootstrapSkillSourceDir: string;
+  bootstrapSkillSourceDirs: string[];
 }> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "executor-test-"));
   tempDirs.push(root);
@@ -54,21 +54,21 @@ async function createTempHarnessDirs(): Promise<{
   await fs.mkdir(workspace, { recursive: true });
   await fs.mkdir(bootstrapSkillSourceDir, { recursive: true });
   await fs.writeFile(path.join(bootstrapSkillSourceDir, "SKILL.md"), "bootstrap", "utf8");
-  return { workspace, bootstrapSkillSourceDir };
+  return { workspace, bootstrapSkillSourceDirs: [bootstrapSkillSourceDir] };
 }
 
 function createExecutor(
   driver: AgentDriver,
   watcher: SkillWatcher,
   workspace: string,
-  bootstrapSkillSourceDir: string,
+  bootstrapSkillSourceDirs: string[],
   options?: ScenarioExecutorOptions,
 ): ScenarioExecutor {
   const executor = new ScenarioExecutor(
     driver,
     watcher,
     workspace,
-    bootstrapSkillSourceDir,
+    bootstrapSkillSourceDirs,
     options,
   );
   (executor as unknown as Record<string, unknown>)["verifyGolemConnectivity"] = async () => {};
@@ -85,7 +85,7 @@ class NativeTrackingDriver implements AgentDriver {
     private readonly failureCounts: Record<string, number> = {},
   ) {}
 
-  async setup(_workspace: string, _bootstrapSkillSourceDir: string): Promise<void> {}
+  async setup(_workspace: string, _bootstrapSkillSourceDirs: string[]): Promise<void> {}
 
   async sendPrompt(prompt: string, _opts: DriverTimeoutOptions): Promise<AgentResult> {
     return this.respond("prompt", prompt);
@@ -165,7 +165,7 @@ class WatcherTrackingDriver implements AgentDriver {
     private readonly watcher: MockWatcher,
   ) {}
 
-  async setup(_workspace: string, _bootstrapSkillSourceDir: string): Promise<void> {}
+  async setup(_workspace: string, _bootstrapSkillSourceDirs: string[]): Promise<void> {}
 
   async sendPrompt(prompt: string, _opts: DriverTimeoutOptions): Promise<AgentResult> {
     return this.respond("prompt", prompt);
@@ -311,13 +311,13 @@ describe("executeVerification", () => {
 
 describe("prompt-session skill tracking", () => {
   it("keeps skill activations cumulative across followups in the same session", async () => {
-    const { workspace, bootstrapSkillSourceDir } = await createTempHarnessDirs();
+    const { workspace, bootstrapSkillSourceDirs } = await createTempHarnessDirs();
     const driver = new NativeTrackingDriver({
       "load skill a": ["skill-a"],
       "load skill b": ["skill-b"],
     });
     const watcher = new SkillWatcher(workspace);
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs);
 
     const spec: ScenarioSpec = {
       name: "same-session-cumulative",
@@ -348,13 +348,13 @@ describe("prompt-session skill tracking", () => {
   });
 
   it("resets skill tracking when continueSession is false", async () => {
-    const { workspace, bootstrapSkillSourceDir } = await createTempHarnessDirs();
+    const { workspace, bootstrapSkillSourceDirs } = await createTempHarnessDirs();
     const driver = new NativeTrackingDriver({
       "load skill a": ["skill-a"],
       "load skill b": ["skill-b"],
     });
     const watcher = new SkillWatcher(workspace);
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs);
 
     const spec: ScenarioSpec = {
       name: "fresh-session-reset",
@@ -386,7 +386,7 @@ describe("prompt-session skill tracking", () => {
   });
 
   it("starts watcher-based tracking on an untracked session-opening prompt", async () => {
-    const { workspace, bootstrapSkillSourceDir } = await createTempHarnessDirs();
+    const { workspace, bootstrapSkillSourceDirs } = await createTempHarnessDirs();
     const watcher = createMockWatcher();
     const driver = new WatcherTrackingDriver(
       {
@@ -395,7 +395,7 @@ describe("prompt-session skill tracking", () => {
       },
       watcher,
     );
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs);
 
     const spec: ScenarioSpec = {
       name: "watcher-session-baseline",
@@ -425,10 +425,10 @@ describe("prompt-session skill tracking", () => {
   });
 
   it("retries a failed initial prompt as a fresh prompt", async () => {
-    const { workspace, bootstrapSkillSourceDir } = await createTempHarnessDirs();
+    const { workspace, bootstrapSkillSourceDirs } = await createTempHarnessDirs();
     const driver = new NativeTrackingDriver({ "load skill a": ["skill-a"] }, { "load skill a": 1 });
     const watcher = new SkillWatcher(workspace);
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs);
 
     const spec: ScenarioSpec = {
       name: "retry-fresh-initial-prompt",

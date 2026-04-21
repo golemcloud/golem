@@ -122,7 +122,12 @@ async fn build_mixed_language_app() {
     ctx.cd(app_name);
 
     // Templates that have unique agent names — no component-name override needed
-    for template in &["ts/human-in-the-loop", "rust/json", "rust/snapshotting", "scala"] {
+    for template in &[
+        "ts/human-in-the-loop",
+        "rust/json",
+        "rust/snapshotting",
+        "scala",
+    ] {
         let outputs = ctx
             .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, template])
             .await;

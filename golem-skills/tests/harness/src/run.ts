@@ -327,18 +327,17 @@ Options:
 
   await fs.mkdir(resultsDir, { recursive: true });
 
-  const bootstrapSkillSourceDir = path.join(
-    golemPath,
-    "golem-skills",
-    "skills",
-    "common",
-    "golem-new-project",
-  );
-  try {
-    await fs.access(path.join(bootstrapSkillSourceDir, "SKILL.md"));
-  } catch {
-    log.error(`Bootstrap skill not found at ${bootstrapSkillSourceDir}`);
-    process.exit(1);
+  const bootstrapSkillNames = ["golem-new-project", "golem-cloud-account-setup"];
+  const bootstrapSkillSourceDirs: string[] = [];
+  for (const skillName of bootstrapSkillNames) {
+    const skillDir = path.join(golemPath, "golem-skills", "skills", "common", skillName);
+    try {
+      await fs.access(path.join(skillDir, "SKILL.md"));
+    } catch {
+      log.error(`Bootstrap skill not found at ${skillDir}`);
+      process.exit(1);
+    }
+    bootstrapSkillSourceDirs.push(skillDir);
   }
 
   const scenarioFiles = (await fs.readdir(scenariosDir)).filter(
@@ -526,7 +525,7 @@ Options:
               driver,
               watcher,
               workspace,
-              bootstrapSkillSourceDir,
+              bootstrapSkillSourceDirs,
               {
                 globalTimeoutSeconds,
                 idleTimeoutSeconds,
