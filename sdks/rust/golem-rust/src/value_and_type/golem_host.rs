@@ -560,9 +560,9 @@ impl FromValueAndType for AgentPropertyFilter {
                 Ok(AgentPropertyFilter::Env(value))
             }
             5 => {
-                let value = <AgentConfigVarsFilter>::from_extractor(&inner.ok_or_else(|| {
-                    "Missing AgentPropertyFilter::Config body".to_string()
-                })?)?;
+                let value = <AgentConfigVarsFilter>::from_extractor(
+                    &inner.ok_or_else(|| "Missing AgentPropertyFilter::Config body".to_string())?,
+                )?;
                 Ok(AgentPropertyFilter::Config(value))
             }
             _ => Err(format!(
