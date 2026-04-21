@@ -1,0 +1,35 @@
+name: "troubleshoot-manifest-trace"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-env-vars"
+    prompt: >
+      In the test-app project, edit `golem.yaml` to add environment variables
+      `APP_MODE` set to `production` and `LOG_LEVEL` set to `info` under the
+      existing component's `env` section. Do not change any source code files.
+    expectedSkills:
+      - "golem-edit-manifest"
+    verify:
+      build: true
+
+  - id: "run-manifest-trace"
+    prompt: >
+      I'm not sure if the environment variables I added to golem.yaml are being
+      applied correctly. Use the manifest-trace command to show me how the
+      component's manifest properties are resolved, so I can verify the env
+      values and which layers they come from.
+    expectedSkills:
+      - "golem-troubleshoot-build"
+
+  - id: "verify-manifest-trace-output"
+    shell:
+      command: "golem"
+      args: ["component", "manifest-trace"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_matches: "[\\s\\S]*APP_MODE[\\s\\S]*production[\\s\\S]*"
