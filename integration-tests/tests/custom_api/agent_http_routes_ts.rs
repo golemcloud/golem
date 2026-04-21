@@ -684,7 +684,10 @@ async fn cors_preflight_wildcard(agent: &HttpTestContext) -> anyhow::Result<()> 
     assert_eq!(allow_origin, "https://any-origin.com");
 
     let vary = response.headers().get("vary").unwrap().to_str()?;
-    assert_eq!(vary, "Origin");
+    assert_eq!(
+        vary,
+        "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+    );
 
     Ok(())
 }
