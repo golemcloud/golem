@@ -35,16 +35,13 @@ steps:
       deploy: true
 
   - id: "trigger-long-running"
-    shell:
-      command: "golem"
-      args:
-        rust: ["agent", "invoke", "--trigger", "CounterAgent(\"c1\")", "run_forever"]
-        ts: ["agent", "invoke", "--trigger", "CounterAgent(\"c1\")", "runForever"]
-        scala: ["agent", "invoke", "--trigger", "CounterAgent(\"c1\")", "runForever"]
-        moonbit: ["agent", "invoke", "--trigger", "CounterAgent(\"c1\")", "run_forever"]
-      cwd: "test-app"
-    expect:
-      exit_code: 0
+    trigger:
+      agent: 'CounterAgent("c1")'
+      method:
+        rust: "run_forever"
+        ts: "runForever"
+        scala: "runForever"
+        moonbit: "run_forever"
 
   - id: "wait-for-agent-to-start"
     sleep: 3

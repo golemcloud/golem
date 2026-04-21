@@ -59,16 +59,9 @@ steps:
       deploy: true
 
   - id: "trigger-approval-request"
-    shell:
-      command: "golem"
-      args:
-        rust: ["agent", "invoke", "--trigger", "ApprovalAgent(\"a1\")", "request"]
-        ts: ["agent", "invoke", "--trigger", "ApprovalAgent(\"a1\")", "request"]
-        scala: ["agent", "invoke", "--trigger", "ApprovalAgent(\"a1\")", "request"]
-        moonbit: ["agent", "invoke", "--trigger", "ApprovalAgent(\"a1\")", "request"]
-      cwd: "test-app"
-    expect:
-      exit_code: 0
+    trigger:
+      agent: 'ApprovalAgent("a1")'
+      method: "request"
 
   - id: "wait-for-promise-setup"
     sleep: 5

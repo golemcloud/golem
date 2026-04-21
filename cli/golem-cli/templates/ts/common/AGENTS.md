@@ -31,6 +31,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-fire-and-forget-ts` | Triggering an agent invocation without waiting for the result |
 | `golem-schedule-future-call-ts` | Scheduling a future agent invocation |
 | `golem-wait-for-external-input-ts` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
+| `golem-add-webhook-ts` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
 | `golem-multi-instance-agent-ts` | Creating multiple agent instances with the same constructor parameters using phantom agents |
 | `golem-atomic-block-ts` | Atomic blocks, persistence control, and idempotency |
 | `golem-add-transactions-ts` | Saga-pattern transactions with compensation |
