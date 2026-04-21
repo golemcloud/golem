@@ -60,7 +60,7 @@ use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
 use golem_common::model::worker::{
-    AgentConfigEntryDto, AgentMetadataDto, typed_agent_config_to_flat_map,
+    AgentConfigEntryDto, AgentMetadataDto, TypedAgentConfigEntry,
 };
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput,
@@ -1847,7 +1847,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_id: metadata_dto.agent_id,
             args: vec![],
             env: metadata_dto.env.into_iter().collect(),
-            config: typed_agent_config_to_flat_map(&metadata_dto.config),
+            config: TypedAgentConfigEntry::to_flat_map(&metadata_dto.config),
             status: metadata_dto.status,
             component_revision: metadata_dto.component_revision,
             retry_count: metadata_dto.retry_count as u64,

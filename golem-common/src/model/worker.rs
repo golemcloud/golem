@@ -20,27 +20,21 @@ use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::collections::BTreeMap;
 
-pub fn render_agent_config_path(path: &[String]) -> String {
-    path.join(".")
-}
+impl TypedAgentConfigEntry {
+    fn render_path(path: &[String]) -> String {
+        path.join(".")
+    }
 
-pub fn typed_agent_config_entry_to_flat_pair(
-    entry: &TypedAgentConfigEntry,
-) -> Option<(String, String)> {
-    entry
-        .value
-        .to_json_value()
-        .ok()
-        .map(|json| (render_agent_config_path(&entry.path), json.to_string()))
-}
+    pub fn to_flat_pair(&self) -> Option<(String, String)> {
+        self.value
+            .to_json_value()
+            .ok()
+            .map(|json| (Self::render_path(&self.path), json.to_string()))
+    }
 
-pub fn typed_agent_config_to_flat_map(
-    entries: &[TypedAgentConfigEntry],
-) -> BTreeMap<String, String> {
-    entries
-        .iter()
-        .filter_map(typed_agent_config_entry_to_flat_pair)
-        .collect()
+    pub fn to_flat_map(entries: &[TypedAgentConfigEntry]) -> BTreeMap<String, String> {
+        entries.iter().filter_map(TypedAgentConfigEntry::to_flat_pair).collect()
+    }
 }
 
 impl UntypedAgentConfigEntry {

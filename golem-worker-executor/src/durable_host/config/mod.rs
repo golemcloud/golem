@@ -15,9 +15,7 @@
 use super::DurableWorkerCtx;
 use crate::preview2::wasi::config::store::{Error, Host};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::worker::{
-    TypedAgentConfigEntry, typed_agent_config_entry_to_flat_pair, typed_agent_config_to_flat_map,
-};
+use golem_common::model::worker::TypedAgentConfigEntry;
 
 /// `wasi:config/store` implementation
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -36,10 +34,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .agent_config
             .get(&path)
             .and_then(|value| {
-                typed_agent_config_entry_to_flat_pair(&TypedAgentConfigEntry {
+                TypedAgentConfigEntry {
                     path,
                     value: value.clone(),
-                })
+                }
+                .to_flat_pair()
                 .map(|(_, rendered_value)| rendered_value)
             });
 
@@ -57,7 +56,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             })
             .collect::<Vec<_>>();
 
-        Ok(Ok(typed_agent_config_to_flat_map(&entries)
+        Ok(Ok(TypedAgentConfigEntry::to_flat_map(&entries)
             .into_iter()
             .collect()))
     }

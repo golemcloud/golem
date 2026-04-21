@@ -58,7 +58,7 @@ pub use retry_policy::{
 use self::component::ComponentId;
 use self::component::{AgentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
-use self::worker::{TypedAgentConfigEntry, typed_agent_config_entry_to_flat_pair};
+use self::worker::TypedAgentConfigEntry;
 use crate::base_model::agent::ParsedAgentId;
 use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -576,7 +576,8 @@ impl AgentFilter {
                 value,
             }) => {
                 let config_value = metadata.config.iter().find_map(|entry| {
-                    typed_agent_config_entry_to_flat_pair(entry)
+                    entry
+                        .to_flat_pair()
                         .and_then(|(key, rendered_value)| (key == name).then_some(rendered_value))
                 });
                 config_value

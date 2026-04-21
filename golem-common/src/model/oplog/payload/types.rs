@@ -20,7 +20,7 @@ use crate::model::invocation_context::{AttributeValue, InvocationContextStack, T
 use crate::model::oplog::{
     PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicSpanData, SpanData,
 };
-use crate::model::worker::typed_agent_config_to_flat_map;
+use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
     AccountId, AgentId, AgentInvocation, AgentMetadata, AgentStatus, IdempotencyKey, OwnedAgentId,
     RdbmsPoolKey, ScheduleId, ScheduledAction,
@@ -1149,7 +1149,7 @@ impl From<AgentMetadata> for AgentMetadataForGuests {
             agent_id: value.agent_id,
             args: vec![],
             env: value.env,
-            config: typed_agent_config_to_flat_map(&value.config),
+            config: TypedAgentConfigEntry::to_flat_map(&value.config),
             status: value.last_known_status.status,
             component_revision: value.last_known_status.component_revision,
             retry_count: value
