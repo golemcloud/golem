@@ -9992,11 +9992,15 @@ components:
       title: AgentInvocationResult
       type: object
       properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
         result:
           $ref: '#/components/schemas/UntypedJsonDataValue'
         componentRevision:
           type: integer
           format: uint64
+      required:
+      - agentId
     AgentMetadataDto:
       title: AgentMetadataDto
       type: object

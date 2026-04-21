@@ -528,7 +528,7 @@ export type TextOrImage =
   | { tag: 'un-binary'; val: UnstructuredBinary<['application/json']> };
 
 @agent({ mode: 'ephemeral' })
-class EphemeralAgent extends BaseAgent {
+export class EphemeralAgent extends BaseAgent {
   constructor(readonly input: string) {
     super();
     this.input = input;
