@@ -26,12 +26,12 @@ import {
 } from './testUtils';
 import { DataSchema, DataValue, ElementSchema } from 'golem:agent/common@1.5.0';
 import * as util from 'node:util';
-import { FooAgent } from './validAgents';
+import { EphemeralAgent, FooAgent } from './validAgents';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { WitNodeBuilder } from '../src/internal/mapping/values/WitNodeBuilder';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import { Uuid } from '../src/uuid';
-import { AgentClassName } from '../src';
+import { AgentClassName, BaseAgent } from '../src';
 
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set-up changes, this test should fail
@@ -979,6 +979,20 @@ describe('Annotated FooAgent class', () => {
     );
     expect(await client.phantomId()).toBeUndefined();
     expect(await client.getAgentType()).toEqual(agentType);
+  });
+});
+
+describe('Annotated EphemeralAgent class', () => {
+  it('does not override non-phantom constructors', () => {
+    expect(EphemeralAgent.get).toBe(BaseAgent.get);
+    expect(EphemeralAgent.getWithConfig).toBe(BaseAgent.getWithConfig);
+  });
+
+  it('still exposes phantom constructors', () => {
+    expect(EphemeralAgent.getPhantom).toBeDefined();
+    expect(EphemeralAgent.getPhantom).toBeTypeOf('function');
+    expect(EphemeralAgent.newPhantom).toBeDefined();
+    expect(EphemeralAgent.newPhantom).toBeTypeOf('function');
   });
 });
 

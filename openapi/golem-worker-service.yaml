@@ -2073,7 +2073,11 @@ components:
     AgentInvocationResult:
       type: object
       title: AgentInvocationResult
+      required:
+      - agentId
       properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
         result:
           $ref: '#/components/schemas/UntypedJsonDataValue'
         componentRevision:

@@ -349,8 +349,10 @@ export function agent(options?: AgentDecoratorOptions) {
       );
     }
 
-    (ctor as any).get = getRemoteClient(agentClassName, agentType, ctor, false);
-    (ctor as any).getWithConfig = getRemoteClient(agentClassName, agentType, ctor, true);
+    if (agentType.mode === 'durable') {
+      (ctor as any).get = getRemoteClient(agentClassName, agentType, ctor, false);
+      (ctor as any).getWithConfig = getRemoteClient(agentClassName, agentType, ctor, true);
+    }
     (ctor as any).newPhantom = getNewPhantomRemoteClient(agentClassName, agentType, ctor, false);
     (ctor as any).newPhantomWithConfig = getNewPhantomRemoteClient(
       agentClassName,
