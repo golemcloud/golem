@@ -11,7 +11,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-component` | Adding a new component or agent templates to an existing application |
 | `golem-edit-manifest` | Editing the Golem Application Manifest (golem.yaml) — components, agents, templates, environments, httpApi, mcp, bridge SDKs, plugins, and more |
 | `golem-build` | Building a Golem application with `golem build` |
-| `golem-troubleshoot-build` | Troubleshooting Golem build failures — diagnosing tool, dependency, and manifest configuration issues |
+| `golem-troubleshoot-build` | Troubleshooting Golem build failures and debugging manifest file (golem.yaml) configuration — diagnosing tool, dependency, env var, config, and manifest layer issues with `golem component manifest-trace` |
 | `golem-deploy` | Deploying a Golem application with `golem deploy` |
 | `golem-local-dev-server` | Starting and managing the local Golem development server with `golem server` |
 | `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |

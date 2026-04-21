@@ -1,6 +1,6 @@
 ---
 name: golem-troubleshoot-build
-description: "Troubleshooting Golem build failures. Use when a build fails, produces unexpected errors, or when diagnosing dependency, tool, or manifest configuration issues."
+description: "Troubleshooting Golem build failures and debugging manifest file (golem.yaml) configuration. Use when a build fails, when environment variables or config values are not applied as expected, when diagnosing why a manifest property has the wrong value, or when using `golem component manifest-trace` to inspect how golem.yaml layers are resolved."
 ---
 
 # Troubleshooting Golem Build Failures
