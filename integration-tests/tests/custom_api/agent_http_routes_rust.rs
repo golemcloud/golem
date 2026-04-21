@@ -751,8 +751,10 @@ async fn cors_get_with_origin_header(agent: &HttpTestContext) -> anyhow::Result<
     assert_eq!(allow_origin, "https://mount.example.com");
 
     let vary = response.headers().get("vary").unwrap().to_str()?;
-    assert_eq!(vary, "Origin");
-
+    assert_eq!(
+        vary,
+        "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+    );
     Ok(())
 }
 
@@ -798,8 +800,10 @@ async fn cors_get_wildcard_origin(agent: &HttpTestContext) -> anyhow::Result<()>
     assert_eq!(allow_origin, "https://random-origin.com");
 
     let vary = response.headers().get("vary").unwrap().to_str()?;
-    assert_eq!(vary, "Origin");
-
+    assert_eq!(
+        vary,
+        "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+    );
     Ok(())
 }
 
