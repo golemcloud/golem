@@ -121,7 +121,9 @@ async function mergeReports(reportsDir: string, outputDir: string): Promise<void
   }
 
   const scenarioReports = await collectScenarioReports(reportsDir);
-  log.info(`Found ${summaries.length} summary files and ${scenarioReports.length} scenario reports`);
+  log.info(
+    `Found ${summaries.length} summary files and ${scenarioReports.length} scenario reports`,
+  );
 
   const agents = new Set<string>();
   const languages = new Set<string>();

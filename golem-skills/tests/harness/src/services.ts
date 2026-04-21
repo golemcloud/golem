@@ -254,7 +254,9 @@ async function startOpenAiMockService(): Promise<ManagedService> {
   }
 }
 
-async function stopManagedServices(services: Pick<ManagedService, "name" | "containerId">[]): Promise<void> {
+async function stopManagedServices(
+  services: Pick<ManagedService, "name" | "containerId">[],
+): Promise<void> {
   for (const service of [...services].reverse()) {
     try {
       log.info(`Stopping prerequisite service ${service.name}`);
@@ -353,7 +355,9 @@ async function waitForContainerHealth(
   }
 
   const logs = await safeDockerLogs(containerId);
-  throw new Error(`Timed out waiting for container ${containerId} to become ${expectedState}: ${logs}`);
+  throw new Error(
+    `Timed out waiting for container ${containerId} to become ${expectedState}: ${logs}`,
+  );
 }
 
 async function waitForLogMessage(

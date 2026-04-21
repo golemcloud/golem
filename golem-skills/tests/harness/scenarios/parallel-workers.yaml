@@ -1,0 +1,80 @@
+name: "parallel-workers"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-worker-and-fan-out"
+    prompt: >
+      In the test-app project, add a second agent type called `Worker` with a single
+      constructor parameter (a u64 id). Give it a method `compute(value: u64) -> u64`
+      that returns `value * 2`.
+
+      Then modify the existing `CounterAgent` to add a new method
+      `fan-out(items: list<u64>) -> list<u64>` that distributes work to multiple
+      `Worker` child agents concurrently. It should spawn one `Worker` per item
+      (using the item's index as the worker id), call `compute` on each worker
+      concurrently (not one-by-one sequentially), and return the collected results
+      in the same order as the input list.
+
+      Make sure the project builds successfully.
+    expectedSkills:
+      rust:
+        - "golem-parallel-workers-rust"
+      ts:
+        - "golem-parallel-workers-ts"
+      scala:
+        - "golem-parallel-workers-scala"
+      moonbit:
+        - "golem-parallel-workers-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "fan-out-3-items"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method:
+        rust: "fan_out"
+        ts: "fanOut"
+        scala: "fanOut"
+        moonbit: "fan_out"
+      args: "[1, 2, 3]"
+    expect:
+      result_json:
+        - path: "$[0]"
+          equals: 2
+        - path: "$[1]"
+          equals: 4
+        - path: "$[2]"
+          equals: 6
+
+  - id: "fan-out-empty"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method:
+        rust: "fan_out"
+        ts: "fanOut"
+        scala: "fanOut"
+        moonbit: "fan_out"
+      args: "[]"
+    expect:
+      result_json:
+        - path: "$"
+          equals: []
+
+  - id: "fan-out-single"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method:
+        rust: "fan_out"
+        ts: "fanOut"
+        scala: "fanOut"
+        moonbit: "fan_out"
+      args: "[10]"
+    expect:
+      result_json:
+        - path: "$[0]"
+          equals: 20

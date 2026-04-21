@@ -29,6 +29,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-call-another-agent-rust` | Calling another agent and awaiting the result (RPC) |
 | `golem-call-from-external-rust` | Calling agents from external Rust applications using generated bridge SDKs |
 | `golem-fire-and-forget-rust` | Triggering an agent invocation without waiting for the result |
+| `golem-parallel-workers-rust` | Fan out work to multiple parallel agents and collect results |
 | `golem-schedule-future-call-rust` | Scheduling a future agent invocation |
 | `golem-wait-for-external-input-rust` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-rust` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |

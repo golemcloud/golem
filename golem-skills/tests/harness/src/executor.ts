@@ -8,10 +8,7 @@ import { SkillWatcher } from "./watcher.js";
 import { evaluate, ExpectSchema, type AssertionContext } from "./assertions.js";
 import { classifyFailure, type FailureClassification } from "./failure-classification.js";
 import { findGolemAppDir } from "./workspace.js";
-import {
-  startPrerequisiteServices,
-  type PrerequisiteServiceName,
-} from "./services.js";
+import { startPrerequisiteServices, type PrerequisiteServiceName } from "./services.js";
 import * as log from "./log.js";
 
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 1800;
@@ -1769,9 +1766,8 @@ export class ScenarioExecutor {
     log.stepAction(stepLabel, `MCP ${spec.method} → ${spec.url}`);
 
     const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-    const { StreamableHTTPClientTransport } = await import(
-      "@modelcontextprotocol/sdk/client/streamableHttp.js"
-    );
+    const { StreamableHTTPClientTransport } =
+      await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
     const { CallToolResultSchema } = await import("@modelcontextprotocol/sdk/types.js");
 
     const client = new Client(

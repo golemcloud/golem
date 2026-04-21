@@ -29,6 +29,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-call-another-agent-ts` | Calling another agent and awaiting the result (RPC) |
 | `golem-call-from-external-ts` | Calling agents from external TypeScript/Node.js applications using generated bridge SDKs |
 | `golem-fire-and-forget-ts` | Triggering an agent invocation without waiting for the result |
+| `golem-parallel-workers-ts` | Fan out work to multiple parallel agents and collect results |
 | `golem-schedule-future-call-ts` | Scheduling a future agent invocation |
 | `golem-wait-for-external-input-ts` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-ts` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |

@@ -29,6 +29,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-call-another-agent-moonbit` | Calling another agent and awaiting the result (RPC) |
 | `golem-call-from-external-moonbit` | Calling agents from external applications (no bridge generator yet — use the REST API or a TS/Rust bridge) |
 | `golem-fire-and-forget-moonbit` | Triggering an agent invocation without waiting for the result |
+| `golem-parallel-workers-moonbit` | Fan out work to multiple parallel agents and collect results |
 | `golem-schedule-future-call-moonbit` | Scheduling a future agent invocation from within agent code |
 | `golem-wait-for-external-input-moonbit` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-moonbit` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
