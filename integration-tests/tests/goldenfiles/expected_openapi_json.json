@@ -47,6 +47,14 @@
           "204": {
             "description": "Response 204",
             "headers": {
+              "Access-Control-Allow-Credentials": {
+                "description": "Response header: Access-Control-Allow-Credentials",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "style": "simple"
+              },
               "Access-Control-Allow-Headers": {
                 "description": "Response header: Access-Control-Allow-Headers",
                 "required": true,
@@ -85,6 +93,14 @@
           "204": {
             "description": "Response 204",
             "headers": {
+              "Access-Control-Allow-Credentials": {
+                "description": "Response header: Access-Control-Allow-Credentials",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "style": "simple"
+              },
               "Access-Control-Allow-Headers": {
                 "description": "Response header: Access-Control-Allow-Headers",
                 "required": true,
@@ -220,6 +236,14 @@
           "204": {
             "description": "Response 204",
             "headers": {
+              "Access-Control-Allow-Credentials": {
+                "description": "Response header: Access-Control-Allow-Credentials",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "style": "simple"
+              },
               "Access-Control-Allow-Headers": {
                 "description": "Response header: Access-Control-Allow-Headers",
                 "required": true,
@@ -248,6 +272,50 @@
                 "style": "simple"
               }
             }
+          }
+        }
+      }
+    },
+    "/http-agents/{agent-name}/api": {
+      "options": {
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "endpoints": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "endpoints"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
           }
         }
       }
@@ -515,6 +583,303 @@
         }
       }
     },
+    "/http-agents/{agent-name}/proxy/{target}": {},
+    "/http-agents/{agent-name}/resource/{id}": {
+      "head": {
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: id",
+            "explode": false,
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "content_length": {
+                      "format": "int64",
+                      "minimum": 0,
+                      "nullable": true,
+                      "type": "integer"
+                    },
+                    "exists": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "exists"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      },
+      "options": {
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: id",
+            "explode": false,
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "allowed_headers": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "allowed_methods": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "max_age": {
+                      "format": "int64",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "allowed_methods",
+                    "allowed_headers",
+                    "max_age"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      },
+      "patch": {
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: id",
+            "explode": false,
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "update": {
+                    "properties": {
+                      "description": {
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "enabled": {
+                        "nullable": true,
+                        "type": "boolean"
+                      },
+                      "name": {
+                        "nullable": true,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "update"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "description": "JSON body",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "method": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "updated",
+                    "method"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      }
+    },
+    "/http-agents/{agent-name}/resource/{id}/exists": {
+      "head": {
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: id",
+            "explode": false,
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Response 204"
+          }
+        }
+      }
+    },
+    "/http-agents/{agent-name}/resource/{id}/partial": {
+      "patch": {
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: id",
+            "explode": false,
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "method": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "updated",
+                    "method"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      }
+    },
     "/http-agents/{agent-name}/resp/binary": {
       "get": {
         "parameters": [
@@ -701,6 +1066,21 @@
             "description": "Response 200"
           },
           "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Response 500"
           }
         }
@@ -770,7 +1150,7 @@
           }
         ],
         "responses": {
-          "200": {
+          "204": {
             "content": {
               "*/*": {
                 "schema": {
@@ -779,9 +1159,24 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 204"
           },
           "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Response 500"
           }
         }
@@ -937,6 +1332,118 @@
         }
       }
     },
+    "/http-agents/{agent-name}/trace": {
+      "trace": {
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "received_headers": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "timestamp": {
+                      "format": "int64",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "received_headers",
+                    "timestamp"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      }
+    },
+    "/http-agents/{agent-name}/trace/{path}": {
+      "trace": {
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: path",
+            "explode": false,
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "received_headers": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "timestamp": {
+                      "format": "int64",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "received_headers",
+                    "timestamp"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      }
+    },
+    "/http-agents/{agent-name}/tunnel/{host}/{port}": {},
     "/http-agents/{agent-name}/unrestricted-unstructured-binary/{bucket}": {
       "post": {
         "parameters": [
