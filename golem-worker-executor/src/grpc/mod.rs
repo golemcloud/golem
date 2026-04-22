@@ -900,6 +900,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
 
         self.shard_service().revoke_shards(&shard_ids)?;
+        let current_assignment = self.shard_service().try_get_current_assignment();
+        info!(
+            revoked_shards = ?shard_ids,
+            current_assignment = ?current_assignment,
+            "Investigation: shard revoke applied"
+        );
 
         for (agent_id, worker_details) in self.active_workers().snapshot().await {
             if self.shard_service().check_worker(&agent_id).is_err()
@@ -907,7 +913,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .set_interrupting(InterruptKind::Restart)
                     .await
             {
+                warn!(
+                    agent_id = %agent_id,
+                    current_assignment = ?current_assignment,
+                    "Investigation: interrupting worker on revoked executor"
+                );
                 await_interrupted.recv().await.unwrap();
+                warn!(
+                    agent_id = %agent_id,
+                    current_assignment = ?current_assignment,
+                    "Investigation: worker interrupt completed on revoked executor"
+                );
             }
         }
 
@@ -923,6 +939,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
 
         self.shard_service().assign_shards(&shard_ids)?;
+        let current_assignment = self.shard_service().try_get_current_assignment();
+        info!(
+            assigned_shards = ?shard_ids,
+            current_assignment = ?current_assignment,
+            "Investigation: shard assign applied"
+        );
         Ctx::on_shard_assignment_changed(self).await?;
 
         Ok(())
