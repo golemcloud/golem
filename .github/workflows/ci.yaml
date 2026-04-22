@@ -182,6 +182,10 @@ jobs:
             description: "IT #10"
           - name: integration-tests-group11
             description: "IT #11"
+          - name: integration-tests-group12
+            description: "IT #12"
+          - name: integration-tests-group13
+            description: "IT #13"
           - name: cli-integration-tests-group1
             description: "CLI tests #1"
           - name: cli-integration-tests-group2
