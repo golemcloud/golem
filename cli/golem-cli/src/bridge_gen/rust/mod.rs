@@ -122,6 +122,7 @@ impl RustBridgeGenerator {
         doc["dependencies"]["nonempty-collections"] = dep("0.3.1", &[]);
         doc["dependencies"]["reqwest"] = dep("0.13", &["rustls"]);
         doc["dependencies"]["reqwest-middleware"] = dep("0.5", &[]);
+        doc["dependencies"]["serde"] = dep("1", &["derive"]);
         doc["dependencies"]["serde_json"] = dep("1", &[]);
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
 
@@ -198,7 +199,7 @@ impl RustBridgeGenerator {
                 if let Some(value) = #param_name {
                     agent_config.push(golem_client::model::AgentConfigEntryDto {
                         path: vec![#(#path_segments),*],
-                        value: serde_json::to_value(value).unwrap(),
+                        value: serde_json::to_value(value).unwrap().into(),
                     });
                 }
             });
@@ -600,7 +601,7 @@ impl RustBridgeGenerator {
                 }
 
                 Ok(quote! {
-                    #[derive(Debug, Clone)]
+                    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
                     pub enum #name {
                         #(#cases),*
                     }
@@ -682,7 +683,7 @@ impl RustBridgeGenerator {
                 }
 
                 Ok(quote! {
-                    #[derive(Debug, Clone)]
+                    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
                     pub enum #name {
                         #(#cases),*
                     }
@@ -753,7 +754,7 @@ impl RustBridgeGenerator {
                 let field_count = field_idents.len();
 
                 Ok(quote! {
-                    #[derive(Debug, Clone)]
+                    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
                     pub struct #name {
                         #(#fields),*
                     }
