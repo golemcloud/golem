@@ -622,6 +622,16 @@ export function heading(msg: string): void {
   runLine(msg, chalk.blue);
 }
 
+export function scenarioSeparator(completed: number, total: number, nextName: string): void {
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const bar = "═".repeat(72);
+  runLine("");
+  runLine(bar, chalk.cyan);
+  runLine(`  ${completed} of ${total} completed (${pct}%)  ▸  next: ${nextName}`, chalk.cyan.bold);
+  runLine(bar, chalk.cyan);
+  runLine("");
+}
+
 export function usage(text: string): void {
   runLine(text);
 }

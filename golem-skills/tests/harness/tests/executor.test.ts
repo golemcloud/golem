@@ -103,6 +103,10 @@ class NativeTrackingDriver implements AgentDriver {
     return [...this.activatedSkills];
   }
 
+  getDefaultIdleTimeoutSeconds(): number | undefined {
+    return undefined;
+  }
+
   resetActivatedSkills(): void {
     this.resetCount += 1;
     this.activatedSkills.length = 0;
@@ -180,6 +184,10 @@ class WatcherTrackingDriver implements AgentDriver {
   setWorkingDirectory(_dir: string): void {}
 
   getActivatedSkills(): string[] | undefined {
+    return undefined;
+  }
+
+  getDefaultIdleTimeoutSeconds(): number | undefined {
     return undefined;
   }
 

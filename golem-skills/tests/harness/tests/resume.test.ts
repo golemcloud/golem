@@ -26,6 +26,7 @@ const mockDriver: AgentDriver = {
   }),
   setWorkingDirectory: () => {},
   getActivatedSkills: () => undefined,
+  getDefaultIdleTimeoutSeconds: () => undefined,
   resetActivatedSkills: () => {},
 };
 

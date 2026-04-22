@@ -14,6 +14,9 @@ const STARTUP_STALL_TIMEOUT_SECONDS = 120;
 export class GeminiAgentDriver extends BaseAgentDriver {
   protected readonly driverName = "gemini";
   protected readonly skillDirs = [".agents/skills"];
+  // Gemini CLI has long silent gaps due to retry backoff (up to 300s on 429)
+  // and extra LLM calls (next-speaker check, context compression).
+  protected readonly defaultIdleTimeoutOverride = 600;
   private lastSessionId: string | null = null;
   private activatedSkillNames: Set<string> = new Set();
 

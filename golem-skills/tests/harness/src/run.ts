@@ -344,15 +344,17 @@ Options:
     bootstrapSkillSourceDirs.push(skillDir);
   }
 
-  const scenarioFiles = (await fs.readdir(scenariosDir)).filter(
-    (f) => f.endsWith(".yaml") || f.endsWith(".yml"),
+  const scenarioFiles = (await fs.readdir(scenariosDir))
+    .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
+    .sort();
+
+  // Pre-load all scenario specs (reused for validation, counting, and dry-run)
+  const allSpecs = await Promise.all(
+    scenarioFiles.map((f) => ScenarioLoader.load(path.join(scenariosDir, f))),
   );
 
   // Validate that the --scenario filter matches an existing scenario
   if (scenarioFilter) {
-    const allSpecs = await Promise.all(
-      scenarioFiles.map((f) => ScenarioLoader.load(path.join(scenariosDir, f))),
-    );
     const scenarioNames = allSpecs.map((s) => s.name);
     if (!scenarioNames.includes(scenarioFilter)) {
       log.error(
@@ -469,6 +471,19 @@ Options:
   let hasFailures = false;
   let isFirstScenario = true;
 
+  // Compute total runnable scenario count for progress tracking
+  let totalScenarios = 0;
+  for (const currentAgent of agents) {
+    for (const currentLanguage of languages) {
+      for (const spec of allSpecs) {
+        if (scenarioFilter && spec.name !== scenarioFilter) continue;
+        if (spec.languageAgnostic && currentLanguage !== languages[0]) continue;
+        totalScenarios++;
+      }
+    }
+  }
+  let completedScenarios = 0;
+
   try {
     for (const currentAgent of agents) {
       for (const currentLanguage of languages) {
@@ -490,6 +505,9 @@ Options:
 
           // Language-agnostic scenarios run only once per agent (on the first language)
           if (spec.languageAgnostic && currentLanguage !== languages[0]) continue;
+
+          // Log progress separator
+          log.scenarioSeparator(completedScenarios, totalScenarios, spec.name);
 
           // Restart Golem server between scenarios to get a clean state
           if (!isFirstScenario) {
@@ -603,6 +621,7 @@ Options:
           await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
           scenarioReports.push(report);
 
+          completedScenarios++;
           log.scenarioResultLine(allPassed, spec.name, results.length, spec.steps.length);
 
           if (scenarioResult!.creditInsufficient) {

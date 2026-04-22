@@ -1168,7 +1168,10 @@ export class ScenarioExecutor {
         );
         break;
       case "prompt": {
-        const idleTimeout = this.options.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS;
+        const idleTimeout =
+          this.options.idleTimeoutSeconds ??
+          this.driver.getDefaultIdleTimeoutSeconds() ??
+          DEFAULT_IDLE_TIMEOUT_SECONDS;
         const promptResult = await this.executePrompt(
           stepLabel,
           step.prompt as string,

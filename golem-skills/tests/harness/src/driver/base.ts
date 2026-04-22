@@ -79,6 +79,12 @@ export interface AgentDriver {
   getActivatedSkills(): string[] | undefined;
 
   /**
+   * Per-driver default idle timeout override in seconds. Returns `undefined`
+   * if the driver has no preference (use the global default).
+   */
+  getDefaultIdleTimeoutSeconds(): number | undefined;
+
+  /**
    * Clear the driver's internal list of activated skills.
    * Called both during teardown and when the executor starts a fresh prompt
    * session.
@@ -213,6 +219,14 @@ export abstract class BaseAgentDriver implements AgentDriver {
   /** Directories relative to workspace where the bootstrap skill should be copied. */
   protected abstract readonly skillDirs: string[];
 
+  /**
+   * Per-driver default idle timeout in seconds. If set, overrides the global
+   * default when the executor doesn't provide an explicit idle timeout.
+   * Drivers whose underlying CLI has long silent gaps (e.g. retry backoff)
+   * can increase this.
+   */
+  protected readonly defaultIdleTimeoutOverride: number | undefined = undefined;
+
   /** Returns the driver log tag, e.g. `claude-code` */
   protected get logPrefix(): string {
     return this.driverName;
@@ -244,6 +258,10 @@ export abstract class BaseAgentDriver implements AgentDriver {
 
   getActivatedSkills(): string[] | undefined {
     return undefined;
+  }
+
+  getDefaultIdleTimeoutSeconds(): number | undefined {
+    return this.defaultIdleTimeoutOverride;
   }
 
   resetActivatedSkills(): void {
