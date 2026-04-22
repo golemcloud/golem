@@ -5,19 +5,59 @@ steps:
       name: test-app
 
   - id: "annotate-counter-agent"
-    prompt: >
-      In the test-app project, add a new externally invokable method to the existing
-      CounterAgent named `get-double` (or `getDouble` following the source language
-      naming convention) that returns the current count multiplied by 2 as a u64/number.
+    prompt:
+      rust: >
+        In the test-app project, add a new externally invokable method to the existing
+        CounterAgent named `get_double` that returns the current count multiplied by 2
+        as a u64/number.
 
-      Add the following annotations to this new method:
-        - prompt: "Get the doubled value of the counter"
-        - description: "Returns the current count multiplied by two. Useful for scaling operations."
+        Add the following annotations to this new method:
+          - prompt: "Get the doubled value of the counter"
+          - description: "Returns the current count multiplied by two. Useful for scaling operations."
 
-      Also set the agent-level description of CounterAgent to exactly:
-        "A test counter agent for tracking numeric values"
+        Also set the agent-level description of CounterAgent to exactly:
+          "A test counter agent for tracking numeric values"
 
-      Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully.
+      ts: >
+        In the test-app project, add a new externally invokable method to the existing
+        CounterAgent named `getDouble` that returns the current count multiplied by 2
+        as a u64/number.
+
+        Add the following annotations to this new method:
+          - prompt: "Get the doubled value of the counter"
+          - description: "Returns the current count multiplied by two. Useful for scaling operations."
+
+        Also set the agent-level description of CounterAgent to exactly:
+          "A test counter agent for tracking numeric values"
+
+        Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, add a new externally invokable method to the existing
+        CounterAgent named `getDouble` that returns the current count multiplied by 2
+        as a u64/number.
+
+        Add the following annotations to this new method:
+          - prompt: "Get the doubled value of the counter"
+          - description: "Returns the current count multiplied by two. Useful for scaling operations."
+
+        Also set the agent-level description of CounterAgent to exactly:
+          "A test counter agent for tracking numeric values"
+
+        Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, add a new externally invokable method to the existing
+        CounterAgent named `get_double` that returns the current count multiplied by 2
+        as a u64/number.
+
+        Add the following annotations to this new method:
+          - prompt: "Get the doubled value of the counter"
+          - description: "Returns the current count multiplied by two. Useful for scaling operations."
+
+        Also set the agent-level description of CounterAgent to exactly:
+          "A test counter agent for tracking numeric values"
+
+        Make sure the project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-annotate-agent-rust"

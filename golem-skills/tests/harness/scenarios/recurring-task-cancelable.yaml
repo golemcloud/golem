@@ -7,37 +7,127 @@ steps:
       build: true
 
   - id: "add-cancelable-ticker"
-    prompt: >
-      In the test-app project, add a second durable agent type called `Ticker`
-      identified by a single name constructor parameter.
+    prompt:
+      rust: >
+        In the test-app project, add a second durable agent type called `Ticker`
+        identified by a single name constructor parameter.
 
-      `Ticker` must have mutable state:
-      - `tick_count` (u64, initially 0): how many times `tick` has executed
-      - `running` (bool, initially false): whether the recurring loop is active
+        `Ticker` must have mutable state:
+        - `tick_count` (u64, initially 0): how many times `tick` has executed
+        - `running` (bool, initially false): whether the recurring loop is active
 
-      It must expose these externally invokable methods:
+        It must expose these externally invokable methods:
 
-      - `start` — sets `running` to true and immediately calls `tick`. Returns nothing.
+        - `start` — sets `running` to true and immediately calls `tick`. Returns nothing.
 
-      - `tick` — if `running` is false, returns without doing anything. Otherwise,
-        increments `tick_count` by 1. If `tick_count` is less than 5, it schedules
-        itself (the same agent's `tick` method) to run again 5 seconds in the future
-        using the cancelable schedule variant. The cancelable schedule variant returns
-        a CancellationToken. Store the cancellation token in agent state so it can be
-        used later. Returns nothing.
+        - `tick` — if `running` is false, returns without doing anything. Otherwise,
+          increments `tick_count` by 1. If `tick_count` is less than 5, it schedules
+          itself (the same agent's `tick` method) to run again 5 seconds in the future
+          using the cancelable schedule variant. The cancelable schedule variant returns
+          a CancellationToken. Store the cancellation token in agent state so it can be
+          used later. Returns nothing.
 
-      - `cancel` — sets `running` to false. If a cancellation token is stored from a
-        previous `tick`, cancel it (call cancel() on the token) so the pending scheduled
-        invocation is dropped immediately without waiting for it to fire. Returns nothing.
+        - `cancel` — sets `running` to false. If a cancellation token is stored from a
+          previous `tick`, cancel it (call cancel() on the token) so the pending scheduled
+          invocation is dropped immediately without waiting for it to fire. Returns nothing.
 
-      - `get-tick-count` — returns `tick_count` as a u64.
+        - `get_tick_count` — returns `tick_count` as a u64.
 
-      The self-scheduling must use the generated RPC client to schedule a future
-      invocation on the same agent instance. Use the cancelable schedule variant
-      (schedule_cancelable_ in Rust/MoonBit, .scheduleCancelable() in TypeScript,
-      .scheduleCancelableAt() in Scala) which returns a CancellationToken.
+        The self-scheduling must use the generated RPC client to schedule a future
+        invocation on the same agent instance. Use the cancelable schedule variant
+        (schedule_cancelable_ in Rust) which returns a CancellationToken.
 
-      Make sure the project builds successfully.
+        Make sure the project builds successfully.
+      ts: >
+        In the test-app project, add a second durable agent type called `Ticker`
+        identified by a single name constructor parameter.
+
+        `Ticker` must have mutable state:
+        - `tickCount` (number, initially 0): how many times `tick` has executed
+        - `running` (boolean, initially false): whether the recurring loop is active
+
+        It must expose these externally invokable methods:
+
+        - `start` — sets `running` to true and immediately calls `tick`. Returns nothing.
+
+        - `tick` — if `running` is false, returns without doing anything. Otherwise,
+          increments `tickCount` by 1. If `tickCount` is less than 5, it schedules
+          itself (the same agent's `tick` method) to run again 5 seconds in the future
+          using the cancelable schedule variant. The cancelable schedule variant returns
+          a CancellationToken. Store the cancellation token in agent state so it can be
+          used later. Returns nothing.
+
+        - `cancel` — sets `running` to false. If a cancellation token is stored from a
+          previous `tick`, cancel it (call cancel() on the token) so the pending scheduled
+          invocation is dropped immediately without waiting for it to fire. Returns nothing.
+
+        - `getTickCount` — returns `tickCount` as a number.
+
+        The self-scheduling must use the generated RPC client to schedule a future
+        invocation on the same agent instance. Use the cancelable schedule variant
+        (.scheduleCancelable() in TypeScript) which returns a CancellationToken.
+
+        Make sure the project builds successfully.
+      scala: >
+        In the test-app project, add a second durable agent type called `Ticker`
+        identified by a single name constructor parameter.
+
+        `Ticker` must have mutable state:
+        - `tickCount` (Long, initially 0): how many times `tick` has executed
+        - `running` (Boolean, initially false): whether the recurring loop is active
+
+        It must expose these externally invokable methods:
+
+        - `start` — sets `running` to true and immediately calls `tick`. Returns nothing.
+
+        - `tick` — if `running` is false, returns without doing anything. Otherwise,
+          increments `tickCount` by 1. If `tickCount` is less than 5, it schedules
+          itself (the same agent's `tick` method) to run again 5 seconds in the future
+          using the cancelable schedule variant. The cancelable schedule variant returns
+          a CancellationToken. Store the cancellation token in agent state so it can be
+          used later. Returns nothing.
+
+        - `cancel` — sets `running` to false. If a cancellation token is stored from a
+          previous `tick`, cancel it (call cancel() on the token) so the pending scheduled
+          invocation is dropped immediately without waiting for it to fire. Returns nothing.
+
+        - `getTickCount` — returns `tickCount` as a Long.
+
+        The self-scheduling must use the generated RPC client to schedule a future
+        invocation on the same agent instance. Use the cancelable schedule variant
+        (.scheduleCancelableAt() in Scala) which returns a CancellationToken.
+
+        Make sure the project builds successfully.
+      moonbit: >
+        In the test-app project, add a second durable agent type called `Ticker`
+        identified by a single name constructor parameter.
+
+        `Ticker` must have mutable state:
+        - `tick_count` (UInt64, initially 0): how many times `tick` has executed
+        - `running` (Bool, initially false): whether the recurring loop is active
+
+        It must expose these externally invokable methods:
+
+        - `start` — sets `running` to true and immediately calls `tick`. Returns nothing.
+
+        - `tick` — if `running` is false, returns without doing anything. Otherwise,
+          increments `tick_count` by 1. If `tick_count` is less than 5, it schedules
+          itself (the same agent's `tick` method) to run again 5 seconds in the future
+          using the cancelable schedule variant. The cancelable schedule variant returns
+          a CancellationToken. Store the cancellation token in agent state so it can be
+          used later. Returns nothing.
+
+        - `cancel` — sets `running` to false. If a cancellation token is stored from a
+          previous `tick`, cancel it (call cancel() on the token) so the pending scheduled
+          invocation is dropped immediately without waiting for it to fire. Returns nothing.
+
+        - `get_tick_count` — returns `tick_count` as a UInt64.
+
+        The self-scheduling must use the generated RPC client to schedule a future
+        invocation on the same agent instance. Use the cancelable schedule variant
+        (schedule_cancelable_ in MoonBit) which returns a CancellationToken.
+
+        Make sure the project builds successfully.
     expectedSkills:
       rust:
         - "golem-recurring-task-rust"

@@ -78,6 +78,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       let receivedFirstOutput = false;
       let startupStalled = false;
       let creditInsufficient = false;
+      let encounteredError = false;
 
       const model = process.env.OPENCODE_MODEL;
       log.driver(
@@ -127,11 +128,15 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         const lines = stdoutBuf.split("\n");
         stdoutBuf = lines.pop()!;
         for (const line of lines) {
-          if (this.processJsonLine(prefix, line, textParts)) {
+          const signal = this.processJsonLine(prefix, line, textParts);
+          if (signal === "credit") {
             creditInsufficient = true;
             log.driverFatal(prefix, "✗ credit balance too low — aborting run");
             killProcessTree(child);
             return;
+          }
+          if (signal === "error") {
+            encounteredError = true;
           }
         }
       });
@@ -159,8 +164,11 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         clearTimeout(startupTimer);
         monitor.finish();
         if (stdoutBuf) {
-          if (this.processJsonLine(prefix, stdoutBuf, textParts)) {
+          const signal = this.processJsonLine(prefix, stdoutBuf, textParts);
+          if (signal === "credit") {
             creditInsufficient = true;
+          } else if (signal === "error") {
+            encounteredError = true;
           }
         }
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
@@ -208,7 +216,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           return;
         }
 
-        const success = exitCode === 0;
+        const success = exitCode === 0 && !encounteredError;
         const output = textParts.join("\n") || rawOutput;
 
         if (!success) {
@@ -244,12 +252,12 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
 
   /**
    * Parse a single JSONL line from opencode's `--format json` output and emit
-   * structured log output. Returns `true` if a credit-insufficient error was
-   * detected and the caller should abort.
+   * structured log output. Returns `"credit"` if a credit-insufficient error
+   * was detected, `"error"` for other error events, or `null` otherwise.
    */
-  private processJsonLine(prefix: string, line: string, textParts: string[]): boolean {
+  private processJsonLine(prefix: string, line: string, textParts: string[]): "credit" | "error" | null {
     const trimmed = line.trim();
-    if (!trimmed) return false;
+    if (!trimmed) return null;
 
     let event: Record<string, unknown>;
     try {
@@ -257,7 +265,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
     } catch {
       // Not JSON — log as plain text
       log.driver(prefix, trimmed);
-      return false;
+      return null;
     }
 
     const sessionId = event.sessionID as string | undefined;
@@ -299,7 +307,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
             for (const l of text.split("\n")) {
               log.driver(prefix, l);
             }
-            if (CREDIT_INSUFFICIENT_PATTERN.test(text)) return true;
+            if (CREDIT_INSUFFICIENT_PATTERN.test(text)) return "credit";
           }
         }
         break;
@@ -324,8 +332,8 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         const errData = error?.data as Record<string, unknown> | undefined;
         const errMsg = (errData?.message as string) || (error?.name as string) || "unknown error";
         log.driverError(prefix, errMsg);
-        if (CREDIT_INSUFFICIENT_PATTERN.test(errMsg)) return true;
-        break;
+        if (CREDIT_INSUFFICIENT_PATTERN.test(errMsg)) return "credit";
+        return "error";
       }
 
       default: {
@@ -335,6 +343,6 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       }
     }
 
-    return false;
+    return null;
   }
 }

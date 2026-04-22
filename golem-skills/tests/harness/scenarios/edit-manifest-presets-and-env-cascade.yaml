@@ -7,25 +7,83 @@ steps:
       build: true
 
   - id: "add-agent-with-presets"
-    prompt: >
-      In the test-app project, do the following:
+    prompt:
+      rust: >
+        In the test-app project, do the following:
 
-      1. Add a new durable agent type called `ConfigReporter` identified by a single
-         constructor parameter for the instance name.
+        1. Add a new durable agent type called `ConfigReporter` identified by a single
+           constructor parameter for the instance name.
 
-      2. ConfigReporter must expose a method called `get-mode` that takes no arguments,
-         reads the `APP_MODE` environment variable from the process environment, and returns
-         its value as a string. If the variable is not set, return the string `unknown`.
+        2. ConfigReporter must expose a method called `get_mode` that takes no arguments,
+           reads the `APP_MODE` environment variable from the process environment, and returns
+           its value as a string. If the variable is not set, return the string `unknown`.
 
-      3. In `golem.yaml`, set environment variables on the component (under the existing
-         component entry in `components`):
-         - `APP_MODE` set to `production`
+        3. In `golem.yaml`, set environment variables on the component (under the existing
+           component entry in `components`):
+           - `APP_MODE` set to `production`
 
-      4. Also in the same component entry in `golem.yaml`, add a `presets` section with a
-         preset called `debug` that is marked as the default preset (`default: true`) and
-         overrides `APP_MODE` to `development`.
+        4. Also in the same component entry in `golem.yaml`, add a `presets` section with a
+           preset called `debug` that is marked as the default preset (`default: true`) and
+           overrides `APP_MODE` to `development`.
 
-      Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully.
+      ts: >
+        In the test-app project, do the following:
+
+        1. Add a new durable agent type called `ConfigReporter` identified by a single
+           constructor parameter for the instance name.
+
+        2. ConfigReporter must expose a method called `getMode` that takes no arguments,
+           reads the `APP_MODE` environment variable from the process environment, and returns
+           its value as a string. If the variable is not set, return the string `unknown`.
+
+        3. In `golem.yaml`, set environment variables on the component (under the existing
+           component entry in `components`):
+           - `APP_MODE` set to `production`
+
+        4. Also in the same component entry in `golem.yaml`, add a `presets` section with a
+           preset called `debug` that is marked as the default preset (`default: true`) and
+           overrides `APP_MODE` to `development`.
+
+        Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, do the following:
+
+        1. Add a new durable agent type called `ConfigReporter` identified by a single
+           constructor parameter for the instance name.
+
+        2. ConfigReporter must expose a method called `getMode` that takes no arguments,
+           reads the `APP_MODE` environment variable from the process environment, and returns
+           its value as a string. If the variable is not set, return the string `unknown`.
+
+        3. In `golem.yaml`, set environment variables on the component (under the existing
+           component entry in `components`):
+           - `APP_MODE` set to `production`
+
+        4. Also in the same component entry in `golem.yaml`, add a `presets` section with a
+           preset called `debug` that is marked as the default preset (`default: true`) and
+           overrides `APP_MODE` to `development`.
+
+        Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, do the following:
+
+        1. Add a new durable agent type called `ConfigReporter` identified by a single
+           constructor parameter for the instance name.
+
+        2. ConfigReporter must expose a method called `get_mode` that takes no arguments,
+           reads the `APP_MODE` environment variable from the process environment, and returns
+           its value as a string. If the variable is not set, return the string `unknown`.
+
+        3. In `golem.yaml`, set environment variables on the component (under the existing
+           component entry in `components`):
+           - `APP_MODE` set to `production`
+
+        4. Also in the same component entry in `golem.yaml`, add a `presets` section with a
+           preset called `debug` that is marked as the default preset (`default: true`) and
+           overrides `APP_MODE` to `development`.
+
+        Make sure the project builds and deploys successfully.
     expectedSkills:
       - "golem-edit-manifest"
     verify:
