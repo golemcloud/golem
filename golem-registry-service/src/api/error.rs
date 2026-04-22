@@ -639,7 +639,7 @@ impl From<DeploymentWriteError> for ApiError {
                 Self::conflict(api::error_code::DEPLOYMENT_VERSION_ALREADY_EXISTS, error)
             }
             DeploymentWriteError::DeploymentHashMismatch { .. } => {
-                Self::bad_request(api::error_code::DEPLOYMENT_HASH_MISMATCH, error)
+                Self::conflict(api::error_code::DEPLOYMENT_HASH_MISMATCH, error)
             }
             DeploymentWriteError::EnvironmentNotYetDeployed => {
                 Self::conflict(api::error_code::ENVIRONMENT_NOT_DEPLOYED, error)

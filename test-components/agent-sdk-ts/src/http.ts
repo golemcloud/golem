@@ -21,40 +21,6 @@ interface ResourceResponse {
   method: string;
 }
 
-interface ResourceMetadata {
-  id: string;
-  exists: boolean;
-  contentLength?: number;
-}
-
-interface OptionsResponse {
-  allowedMethods: string[];
-  allowedHeaders: string[];
-  maxAge: number;
-}
-
-interface ApiOptionsResponse {
-  version: string;
-  endpoints: string[];
-}
-
-interface TunnelResponse {
-  host: string;
-  port: number;
-  connected: boolean;
-}
-
-interface ProxyResponse {
-  target: string;
-  proxyActive: boolean;
-}
-
-interface TraceResponse {
-  path: string;
-  receivedHeaders: string[];
-  timestamp: number;
-}
-
 @agent({
   mount: '/http-agents/{agentName}',
 })
@@ -179,89 +145,6 @@ class HttpAgent extends BaseAgent {
       id: id,
       updated: true,
       method: "PATCH"
-    };
-  }
-
-  // HEAD method endpoints
-  @endpoint({ head: "/resource/{id}" })
-  headResource(id: string): ResourceMetadata {
-    return {
-      id: id,
-      exists: true,
-      contentLength: 1024
-    };
-  }
-
-  @endpoint({ head: "/resource/{id}/exists" })
-  headExists(id: string): void {
-    // HEAD method with no response body (204)
-  }
-
-  // OPTIONS method endpoints
-  @endpoint({ options: "/resource/{id}" })
-  optionsResource(id: string): OptionsResponse {
-    return {
-      allowedMethods: ["GET", "POST", "PATCH", "HEAD", "OPTIONS", "DELETE"],
-      allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
-      maxAge: 86400
-    };
-  }
-
-  @endpoint({ options: "/api" })
-  optionsApi(): ApiOptionsResponse {
-    return {
-      version: "1.0.0",
-      endpoints: [
-        "/resource/{id}",
-        "/api",
-        "/tunnel/{host}/{port}",
-        "/proxy/{target}",
-        "/trace/{path}"
-      ]
-    };
-  }
-
-  // CONNECT method endpoints
-  @endpoint({ connect: "/tunnel/{host}/{port}" })
-  connectTunnel(host: string, port: number): TunnelResponse {
-    return {
-      host: host,
-      port: port,
-      connected: true
-    };
-  }
-
-  @endpoint({ connect: "/proxy/{target}" })
-  connectProxy(target: string): ProxyResponse {
-    return {
-      target: target,
-      proxyActive: true
-    };
-  }
-
-  // TRACE method endpoints
-  @endpoint({ trace: "/trace/{path}" })
-  tracePath(path: string): TraceResponse {
-    return {
-      path: path,
-      receivedHeaders: [
-        "X-Trace-Request",
-        "X-Debug-Info",
-        "User-Agent: TestClient"
-      ],
-      timestamp: Math.floor(Date.now() / 1000)
-    };
-  }
-
-  @endpoint({ trace: "/trace" })
-  traceRoot(): TraceResponse {
-    return {
-      path: "/",
-      receivedHeaders: [
-        "X-Root-Trace",
-        "X-System-Check"
-      ],
-      timestamp: Math.floor(Date.now() / 1000)
     };
   }
 }
