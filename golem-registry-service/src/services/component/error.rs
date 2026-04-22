@@ -49,10 +49,6 @@ pub enum ComponentError {
     },
     #[error("Invalid file path: {0}")]
     InvalidFilePath(String),
-    #[error(
-        "The component name {actual} did not match the component's root package name: {expected}"
-    )]
-    InvalidComponentName { expected: String, actual: String },
     #[error("Plugin does not implement golem:api/oplog-processor")]
     InvalidOplogProcessorPlugin,
     #[error("Invalid plugin scope for {plugin_name}@{plugin_version} {details}")]
@@ -132,7 +128,6 @@ impl SafeDisplay for ComponentError {
             Self::MalformedComponentArchive { .. } => self.to_string(),
             Self::AgentFileNotFoundInArchive { .. } => self.to_string(),
             Self::InvalidFilePath(_) => self.to_string(),
-            Self::InvalidComponentName { .. } => self.to_string(),
             Self::LimitExceeded(inner) => inner.to_safe_string(),
             Self::InvalidOplogProcessorPlugin => self.to_string(),
             Self::EnvironmentPluginNotFound(_) => self.to_string(),
