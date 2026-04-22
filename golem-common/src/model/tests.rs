@@ -14,10 +14,11 @@
 
 use crate::model::component::{CanonicalFilePath, ComponentRevision};
 use crate::model::environment::EnvironmentId;
-use crate::model::oplog::OplogIndex;
+use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription, UpdateDescription};
 use crate::model::{
-    AccountId, AgentFilter, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, ComponentId,
-    FilterComparator, IdempotencyKey, StringFilterComparator, Timestamp,
+    AccountId, AgentFilter, AgentId, AgentInvocation, AgentMetadata, AgentStatus,
+    AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey, StringFilterComparator,
+    Timestamp, TimestampedAgentInvocation,
 };
 use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
@@ -313,6 +314,40 @@ fn worker_filter_matches() {
         )
         .matches(&worker_metadata)
     );
+}
+
+#[test]
+fn agent_status_record_has_pending_work_for_pending_invocations() {
+    let mut status = AgentStatusRecord::default();
+    status.pending_invocations.push(TimestampedAgentInvocation {
+        timestamp: Timestamp::now_utc(),
+        invocation: AgentInvocation::ManualUpdate {
+            target_revision: ComponentRevision::INITIAL,
+        },
+    });
+
+    assert!(status.has_pending_work());
+}
+
+#[test]
+fn agent_status_record_has_pending_work_for_pending_updates() {
+    let mut status = AgentStatusRecord::default();
+    status
+        .pending_updates
+        .push_back(TimestampedUpdateDescription {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL,
+            description: UpdateDescription::Automatic {
+                target_revision: ComponentRevision::INITIAL,
+            },
+        });
+
+    assert!(status.has_pending_work());
+}
+
+#[test]
+fn agent_status_record_has_pending_work_is_false_without_pending_queues() {
+    assert!(!AgentStatusRecord::default().has_pending_work());
 }
 
 #[test]
