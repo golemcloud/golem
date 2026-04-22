@@ -50,7 +50,7 @@ export interface AgentResult {
 
 /** Pattern that matches credit-balance / quota errors emitted by LLM providers. */
 export const CREDIT_INSUFFICIENT_PATTERN =
-  /credit balance is too low|quota exceeded[.]? check your plan and billing/i;
+  /credit balance is too low|quota exceeded[.]? check your plan and billing|you have reached your specified API usage limits/i;
 
 export interface DriverTimeoutOptions {
   stepTimeoutSeconds: number;

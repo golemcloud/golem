@@ -473,7 +473,7 @@ Options:
 
   // Compute total runnable scenario count for progress tracking
   let totalScenarios = 0;
-  for (const currentAgent of agents) {
+  for (const _currentAgent of agents) {
     for (const currentLanguage of languages) {
       for (const spec of allSpecs) {
         if (scenarioFilter && spec.name !== scenarioFilter) continue;
@@ -483,6 +483,36 @@ Options:
     }
   }
   let completedScenarios = 0;
+
+  /** Rebuild and write the CTRF report from all scenario results collected so far. */
+  async function flushCtrf(): Promise<void> {
+    if (!ctrfOutputPath || scenarioReports.length === 0) return;
+
+    const ctrfBuilder = new ReportBuilder({ autoGenerateId: true, autoTimestamp: true })
+      .tool({ name: "golem-skill-harness", version: "0.1.0" })
+      .environment({
+        buildName: `${agents.join(",")}/${languages.join(",")}`,
+        ...(process.env.GITHUB_SHA ? { testEnvironment: "ci" } : {}),
+      });
+
+    for (const r of scenarioReports) {
+      const failedStep = r.results.find((s) => !s.success);
+      ctrfBuilder.addTest(
+        new TestBuilder()
+          .name(r.scenario)
+          .status(r.status === "pass" ? "passed" : "failed")
+          .duration(Math.round(r.durationSeconds * 1000))
+          .suite([r.matrix.agent, r.matrix.language])
+          .message(failedStep?.error ?? "")
+          .build(),
+      );
+    }
+
+    const ctrfReport = ctrfBuilder.build();
+    const resolvedCtrfPath = path.resolve(process.cwd(), ctrfOutputPath);
+    await fs.mkdir(path.dirname(resolvedCtrfPath), { recursive: true });
+    await fs.writeFile(resolvedCtrfPath, stringify(ctrfReport));
+  }
 
   try {
     for (const currentAgent of agents) {
@@ -623,6 +653,7 @@ Options:
 
           completedScenarios++;
           log.scenarioResultLine(allPassed, spec.name, results.length, spec.steps.length);
+          await flushCtrf();
 
           if (scenarioResult!.creditInsufficient) {
             log.error("Credit balance too low — marking all remaining scenarios as failed.");
@@ -669,6 +700,7 @@ Options:
           }
         }
       }
+      await flushCtrf();
     }
 
     // Aggregated summary report
@@ -771,34 +803,8 @@ Options:
 
       log.dim(`Reports: ${summaryPath}, ${path.join(resultsDir, "report.html")}`);
 
-      // Generate CTRF report if requested
-      if (ctrfOutputPath) {
-        const ctrfBuilder = new ReportBuilder({ autoGenerateId: true, autoTimestamp: true })
-          .tool({ name: "golem-skill-harness", version: "0.1.0" })
-          .environment({
-            buildName: `${agents.join(",")}/${languages.join(",")}`,
-            ...(process.env.GITHUB_SHA ? { testEnvironment: "ci" } : {}),
-          });
-
-        for (const r of scenarioReports) {
-          const failedStep = r.results.find((s) => !s.success);
-          ctrfBuilder.addTest(
-            new TestBuilder()
-              .name(r.scenario)
-              .status(r.status === "pass" ? "passed" : "failed")
-              .duration(Math.round(r.durationSeconds * 1000))
-              .suite([r.matrix.agent, r.matrix.language])
-              .message(failedStep?.error ?? "")
-              .build(),
-          );
-        }
-
-        const ctrfReport = ctrfBuilder.build();
-        const resolvedCtrfPath = path.resolve(process.cwd(), ctrfOutputPath);
-        await fs.mkdir(path.dirname(resolvedCtrfPath), { recursive: true });
-        await fs.writeFile(resolvedCtrfPath, stringify(ctrfReport));
-        log.dim(`CTRF report: ${resolvedCtrfPath}`);
-      }
+      // Final CTRF flush (already written incrementally after each scenario)
+      await flushCtrf();
     }
 
     if (hasFailures) {
