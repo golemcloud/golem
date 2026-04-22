@@ -16,7 +16,7 @@ import { ClaudeAgentDriver } from "./driver/claude.js";
 import { OpenCodeAgentDriver } from "./driver/opencode.js";
 import { CodexAgentDriver } from "./driver/codex.js";
 import { GeminiAgentDriver } from "./driver/gemini.js";
-import type { AgentDriver } from "./driver/base.js";
+import type { AgentDriver, UsageStats } from "./driver/base.js";
 import { SkillWatcher } from "./watcher.js";
 import {
   generateHtmlReport,
@@ -44,6 +44,7 @@ interface ScenarioReport {
   durationSeconds: number;
   results: ScenarioRunResult["stepResults"];
   artifactPaths: string[];
+  usage?: UsageStats;
 }
 
 function createDriver(agent: SupportedAgent): AgentDriver {
@@ -148,6 +149,7 @@ async function mergeReports(reportsDir: string, outputDir: string): Promise<void
       total: s.total,
       passed: s.passed,
       failed: s.failed,
+      usage: s.usage,
     });
   }
 
@@ -642,6 +644,7 @@ Options:
             durationSeconds: scenarioResult!.durationSeconds,
             results,
             artifactPaths: scenarioResult!.artifactPaths,
+            usage: scenarioResult!.usage,
           };
 
           const reportPath = path.join(
@@ -710,6 +713,20 @@ Options:
       const failed = scenarioReports.filter((r) => r.status === "fail").length;
       const totalDuration = scenarioReports.reduce((sum, r) => sum + r.durationSeconds, 0);
 
+      // Aggregate usage across all scenarios
+      const totalUsage: UsageStats = {};
+      for (const r of scenarioReports) {
+        if (r.usage) {
+          if (r.usage.inputTokens)
+            totalUsage.inputTokens = (totalUsage.inputTokens ?? 0) + r.usage.inputTokens;
+          if (r.usage.outputTokens)
+            totalUsage.outputTokens = (totalUsage.outputTokens ?? 0) + r.usage.outputTokens;
+          if (r.usage.costUsd) totalUsage.costUsd = (totalUsage.costUsd ?? 0) + r.usage.costUsd;
+          if (r.usage.numTurns) totalUsage.numTurns = (totalUsage.numTurns ?? 0) + r.usage.numTurns;
+        }
+      }
+      const hasUsage = Object.keys(totalUsage).length > 0;
+
       const worstFailures = scenarioReports
         .filter((r) => r.status === "fail")
         .map((r) => {
@@ -744,7 +761,9 @@ Options:
           name: r.scenario,
           status: r.status,
           durationSeconds: r.durationSeconds,
+          usage: r.usage,
         })),
+        ...(hasUsage && { usage: totalUsage }),
       };
 
       const summaryPath = path.join(resultsDir, "summary.json");
@@ -783,6 +802,14 @@ Options:
       log.summaryLine("Passed:   ", passed, "green");
       log.summaryLine("Failed:   ", failed, failed > 0 ? "red" : undefined);
       log.plain(`Duration: ${totalDuration.toFixed(1)}s`);
+      if (hasUsage) {
+        const parts: string[] = [];
+        if (totalUsage.inputTokens) parts.push(`${totalUsage.inputTokens.toLocaleString()} in`);
+        if (totalUsage.outputTokens) parts.push(`${totalUsage.outputTokens.toLocaleString()} out`);
+        if (parts.length > 0) log.plain(`Tokens:   ${parts.join(" / ")}`);
+        if (totalUsage.costUsd) log.plain(`Cost:     $${totalUsage.costUsd.toFixed(4)}`);
+        if (totalUsage.numTurns) log.plain(`Turns:    ${totalUsage.numTurns}`);
+      }
 
       if (worstFailures.length > 0) {
         log.blank();

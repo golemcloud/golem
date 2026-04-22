@@ -6,6 +6,7 @@ import {
   ActivityMonitor,
   CREDIT_INSUFFICIENT_PATTERN,
   type DriverTimeoutOptions,
+  type UsageStats,
 } from "./base.js";
 import * as log from "../log.js";
 
@@ -19,6 +20,7 @@ export class GeminiAgentDriver extends BaseAgentDriver {
   protected readonly defaultIdleTimeoutOverride = 600;
   private lastSessionId: string | null = null;
   private activatedSkillNames: Set<string> = new Set();
+  private accumulatedUsage: UsageStats = {};
 
   async sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
     this.lastSessionId = null;
@@ -55,6 +57,7 @@ export class GeminiAgentDriver extends BaseAgentDriver {
     isFollowup: boolean,
     opts: DriverTimeoutOptions,
   ): Promise<AgentResult> {
+    this.accumulatedUsage = {};
     const prefix = this.logPrefix;
     const startTime = Date.now();
     const textParts: string[] = [];
@@ -162,6 +165,7 @@ export class GeminiAgentDriver extends BaseAgentDriver {
             durationSeconds,
             exitCode: exitCode,
             creditInsufficient: true,
+            usage: { ...this.accumulatedUsage },
           });
           return;
         }
@@ -178,6 +182,7 @@ export class GeminiAgentDriver extends BaseAgentDriver {
             exitCode: null,
             timedOut: true,
             timeoutKind: "idle",
+            usage: { ...this.accumulatedUsage },
           });
           return;
         }
@@ -191,6 +196,7 @@ export class GeminiAgentDriver extends BaseAgentDriver {
             exitCode: null,
             timedOut: true,
             timeoutKind: monitor.timeoutKind,
+            usage: { ...this.accumulatedUsage },
           });
           return;
         }
@@ -211,7 +217,13 @@ export class GeminiAgentDriver extends BaseAgentDriver {
           log.driverSuccess(prefix, durationStr);
         }
 
-        resolve({ success, output, durationSeconds, exitCode });
+        resolve({
+          success,
+          output,
+          durationSeconds,
+          exitCode,
+          usage: { ...this.accumulatedUsage },
+        });
       });
 
       child.on("error", (err) => {
@@ -224,6 +236,7 @@ export class GeminiAgentDriver extends BaseAgentDriver {
           output: rawOutput + (err.message || "Unknown error"),
           durationSeconds,
           exitCode: null,
+          usage: { ...this.accumulatedUsage },
         });
       });
     });
@@ -326,6 +339,8 @@ export class GeminiAgentDriver extends BaseAgentDriver {
           const inputTokens = (stats.input_tokens as number) ?? 0;
           const outputTokens = (stats.output_tokens as number) ?? 0;
           const toolCalls = stats.tool_calls as number | undefined;
+          this.accumulatedUsage.inputTokens = inputTokens;
+          this.accumulatedUsage.outputTokens = outputTokens;
           let extra = `tokens=${inputTokens}+${outputTokens}`;
           if (toolCalls != null) extra += ` tools=${toolCalls}`;
           log.driver(prefix, extra);

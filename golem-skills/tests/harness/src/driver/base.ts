@@ -37,6 +37,13 @@ export function killProcessTree(child: ChildProcess): void {
   }, 5000);
 }
 
+export interface UsageStats {
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  numTurns?: number;
+}
+
 export interface AgentResult {
   success: boolean;
   output: string;
@@ -46,6 +53,7 @@ export interface AgentResult {
   timeoutKind?: "step" | "idle";
   /** The agent reported that the credit balance is too low to continue. */
   creditInsufficient?: boolean;
+  usage?: UsageStats;
 }
 
 /** Pattern that matches credit-balance / quota errors emitted by LLM providers. */

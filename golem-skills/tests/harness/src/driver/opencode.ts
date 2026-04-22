@@ -6,6 +6,7 @@ import {
   ActivityMonitor,
   CREDIT_INSUFFICIENT_PATTERN,
   type DriverTimeoutOptions,
+  type UsageStats,
 } from "./base.js";
 import * as log from "../log.js";
 
@@ -16,6 +17,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
   protected readonly skillDirs = [".agents/skills"];
   private lastSessionId: string | null = null;
   private activatedSkillNames: Set<string> = new Set();
+  private accumulatedUsage: UsageStats = {};
 
   private buildArgs(prompt: string, isFollowup: boolean): string[] {
     const args = ["run", "--format", "json", "--dangerously-skip-permissions"];
@@ -57,6 +59,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
     isFollowup: boolean,
     opts: DriverTimeoutOptions,
   ): Promise<AgentResult> {
+    this.accumulatedUsage = {};
     const prefix = this.logPrefix;
     const startTime = Date.now();
     const textParts: string[] = [];
@@ -183,6 +186,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
             durationSeconds,
             exitCode: exitCode,
             creditInsufficient: true,
+            usage: { ...this.accumulatedUsage },
           });
           return;
         }
@@ -199,6 +203,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
             exitCode: null,
             timedOut: true,
             timeoutKind: "idle",
+            usage: { ...this.accumulatedUsage },
           });
           return;
         }
@@ -212,6 +217,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
             exitCode: null,
             timedOut: true,
             timeoutKind: monitor.timeoutKind,
+            usage: { ...this.accumulatedUsage },
           });
           return;
         }
@@ -232,7 +238,13 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           log.driverSuccess(prefix, durationStr);
         }
 
-        resolve({ success, output, durationSeconds, exitCode });
+        resolve({
+          success,
+          output,
+          durationSeconds,
+          exitCode,
+          usage: { ...this.accumulatedUsage },
+        });
       });
 
       child.on("error", (err) => {
@@ -245,6 +257,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           output: rawOutput + (err.message || "Unknown error"),
           durationSeconds,
           exitCode: null,
+          usage: { ...this.accumulatedUsage },
         });
       });
     });
@@ -324,9 +337,15 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           if (tokens || cost !== undefined) {
             const input = (tokens?.input as number) ?? 0;
             const output = (tokens?.output as number) ?? 0;
+            this.accumulatedUsage.inputTokens = (this.accumulatedUsage.inputTokens ?? 0) + input;
+            this.accumulatedUsage.outputTokens = (this.accumulatedUsage.outputTokens ?? 0) + output;
+            if (cost !== undefined) {
+              this.accumulatedUsage.costUsd = (this.accumulatedUsage.costUsd ?? 0) + cost;
+            }
             const extra = `tokens=${input}+${output}` + (cost ? ` cost=$${cost.toFixed(4)}` : "");
             log.driver(prefix, extra);
           }
+          this.accumulatedUsage.numTurns = (this.accumulatedUsage.numTurns ?? 0) + 1;
         }
         break;
       }

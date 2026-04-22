@@ -1,4 +1,5 @@
 import type { StepResult } from "./executor.js";
+import type { UsageStats } from "./driver/base.js";
 
 interface ScenarioReport {
   scenario: string;
@@ -8,6 +9,7 @@ interface ScenarioReport {
   durationSeconds: number;
   results: StepResult[];
   artifactPaths: string[];
+  usage?: UsageStats;
 }
 
 export interface Summary {
@@ -22,7 +24,8 @@ export interface Summary {
   skipped: number;
   durationSeconds: number;
   worstFailures: Array<{ scenario: string; agent?: string; language?: string; error: string }>;
-  scenarios: Array<{ name: string; status: string; durationSeconds: number }>;
+  scenarios: Array<{ name: string; status: string; durationSeconds: number; usage?: UsageStats }>;
+  usage?: UsageStats;
 }
 
 export interface MergedSummary {
@@ -38,6 +41,7 @@ export interface MergedSummary {
     total: number;
     passed: number;
     failed: number;
+    usage?: UsageStats;
   }>;
   summaries: Summary[];
 }
@@ -59,6 +63,29 @@ function driverLabel(agent: string, model?: string): string {
   return model ? `${agent}/${model}` : agent;
 }
 
+function formatUsageCards(usage?: UsageStats): string {
+  if (!usage) return "";
+  const cards: string[] = [];
+  if (usage.inputTokens || usage.outputTokens) {
+    const inStr = (usage.inputTokens ?? 0).toLocaleString();
+    const outStr = (usage.outputTokens ?? 0).toLocaleString();
+    cards.push(
+      `<div class="stat usage"><span class="label">Tokens</span><span class="value">${inStr} in / ${outStr} out</span></div>`,
+    );
+  }
+  if (usage.costUsd) {
+    cards.push(
+      `<div class="stat usage"><span class="label">Cost</span><span class="value">$${usage.costUsd.toFixed(4)}</span></div>`,
+    );
+  }
+  if (usage.numTurns) {
+    cards.push(
+      `<div class="stat usage"><span class="label">Turns</span><span class="value">${usage.numTurns}</span></div>`,
+    );
+  }
+  return cards.join("\n        ");
+}
+
 function generateOverviewSection(summary: Summary | MergedSummary): string {
   if (isMergedSummary(summary)) {
     const agentLabels = [...new Set(summary.heatMap.map((e) => driverLabel(e.agent, e.model)))];
@@ -77,6 +104,7 @@ function generateOverviewSection(summary: Summary | MergedSummary): string {
     </div>`;
   }
 
+  const usageCards = formatUsageCards(summary.usage);
   return `
     <div class="overview">
       <h2>Overview</h2>
@@ -92,6 +120,7 @@ function generateOverviewSection(summary: Summary | MergedSummary): string {
         <div class="stat fail"><span class="label">Failed</span><span class="value">${summary.failed}</span></div>
         <div class="stat skip"><span class="label">Skipped</span><span class="value">${summary.skipped}</span></div>
         <div class="stat"><span class="label">Duration</span><span class="value">${summary.durationSeconds.toFixed(1)}s</span></div>
+        ${usageCards}
       </div>
     </div>`;
 }
@@ -99,10 +128,22 @@ function generateOverviewSection(summary: Summary | MergedSummary): string {
 function generateMatrixTable(summary: MergedSummary): string {
   if (summary.heatMap.length === 0) return "";
 
+  const anyUsage = summary.heatMap.some((e) => e.usage);
   const rows = summary.heatMap
     .map((entry) => {
       const statusClass = entry.failed > 0 ? "fail" : "pass";
       const agentCell = escapeHtml(driverLabel(entry.agent, entry.model));
+      const usageCells = anyUsage
+        ? (() => {
+            const u = entry.usage;
+            const tokens =
+              u?.inputTokens || u?.outputTokens
+                ? `${(u?.inputTokens ?? 0).toLocaleString()} / ${(u?.outputTokens ?? 0).toLocaleString()}`
+                : "-";
+            const cost = u?.costUsd ? `$${u.costUsd.toFixed(4)}` : "-";
+            return `<td>${tokens}</td><td>${cost}</td>`;
+          })()
+        : "";
       return `<tr class="${statusClass}">
       <td>${agentCell}</td>
       <td>${escapeHtml(entry.language)}</td>
@@ -110,15 +151,17 @@ function generateMatrixTable(summary: MergedSummary): string {
       <td>${entry.total}</td>
       <td>${entry.passed}</td>
       <td>${entry.failed}</td>
+      ${usageCells}
     </tr>`;
     })
     .join("\n");
 
+  const usageHeaders = anyUsage ? "<th>Tokens (in/out)</th><th>Cost</th>" : "";
   return `
     <div class="matrix-table">
       <h2>Matrix Results</h2>
       <table>
-        <thead><tr><th>Agent</th><th>Language</th><th>OS</th><th>Total</th><th>Passed</th><th>Failed</th></tr></thead>
+        <thead><tr><th>Agent</th><th>Language</th><th>OS</th><th>Total</th><th>Passed</th><th>Failed</th>${usageHeaders}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
@@ -247,6 +290,7 @@ const CSS = `
   .stat.pass .value { color: #198754; }
   .stat.fail .value { color: #dc3545; }
   .stat.skip .value { color: #fd7e14; }
+  .stat.usage .value { color: #6f42c1; font-size: 1rem; }
   .agent-labels { margin-top: 12px; font-size: 0.9rem; }
   .agent-labels .label { color: #6c757d; text-transform: uppercase; font-size: 0.75rem; margin-right: 4px; }
   .agent-label { display: inline-block; padding: 2px 8px; border-radius: 4px; background: #e9ecef; font-weight: 500; margin: 2px 4px; font-size: 0.85rem; }
@@ -398,6 +442,12 @@ const JS = `
       html += '<span>Language: <strong>' + escHtml(report.matrix.language) + '</strong></span>';
       html += '<span>Status: <strong>' + report.status + '</strong></span>';
       html += '<span>Duration: <strong>' + report.durationSeconds.toFixed(1) + 's</strong></span>';
+      if (report.usage) {
+        var u = report.usage;
+        if (u.inputTokens || u.outputTokens) html += '<span>Tokens: <strong>' + (u.inputTokens||0).toLocaleString() + ' in / ' + (u.outputTokens||0).toLocaleString() + ' out</strong></span>';
+        if (u.costUsd) html += '<span>Cost: <strong>$' + u.costUsd.toFixed(4) + '</strong></span>';
+        if (u.numTurns) html += '<span>Turns: <strong>' + u.numTurns + '</strong></span>';
+      }
       html += '</div>';
 
       for (var j = 0; j < report.results.length; j++) {

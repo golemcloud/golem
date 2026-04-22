@@ -7,6 +7,7 @@ import {
   ActivityMonitor,
   CREDIT_INSUFFICIENT_PATTERN,
   type DriverTimeoutOptions,
+  type UsageStats,
 } from "./base.js";
 import * as log from "../log.js";
 
@@ -14,6 +15,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
   protected readonly driverName = "codex";
   protected readonly skillDirs = [".agents/skills"];
   private lastSessionId: string | null = null;
+  private accumulatedUsage: UsageStats = {};
 
   async sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
     const result = await this.executeCodex(
@@ -51,6 +53,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
   }
 
   private executeCodex(args: string[], opts: DriverTimeoutOptions): Promise<AgentResult> {
+    this.accumulatedUsage = {};
     const startTime = Date.now();
     const prefix = this.logPrefix;
 
@@ -113,6 +116,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
             durationSeconds,
             exitCode,
             creditInsufficient: true,
+            usage: { ...this.accumulatedUsage },
           });
           return;
         }
@@ -126,6 +130,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
           exitCode: monitor.isTimedOut ? null : exitCode,
           timedOut: monitor.isTimedOut || undefined,
           timeoutKind: monitor.timeoutKind,
+          usage: { ...this.accumulatedUsage },
         });
       });
 
@@ -137,6 +142,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
           output: outputParts.join("") + (err.message || "Unknown error"),
           durationSeconds,
           exitCode: null,
+          usage: { ...this.accumulatedUsage },
         });
       });
     });
@@ -185,10 +191,17 @@ export class CodexAgentDriver extends BaseAgentDriver {
         if (usage) {
           const input = usage.input_tokens as number | undefined;
           const output = usage.output_tokens as number | undefined;
+          if (input != null) {
+            this.accumulatedUsage.inputTokens = (this.accumulatedUsage.inputTokens ?? 0) + input;
+          }
+          if (output != null) {
+            this.accumulatedUsage.outputTokens = (this.accumulatedUsage.outputTokens ?? 0) + output;
+          }
           if (input != null || output != null) {
             extra = `tokens=${input ?? 0}in/${output ?? 0}out`;
           }
         }
+        this.accumulatedUsage.numTurns = (this.accumulatedUsage.numTurns ?? 0) + 1;
         log.driverSuccess(prefix, durationStr, extra);
         break;
       }

@@ -4,6 +4,7 @@ import {
   ActivityMonitor,
   CREDIT_INSUFFICIENT_PATTERN,
   type DriverTimeoutOptions,
+  type UsageStats,
 } from "./base.js";
 import { execute, type AmpOptions } from "@sourcegraph/amp-sdk";
 import * as log from "../log.js";
@@ -126,6 +127,11 @@ export class AmpAgentDriver extends BaseAgentDriver {
           if (message.is_error) {
             const errOutput = message.error || outputParts.join("") || "Unknown Amp error";
             log.driverError(prefix, message.error || "", durationStr);
+            const errUsage: UsageStats = { numTurns: message.num_turns };
+            if (message.usage) {
+              errUsage.inputTokens = message.usage.input_tokens;
+              errUsage.outputTokens = message.usage.output_tokens;
+            }
             if (CREDIT_INSUFFICIENT_PATTERN.test(errOutput)) {
               log.driverFatal(prefix, "✗ credit balance too low — aborting run");
               return {
@@ -134,6 +140,7 @@ export class AmpAgentDriver extends BaseAgentDriver {
                 durationSeconds,
                 exitCode: 1,
                 creditInsufficient: true,
+                usage: errUsage,
               };
             }
             return {
@@ -141,15 +148,22 @@ export class AmpAgentDriver extends BaseAgentDriver {
               output: errOutput,
               durationSeconds,
               exitCode: 1,
+              usage: errUsage,
             };
           }
 
+          const usage: UsageStats = { numTurns: message.num_turns };
+          if (message.usage) {
+            usage.inputTokens = message.usage.input_tokens;
+            usage.outputTokens = message.usage.output_tokens;
+          }
           log.driverSuccess(prefix, durationStr, `turns=${message.num_turns}`);
           return {
             success: true,
             output: message.result || outputParts.join(""),
             durationSeconds,
             exitCode: 0,
+            usage,
           };
         }
       }

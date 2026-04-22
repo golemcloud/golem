@@ -8,6 +8,7 @@ import {
   ActivityMonitor,
   CREDIT_INSUFFICIENT_PATTERN,
   type DriverTimeoutOptions,
+  type UsageStats,
 } from "./base.js";
 import * as log from "../log.js";
 
@@ -89,6 +90,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
     const startTime = Date.now();
     const prefix = this.logPrefix;
     const outputParts: string[] = [];
+    let usage: UsageStats = {};
 
     return new Promise((resolve) => {
       const child = spawn("claude", args, {
@@ -133,7 +135,18 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
             }
           }
         } else if (msg.type === "assistant") {
-          const message = msg.message as { content?: unknown[] } | undefined;
+          const message = msg.message as
+            | { content?: unknown[]; usage?: Record<string, unknown> }
+            | undefined;
+          if (message?.usage && typeof message.usage === "object") {
+            const u = message.usage;
+            if (typeof u.input_tokens === "number") {
+              usage.inputTokens = (usage.inputTokens ?? 0) + u.input_tokens;
+            }
+            if (typeof u.output_tokens === "number") {
+              usage.outputTokens = (usage.outputTokens ?? 0) + u.output_tokens;
+            }
+          }
           if (message && Array.isArray(message.content)) {
             for (const block of message.content as Record<string, unknown>[]) {
               if (block.type === "text" && typeof block.text === "string") {
@@ -164,6 +177,13 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
 
           if (typeof msg.session_id === "string" && msg.session_id.length > 0) {
             this.sessionId = msg.session_id;
+          }
+
+          if (typeof msg.num_turns === "number") {
+            usage.numTurns = msg.num_turns;
+          }
+          if (typeof msg.total_cost_usd === "number") {
+            usage.costUsd = msg.total_cost_usd;
           }
 
           if (msg.subtype === "success" && msg.is_error === false) {
@@ -231,6 +251,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
             durationSeconds,
             exitCode,
             creditInsufficient: true,
+            usage,
           });
           return;
         }
@@ -244,6 +265,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
           exitCode: monitor.isTimedOut ? null : exitCode,
           timedOut: monitor.isTimedOut || undefined,
           timeoutKind: monitor.timeoutKind,
+          usage,
         });
       });
 
@@ -257,6 +279,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
           output: outputParts.join("") + errMsg,
           durationSeconds,
           exitCode: null,
+          usage,
         });
       });
     });
