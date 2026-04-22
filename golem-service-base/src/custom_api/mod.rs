@@ -43,6 +43,15 @@ pub enum PathSegment {
     CatchAll { display_name: String },
 }
 
+impl PathSegment {
+    pub fn literal_value(&self) -> Option<&str> {
+        match self {
+            Self::Literal { value } => Some(value),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for PathSegment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -287,7 +296,16 @@ pub struct WebhookCallbackBehaviour {
 
 #[derive(Debug, BinaryCodec)]
 #[desert(evolution())]
-pub struct OpenApiSpecBehaviour {}
+pub struct OpenApiSpecBehaviour {
+    pub format: OpenApiSpecFormat,
+}
+
+#[derive(Debug, Clone, Copy, BinaryCodec)]
+#[desert(evolution())]
+pub enum OpenApiSpecFormat {
+    Json,
+    Yaml,
+}
 
 #[derive(Debug, Clone)]
 pub enum RouteSecurity {

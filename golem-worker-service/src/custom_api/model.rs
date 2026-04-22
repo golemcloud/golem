@@ -19,7 +19,8 @@ use golem_common::model::agent::BinarySource;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::custom_api::{
     CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, OpenApiSpecBehaviour,
-    SecuritySchemeDetails, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    OpenApiSpecFormat, SecuritySchemeDetails, SessionFromHeaderRouteSecurity,
+    WebhookCallbackBehaviour,
 };
 use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
 use http::Method;
@@ -127,12 +128,6 @@ pub enum ResponseBody {
         spec: Arc<HttpApiOpenApiSpec>,
         format: OpenApiSpecFormat,
     },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum OpenApiSpecFormat {
-    Json,
-    Yaml,
 }
 
 impl fmt::Debug for ResponseBody {
