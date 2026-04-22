@@ -4,6 +4,7 @@ import {
   AgentResult,
   killProcessTree,
   ActivityMonitor,
+  CREDIT_INSUFFICIENT_PATTERN,
   type DriverTimeoutOptions,
 } from "./base.js";
 import * as log from "../log.js";
@@ -76,6 +77,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       let stderrBytes = 0;
       let receivedFirstOutput = false;
       let startupStalled = false;
+      let creditInsufficient = false;
 
       const model = process.env.OPENCODE_MODEL;
       log.driver(
@@ -118,7 +120,12 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         const lines = stdoutBuf.split("\n");
         stdoutBuf = lines.pop()!;
         for (const line of lines) {
-          this.processJsonLine(prefix, line, textParts);
+          if (this.processJsonLine(prefix, line, textParts)) {
+            creditInsufficient = true;
+            log.driverFatal(prefix, "✗ credit balance too low — aborting run");
+            killProcessTree(child);
+            return;
+          }
         }
       });
 
@@ -139,11 +146,26 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       child.on("close", (exitCode) => {
         clearTimeout(startupTimer);
         monitor.finish();
-        if (stdoutBuf) this.processJsonLine(prefix, stdoutBuf, textParts);
+        if (stdoutBuf) {
+          if (this.processJsonLine(prefix, stdoutBuf, textParts)) {
+            creditInsufficient = true;
+          }
+        }
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
 
         const durationSeconds = (Date.now() - startTime) / 1000;
         const durationStr = `(${durationSeconds.toFixed(1)}s)`;
+
+        if (creditInsufficient) {
+          resolve({
+            success: false,
+            output: `Credit balance too low. ${rawOutput}`,
+            durationSeconds,
+            exitCode: exitCode,
+            creditInsufficient: true,
+          });
+          return;
+        }
 
         if (startupStalled) {
           log.driver(
@@ -210,18 +232,12 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
 
   /**
    * Parse a single JSONL line from opencode's `--format json` output and emit
-   * structured log output.
-   *
-   * Event types (per opencode docs):
-   *   step_start  — beginning of a processing step (contains sessionID)
-   *   tool_use    — tool invocation completed
-   *   text        — assistant text output
-   *   step_finish — end of step (contains token/cost stats)
-   *   error       — session error
+   * structured log output. Returns `true` if a credit-insufficient error was
+   * detected and the caller should abort.
    */
-  private processJsonLine(prefix: string, line: string, textParts: string[]): void {
+  private processJsonLine(prefix: string, line: string, textParts: string[]): boolean {
     const trimmed = line.trim();
-    if (!trimmed) return;
+    if (!trimmed) return false;
 
     let event: Record<string, unknown>;
     try {
@@ -229,7 +245,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
     } catch {
       // Not JSON — log as plain text
       log.driver(prefix, trimmed);
-      return;
+      return false;
     }
 
     const sessionId = event.sessionID as string | undefined;
@@ -271,6 +287,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
             for (const l of text.split("\n")) {
               log.driver(prefix, l);
             }
+            if (CREDIT_INSUFFICIENT_PATTERN.test(text)) return true;
           }
         }
         break;
@@ -295,6 +312,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         const errData = error?.data as Record<string, unknown> | undefined;
         const errMsg = (errData?.message as string) || (error?.name as string) || "unknown error";
         log.driverError(prefix, errMsg);
+        if (CREDIT_INSUFFICIENT_PATTERN.test(errMsg)) return true;
         break;
       }
 
@@ -304,5 +322,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         break;
       }
     }
+
+    return false;
   }
 }

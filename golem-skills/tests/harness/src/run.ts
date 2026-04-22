@@ -538,9 +538,10 @@ Options:
 
             scenarioResult = await executor.execute(spec);
 
-            // Don't retry on success, abort, or non-idle-timeout failures
+            // Don't retry on success, abort, credit exhaustion, or non-idle-timeout failures
             if (scenarioResult.status === "pass") break;
             if (interrupted) break;
+            if (scenarioResult.creditInsufficient) break;
 
             if (!canRetry || attempt >= totalAttempts) break;
 
@@ -599,8 +600,16 @@ Options:
           scenarioReports.push(report);
 
           log.scenarioResultLine(allPassed, spec.name, results.length, spec.steps.length);
+
+          if (scenarioResult!.creditInsufficient) {
+            log.error("Credit balance too low — aborting all remaining scenarios.");
+            abortController.abort();
+            break;
+          }
         }
+        if (abortController.signal.aborted) break;
       }
+      if (abortController.signal.aborted) break;
     }
 
     // Aggregated summary report

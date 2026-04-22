@@ -6,6 +6,7 @@ import {
   AgentResult,
   killProcessTree,
   ActivityMonitor,
+  CREDIT_INSUFFICIENT_PATTERN,
   type DriverTimeoutOptions,
 } from "./base.js";
 import * as log from "../log.js";
@@ -103,15 +104,16 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
 
       let stdoutBuf = "";
       let stderrBuf = "";
+      let creditInsufficient = false;
 
-      const processLine = (line: string): void => {
-        if (!line.trim()) return;
+      const processLine = (line: string): boolean => {
+        if (!line.trim()) return false;
         let msg: Record<string, unknown>;
         try {
           msg = JSON.parse(line);
         } catch {
           log.driver(prefix, line);
-          return;
+          return false;
         }
 
         if (msg.type === "system" && msg.subtype === "init") {
@@ -139,6 +141,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
                 for (const textLine of block.text.split("\n")) {
                   log.driver(prefix, textLine);
                 }
+                if (CREDIT_INSUFFICIENT_PATTERN.test(block.text)) return true;
               } else if (block.type === "tool_use") {
                 log.driverToolUse(
                   prefix,
@@ -174,6 +177,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
           } else {
             const errors = Array.isArray(msg.errors) ? (msg.errors as string[]).join("; ") : "";
             log.driverError(prefix, errors, durationStr);
+            if (CREDIT_INSUFFICIENT_PATTERN.test(errors)) return true;
           }
         } else if (msg.type === "tool_progress") {
           // Silently ignore progress updates
@@ -181,7 +185,10 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
           const attempt = msg.attempt ?? "?";
           const error = typeof msg.error === "string" ? msg.error : "";
           log.driverErr(prefix, `API retry attempt=${attempt} ${error}`);
+          if (CREDIT_INSUFFICIENT_PATTERN.test(error)) return true;
         }
+
+        return false;
       };
 
       child.stdout?.on("data", (data: Buffer) => {
@@ -190,7 +197,12 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
         const lines = stdoutBuf.split("\n");
         stdoutBuf = lines.pop()!;
         for (const line of lines) {
-          processLine(line);
+          if (processLine(line)) {
+            creditInsufficient = true;
+            log.driverFatal(prefix, "✗ credit balance too low — aborting run");
+            killProcessTree(child);
+            return;
+          }
         }
       });
 
@@ -206,9 +218,23 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
 
       child.on("close", (exitCode) => {
         monitor.finish();
-        if (stdoutBuf) processLine(stdoutBuf);
+        if (stdoutBuf) {
+          if (processLine(stdoutBuf)) creditInsufficient = true;
+        }
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
         const durationSeconds = (Date.now() - startTime) / 1000;
+
+        if (creditInsufficient) {
+          resolve({
+            success: false,
+            output: `Credit balance too low. ${outputParts.join("")}`,
+            durationSeconds,
+            exitCode,
+            creditInsufficient: true,
+          });
+          return;
+        }
+
         resolve({
           success: !monitor.isTimedOut && exitCode === 0,
           output: monitor.isTimedOut

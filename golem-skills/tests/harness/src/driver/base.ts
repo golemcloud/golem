@@ -44,7 +44,13 @@ export interface AgentResult {
   exitCode: number | null;
   timedOut?: boolean;
   timeoutKind?: "step" | "idle";
+  /** The agent reported that the credit balance is too low to continue. */
+  creditInsufficient?: boolean;
 }
+
+/** Pattern that matches credit-balance / quota errors emitted by LLM providers. */
+export const CREDIT_INSUFFICIENT_PATTERN =
+  /credit balance is too low|quota exceeded[.]? check your plan and billing/i;
 
 export interface DriverTimeoutOptions {
   stepTimeoutSeconds: number;

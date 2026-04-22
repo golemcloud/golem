@@ -2,6 +2,7 @@ import {
   BaseAgentDriver,
   AgentResult,
   ActivityMonitor,
+  CREDIT_INSUFFICIENT_PATTERN,
   type DriverTimeoutOptions,
 } from "./base.js";
 import { execute, type AmpOptions } from "@sourcegraph/amp-sdk";
@@ -123,10 +124,21 @@ export class AmpAgentDriver extends BaseAgentDriver {
           const durationStr = `(${durationSeconds.toFixed(1)}s)`;
 
           if (message.is_error) {
+            const errOutput = message.error || outputParts.join("") || "Unknown Amp error";
             log.driverError(prefix, message.error || "", durationStr);
+            if (CREDIT_INSUFFICIENT_PATTERN.test(errOutput)) {
+              log.driverFatal(prefix, "✗ credit balance too low — aborting run");
+              return {
+                success: false,
+                output: `Credit balance too low. ${errOutput}`,
+                durationSeconds,
+                exitCode: 1,
+                creditInsufficient: true,
+              };
+            }
             return {
               success: false,
-              output: message.error || outputParts.join("") || "Unknown Amp error",
+              output: errOutput,
               durationSeconds,
               exitCode: 1,
             };
@@ -180,6 +192,16 @@ export class AmpAgentDriver extends BaseAgentDriver {
           output: `Amp authentication failed. ${errMsg}`,
           durationSeconds,
           exitCode: null,
+        };
+      }
+      if (CREDIT_INSUFFICIENT_PATTERN.test(errMsg)) {
+        log.driverFatal(prefix, "✗ credit balance too low — aborting run");
+        return {
+          success: false,
+          output: `Credit balance too low. ${errMsg}`,
+          durationSeconds,
+          exitCode: null,
+          creditInsufficient: true,
         };
       }
 

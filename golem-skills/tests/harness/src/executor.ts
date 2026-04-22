@@ -470,6 +470,8 @@ export interface ScenarioRunResult {
   stepResults: StepResult[];
   artifactPaths: string[];
   workspace: string;
+  /** True when a step detected a credit-balance-too-low error from the LLM provider. */
+  creditInsufficient?: boolean;
 }
 
 interface LocalCommandResult {
@@ -942,6 +944,7 @@ export class ScenarioExecutor {
     const startTime = Date.now();
     let isFirstPrompt = true;
     let resumeReached = !this.options.resumeFromStepId;
+    let creditInsufficient = false;
     try {
       for (const originalStep of spec.steps) {
         // Check abort signal
@@ -994,6 +997,7 @@ export class ScenarioExecutor {
               isFirstPrompt: boolean;
               timedOut?: boolean;
               timeoutKind?: "step" | "idle";
+              creditInsufficient?: boolean;
             }
           | undefined;
 
@@ -1019,6 +1023,10 @@ export class ScenarioExecutor {
           });
 
           finalResult = bodyResult;
+          if (bodyResult.creditInsufficient) {
+            creditInsufficient = true;
+            break;
+          }
           if (bodyResult.success) break;
         }
 
@@ -1066,6 +1074,7 @@ export class ScenarioExecutor {
       stepResults: results,
       artifactPaths: [this.workspace],
       workspace: this.workspace,
+      creditInsufficient,
     };
   }
 
@@ -1081,11 +1090,13 @@ export class ScenarioExecutor {
     isFirstPrompt: boolean;
     timedOut?: boolean;
     timeoutKind?: "step" | "idle";
+    creditInsufficient?: boolean;
   }> {
     const errors: string[] = [];
     let success = true;
     let stepTimedOut: boolean | undefined;
     let stepTimeoutKind: "step" | "idle" | undefined;
+    let stepCreditInsufficient: boolean | undefined;
     const stepTimeoutSeconds =
       step.timeout ??
       spec.settings?.timeout_per_subprompt ??
@@ -1169,6 +1180,7 @@ export class ScenarioExecutor {
         );
         stepTimedOut = promptResult.timedOut;
         stepTimeoutKind = promptResult.timeoutKind;
+        stepCreditInsufficient = promptResult.creditInsufficient;
         break;
       }
       case "invoke":
@@ -1259,6 +1271,7 @@ export class ScenarioExecutor {
       isFirstPrompt: step.tag === "prompt" && success ? false : isFirstPrompt,
       timedOut: stepTimedOut,
       timeoutKind: stepTimeoutKind,
+      creditInsufficient: stepCreditInsufficient,
     };
   }
 
@@ -1439,7 +1452,11 @@ export class ScenarioExecutor {
     timeout: number,
     idleTimeout: number | undefined,
     fail: (msg: string) => void,
-  ): Promise<{ timedOut?: boolean; timeoutKind?: "step" | "idle" }> {
+  ): Promise<{
+    timedOut?: boolean;
+    timeoutKind?: "step" | "idle";
+    creditInsufficient?: boolean;
+  }> {
     const opts: DriverTimeoutOptions = {
       stepTimeoutSeconds: timeout,
       idleTimeoutSeconds: idleTimeout,
@@ -1449,12 +1466,20 @@ export class ScenarioExecutor {
       log.stepPrompt(stepLabel, prompt, "followup");
       const result = await this.driver.sendFollowup(prompt, opts);
       if (!result.success) fail(`Agent failed: ${result.output}`);
-      return { timedOut: result.timedOut, timeoutKind: result.timeoutKind };
+      return {
+        timedOut: result.timedOut,
+        timeoutKind: result.timeoutKind,
+        creditInsufficient: result.creditInsufficient,
+      };
     } else {
       log.stepPrompt(stepLabel, prompt, "initial");
       const result = await this.driver.sendPrompt(prompt, opts);
       if (!result.success) fail(`Agent failed: ${result.output}`);
-      return { timedOut: result.timedOut, timeoutKind: result.timeoutKind };
+      return {
+        timedOut: result.timedOut,
+        timeoutKind: result.timeoutKind,
+        creditInsufficient: result.creditInsufficient,
+      };
     }
   }
 

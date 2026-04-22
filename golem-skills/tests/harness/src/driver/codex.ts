@@ -4,6 +4,7 @@ import {
   AgentResult,
   killProcessTree,
   ActivityMonitor,
+  CREDIT_INSUFFICIENT_PATTERN,
   type DriverTimeoutOptions,
 } from "./base.js";
 import * as log from "../log.js";
@@ -67,6 +68,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
       const outputParts: string[] = [];
       let stdoutBuf = "";
       let stderrBuf = "";
+      let creditInsufficient = false;
 
       child.stdout?.on("data", (data: Buffer) => {
         monitor.noteActivity();
@@ -74,7 +76,12 @@ export class CodexAgentDriver extends BaseAgentDriver {
         const lines = stdoutBuf.split("\n");
         stdoutBuf = lines.pop()!;
         for (const line of lines) {
-          this.handleJsonLine(prefix, line, outputParts, startTime);
+          if (this.handleJsonLine(prefix, line, outputParts, startTime)) {
+            creditInsufficient = true;
+            log.driverFatal(prefix, "✗ credit balance too low — aborting run");
+            killProcessTree(child);
+            return;
+          }
         }
       });
 
@@ -90,9 +97,25 @@ export class CodexAgentDriver extends BaseAgentDriver {
 
       child.on("close", (exitCode) => {
         monitor.finish();
-        if (stdoutBuf) this.handleJsonLine(prefix, stdoutBuf, outputParts, startTime);
+        if (stdoutBuf) {
+          if (this.handleJsonLine(prefix, stdoutBuf, outputParts, startTime)) {
+            creditInsufficient = true;
+          }
+        }
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
         const durationSeconds = (Date.now() - startTime) / 1000;
+
+        if (creditInsufficient) {
+          resolve({
+            success: false,
+            output: `Credit balance too low. ${outputParts.join("")}`,
+            durationSeconds,
+            exitCode,
+            creditInsufficient: true,
+          });
+          return;
+        }
+
         resolve({
           success: !monitor.isTimedOut && exitCode === 0,
           output: monitor.isTimedOut
@@ -123,22 +146,22 @@ export class CodexAgentDriver extends BaseAgentDriver {
     line: string,
     outputParts: string[],
     startTime: number,
-  ): void {
+  ): boolean {
     const trimmed = line.trim();
-    if (!trimmed) return;
+    if (!trimmed) return false;
 
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(trimmed) as Record<string, unknown>;
     } catch {
       log.driver(prefix, line);
-      return;
+      return false;
     }
 
     const type = event.type as string | undefined;
     if (!type) {
       log.driver(prefix, line);
-      return;
+      return false;
     }
 
     switch (type) {
@@ -173,6 +196,7 @@ export class CodexAgentDriver extends BaseAgentDriver {
         const error = event.error as Record<string, unknown> | undefined;
         const msg = (error?.message as string) ?? "unknown error";
         log.driverError(prefix, msg);
+        if (CREDIT_INSUFFICIENT_PATTERN.test(msg)) return true;
         break;
       }
 
@@ -181,13 +205,14 @@ export class CodexAgentDriver extends BaseAgentDriver {
       case "item.completed": {
         const item = event.item as Record<string, unknown> | undefined;
         if (!item) break;
-        this.handleItem(prefix, item, type, outputParts);
+        if (this.handleItem(prefix, item, type, outputParts)) return true;
         break;
       }
 
       case "error": {
         const msg = (event.message as string) ?? "fatal stream error";
         log.driverError(prefix, msg);
+        if (CREDIT_INSUFFICIENT_PATTERN.test(msg)) return true;
         break;
       }
 
@@ -195,6 +220,8 @@ export class CodexAgentDriver extends BaseAgentDriver {
         log.driver(prefix, line);
         break;
     }
+
+    return false;
   }
 
   private handleItem(
@@ -202,9 +229,9 @@ export class CodexAgentDriver extends BaseAgentDriver {
     item: Record<string, unknown>,
     eventType: string,
     outputParts: string[],
-  ): void {
+  ): boolean {
     const itemType = item.type as string | undefined;
-    if (!itemType) return;
+    if (!itemType) return false;
 
     switch (itemType) {
       case "agent_message": {
@@ -287,11 +314,14 @@ export class CodexAgentDriver extends BaseAgentDriver {
       case "error": {
         const message = (item.message as string) ?? "unknown item error";
         log.driverError(prefix, message);
+        if (CREDIT_INSUFFICIENT_PATTERN.test(message)) return true;
         break;
       }
 
       default:
         break;
     }
+
+    return false;
   }
 }
