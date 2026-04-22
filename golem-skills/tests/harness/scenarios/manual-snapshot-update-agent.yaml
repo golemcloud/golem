@@ -1,0 +1,77 @@
+name: "manual-snapshot-update-agent"
+steps:
+  # 1. Create project (without deploying yet)
+  - id: "create-project"
+    create_project:
+      name: test-app
+
+  # 2. Add snapshot support BEFORE any agent is created, then deploy
+  - id: "add-snapshot-support"
+    prompt: >
+      In the test-app project, add custom save/load snapshot functions to the
+      CounterAgent that serialize the counter value as 4 big-endian bytes. Do not change
+      any existing methods or behavior. Build and deploy the project.
+    expectedSkills:
+      rust:
+        - "golem-custom-snapshot-rust"
+      ts:
+        - "golem-custom-snapshot-ts"
+      scala:
+        - "golem-custom-snapshot-scala"
+      moonbit:
+        - "golem-custom-snapshot-moonbit"
+    verify:
+      deploy: true
+
+  # 3. Create agent and set state to 2 (agent starts on revision with snapshot support)
+  - id: "invoke-increment-1"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  - id: "invoke-increment-2"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2
+
+  # 4. Make a breaking change: remove increment, add get_double. Keep snapshot support.
+  #    Deploy as a new revision. This is incompatible with auto-update.
+  - id: "breaking-change"
+    prompt: >
+      In the test-app project, make a breaking change to CounterAgent: remove the
+      `increment` method entirely, and add a new method called `get-double` that returns
+      the current counter value multiplied by 2. Keep the save/load snapshot
+      functions unchanged so the counter value is still preserved across updates. Build
+      and deploy, but do not update existing running agents.
+    verify:
+      deploy: true
+
+  # 5. Update the running agent using manual (snapshot-based) mode
+  - id: "manual-update-agent"
+    prompt: >
+      Update the running CounterAgent "c1" to the latest component revision using manual
+      (snapshot-based) update mode. Wait for the update to complete.
+    expectedSkills:
+      - "golem-update-running-agents"
+
+  # 6. Verify the new method works and state was migrated via snapshot
+  - id: "verify-updated"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method:
+        rust: "get_double"
+        ts: "getDouble"
+        scala: "getDouble"
+        moonbit: "get_double"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 4

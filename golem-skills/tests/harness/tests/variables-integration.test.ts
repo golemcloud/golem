@@ -14,7 +14,7 @@ import { SkillWatcher } from "../src/watcher.js";
 // Stub driver that records prompts sent to it
 class StubDriver implements AgentDriver {
   prompts: string[] = [];
-  async setup(_workspace: string, _bootstrapSkillSourceDir: string): Promise<void> {
+  async setup(_workspace: string, _bootstrapSkillSourceDirs: string[]): Promise<void> {
     /* no-op */
   }
   async sendPrompt(prompt: string, _opts: DriverTimeoutOptions): Promise<AgentResult> {
@@ -43,10 +43,10 @@ function createExecutor(
   driver: AgentDriver,
   watcher: SkillWatcher,
   workspace: string,
-  bootstrapSkillSourceDir: string,
+  bootstrapSkillSourceDirs: string[],
   opts?: ScenarioExecutorOptions,
 ): ScenarioExecutor {
-  const executor = new ScenarioExecutor(driver, watcher, workspace, bootstrapSkillSourceDir, opts);
+  const executor = new ScenarioExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
   // Patch out golem connectivity check — there's no server in tests
   (executor as unknown as Record<string, unknown>)["verifyGolemConnectivity"] = async () => {};
   return executor;
@@ -55,15 +55,16 @@ function createExecutor(
 describe("Variable substitution integration", () => {
   let tmpDir: string;
   let workspace: string;
-  let bootstrapSkillSourceDir: string;
+  let bootstrapSkillSourceDirs: string[];
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "vars-integ-"));
     workspace = path.join(tmpDir, "workspace");
-    bootstrapSkillSourceDir = path.join(tmpDir, "bootstrap-skill");
+    const bootstrapSkillSourceDir = path.join(tmpDir, "bootstrap-skill");
     await fs.mkdir(workspace, { recursive: true });
     await fs.mkdir(bootstrapSkillSourceDir, { recursive: true });
     await fs.writeFile(path.join(bootstrapSkillSourceDir, "SKILL.md"), "bootstrap");
+    bootstrapSkillSourceDirs = [bootstrapSkillSourceDir];
   });
 
   afterEach(async () => {
@@ -77,7 +78,7 @@ describe("Variable substitution integration", () => {
       agent: "claude-code",
       language: "ts",
     };
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir, opts);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
 
     const spec: ScenarioSpec = {
       name: "my-test-scenario",
@@ -111,7 +112,7 @@ describe("Variable substitution integration", () => {
     const driver = new StubDriver();
     const watcher = new SkillWatcher(workspace);
     const opts: ScenarioExecutorOptions = { agent: "opencode", language: "rust" };
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir, opts);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
 
     const spec: ScenarioSpec = {
       name: "shell-vars",
@@ -142,7 +143,7 @@ describe("Variable substitution integration", () => {
       agent: "claude-code",
       language: "scala",
     };
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir, opts);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
 
     let capturedVerify: { build?: boolean; deploy?: boolean; expectedFiles?: string[] } | undefined;
     (executor as unknown as Record<string, unknown>)["executeVerification"] = async (
@@ -190,7 +191,7 @@ describe("Variable substitution integration", () => {
       agent: "claude-code",
       language: "ts",
     };
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir, opts);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
 
     const spec: ScenarioSpec = {
       name: "unknown-var",
@@ -216,7 +217,7 @@ describe("Variable substitution integration", () => {
     const driver = new StubDriver();
     const watcher = new SkillWatcher(workspace);
     const opts: ScenarioExecutorOptions = { agent: "opencode", language: "ts" };
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir, opts);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
 
     // The invoke will fail (no golem agent running), but we can inspect the step result error
     // to confirm substitution happened — the error will reference the substituted agent name
@@ -251,7 +252,7 @@ describe("Variable substitution integration", () => {
     const driver = new StubDriver();
     const watcher = new SkillWatcher(workspace);
     const opts: ScenarioExecutorOptions = { agent: "amp", language: "ts" };
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir, opts);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
 
     (executor as unknown as Record<string, unknown>)["findGolemProjectDir"] = async () => workspace;
     (executor as unknown as Record<string, unknown>)["runLocalCommand"] = async () => ({
@@ -307,7 +308,7 @@ describe("Variable substitution integration", () => {
     const driver = new StubDriver();
     const watcher = new SkillWatcher(workspace);
     const opts: ScenarioExecutorOptions = { agent: "amp", language: "rust" };
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir, opts);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
 
     (executor as unknown as Record<string, unknown>)["findGolemProjectDir"] = async () => workspace;
 
@@ -378,7 +379,7 @@ describe("Variable substitution integration", () => {
       agent: "claude-code",
       language: "ts",
     };
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir, opts);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
 
     const spec: ScenarioSpec = {
       name: "agent-name-vars",
@@ -406,7 +407,7 @@ describe("Variable substitution integration", () => {
       agent: "claude-code",
       language: "ts",
     };
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir, opts);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
 
     const spec: ScenarioSpec = {
       name: "cond-vars",
@@ -449,7 +450,7 @@ describe("Variable substitution integration", () => {
       language: "ts",
       abortSignal: controller.signal,
     };
-    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDir, opts);
+    const executor = createExecutor(driver, watcher, workspace, bootstrapSkillSourceDirs, opts);
 
     const spec: ScenarioSpec = {
       name: "abort-test",

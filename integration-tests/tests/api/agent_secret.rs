@@ -416,7 +416,7 @@ async fn create_agent_secret_with_value_type_mismatch_should_fail(
     assert_matches!(
         result,
         Err(golem_client::Error::Item(
-            RegistryServiceCreateAgentSecretError::Error409(_)
+            RegistryServiceCreateAgentSecretError::Error400(_)
         ))
     );
 

@@ -151,6 +151,8 @@ pub enum TestMode {
         #[arg(long)]
         registry_service_admin_account_token: String,
         #[arg(long)]
+        registry_service_builtin_plugin_owner_account_id: Uuid,
+        #[arg(long)]
         registry_service_default_plan_id: Uuid,
         #[arg(long)]
         registry_service_low_fuel_plan_id: Uuid,
@@ -441,6 +443,7 @@ impl BenchmarkTestDependencies {
                 registry_service_admin_account_id,
                 registry_service_admin_account_email,
                 registry_service_admin_account_token,
+                registry_service_builtin_plugin_owner_account_id,
                 registry_service_default_plan_id,
                 registry_service_low_fuel_plan_id,
                 registry_service_low_disk_space_plan_id,
@@ -487,6 +490,7 @@ impl BenchmarkTestDependencies {
                         AccountId(*registry_service_admin_account_id),
                         AccountEmail::new(registry_service_admin_account_email.clone()),
                         TokenSecret::trusted(registry_service_admin_account_token.clone()),
+                        AccountId(*registry_service_builtin_plugin_owner_account_id),
                         PlanId(*registry_service_default_plan_id),
                         PlanId(*registry_service_low_fuel_plan_id),
                         PlanId(*registry_service_low_disk_space_plan_id),

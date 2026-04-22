@@ -1,7 +1,11 @@
 import { describe } from 'vitest';
 import { AgentType } from 'golem:agent/common@1.5.0';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
-import { ComplexHttpAgentClassName, SimpleHttpAgentClassName } from './testUtils';
+import {
+  AllHttpMethodsAgentClassName,
+  ComplexHttpAgentClassName,
+  SimpleHttpAgentClassName,
+} from './testUtils';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
 describe('Http Agent class', () => {
@@ -278,5 +282,37 @@ describe('Http Agent class', () => {
         ],
       },
     ]);
+  });
+
+  it('should register all HTTP methods correctly', () => {
+    const allHttpMethodsAgent = AgentTypeRegistry.get(AllHttpMethodsAgentClassName);
+
+    if (!allHttpMethodsAgent) {
+      throw new Error('AllHttpMethodsAgent not found in AgentTypeRegistry');
+    }
+
+    const expectedMethods = [
+      { name: 'getMethod', tag: 'get' },
+      { name: 'postMethod', tag: 'post' },
+      { name: 'putMethod', tag: 'put' },
+      { name: 'deleteMethod', tag: 'delete' },
+      { name: 'patchMethod', tag: 'patch' },
+    ];
+
+    for (const { name, tag } of expectedMethods) {
+      const method = AgentMethodRegistry.get(AllHttpMethodsAgentClassName.value)?.get(name);
+
+      if (!method) {
+        throw new Error(`Method ${name} not found in AgentMethodRegistry`);
+      }
+
+      expect(method.httpEndpoint).toBeDefined();
+      expect(method.httpEndpoint).toHaveLength(1);
+      expect(method.httpEndpoint![0].httpMethod).toEqual({ tag });
+      expect(method.httpEndpoint![0].authDetails).toBeUndefined();
+      expect(method.httpEndpoint![0].queryVars).toEqual([]);
+      expect(method.httpEndpoint![0].corsOptions).toEqual({ allowedPatterns: [] });
+      expect(method.httpEndpoint![0].headerVars).toEqual([]);
+    }
   });
 });

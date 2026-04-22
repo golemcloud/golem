@@ -13,3 +13,4 @@ steps:
         rust: ["test-app/golem-temp/agents/test_app_rust_main_debug.wasm"]
         ts: ["test-app/golem-temp/agents/test_app_ts_main.wasm"]
         scala: ["test-app/golem-temp/agents/test_app_scala_main.wasm"]
+        moonbit: ["test-app/golem-temp/agents/test_app_moonbit_main.wasm"]

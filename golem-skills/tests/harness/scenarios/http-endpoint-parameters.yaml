@@ -56,6 +56,8 @@ steps:
         - "golem-add-http-endpoint-ts"
       scala:
         - "golem-add-http-endpoint-scala"
+      moonbit:
+        - "golem-add-http-endpoint-moonbit"
     verify:
       build: true
       deploy: true
@@ -72,6 +74,7 @@ steps:
         rust: '{"name":"Laptop","price":999.99,"in_stock":true}'
         ts: '{"name":"Laptop","price":999.99,"inStock":true}'
         scala: '{"name":"Laptop","price":999.99,"inStock":true}'
+        moonbit: '{"name":"Laptop","price":999.99,"in_stock":true}'
     expect:
       rust:
         status: 200
@@ -100,6 +103,15 @@ steps:
             equals: 999.99
           - path: "$.inStock"
             equals: true
+      moonbit:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Laptop"
+          - path: "$.price"
+            equals: 999.99
+          - path: "$.in_stock"
+            equals: true
 
   - id: "create-product-2"
     http:
@@ -111,6 +123,7 @@ steps:
         rust: '{"name":"Mouse","price":25.50,"in_stock":true}'
         ts: '{"name":"Mouse","price":25.50,"inStock":true}'
         scala: '{"name":"Mouse","price":25.50,"inStock":true}'
+        moonbit: '{"name":"Mouse","price":25.50,"in_stock":true}'
     expect:
       status: 200
       body_json:
@@ -127,6 +140,7 @@ steps:
         rust: '{"name":"Keyboard","price":75.00,"in_stock":false}'
         ts: '{"name":"Keyboard","price":75.00,"inStock":false}'
         scala: '{"name":"Keyboard","price":75.00,"inStock":false}'
+        moonbit: '{"name":"Keyboard","price":75.00,"in_stock":false}'
     expect:
       rust:
         status: 200
@@ -148,6 +162,13 @@ steps:
           - path: "$.name"
             equals: "Keyboard"
           - path: "$.inStock"
+            equals: false
+      moonbit:
+        status: 200
+        body_json:
+          - path: "$.name"
+            equals: "Keyboard"
+          - path: "$.in_stock"
             equals: false
 
   # --- Path variable mapping on GET ---
@@ -241,6 +262,7 @@ steps:
         rust: '{"name":"Gaming Mouse","price":49.99,"in_stock":true}'
         ts: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
         scala: '{"name":"Gaming Mouse","price":49.99,"inStock":true}'
+        moonbit: '{"name":"Gaming Mouse","price":49.99,"in_stock":true}'
     expect:
       status: 200
       body_json:
@@ -272,6 +294,7 @@ steps:
         rust: '{"name":"Ghost","price":0,"in_stock":false}'
         ts: '{"name":"Ghost","price":0,"inStock":false}'
         scala: '{"name":"Ghost","price":0,"inStock":false}'
+        moonbit: '{"name":"Ghost","price":0,"in_stock":false}'
     expect:
       status: 404
 
@@ -301,6 +324,7 @@ steps:
         rust: '{"products":[{"name":"Monitor","price":299.99,"in_stock":true},{"name":"Webcam","price":59.99,"in_stock":false}]}'
         ts: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
         scala: '{"products":[{"name":"Monitor","price":299.99,"inStock":true},{"name":"Webcam","price":59.99,"inStock":false}]}'
+        moonbit: '{"products":[{"name":"Monitor","price":299.99,"in_stock":true},{"name":"Webcam","price":59.99,"in_stock":false}]}'
     expect:
       status: 200
       body_contains: "Monitor"

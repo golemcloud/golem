@@ -17,6 +17,8 @@ steps:
         - "golem-configure-durability-ts"
       scala:
         - "golem-configure-durability-scala"
+      moonbit:
+        - "golem-configure-durability-moonbit"
     verify:
       build: true
       deploy: true
@@ -39,6 +41,8 @@ steps:
         - "golem-configure-durability-ts"
       scala:
         - "golem-configure-durability-scala"
+      moonbit:
+        - "golem-configure-durability-moonbit"
     verify:
       build: true
       deploy: true

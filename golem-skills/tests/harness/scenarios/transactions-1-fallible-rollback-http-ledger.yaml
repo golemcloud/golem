@@ -47,6 +47,8 @@ steps:
         - "golem-add-transactions-ts"
       scala:
         - "golem-add-transactions-scala"
+      moonbit:
+        - "golem-add-transactions-moonbit"
     verify:
       build: true
       deploy: true
@@ -58,6 +60,7 @@ steps:
         rust: "process_order"
         ts: "processOrder"
         scala: "processOrder"
+        moonbit: "process_order"
       args: '"order-1", true'
     expect:
       result_json:
@@ -85,6 +88,7 @@ steps:
         rust: "process_order"
         ts: "processOrder"
         scala: "processOrder"
+        moonbit: "process_order"
       args: '"order-2", false'
     expect:
       result_json:

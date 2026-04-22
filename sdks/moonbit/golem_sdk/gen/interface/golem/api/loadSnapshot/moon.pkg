@@ -1,0 +1,9 @@
+import {
+  "golemcloud/golem_sdk/agents" @agents,
+  "golemcloud/golem_sdk/interface/golem/api/host" @host,
+  "golemcloud/golem_sdk/interface/golem/agent/common" @common,
+  "golemcloud/golem_sdk/interface/golem/agent/host" @agentHost,
+  "golemcloud/golem_sdk/interface/wasi/cli/environment" @environment,
+}
+
+warnings = "-44"

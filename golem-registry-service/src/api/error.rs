@@ -639,7 +639,7 @@ impl From<DeploymentWriteError> for ApiError {
                 Self::conflict(api::error_code::DEPLOYMENT_VERSION_ALREADY_EXISTS, error)
             }
             DeploymentWriteError::DeploymentHashMismatch { .. } => {
-                Self::bad_request(api::error_code::DEPLOYMENT_HASH_MISMATCH, error)
+                Self::conflict(api::error_code::DEPLOYMENT_HASH_MISMATCH, error)
             }
             DeploymentWriteError::EnvironmentNotYetDeployed => {
                 Self::conflict(api::error_code::ENVIRONMENT_NOT_DEPLOYED, error)
@@ -703,6 +703,14 @@ impl From<DomainRegistrationError> for ApiError {
 
             DomainRegistrationError::DomainAlreadyExists(_) => {
                 Self::conflict(api::error_code::DOMAIN_ALREADY_EXISTS, error)
+            }
+
+            DomainRegistrationError::DomainNotValidForHttpApi(_) => {
+                Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_HTTP_API, error)
+            }
+
+            DomainRegistrationError::DomainNotValidForMcp(_) => {
+                Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_MCP, error)
             }
 
             DomainRegistrationError::Unauthorized(inner) => inner.into(),
@@ -776,6 +784,10 @@ impl From<HttpApiDeploymentError> for ApiError {
                 cause: None,
             })),
 
+            HttpApiDeploymentError::DomainNotValidForHttpApi(_) => {
+                Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_HTTP_API, error)
+            }
+
             HttpApiDeploymentError::HttpApiDeploymentForDomainAlreadyExists(_) => {
                 Self::conflict(api::error_code::HTTP_API_DEPLOYMENT_ALREADY_EXISTS, error)
             }
@@ -815,6 +827,10 @@ impl From<McpDeploymentError> for ApiError {
                 code: api::error_code::DOMAIN_NOT_REGISTERED.to_string(),
                 cause: None,
             })),
+
+            McpDeploymentError::DomainNotValidForMcp(_) => {
+                Self::bad_request(api::error_code::DOMAIN_NOT_VALID_FOR_MCP, error)
+            }
 
             McpDeploymentError::McpDeploymentForDomainAlreadyExists(_) => {
                 Self::conflict(api::error_code::MCP_DEPLOYMENT_ALREADY_EXISTS, error)
@@ -866,8 +882,11 @@ impl From<RetryPolicyError> for ApiError {
     fn from(value: RetryPolicyError) -> Self {
         let error: String = value.to_safe_string();
         match value {
-            RetryPolicyError::InvalidPredicateJson(_) | RetryPolicyError::InvalidPolicyJson(_) => {
-                Self::bad_request(api::error_code::VALIDATION_ERROR, error)
+            RetryPolicyError::InvalidPredicateJson(_) => {
+                Self::bad_request(api::error_code::RETRY_POLICY_INVALID_PREDICATE_JSON, error)
+            }
+            RetryPolicyError::InvalidPolicyJson(_) => {
+                Self::bad_request(api::error_code::RETRY_POLICY_INVALID_POLICY_JSON, error)
             }
             RetryPolicyError::ConcurrentModification => {
                 Self::conflict(api::error_code::CONCURRENT_UPDATE, error)

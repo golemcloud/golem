@@ -24,6 +24,8 @@ steps:
         - "golem-add-agent-ts"
       scala:
         - "golem-add-agent-scala"
+      moonbit:
+        - "golem-add-agent-moonbit"
     verify:
       build: true
       deploy: true
@@ -35,10 +37,12 @@ steps:
         rust: "create_item"
         ts: "createItem"
         scala: "createItem"
+        moonbit: "create_item"
       args:
         rust: '{ id: "item-1", name: "Hammer" }'
         ts: '{ id: "item-1", name: "Hammer" }'
         scala: 'Item(id = "item-1", name = "Hammer")'
+        moonbit: '{ id: "item-1", name: "Hammer" }'
     expect:
       result_json:
         - path: "$.id"
@@ -53,6 +57,7 @@ steps:
         rust: "get_item"
         ts: "getItem"
         scala: "getItem"
+        moonbit: "get_item"
       args: '"item-1"'
     expect:
       result_json:
@@ -68,10 +73,12 @@ steps:
         rust: "update_item"
         ts: "updateItem"
         scala: "updateItem"
+        moonbit: "update_item"
       args:
         rust: '{ id: "item-1", name: "Updated Hammer" }'
         ts: '{ id: "item-1", name: "Updated Hammer" }'
         scala: 'Item(id = "item-1", name = "Updated Hammer")'
+        moonbit: '{ id: "item-1", name: "Updated Hammer" }'
     expect:
       result_json:
         - path: "$.id"
@@ -86,6 +93,7 @@ steps:
         rust: "list_items"
         ts: "listItems"
         scala: "listItems"
+        moonbit: "list_items"
     expect:
       result_json:
         - path: "$"
@@ -100,6 +108,7 @@ steps:
         rust: "delete_item"
         ts: "deleteItem"
         scala: "deleteItem"
+        moonbit: "delete_item"
       args: '"item-1"'
     expect:
       result_json:
@@ -113,6 +122,7 @@ steps:
         rust: "list_items"
         ts: "listItems"
         scala: "listItems"
+        moonbit: "list_items"
     expect:
       result_json:
         - path: "$"

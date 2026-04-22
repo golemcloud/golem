@@ -1,0 +1,199 @@
+///|
+/// Creates an `ElementSchema` for a record type from an array of (name, schema) field pairs.
+pub fn make_record_schema(
+  fields : Array[(String, @types.ElementSchema)],
+) -> @types.ElementSchema {
+  let wit_fields : Array[(String, @types.WitType)] = []
+  for i in 0..<fields.length() {
+    let (name, schema) = fields[i]
+    guard schema is @types.ElementSchema::ComponentModel(inner_wit_type) else {
+      abort("make_record_schema: field \{name} is not a ComponentModel schema")
+    }
+    wit_fields.push((name, inner_wit_type))
+  }
+  @types.ElementSchema::ComponentModel(
+    @builder.TypeBuilder::new().record_type(wit_fields),
+  )
+}
+
+///|
+/// Creates an `ElementValue` for a record from an array of field values.
+pub fn make_record_value(
+  fields : Array[@types.ElementValue],
+) -> @types.ElementValue raise @common.AgentError {
+  let wit_values : Array[@types.WitValue] = []
+  for i in 0..<fields.length() {
+    guard fields[i] is @types.ElementValue::ComponentModel(inner_wit) else {
+      raise @common.AgentError::InvalidInput(
+        "Expected ComponentModel for record field at index " + i.to_string(),
+      )
+    }
+    wit_values.push(inner_wit)
+  }
+  let wit_value = @builder.Builder::new().record(item => {
+    for v in wit_values {
+      item.wit_value(v)
+    }
+  }) catch {
+    @builder.BuilderError(msg) => raise @common.AgentError::InvalidInput(msg)
+  }
+  @types.ElementValue::ComponentModel(wit_value)
+}
+
+///|
+/// Extracts and deserializes a record field by index from an `Extractor`.
+pub fn[T : FromExtractor] extract_field(
+  e : &@extractor.Extractor,
+  idx : Int,
+) -> T raise @common.AgentError {
+  guard e.field(idx) is Some(f) else {
+    raise @common.AgentError::InvalidInput(
+      "Expected field at index " + idx.to_string(),
+    )
+  }
+  T::from_extractor(f)
+}
+
+///|
+/// Creates an `ElementSchema` for a tuple type from an array of element schemas.
+pub fn make_tuple_schema(
+  elements : Array[@types.ElementSchema],
+) -> @types.ElementSchema {
+  let wit_elems : Array[@types.WitType] = []
+  for i in 0..<elements.length() {
+    guard elements[i] is @types.ElementSchema::ComponentModel(inner_wit_type) else {
+      abort(
+        "make_tuple_schema: element at index \{i} is not a ComponentModel schema",
+      )
+    }
+    wit_elems.push(inner_wit_type)
+  }
+  @types.ElementSchema::ComponentModel(
+    @builder.TypeBuilder::new().tuple_type(wit_elems),
+  )
+}
+
+///|
+/// Creates an `ElementValue` for a tuple from an array of element values.
+pub fn make_tuple_value(
+  elements : Array[@types.ElementValue],
+) -> @types.ElementValue raise @common.AgentError {
+  let wit_values : Array[@types.WitValue] = []
+  for i in 0..<elements.length() {
+    guard elements[i] is @types.ElementValue::ComponentModel(inner_wit) else {
+      raise @common.AgentError::InvalidInput(
+        "Expected ComponentModel for tuple element at index " + i.to_string(),
+      )
+    }
+    wit_values.push(inner_wit)
+  }
+  let wit_value = @builder.Builder::new().tuple(item => {
+    for v in wit_values {
+      item.wit_value(v)
+    }
+  }) catch {
+    @builder.BuilderError(msg) => raise @common.AgentError::InvalidInput(msg)
+  }
+  @types.ElementValue::ComponentModel(wit_value)
+}
+
+///|
+/// Extracts and deserializes a tuple element by index from an `Extractor`.
+pub fn[T : FromExtractor] extract_tuple_element(
+  e : &@extractor.Extractor,
+  idx : Int,
+) -> T raise @common.AgentError {
+  guard e.tuple_element(idx) is Some(elem) else {
+    raise @common.AgentError::InvalidInput(
+      "Expected tuple element at index " + idx.to_string(),
+    )
+  }
+  T::from_extractor(elem)
+}
+
+///|
+/// Creates an `ElementSchema` for a simple enum type from an array of case names.
+pub fn make_enum_schema(cases : Array[String]) -> @types.ElementSchema {
+  @types.ElementSchema::ComponentModel(
+    @builder.TypeBuilder::new().enum_type(cases),
+  )
+}
+
+///|
+/// Creates an `ElementValue` for an enum case by its index.
+pub fn make_enum_value(idx : UInt) -> @types.ElementValue {
+  @types.ElementValue::ComponentModel(@builder.Builder::new().enum_value(idx))
+}
+
+///|
+/// Extracts the enum case index from an `Extractor`.
+pub fn extract_enum(e : &@extractor.Extractor) -> UInt raise @common.AgentError {
+  guard e.enum_value() is Some(idx) else {
+    raise @common.AgentError::InvalidInput("Expected enum value")
+  }
+  idx
+}
+
+///|
+/// Creates an `ElementSchema` for a variant type from an array of (name, optional payload schema) pairs.
+pub fn make_variant_schema(
+  cases : Array[(String, @types.ElementSchema?)],
+) -> @types.ElementSchema {
+  let wit_cases : Array[(String, @types.WitType?)] = []
+  for i in 0..<cases.length() {
+    let (name, payload) = cases[i]
+    match payload {
+      None => wit_cases.push((name, None))
+      Some(schema) => {
+        guard schema is @types.ElementSchema::ComponentModel(inner_wit_type) else {
+          abort(
+            "make_variant_schema: case \{name} payload is not a ComponentModel schema",
+          )
+        }
+        wit_cases.push((name, Some(inner_wit_type)))
+      }
+    }
+  }
+  @types.ElementSchema::ComponentModel(
+    @builder.TypeBuilder::new().variant_type(wit_cases),
+  )
+}
+
+///|
+/// Creates an `ElementValue` for a variant case with an optional payload.
+pub fn make_variant_value(
+  case_idx : UInt,
+  payload : @types.ElementValue?,
+) -> @types.ElementValue raise @common.AgentError {
+  match payload {
+    None =>
+      @types.ElementValue::ComponentModel(
+        @builder.Builder::new().variant_unit(case_idx),
+      )
+    Some(p) => {
+      guard p is @types.ElementValue::ComponentModel(inner_wit) else {
+        raise @common.AgentError::InvalidInput(
+          "Expected ComponentModel for variant payload",
+        )
+      }
+      let wit_value = @builder.Builder::new().variant(case_idx, item => {
+        item.wit_value(inner_wit)
+      }) catch {
+        @builder.BuilderError(msg) =>
+          raise @common.AgentError::InvalidInput(msg)
+      }
+      @types.ElementValue::ComponentModel(wit_value)
+    }
+  }
+}
+
+///|
+/// Extracts the variant case index and optional payload extractor from an `Extractor`.
+pub fn extract_variant(
+  e : &@extractor.Extractor,
+) -> (UInt, &@extractor.Extractor?) raise @common.AgentError {
+  guard e.variant() is Some(result) else {
+    raise @common.AgentError::InvalidInput("Expected variant value")
+  }
+  result
+}

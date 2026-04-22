@@ -1,0 +1,71 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/agents"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/interface/golem/core/types",
+}
+
+// Values
+pub fn construct_and_set_instance(String, @types.DataValue, @common.Principal) -> Result[Unit, @common.AgentError]
+
+pub fn get_agent_instance() -> AgentInstance?
+
+pub fn get_all_registered_agents() -> Array[@common.AgentType]
+
+pub fn get_registered_agent(String) -> RegisteredAgent?
+
+pub fn[T] panic_with_message(String, String) -> T
+
+pub fn principal_from_json(Json) -> @common.Principal raise JsonCodecError
+
+pub fn principal_to_json(@common.Principal) -> Json
+
+pub fn register_agent(RegisteredAgent) -> Unit
+
+pub fn set_agent_instance(AgentInstance) -> Unit
+
+// Errors
+pub suberror JsonCodecError {
+  JsonCodecError(String)
+} derive(Show)
+
+// Types and methods
+pub(all) struct AgentInstance {
+  name : String
+  agent_type : @common.AgentType
+  principal : @common.Principal
+  interface : &RawAgent
+  snapshottable : &Snapshottable?
+  snapshot_format : SnapshotFormat?
+}
+
+pub(all) struct ConstructedAgent {
+  raw : &RawAgent
+  snapshottable : &Snapshottable?
+  snapshot_format : SnapshotFormat?
+}
+
+pub(all) struct RegisteredAgent {
+  name : String
+  agent_type : @common.AgentType
+  construct : (@types.DataValue, @common.Principal) -> Result[ConstructedAgent, @common.AgentError]
+}
+
+pub(all) enum SnapshotFormat {
+  Json
+  Binary
+} derive(Eq, Show)
+
+// Type aliases
+
+// Traits
+pub(open) trait RawAgent {
+  invoke(Self, String, @types.DataValue, @common.Principal) -> Result[@types.DataValue, @common.AgentError]
+}
+
+pub(open) trait Snapshottable {
+  save_snapshot(Self) -> Bytes
+  load_snapshot(Self, Bytes) -> Result[Unit, String]
+}
+

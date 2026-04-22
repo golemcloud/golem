@@ -1628,6 +1628,7 @@ fn oplog_processor_idempotency_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::Timestamp;
     use golem_common::model::account::AccountId;
     use golem_common::model::application::ApplicationId;
@@ -1905,7 +1906,7 @@ mod tests {
                 account_id: AccountId::new(),
                 component_size: 100,
                 metadata: ComponentMetadata::from_parts(
-                    vec![],
+                    KnownExports::default(),
                     vec![],
                     None,
                     None,

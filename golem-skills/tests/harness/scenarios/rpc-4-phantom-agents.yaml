@@ -40,6 +40,8 @@ steps:
         - "golem-multi-instance-agent-ts"
       scala:
         - "golem-multi-instance-agent-scala"
+      moonbit:
+        - "golem-multi-instance-agent-moonbit"
     verify:
       build: true
       deploy: true
@@ -52,6 +54,7 @@ steps:
         rust: "spawn_and_fill_phantom"
         ts: "spawnAndFillPhantom"
         scala: "spawnAndFillPhantom"
+        moonbit: "spawn_and_fill_phantom"
     expect:
       result_json:
         - path: "$"
@@ -65,6 +68,7 @@ steps:
         rust: "spawn_two_phantoms"
         ts: "spawnTwoPhantoms"
         scala: "spawnTwoPhantoms"
+        moonbit: "spawn_two_phantoms"
     expect:
       result_json:
         - path: "$[0]"
@@ -80,6 +84,7 @@ steps:
         rust: "get_total"
         ts: "getTotal"
         scala: "getTotal"
+        moonbit: "get_total"
     expect:
       result_json:
         - path: "$"
@@ -93,6 +98,7 @@ steps:
         rust: "read_non_phantom_collector"
         ts: "readNonPhantomCollector"
         scala: "readNonPhantomCollector"
+        moonbit: "read_non_phantom_collector"
     expect:
       result_json:
         - path: "$"

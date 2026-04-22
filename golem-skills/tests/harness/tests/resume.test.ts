@@ -53,7 +53,7 @@ describe("Resume-from validation", () => {
       mockDriver,
       createMockWatcher(),
       "/tmp/fake-workspace",
-      "/tmp/bootstrap-skill",
+      ["/tmp/bootstrap-skill"],
       { resumeFromStepId: "nonexistent-step" },
     );
 
@@ -79,7 +79,7 @@ describe("Resume-from validation", () => {
       mockDriver,
       createMockWatcher(),
       "/tmp/fake-workspace-resume",
-      "/tmp/bootstrap-skill",
+      ["/tmp/bootstrap-skill"],
       { resumeFromStepId: "step-2" },
     );
 

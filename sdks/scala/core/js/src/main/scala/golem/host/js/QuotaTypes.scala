@@ -41,11 +41,11 @@ sealed trait JsReservation extends js.Object {
 
 @js.native
 sealed trait JsQuotaTokenRecord extends js.Object {
-  @JSName("environmentId") def environmentId: js.Dynamic  = js.native
-  @JSName("resourceName")  def resourceName: String        = js.native
-  @JSName("expectedUse")   def expectedUse: js.BigInt      = js.native
-  @JSName("lastCredit")    def lastCredit: js.BigInt        = js.native
-  @JSName("lastCreditAt")  def lastCreditAt: JsDatetime    = js.native
+  @JSName("environmentId") def environmentId: js.Dynamic = js.native
+  @JSName("resourceName") def resourceName: String       = js.native
+  @JSName("expectedUse") def expectedUse: js.BigInt      = js.native
+  @JSName("lastCredit") def lastCredit: js.BigInt        = js.native
+  @JSName("lastCreditAt") def lastCreditAt: JsDatetime   = js.native
 }
 
 // --- quota-token resource ---
@@ -53,8 +53,8 @@ sealed trait JsQuotaTokenRecord extends js.Object {
 
 @js.native
 sealed trait JsQuotaToken extends js.Object {
-  def reserve(amount: js.BigInt): JsReservation                      = js.native
-  def split(childExpectedUse: js.BigInt): JsQuotaToken               = js.native
-  def merge(other: JsQuotaToken): Unit                               = js.native
-  def toRecord(): JsQuotaTokenRecord                                 = js.native
+  def reserve(amount: js.BigInt): JsReservation        = js.native
+  def split(childExpectedUse: js.BigInt): JsQuotaToken = js.native
+  def merge(other: JsQuotaToken): Unit                 = js.native
+  def toRecord(): JsQuotaTokenRecord                   = js.native
 }

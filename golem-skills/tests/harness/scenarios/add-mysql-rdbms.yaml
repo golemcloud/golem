@@ -1,0 +1,45 @@
+name: "add-mysql-rdbms"
+prerequisites:
+  services:
+    - mysql
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-mysql-method"
+    prompt: >
+      In the test-app project, modify the existing CounterAgent so it adds a new method called
+      `check-mysql` that returns a string. Implement it using the Golem RDBMS MySQL API.
+      Hardcode the MySQL connection string `{{mysql_url}}`, open a connection, run
+      `SELECT 'mysql-ok'`, read the first row and first column, and return that string. Keep the
+      existing increment method unchanged. The method must return a plain string, not a result
+      type. Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-add-mysql-rust"
+      ts:
+        - "golem-add-mysql-ts"
+      scala:
+        - "golem-add-mysql-scala"
+      moonbit:
+        - "golem-add-mysql-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "invoke-mysql-check"
+    invoke_json:
+      agent: 'CounterAgent("db-test")'
+      method:
+        rust: "check_mysql"
+        ts: "checkMysql"
+        scala: "checkMysql"
+        moonbit: "check_mysql"
+    expect:
+      result_json:
+        - path: "$"
+          equals: "mysql-ok"

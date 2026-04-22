@@ -19,6 +19,11 @@ async fn build_and_deploy_all_templates_for_rust() {
     build_and_deploy_all_templates_for_lang(GuestLanguage::Rust).await;
 }
 
+#[test]
+async fn build_and_deploy_all_templates_for_moonbit() {
+    build_and_deploy_all_templates_for_lang(GuestLanguage::MoonBit).await;
+}
+
 async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
     let mut ctx = TestContext::new();
 
@@ -104,35 +109,49 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
     );
 }
 
-// We only select a few non-conflicting templates from all apps
+// We only select a few non-conflicting templates from all apps.
+// Scala and MoonBit defaults both define CounterAgent, so we give the
+// MoonBit component an explicit name to avoid agent-type collisions.
 #[test]
 async fn build_mixed_language_app() {
     let mut ctx = TestContext::new();
-
-    let templates = GuestLanguage::iter()
-        .flat_map(|language| match language {
-            GuestLanguage::TypeScript => {
-                vec!["ts/human-in-the-loop"]
-            }
-            GuestLanguage::Rust => {
-                vec!["rust/json", "rust/snapshotting"]
-            }
-            GuestLanguage::Scala => {
-                vec!["scala"]
-            }
-        })
-        .collect::<Vec<_>>();
 
     let app_name = "mixed-lang-templates-app";
 
     fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
     ctx.cd(app_name);
 
-    for template in &templates {
+    for template in &[
+        "ts/human-in-the-loop",
+        "rust/json",
+        "rust/snapshotting",
+        "scala",
+    ] {
         let outputs = ctx
             .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, template])
             .await;
         assert!(outputs.success_or_dump());
+    }
+
+    // MoonBit default also uses CounterAgent (same as Scala), so give it an
+    // explicit component name and rename the agent type to avoid the collision.
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "moonbit",
+            flag::COMPONENT_NAME,
+            "mixed-lang-templates-app:moonbit",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    for file in &["moonbit/counter.mbt", "golem.yaml"] {
+        let path = ctx.cwd_path_join(file);
+        let content = fs::read_to_string(&path).unwrap();
+        fs::write(&path, content.replace("CounterAgent", "MoonbitCounter")).unwrap();
     }
 
     let outputs = ctx.cli([cmd::BUILD]).await;

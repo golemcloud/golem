@@ -48,6 +48,11 @@ const CLASSIFICATION_MAP: Record<
     guidance:
       "HTTP request failed. Check the URL, ensure the server is available, and verify expected response status.",
   },
+  MCP_CALL_FAILED: {
+    category: "network",
+    guidance:
+      "MCP call failed. Check the MCP server URL, ensure the MCP deployment is configured and the server is running on port 9007.",
+  },
   CREATE_PROJECT_FAILED: {
     category: "infra",
     guidance:

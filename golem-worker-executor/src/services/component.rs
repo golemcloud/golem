@@ -66,6 +66,22 @@ pub trait ComponentService: Send + Sync {
     /// Returns all the component metadata the implementation has cached.
     /// This is useful for some mock/local implementations.
     async fn all_cached_metadata(&self) -> Vec<Component>;
+
+    /// Invalidates cached "latest deployed" component metadata.
+    async fn invalidate_latest_deployed_metadata(&self) {}
+
+    /// Invalidates cached "latest deployed" component metadata for a specific environment.
+    async fn invalidate_latest_deployed_metadata_for_environment(
+        &self,
+        _environment_id: EnvironmentId,
+    ) {
+        self.invalidate_latest_deployed_metadata().await
+    }
+
+    /// Invalidates all cached component metadata.
+    async fn invalidate_all(&self) {
+        self.invalidate_latest_deployed_metadata().await
+    }
 }
 
 pub fn configured(
@@ -89,6 +105,7 @@ pub fn configured(
 pub struct ComponentServiceDefault {
     component_cache: Cache<ComponentKey, (), wasmtime::component::Component, WorkerExecutorError>,
     component_metadata_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
+    latest_component_metadata_cache: Cache<ComponentId, (), Component, WorkerExecutorError>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
     registry_client: Arc<dyn RegistryService>,
 }
@@ -105,6 +122,10 @@ impl ComponentServiceDefault {
             registry_client,
             component_cache: create_component_cache(max_component_capacity, time_to_idle),
             component_metadata_cache: create_component_metadata_cache(
+                max_metadata_capacity,
+                time_to_idle,
+            ),
+            latest_component_metadata_cache: create_latest_component_metadata_cache(
                 max_metadata_capacity,
                 time_to_idle,
             ),
@@ -238,25 +259,34 @@ impl ComponentService for ComponentServiceDefault {
                     .await
             }
             None => {
+                let client = self.registry_client.clone();
                 let metadata = self
-                    .registry_client
-                    .get_deployed_component_metadata(component_id)
-                    .await
-                    .map_err(|e| {
-                        WorkerExecutorError::runtime(format!(
-                            "Failed getting component metadata: {}",
-                            e.to_safe_string()
-                        ))
-                    })?;
+                    .latest_component_metadata_cache
+                    .get_or_insert_simple(&component_id, || {
+                        Box::pin(async move {
+                            client
+                                .get_deployed_component_metadata(component_id)
+                                .await
+                                .map_err(|e| {
+                                    WorkerExecutorError::runtime(format!(
+                                        "Failed getting component metadata: {}",
+                                        e.to_safe_string()
+                                    ))
+                                })
+                        })
+                    })
+                    .await?;
 
-                let metadata = self
-                    .component_metadata_cache
+                self.component_metadata_cache
                     .get_or_insert_simple(
                         &ComponentKey {
                             component_id,
                             component_revision: metadata.revision,
                         },
-                        || Box::pin(async move { Ok(metadata) }),
+                        || {
+                            let metadata = metadata.clone();
+                            Box::pin(async move { Ok(metadata) })
+                        },
                     )
                     .await?;
 
@@ -300,6 +330,41 @@ impl ComponentService for ComponentServiceDefault {
             .map(|(_, v)| v)
             .collect()
     }
+
+    async fn invalidate_latest_deployed_metadata(&self) {
+        let keys = self.latest_component_metadata_cache.keys().await;
+        for key in keys {
+            self.latest_component_metadata_cache.remove(&key).await;
+        }
+    }
+
+    async fn invalidate_latest_deployed_metadata_for_environment(
+        &self,
+        environment_id: EnvironmentId,
+    ) {
+        let keys = self
+            .latest_component_metadata_cache
+            .iter()
+            .await
+            .into_iter()
+            .filter_map(|(component_id, component)| {
+                (component.environment_id == environment_id).then_some(component_id)
+            })
+            .collect::<Vec<_>>();
+
+        for key in keys {
+            self.latest_component_metadata_cache.remove(&key).await;
+        }
+    }
+
+    async fn invalidate_all(&self) {
+        self.invalidate_latest_deployed_metadata().await;
+
+        let metadata_keys = self.component_metadata_cache.keys().await;
+        for key in metadata_keys {
+            self.component_metadata_cache.remove(&key).await;
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -323,6 +388,21 @@ fn create_component_metadata_cache(
     )
 }
 
+fn create_latest_component_metadata_cache(
+    max_capacity: usize,
+    time_to_idle: Duration,
+) -> Cache<ComponentId, (), Component, WorkerExecutorError> {
+    Cache::new(
+        Some(max_capacity),
+        FullCacheEvictionMode::LeastRecentlyUsed(1),
+        BackgroundEvictionMode::OlderThan {
+            ttl: time_to_idle,
+            period: Duration::from_secs(60),
+        },
+        "latest_component_metadata",
+    )
+}
+
 fn create_component_cache(
     max_capacity: usize,
     time_to_idle: Duration,
@@ -336,4 +416,366 @@ fn create_component_cache(
         },
         "component",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::agent::{AgentTypeName, RegisteredAgentType, ResolvedAgentType};
+    use golem_common::model::application::{ApplicationId, ApplicationName};
+    use golem_common::model::auth::TokenSecret;
+    use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+    use golem_common::model::deployment::DeploymentRevision;
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
+    use golem_service_base::clients::registry::RegistryServiceError;
+    use golem_service_base::clients::registry::{RegistryInvalidationHandler, ResourceUsageUpdate};
+    use golem_service_base::custom_api::CompiledRoutes;
+    use golem_service_base::mcp::CompiledMcp;
+    use golem_service_base::model::auth::{AuthCtx, AuthDetailsForEnvironment};
+    use golem_service_base::model::component::Component;
+    use golem_service_base::model::environment::EnvironmentState;
+    use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
+    use golem_service_base::service::compiled_component::CompiledComponentServiceDisabled;
+    use std::collections::HashMap;
+    use test_r::test;
+
+    struct MockRegistryService {
+        components: HashMap<ComponentId, Component>,
+        deployed_component_calls: Arc<std::sync::Mutex<HashMap<ComponentId, usize>>>,
+    }
+
+    impl MockRegistryService {
+        fn new(components: impl IntoIterator<Item = Component>) -> Self {
+            Self {
+                components: components
+                    .into_iter()
+                    .map(|component| (component.id, component))
+                    .collect(),
+                deployed_component_calls: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            }
+        }
+
+        fn deployed_component_calls(&self) -> Arc<std::sync::Mutex<HashMap<ComponentId, usize>>> {
+            self.deployed_component_calls.clone()
+        }
+    }
+
+    #[async_trait]
+    impl RegistryService for MockRegistryService {
+        async fn authenticate_token(
+            &self,
+            _token: &TokenSecret,
+        ) -> Result<AuthCtx, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_auth_details_for_environment(
+            &self,
+            _environment_id: EnvironmentId,
+            _include_deleted: bool,
+            _auth_ctx: &AuthCtx,
+        ) -> Result<AuthDetailsForEnvironment, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_resource_limits(
+            &self,
+            _account_id: golem_common::model::account::AccountId,
+        ) -> Result<ResourceLimits, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn update_worker_connection_limit(
+            &self,
+            _account_id: golem_common::model::account::AccountId,
+            _agent_id: &golem_common::model::AgentId,
+            _added: bool,
+        ) -> Result<(), RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn batch_update_resource_usage(
+            &self,
+            _updates: HashMap<golem_common::model::account::AccountId, ResourceUsageUpdate>,
+        ) -> Result<AccountResourceLimits, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn download_component(
+            &self,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<Vec<u8>, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_component_metadata(
+            &self,
+            component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<Component, RegistryServiceError> {
+            self.components
+                .get(&component_id)
+                .cloned()
+                .ok_or_else(|| RegistryServiceError::NotFound("missing component".to_string()))
+        }
+
+        async fn get_deployed_component_metadata(
+            &self,
+            component_id: ComponentId,
+        ) -> Result<Component, RegistryServiceError> {
+            let mut calls = self.deployed_component_calls.lock().unwrap();
+            *calls.entry(component_id).or_default() += 1;
+            drop(calls);
+
+            self.components
+                .get(&component_id)
+                .cloned()
+                .ok_or_else(|| RegistryServiceError::NotFound("missing component".to_string()))
+        }
+
+        async fn get_all_deployed_component_revisions(
+            &self,
+            _component_id: ComponentId,
+        ) -> Result<Vec<Component>, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn resolve_component(
+            &self,
+            _resolving_account_id: golem_common::model::account::AccountId,
+            _resolving_application_id: ApplicationId,
+            _resolving_environment_id: EnvironmentId,
+            _component_slug: &str,
+        ) -> Result<Component, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_all_agent_types(
+            &self,
+            _environment_id: EnvironmentId,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+        ) -> Result<Vec<RegisteredAgentType>, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_agent_type(
+            &self,
+            _environment_id: EnvironmentId,
+            _component_id: ComponentId,
+            _component_revision: ComponentRevision,
+            _name: &AgentTypeName,
+        ) -> Result<RegisteredAgentType, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn resolve_agent_type_by_names(
+            &self,
+            _app_name: &ApplicationName,
+            _environment_name: &EnvironmentName,
+            _agent_type_name: &AgentTypeName,
+            _deployment_revision: Option<DeploymentRevision>,
+            _owner_account_email: Option<&str>,
+            _auth_ctx: &AuthCtx,
+        ) -> Result<ResolvedAgentType, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_active_routes_for_domain(
+            &self,
+            _domain: &Domain,
+        ) -> Result<CompiledRoutes, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_active_compiled_mcps_for_domain(
+            &self,
+            _domain: &Domain,
+        ) -> Result<CompiledMcp, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_current_environment_state(
+            &self,
+            _environment_id: EnvironmentId,
+        ) -> Result<EnvironmentState, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_resource_definition_by_id(
+            &self,
+            _resource_definition_id: ResourceDefinitionId,
+        ) -> Result<ResourceDefinition, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn get_resource_definition_by_name(
+            &self,
+            _environment_id: EnvironmentId,
+            _resource_name: ResourceName,
+        ) -> Result<ResourceDefinition, RegistryServiceError> {
+            unimplemented!()
+        }
+
+        async fn subscribe_registry_invalidations(
+            &self,
+            _last_seen_event_id: Option<u64>,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures::Stream<
+                            Item = Result<
+                                golem_common::model::agent::RegistryInvalidationEvent,
+                                RegistryServiceError,
+                            >,
+                        > + Send,
+                >,
+            >,
+            RegistryServiceError,
+        > {
+            unimplemented!()
+        }
+
+        async fn run_registry_invalidation_event_subscriber(
+            &self,
+            _service_name: &'static str,
+            _shutdown_token: Option<tokio_util::sync::CancellationToken>,
+            _handler: Arc<dyn RegistryInvalidationHandler>,
+        ) {
+            unimplemented!()
+        }
+    }
+
+    fn make_component(component_id: ComponentId, environment_id: EnvironmentId) -> Component {
+        Component {
+            id: component_id,
+            revision: ComponentRevision::new(1).unwrap(),
+            environment_id,
+            component_name: ComponentName("test:component".to_string()),
+            hash: golem_common::model::diff::Hash::new(blake3::hash(b"component-hash")),
+            application_id: ApplicationId::new(),
+            account_id: golem_common::model::account::AccountId::new(),
+            component_size: 1,
+            metadata: golem_common::model::component_metadata::ComponentMetadata::default(),
+            created_at: chrono::Utc::now(),
+            wasm_hash: golem_common::model::diff::Hash::new(blake3::hash(b"wasm-hash")),
+            object_store_key: "test-object".to_string(),
+        }
+    }
+
+    #[test]
+    async fn caches_latest_deployed_component_metadata_by_component_id() {
+        let component_id = ComponentId::new();
+        let environment_id = EnvironmentId::new();
+        let registry = Arc::new(MockRegistryService::new([make_component(
+            component_id,
+            environment_id,
+        )]));
+        let calls = registry.deployed_component_calls();
+        let service = ComponentServiceDefault::new(
+            registry,
+            1,
+            8,
+            Duration::from_secs(60),
+            Arc::new(CompiledComponentServiceDisabled::new()),
+        );
+
+        let first = service.get_metadata(component_id, None).await.unwrap();
+        let second = service.get_metadata(component_id, None).await.unwrap();
+
+        assert_eq!(first.environment_id, environment_id);
+        assert_eq!(second.environment_id, environment_id);
+        let calls = calls.lock().unwrap();
+        assert_eq!(
+            calls.get(&component_id).copied().unwrap_or_default(),
+            1,
+            "latest deployed metadata should be fetched once per component id"
+        );
+    }
+
+    #[test]
+    async fn invalidating_latest_deployed_component_metadata_forces_refresh() {
+        let component_id = ComponentId::new();
+        let registry = Arc::new(MockRegistryService::new([make_component(
+            component_id,
+            EnvironmentId::new(),
+        )]));
+        let calls = registry.deployed_component_calls();
+        let service = ComponentServiceDefault::new(
+            registry,
+            1,
+            8,
+            Duration::from_secs(60),
+            Arc::new(CompiledComponentServiceDisabled::new()),
+        );
+
+        let _ = service.get_metadata(component_id, None).await.unwrap();
+        service.invalidate_latest_deployed_metadata().await;
+        let _ = service.get_metadata(component_id, None).await.unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(
+            calls.get(&component_id).copied().unwrap_or_default(),
+            2,
+            "invalidating latest deployed metadata should force a fresh registry lookup"
+        );
+    }
+
+    #[test]
+    async fn invalidating_latest_deployed_component_metadata_for_environment_only_evicts_matching_entries()
+     {
+        let first_component_id = ComponentId::new();
+        let second_component_id = ComponentId::new();
+        let first_environment_id = EnvironmentId::new();
+        let second_environment_id = EnvironmentId::new();
+        let registry = Arc::new(MockRegistryService::new([
+            make_component(first_component_id, first_environment_id),
+            make_component(second_component_id, second_environment_id),
+        ]));
+        let calls = registry.deployed_component_calls();
+        let service = ComponentServiceDefault::new(
+            registry,
+            1,
+            8,
+            Duration::from_secs(60),
+            Arc::new(CompiledComponentServiceDisabled::new()),
+        );
+
+        let _ = service
+            .get_metadata(first_component_id, None)
+            .await
+            .unwrap();
+        let _ = service
+            .get_metadata(second_component_id, None)
+            .await
+            .unwrap();
+
+        service
+            .invalidate_latest_deployed_metadata_for_environment(first_environment_id)
+            .await;
+
+        let _ = service
+            .get_metadata(first_component_id, None)
+            .await
+            .unwrap();
+        let _ = service
+            .get_metadata(second_component_id, None)
+            .await
+            .unwrap();
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(
+            calls.get(&first_component_id).copied().unwrap_or_default(),
+            2,
+            "matching environment should be refreshed"
+        );
+        assert_eq!(
+            calls.get(&second_component_id).copied().unwrap_or_default(),
+            1,
+            "other environments should stay cached"
+        );
+    }
 }

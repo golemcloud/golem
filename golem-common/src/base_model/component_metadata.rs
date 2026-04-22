@@ -13,11 +13,9 @@
 // limitations under the License.
 
 use crate::base_model::agent::AgentType;
-use crate::base_model::base64::Base64;
 use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
-use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -62,6 +60,36 @@ pub struct Producers {
     pub fields: Vec<ProducerField>,
 }
 
+/// Compact index of known exported interfaces in a component.
+/// Instead of persisting the full `AnalysedExport` tree, we store only
+/// the exact versioned interface name for each supported capability.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct KnownExports {
+    /// Exact exported interface name for `golem:agent/guest`, e.g. `golem:agent/guest@1.5.0`
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub agent_guest_interface: Option<String>,
+    /// Exact exported interface name for `golem:api/save-snapshot`
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub save_snapshot_interface: Option<String>,
+    /// Exact exported interface name for `golem:api/load-snapshot`
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub load_snapshot_interface: Option<String>,
+    /// Exact exported interface name for `golem:api/oplog-processor`
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub oplog_processor_interface: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
@@ -88,19 +116,14 @@ impl LinearMemory {
 #[allow(dead_code)]
 pub struct ComponentMetadata {
     pub(crate) data: Arc<ComponentMetadataInnerData>,
-    #[cfg(feature = "full")]
-    #[cfg_attr(feature = "full", transient(Default::default()))]
-    pub(crate) cache:
-        Arc<std::sync::Mutex<crate::model::component_metadata::ComponentMetadataInnerCache>>,
 }
 
 impl Debug for ComponentMetadata {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("ComponentMetadata")
-            .field("exports", &self.data.exports)
+            .field("known_exports", &self.data.known_exports)
             .field("producers", &self.data.producers)
             .field("memories", &self.data.memories)
-            .field("binary_wit_len", &self.data.binary_wit.len())
             .field("root_package_name", &self.data.root_package_name)
             .field("root_package_version", &self.data.root_package_version)
             .field("agent_types", &self.data.agent_types)
@@ -135,8 +158,6 @@ impl<'de> Deserialize<'de> for ComponentMetadata {
         let data = ComponentMetadataInnerData::deserialize(deserializer)?;
         Ok(Self {
             data: Arc::new(data),
-            #[cfg(feature = "full")]
-            cache: Arc::default(),
         })
     }
 }
@@ -152,12 +173,9 @@ impl<'de> Deserialize<'de> for ComponentMetadata {
 )]
 #[serde(rename = "ComponentMetadata", rename_all = "camelCase")]
 pub struct ComponentMetadataInnerData {
-    pub exports: Vec<AnalysedExport>,
+    pub known_exports: KnownExports,
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
-    #[serde(default)]
-    #[cfg_attr(feature = "full", oai(default))]
-    pub binary_wit: Base64,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
 

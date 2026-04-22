@@ -12,6 +12,7 @@ steps:
       rust: "Add the 'base64' crate (version 0.22) to the test-app project. Make sure it builds and deploys successfully."
       ts: "Add the 'change-case' npm package to the test-app project. Make sure it builds and deploys successfully."
       scala: "Add the 'com.lihaoyi::upickle::4.1.0' library to the test-app project. Make sure it builds and deploys successfully."
+      moonbit: "Add the 'moonbitlang/x' package to the test-app project. Make sure it builds and deploys successfully."
     expectedSkills:
       rust:
         - "golem-add-rust-crate"
@@ -19,6 +20,8 @@ steps:
         - "golem-add-npm-package"
       scala:
         - "golem-add-scala-dependency"
+      moonbit:
+        - "golem-add-moonbit-package"
     verify:
       build: true
       deploy: true
@@ -41,6 +44,11 @@ steps:
         Modify the CounterAgent in test-app so the 'increment' function uses upickle to serialize
         the counter value into a JSON string like {"count":1} and returns that string.
         Change the method's return type to string.
+        Make sure it builds and deploys successfully.
+      moonbit: >
+        Modify the CounterAgent in test-app so the 'increment' method converts the current counter
+        value to a string and returns that string instead of the counter value. Change the method's
+        return type to string. Use the 'moonbitlang/x' package for the string conversion.
         Make sure it builds and deploys successfully.
     verify:
       build: true
@@ -78,3 +86,14 @@ steps:
       result_json:
         - path: "$"
           contains: '"count"'
+
+  - id: "verify-result-moonbit"
+    only_if:
+      language: "moonbit"
+    invoke_json:
+      agent: 'CounterAgent("dep-test")'
+      method: 'increment'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "1"

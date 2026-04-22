@@ -74,7 +74,7 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
                                             },
                                         );
                                     } else {
-                                        responses.insert(200, ResponseBodyOpenApiSchema::Unknown);
+                                        responses.insert(204, ResponseBodyOpenApiSchema::Unknown);
                                     }
 
                                     if let Some(err_type) = &res.err {
@@ -86,7 +86,6 @@ pub fn get_route_response_schema(route: &RichCompiledRoute) -> RouteResponseOpen
                                                 content_type: "application/json".to_string(),
                                             },
                                         );
-                                        responses.insert(500, ResponseBodyOpenApiSchema::NoBody);
                                     } else {
                                         responses.insert(500, ResponseBodyOpenApiSchema::Unknown);
                                     }

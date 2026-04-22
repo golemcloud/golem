@@ -34,11 +34,12 @@ tag_suite!(fork, group1);
 
 tag_suite!(agent_config, group2);
 tag_suite!(api, group2);
-tag_suite!(custom_api, group2);
-tag_suite!(quota, group2);
 
 tag_suite!(otlp_plugin, group7);
 tag_suite!(plugins, group7);
+
+tag_suite!(custom_api, group10);
+tag_suite!(quota, group10);
 
 test_r::sequential_suite!(otlp_plugin);
 test_r::sequential_suite!(plugins);

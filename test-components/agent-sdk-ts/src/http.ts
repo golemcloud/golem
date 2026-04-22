@@ -8,6 +8,19 @@ import {
     createWebhook
 } from '@golemcloud/golem-ts-sdk';
 
+// Response interfaces for comprehensive HTTP method testing
+interface ResourceUpdate {
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+}
+
+interface ResourceResponse {
+  id: string;
+  updated: boolean;
+  method: string;
+}
+
 @agent({
   mount: '/http-agents/{agentName}',
 })
@@ -114,6 +127,25 @@ class HttpAgent extends BaseAgent {
   @endpoint({ get: "/resp/binary" })
   binaryResponse(): UnstructuredBinary {
     return UnstructuredBinary.fromInline(new Uint8Array([1, 2, 3, 4]), 'application/octet-stream')
+  }
+
+  // PATCH method endpoints
+  @endpoint({ patch: "/resource/{id}" })
+  patchResource(id: string, update: ResourceUpdate): ResourceResponse {
+    return {
+      id: id,
+      updated: true,
+      method: "PATCH"
+    };
+  }
+
+  @endpoint({ patch: "/resource/{id}/partial" })
+  patchPartial(id: string): ResourceResponse {
+    return {
+      id: id,
+      updated: true,
+      method: "PATCH"
+    };
   }
 }
 

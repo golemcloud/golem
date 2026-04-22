@@ -670,6 +670,7 @@ async fn cors_preflight_wildcard(agent: &HttpTestContext) -> anyhow::Result<()> 
             agent.base_url.join("/cors-agents/test-agent/wildcard")?,
         )
         .header("Origin", "https://any-origin.com")
+        .header("Access-Control-Request-Method", "GET")
         .send()
         .await?;
 
@@ -683,7 +684,10 @@ async fn cors_preflight_wildcard(agent: &HttpTestContext) -> anyhow::Result<()> 
     assert_eq!(allow_origin, "https://any-origin.com");
 
     let vary = response.headers().get("vary").unwrap().to_str()?;
-    assert_eq!(vary, "Origin");
+    assert_eq!(
+        vary,
+        "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+    );
 
     Ok(())
 }
@@ -700,6 +704,7 @@ async fn cors_preflight_specific_origin(agent: &HttpTestContext) -> anyhow::Resu
                 .join("/cors-agents/test-agent/preflight-required")?,
         )
         .header("Origin", "https://app.example.com")
+        .header("Access-Control-Request-Method", "POST")
         .send()
         .await?;
 
@@ -720,7 +725,10 @@ async fn cors_preflight_specific_origin(agent: &HttpTestContext) -> anyhow::Resu
     assert!(allow_methods.contains("POST"));
 
     let vary = response.headers().get("vary").unwrap().to_str()?;
-    assert_eq!(vary, "Origin");
+    assert_eq!(
+        vary,
+        "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+    );
 
     Ok(())
 }
@@ -881,5 +889,85 @@ async fn webhook_callback(agent: &HttpTestContext) -> anyhow::Result<()> {
 
     http_server.abort();
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn patch_resource_success(agent: &HttpTestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .patch(
+            agent
+                .base_url
+                .join("/http-agents/test-agent/resource/item-123")?,
+        )
+        .json(&json!({
+            "update": {
+                "name": "Updated Item",
+                "description": "Updated description",
+                "enabled": true
+            }
+        }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(
+        body,
+        json!({
+            "id": "item-123",
+            "updated": true,
+            "method": "PATCH"
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn patch_partial_success(agent: &HttpTestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .patch(
+            agent
+                .base_url
+                .join("/http-agents/test-agent/resource/item-456/partial")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let body: serde_json::Value = response.json().await?;
+    assert_eq!(
+        body,
+        json!({
+            "id": "item-456",
+            "updated": true,
+            "method": "PATCH"
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn patch_resource_missing_body(agent: &HttpTestContext) -> anyhow::Result<()> {
+    let response = agent
+        .client
+        .patch(
+            agent
+                .base_url
+                .join("/http-agents/test-agent/resource/item-123")?,
+        )
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
     Ok(())
 }

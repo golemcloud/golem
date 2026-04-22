@@ -85,6 +85,13 @@ pub trait HttpAgent {
 
     #[endpoint(get = "/resp/binary")]
     fn binary_response(&self) -> UnstructuredBinary<String>;
+
+    // PATCH method endpoints
+    #[endpoint(patch = "/resource/{id}")]
+    fn patch_resource(&self, id: String, update: ResourceUpdate) -> ResourceResponse;
+
+    #[endpoint(patch = "/resource/{id}/partial")]
+    fn patch_partial(&self, id: String) -> ResourceResponse;
 }
 
 #[derive(AllowedMimeTypes, Clone, Debug)]
@@ -226,6 +233,23 @@ impl HttpAgent for HttpAgentImpl {
         UnstructuredBinary::Inline {
             data: vec![1, 2, 3, 4],
             mime_type: "application/octet-stream".to_string(),
+        }
+    }
+
+    // PATCH method implementations
+    fn patch_resource(&self, id: String, update: ResourceUpdate) -> ResourceResponse {
+        ResourceResponse {
+            id: id.clone(),
+            updated: true,
+            method: "PATCH".to_string(),
+        }
+    }
+
+    fn patch_partial(&self, id: String) -> ResourceResponse {
+        ResourceResponse {
+            id: id.clone(),
+            updated: true,
+            method: "PATCH".to_string(),
         }
     }
 }

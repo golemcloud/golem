@@ -21,9 +21,9 @@ use crate::model::api_definition::{
 };
 use golem_common::model::Empty;
 use golem_common::model::agent::{
-    AgentMethod, AgentType, AgentTypeName, DataSchema, ElementSchema, HttpEndpointDetails,
-    HttpMethod, HttpMountDetails, NamedElementSchemas, RegisteredAgentTypeImplementer,
-    SystemVariable,
+    AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema, ElementSchema,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, NamedElementSchemas,
+    RegisteredAgentTypeImplementer, SystemVariable,
 };
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
@@ -141,7 +141,7 @@ pub fn add_agent_method_http_routes(
                     component_revision: implementer.component_revision,
                     agent_type: agent.type_name.clone(),
                     method_name: agent_method.name.clone(),
-                    phantom: http_mount.phantom_agent,
+                    phantom: http_mount.phantom_agent || agent.mode == AgentMode::Ephemeral,
                     constructor_parameters: constructor_parameters.clone(),
                     method_parameters,
                     expected_agent_response: agent_method.output_schema.clone(),
@@ -692,14 +692,143 @@ mod tests {
     use crate::model::api_definition::UnboundRouteSecurity;
     use chrono::Utc;
     use golem_common::model::Empty;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::{
+        AgentConstructor, AgentMethod, AgentMode, AgentType, CorsOptions as AgentCorsOptions,
+        HttpMountDetails, LiteralSegment, Snapshotting,
+    };
+    use golem_common::model::application::ApplicationId;
+    use golem_common::model::auth::EnvironmentRole;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::diff::Hash;
     use golem_common::model::domain_registration::Domain;
-    use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentId};
+    use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentId, HttpApiDeploymentAgentOptions};
+    use golem_common::model::environment::{
+        Environment, EnvironmentId, EnvironmentName, EnvironmentRevision,
+    };
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
+    use uuid::Uuid;
 
-    fn test_deployment(openapi_endpoint: Option<&str>) -> HttpApiDeployment {
+    fn test_environment(environment_id: EnvironmentId) -> Environment {
+        Environment {
+            id: environment_id,
+            revision: EnvironmentRevision::INITIAL,
+            application_id: ApplicationId(Uuid::new_v4()),
+            name: EnvironmentName::try_from("prod").unwrap(),
+            diff_model_version: 0,
+            compatibility_check: false,
+            version_check: false,
+            security_overrides: false,
+            owner_account_id: AccountId(Uuid::new_v4()),
+            roles_from_active_shares: BTreeSet::<EnvironmentRole>::new(),
+            current_deployment: None,
+        }
+    }
+
+    fn test_agent(mode: AgentMode, phantom_agent: bool) -> AgentType {
+        AgentType {
+            type_name: AgentTypeName("note-agent".to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            constructor: AgentConstructor {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+            },
+            methods: vec![AgentMethod {
+                name: "fetch".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                http_endpoint: vec![HttpEndpointDetails {
+                    http_method: HttpMethod::Get(Empty {}),
+                    path_suffix: vec![],
+                    header_vars: vec![],
+                    query_vars: vec![],
+                    auth_details: None,
+                    cors_options: AgentCorsOptions {
+                        allowed_patterns: vec![],
+                    },
+                }],
+            }],
+            dependencies: vec![],
+            mode,
+            http_mount: Some(HttpMountDetails {
+                path_prefix: vec![golem_common::model::agent::PathSegment::Literal(
+                    LiteralSegment {
+                        value: "notes".to_string(),
+                    },
+                )],
+                auth_details: None,
+                phantom_agent,
+                cors_options: AgentCorsOptions {
+                    allowed_patterns: vec![],
+                },
+                webhook_suffix: vec![],
+            }),
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        }
+    }
+
+    fn test_deployment(environment_id: EnvironmentId) -> HttpApiDeployment {
+        HttpApiDeployment {
+            id: HttpApiDeploymentId::new(),
+            revision:
+                golem_common::model::http_api_deployment::HttpApiDeploymentRevision::try_from(0u64)
+                    .unwrap(),
+            environment_id,
+            domain: Domain("example.com".to_string()),
+            hash: Hash::empty(),
+            agents: BTreeMap::new(),
+            webhooks_url: "/webhooks".to_string(),
+            openapi_endpoint: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    fn compiled_phantom_flag(mode: AgentMode, phantom_agent: bool) -> bool {
+        let environment_id = EnvironmentId(Uuid::new_v4());
+        let environment = test_environment(environment_id);
+        let deployment = test_deployment(environment_id);
+        let agent = test_agent(mode, phantom_agent);
+        let http_mount = agent.http_mount.clone().unwrap();
+        let implementer = RegisteredAgentTypeImplementer {
+            component_id: ComponentId(Uuid::new_v4()),
+            component_revision: ComponentRevision::INITIAL,
+        };
+        let mut current_route_id = 0;
+        let mut compiled_routes = Vec::new();
+        let mut errors = Vec::new();
+
+        add_agent_method_http_routes(
+            &environment,
+            &deployment,
+            &agent,
+            &implementer,
+            &http_mount,
+            &agent.methods,
+            vec![],
+            &HttpApiDeploymentAgentOptions::default(),
+            &mut current_route_id,
+            &mut compiled_routes,
+            &mut errors,
+        );
+
+        assert!(errors.is_empty());
+
+        let compiled_route = compiled_routes.into_iter().next().unwrap();
+        let RouteBehaviour::CallAgent(call_agent) = compiled_route.behaviour else {
+            panic!("expected call-agent route");
+        };
+
+        call_agent.phantom
+    }
+
+    fn test_deployment_with_openapi(openapi_endpoint: Option<&str>) -> HttpApiDeployment {
         HttpApiDeployment {
             id: HttpApiDeploymentId::new(),
             revision:
@@ -773,7 +902,7 @@ mod tests {
 
     #[test]
     fn parses_openapi_endpoint_segments_for_literal_prefix() {
-        let result = parse_openapi_endpoint_path_segments(&test_deployment(Some("/docs/specs/")))
+        let result = parse_openapi_endpoint_path_segments(&test_deployment_with_openapi(Some("/docs/specs/")))
             .expect("expected valid openapi prefix");
 
         assert_eq!(
@@ -791,7 +920,7 @@ mod tests {
 
     #[test]
     fn parses_openapi_endpoint_as_root_when_unset() {
-        let result = parse_openapi_endpoint_path_segments(&test_deployment(None))
+        let result = parse_openapi_endpoint_path_segments(&test_deployment_with_openapi(None))
             .expect("expected root openapi prefix");
 
         assert!(result.is_empty());
@@ -809,7 +938,7 @@ mod tests {
             "/docs/openapi.json",
         ] {
             let result =
-                parse_openapi_endpoint_path_segments(&test_deployment(Some(invalid_prefix)));
+                parse_openapi_endpoint_path_segments(&test_deployment_with_openapi(Some(invalid_prefix)));
 
             assert!(matches!(
                 result,
@@ -820,7 +949,7 @@ mod tests {
 
     #[test]
     fn add_openapi_spec_routes_uses_custom_prefix_and_formats() {
-        let deployment = test_deployment(Some("/docs"));
+        let deployment = test_deployment_with_openapi(Some("/docs"));
         let mut route_id = 1;
         let mut compiled_routes = Vec::new();
         let mut errors = Vec::new();
@@ -874,7 +1003,7 @@ mod tests {
 
     #[test]
     fn add_openapi_spec_routes_reports_invalid_prefix_error() {
-        let deployment = test_deployment(Some("/docs?x=1"));
+        let deployment = test_deployment_with_openapi(Some("/docs?x=1"));
         let mut route_id = 1;
         let mut compiled_routes = Vec::new();
         let mut errors = Vec::new();
@@ -956,7 +1085,7 @@ mod tests {
             },
         ];
 
-        let deployment = test_deployment(None);
+        let deployment = test_deployment_with_openapi(None);
 
         let mut route_id = 3;
         add_cors_preflight_http_routes(&deployment, &mut route_id, &mut compiled_routes);
@@ -999,5 +1128,15 @@ mod tests {
             post_policy.allowed_headers,
             BTreeSet::from(["content-type".to_string(), "x-session".to_string(),])
         );
+    }
+
+    #[test]
+    fn ephemeral_agents_force_http_routes_to_be_phantom() {
+        assert!(compiled_phantom_flag(AgentMode::Ephemeral, false));
+    }
+
+    #[test]
+    fn durable_agents_keep_explicit_http_phantom_flag() {
+        assert!(compiled_phantom_flag(AgentMode::Durable, true));
     }
 }

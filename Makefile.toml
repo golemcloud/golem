@@ -110,14 +110,17 @@ script = """
 rm -r sdks/rust/golem-rust/wit/deps
 rm -r sdks/ts/wit/deps
 rm -r sdks/scala/wit/deps
+rm -r sdks/moonbit/golem_sdk/wit/deps
 mkdir sdks/rust/golem-rust/wit/deps
 mkdir sdks/ts/wit/deps
 mkdir sdks/scala/wit/deps
+mkdir sdks/moonbit/golem_sdk/wit/deps
 glob_cp wit/deps/**/* sdks/rust/golem-rust/wit/deps
 glob_cp sdks/rust/golem-rust/wit/golem-ai/**/* sdks/rust/golem-rust/wit/deps
 glob_cp wit/deps/**/* sdks/ts/wit/deps
 glob_cp sdks/ts/wit/golem-ai/**/* sdks/ts/wit/deps
 glob_cp wit/deps/**/* sdks/scala/wit/deps
+glob_cp wit/deps/**/* sdks/moonbit/golem_sdk/wit/deps
 """
 
 [tasks.wit-golem-cli]
@@ -300,7 +303,7 @@ args = [
 description = "Builds the TypeScript SDK if dist or agent_guest.wasm doesn't exist"
 cwd = "./sdks/ts"
 script_runner = "@duckscript"
-env = { PNPM_BIN = "pnpm" }
+env = { NPX_BIN = "npx" }
 script = '''
 dist_exists = is_path_exists packages/golem-ts-sdk/dist
 agent_wasm_exists = is_path_exists packages/golem-ts-sdk/wasm/agent_guest.wasm
@@ -313,29 +316,29 @@ if ${dist_exists}
 end
 
 if ${build_required}
-    exec --fail-on-error %{PNPM_BIN} clean
-    exec --fail-on-error %{PNPM_BIN} install
-    exec --fail-on-error %{PNPM_BIN} run build
-    exec --fail-on-error %{PNPM_BIN} run build-agent-template
+    exec --fail-on-error %{NPX_BIN} pnpm clean
+    exec --fail-on-error %{NPX_BIN} pnpm install
+    exec --fail-on-error %{NPX_BIN} pnpm run build
+    exec --fail-on-error %{NPX_BIN} pnpm run build-agent-template
 else
     echo "TypeScript SDK already built, skipping"
 end
 '''
 
 [tasks.build-sdk-ts.windows]
-env = { PNPM_BIN = "pnpm.cmd" }
+env = { NPX_BIN = "npx.cmd" }
 
 [tasks.clean-sdk-ts]
 description = "Cleans the TypeScript SDK"
 cwd = "./sdks/ts"
 script_runner = "@duckscript"
-env = { PNPM_BIN = "pnpm" }
+env = { NPX_BIN = "npx" }
 script = '''
-exec --fail-on-error %{PNPM_BIN} clean
+exec --fail-on-error %{NPX_BIN} pnpm clean
 '''
 
 [tasks.clean-sdk-ts.windows]
-env = { PNPM_BIN = "pnpm.cmd" }
+env = { NPX_BIN = "npx.cmd" }
 
 [tasks.build-sdk-scala]
 description = "Publishes the Scala SDK to local Ivy/Maven cache as 0.0.0-SNAPSHOT"
@@ -509,15 +512,16 @@ dependencies = [
 ]
 
 [tasks.integration-tests-group1]
-description = "Runs integration tests (group 1/9 - worker, fork)"
+description = "Runs integration tests (group 1/11 - worker, fork)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
+cargo-test-r run --package integration-tests --test integration :tag: -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 cargo-test-r run --package integration-tests --test integration :tag:group1 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group2]
-description = "Runs integration tests (group 2/9 - agent_config, api, custom_api)"
+description = "Runs integration tests (group 2/11 - agent_config, api, custom_api)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -525,15 +529,16 @@ cargo-test-r run --package integration-tests --test integration :tag:group2 -- -
 '''
 
 [tasks.integration-tests-group3]
-description = "Runs integration tests (group 3/9 - worker, fork with sqlite)"
+description = "Runs integration tests (group 3/11 - worker, fork with sqlite)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
 script = '''
+cargo-test-r run --package integration-tests --test integration :tag: -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 cargo-test-r run --package integration-tests --test integration :tag:group1 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group4]
-description = "Runs integration tests (group 4/9 - agent_config, api, custom_api with sqlite)"
+description = "Runs integration tests (group 4/11 - agent_config, api, custom_api with sqlite)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
 script = '''
@@ -541,7 +546,7 @@ cargo-test-r run --package integration-tests --test integration :tag:group2 -- -
 '''
 
 [tasks.integration-tests-group5]
-description = "Runs integration tests (group 5/9 - service tests)"
+description = "Runs integration tests (group 5/11 - service tests)"
 dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -552,7 +557,7 @@ RUST_LOG=debug cargo-test-r run --package golem-debugging-service --test '*' -- 
 '''
 
 [tasks.integration-tests-group6]
-description = "Runs integration tests (group 6/9 - sharding)"
+description = "Runs integration tests (group 6/11 - sharding)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
 script = '''
@@ -560,7 +565,7 @@ cargo-test-r run --package integration-tests --test sharding -- --nocapture --re
 '''
 
 [tasks.integration-tests-group7]
-description = "Runs integration tests (group 7/9 - otlp_plugin, plugins)"
+description = "Runs integration tests (group 7/11 - otlp_plugin, plugins)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -568,7 +573,7 @@ cargo-test-r run --package integration-tests --test integration :tag:group7 -- -
 '''
 
 [tasks.integration-tests-group8]
-description = "Runs integration tests (group 8/9 - live agent secret mutation)"
+description = "Runs integration tests (group 8/11 - live agent secret mutation)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -576,11 +581,27 @@ cargo-test-r run --package integration-tests --test agent-config-live-mutation -
 '''
 
 [tasks.integration-tests-group9]
-description = "Runs integration tests (group 9/9 - live agent secret mutation with sqlite)"
+description = "Runs integration tests (group 9/11 - live agent secret mutation with sqlite)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
 script = '''
 cargo-test-r run --package integration-tests --test agent-config-live-mutation -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group10]
+description = "Runs integration tests (group 10/11 - custom_api, quota)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script = '''
+cargo-test-r run --package integration-tests --test integration :tag:group10 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group11]
+description = "Runs integration tests (group 11/11 - custom_api, quota with sqlite)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+script = '''
+cargo-test-r run --package integration-tests --test integration :tag:group10 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.cli-integration-tests]
@@ -791,6 +812,7 @@ args = [
     "merge",
     "--spec-yaml",
     "./target/golem-registry-service.yaml",
+    "--spec-yaml",
     "./target/golem-worker-service.yaml",
     "--output-yaml",
     "./target/golem-service.yaml",

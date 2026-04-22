@@ -48,6 +48,8 @@ steps:
         - "golem-atomic-block-ts"
       scala:
         - "golem-atomic-block-scala"
+      moonbit:
+        - "golem-atomic-block-moonbit"
     verify:
       build: true
       deploy: true
@@ -59,6 +61,7 @@ steps:
         rust: "run_atomic_test"
         ts: "runAtomicTest"
         scala: "runAtomicTest"
+        moonbit: "run_atomic_test"
 
   - id: "verify-event-sequence"
     http:

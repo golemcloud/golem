@@ -43,6 +43,7 @@ steps:
         rust: "get_config"
         ts: "getConfig"
         scala: "getConfig"
+        moonbit: "get_config"
     expect:
       rust:
         result_json:
@@ -61,4 +62,10 @@ steps:
           - path: "$.appMode"
             equals: "production"
           - path: "$.greetingPrefix"
+            equals: "Hello"
+      moonbit:
+        result_json:
+          - path: "$.app_mode"
+            equals: "production"
+          - path: "$.greeting_prefix"
             equals: "Hello"
