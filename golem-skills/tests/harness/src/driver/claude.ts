@@ -90,7 +90,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
     const startTime = Date.now();
     const prefix = this.logPrefix;
     const outputParts: string[] = [];
-    let usage: UsageStats = {};
+    const usage: UsageStats = {};
 
     return new Promise((resolve) => {
       const child = spawn("claude", args, {
