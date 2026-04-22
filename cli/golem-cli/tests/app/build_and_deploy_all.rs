@@ -121,7 +121,6 @@ async fn build_mixed_language_app() {
     fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
     ctx.cd(app_name);
 
-    // Templates that have unique agent names — no component-name override needed
     for template in &[
         "ts/human-in-the-loop",
         "rust/json",
@@ -134,8 +133,8 @@ async fn build_mixed_language_app() {
         assert!(outputs.success_or_dump());
     }
 
-    // MoonBit default has CounterAgent which collides with Scala default,
-    // so give it an explicit component name
+    // MoonBit default also uses CounterAgent (same as Scala), so give it an
+    // explicit component name and rename the agent type to avoid the collision.
     let outputs = ctx
         .cli([
             flag::YES,
@@ -148,6 +147,12 @@ async fn build_mixed_language_app() {
         ])
         .await;
     assert!(outputs.success_or_dump());
+
+    for file in &["moonbit/counter.mbt", "golem.yaml"] {
+        let path = ctx.cwd_path_join(file);
+        let content = fs::read_to_string(&path).unwrap();
+        fs::write(&path, content.replace("CounterAgent", "MoonbitCounter")).unwrap();
+    }
 
     let outputs = ctx.cli([cmd::BUILD]).await;
     assert!(outputs.success_or_dump());
