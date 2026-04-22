@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import {
   BaseAgentDriver,
   AgentResult,
@@ -270,8 +271,20 @@ export class CodexAgentDriver extends BaseAgentDriver {
         if (changes) {
           for (const change of changes) {
             const kind = (change.kind as string) ?? "update";
-            const path = (change.path as string) ?? "?";
-            log.driver(prefix, `file: ${kind} ${path}`);
+            const filePath = (change.path as string) ?? "?";
+            log.driver(prefix, `file: ${kind} ${filePath}`);
+            if (kind === "add" && filePath !== "?") {
+              try {
+                const content = readFileSync(filePath, "utf-8");
+                log.driver(prefix, `--- ${filePath} (${content.split("\n").length} lines) ---`);
+                for (const line of content.split("\n")) {
+                  log.driver(prefix, `│ ${line}`);
+                }
+                log.driver(prefix, `--- end ${filePath} ---`);
+              } catch {
+                // File may have been deleted or be inaccessible
+              }
+            }
           }
         }
         break;

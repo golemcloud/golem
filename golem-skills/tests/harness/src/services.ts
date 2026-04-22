@@ -6,6 +6,26 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import * as log from "./log.js";
 
+async function waitForWireMockMappings(baseUrl: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const resp = await fetch(`${baseUrl}/__admin/mappings`);
+      if (resp.ok) {
+        const body = (await resp.json()) as { mappings?: unknown[] };
+        if (body.mappings && body.mappings.length > 0) {
+          log.info(`WireMock has ${body.mappings.length} mapping(s) loaded`);
+          return;
+        }
+      }
+    } catch {
+      // not ready yet
+    }
+    await delay(500);
+  }
+  throw new Error(`Timed out waiting for WireMock mappings at ${baseUrl}`);
+}
+
 export type PrerequisiteServiceName = "postgres" | "mysql" | "ignite" | "openai-mock";
 
 interface ManagedService {
@@ -237,6 +257,7 @@ async function startOpenAiMockService(): Promise<ManagedService> {
     await waitForTcpReady("127.0.0.1", hostPort, 30_000);
 
     const url = `http://127.0.0.1:${hostPort}`;
+    await waitForWireMockMappings(url, 15_000);
     return {
       name: "openai-mock",
       containerId,

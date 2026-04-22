@@ -255,7 +255,11 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
    * structured log output. Returns `"credit"` if a credit-insufficient error
    * was detected, `"error"` for other error events, or `null` otherwise.
    */
-  private processJsonLine(prefix: string, line: string, textParts: string[]): "credit" | "error" | null {
+  private processJsonLine(
+    prefix: string,
+    line: string,
+    textParts: string[],
+  ): "credit" | "error" | null {
     const trimmed = line.trim();
     if (!trimmed) return null;
 

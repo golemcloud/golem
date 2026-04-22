@@ -1310,7 +1310,8 @@ export class ScenarioExecutor {
     }
     if (spec.config) {
       for (const [k, v] of Object.entries(spec.config)) {
-        args.push("-c", `${k}=${v}`);
+        const jsonValue = typeof v === "string" ? JSON.stringify(v) : String(v);
+        args.push("-c", `${k}=${jsonValue}`);
       }
     }
     const result = await this.runLocalCommand("golem", args, timeout, projectDir, commandEnv);

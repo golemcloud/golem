@@ -94,7 +94,7 @@ steps:
 
   - id: "http-different-instance"
     http:
-      url: "http://test-app.localhost:9006/todos/work/items"
+      url: "http://test-app.localhost:9006/todos/harness-isolation-check-7f3a/items"
       method: "GET"
     expect:
       status: 200
