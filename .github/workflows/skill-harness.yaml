@@ -263,6 +263,7 @@ jobs:
           cp -r golem-skills/tests/harness/node_modules /tmp/harness-run/node_modules
           cp -r golem-skills/tests/harness/src /tmp/harness-run/src
           cp -r golem-skills/tests/harness/scenarios /tmp/harness-run/scenarios
+          cp -r golem-skills/tests/harness/docker /tmp/harness-run/docker
           cp golem-skills/tests/harness/package.json /tmp/harness-run/
           cp golem-skills/tests/harness/tsconfig.json /tmp/harness-run/
           cd /tmp/harness-run && git init -b main && git config user.email "ci@golem.cloud" && git config user.name "CI" && git add -A && git commit -m "init"

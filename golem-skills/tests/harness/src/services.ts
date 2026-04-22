@@ -240,6 +240,13 @@ async function startOpenAiMockService(): Promise<ManagedService> {
     harnessRoot = parent;
   }
   const mappingsDir = path.resolve(harnessRoot, "docker", "openai-mock", "mappings");
+  log.info(`Resolved WireMock mappings dir: ${mappingsDir}`);
+  if (!existsSync(mappingsDir)) {
+    throw new Error(
+      `OpenAI mock mappings directory not found: ${mappingsDir}\n` +
+        `Ensure the docker/ directory is present alongside package.json.`,
+    );
+  }
 
   const containerId = await dockerRunDetached([
     "run",
