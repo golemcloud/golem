@@ -341,7 +341,7 @@ async fn update_http_api_deployment_openapi_endpoint_can_be_set_and_cleared(
 
     assert_eq!(
         updated_http_api_deployment.openapi_endpoint_prefix,
-        "/docs".to_string()
+        "/docs/".to_string()
     );
 
     Ok(())
