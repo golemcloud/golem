@@ -304,7 +304,7 @@ fn worker_filter_matches() {
         AgentFilter::new_config(
             "var1".to_string(),
             StringFilterComparator::Equal,
-            "\"value1\"".to_string(),
+            "value1".to_string(),
         )
         .matches(&worker_metadata)
     );
@@ -313,7 +313,7 @@ fn worker_filter_matches() {
         !AgentFilter::new_config(
             "var1".to_string(),
             StringFilterComparator::Equal,
-            "\"value2\"".to_string(),
+            "value2".to_string(),
         )
         .matches(&worker_metadata)
     );

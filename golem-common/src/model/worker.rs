@@ -26,10 +26,14 @@ impl TypedAgentConfigEntry {
     }
 
     pub fn to_flat_pair(&self) -> Option<(String, String)> {
-        self.value
-            .to_json_value()
-            .ok()
-            .map(|json| (Self::render_path(&self.path), json.to_string()))
+        self.value.to_json_value().ok().map(|json| {
+            let rendered_value = match json {
+                serde_json::Value::String(value) => value,
+                other => other.to_string(),
+            };
+
+            (Self::render_path(&self.path), rendered_value)
+        })
     }
 
     pub fn to_flat_map(entries: &[TypedAgentConfigEntry]) -> BTreeMap<String, String> {

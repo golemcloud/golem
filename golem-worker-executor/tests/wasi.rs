@@ -3050,7 +3050,7 @@ async fn wasi_config_initial_worker_config(
 
         assert_eq!(
             result,
-            Value::Option(Some(Box::new(Value::String("\"v1\"".to_string()))))
+            Value::Option(Some(Box::new(Value::String("v1".to_string()))))
         )
     }
 
@@ -3080,11 +3080,11 @@ async fn wasi_config_initial_worker_config(
             Value::List(vec![
                 Value::Tuple(vec![
                     Value::String("k1".to_string()),
-                    Value::String("\"v1\"".to_string())
+                    Value::String("v1".to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("k2".to_string()),
-                    Value::String("\"v2\"".to_string())
+                    Value::String("v2".to_string())
                 ])
             ])
         )
@@ -3158,15 +3158,15 @@ async fn wasi_config_component_update(
             Value::List(vec![
                 Value::Tuple(vec![
                     Value::String("k1".to_string()),
-                    Value::String("\"v1\"".to_string())
+                    Value::String("v1".to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("k2".to_string()),
-                    Value::String("\"v2\"".to_string())
+                    Value::String("v2".to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("k3".to_string()),
-                    Value::String("\"v3\"".to_string())
+                    Value::String("v3".to_string())
                 ]),
             ])
         )
@@ -3217,19 +3217,19 @@ async fn wasi_config_component_update(
             Value::List(vec![
                 Value::Tuple(vec![
                     Value::String("k1".to_string()),
-                    Value::String("\"v1\"".to_string())
+                    Value::String("v1".to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("k2".to_string()),
-                    Value::String("\"v2\"".to_string())
+                    Value::String("v2".to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("k3".to_string()),
-                    Value::String("\"v4\"".to_string())
+                    Value::String("v4".to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("k4".to_string()),
-                    Value::String("\"v4\"".to_string())
+                    Value::String("v4".to_string())
                 ]),
             ])
         )
