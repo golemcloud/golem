@@ -52,7 +52,8 @@ impl Diffable for HttpApiDeploymentAgentOptions {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpApiDeployment {
-    pub webhooks_url: String,
+    pub webhooks_prefix: String,
+    pub openapi_endpoint_prefix: String,
     pub agents: BTreeMap<String, HttpApiDeploymentAgentOptions>,
 }
 
@@ -66,6 +67,7 @@ impl Hashable for HttpApiDeployment {
 #[serde(rename_all = "camelCase")]
 pub struct HttpApiDeploymentDiff {
     pub webhooks_url_changed: bool,
+    pub openapi_endpoint_changed: bool,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub agents_changes: BTreeMapDiff<String, HttpApiDeploymentAgentOptions>,
 }
@@ -74,18 +76,23 @@ impl Diffable for HttpApiDeployment {
     type DiffResult = HttpApiDeploymentDiff;
 
     fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
-        let webhooks_url_changed = new.webhooks_url != current.webhooks_url;
+        let webhooks_url_changed = new.webhooks_prefix != current.webhooks_prefix;
+        let openapi_endpoint_changed =
+            new.openapi_endpoint_prefix != current.openapi_endpoint_prefix;
         let agents_changes = new
             .agents
             .diff_with_current(&current.agents)?
             .unwrap_or_default();
-        Ok(if webhooks_url_changed || !agents_changes.is_empty() {
-            Some(Self::DiffResult {
-                webhooks_url_changed,
-                agents_changes,
-            })
-        } else {
-            None
-        })
+        Ok(
+            if webhooks_url_changed || openapi_endpoint_changed || !agents_changes.is_empty() {
+                Some(Self::DiffResult {
+                    webhooks_url_changed,
+                    openapi_endpoint_changed,
+                    agents_changes,
+                })
+            } else {
+                None
+            },
+        )
     }
 }

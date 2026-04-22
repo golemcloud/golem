@@ -884,7 +884,8 @@ impl AppCommandHandler {
                 diffable_local_http_api_deployments.insert(
                     domain.0.clone(),
                     diff::HttpApiDeployment {
-                        webhooks_url: http_api_deployment.webhooks_url.clone(),
+                        webhooks_prefix: http_api_deployment.webhooks_prefix.clone(),
+                        openapi_endpoint_prefix: http_api_deployment.openapi_prefix.clone(),
                         agents,
                     }
                     .into(),

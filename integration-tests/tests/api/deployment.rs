@@ -260,7 +260,8 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
             AgentTypeName("HttpAgent".to_string()),
             HttpApiDeploymentAgentOptions::default(),
         )]),
-        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
+        webhooks_prefix: HttpApiDeploymentCreation::default_webhooks_prefix(),
+        openapi_endpoint_prefix: HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
     };
 
     let http_api_deployment = client

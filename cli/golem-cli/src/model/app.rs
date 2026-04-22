@@ -2493,7 +2493,12 @@ mod app_builder {
                                 deployments.entry(api_deployment.domain).or_insert(WithSource::new(
                                     app.source.to_path_buf(),
                                     HttpApiDeploymentDeployProperties {
-                                        webhooks_url: api_deployment.webhook_url.unwrap_or_else(HttpApiDeploymentCreation::default_webhooks_url),
+                                        webhooks_prefix: HttpApiDeploymentCreation::normalize_webhooks_prefix(
+                                            api_deployment
+                                                .webhook_url
+                                                .unwrap_or_else(HttpApiDeploymentCreation::default_webhooks_prefix),
+                                        ),
+                                        openapi_prefix: HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix(api_deployment.openapi_endpoint.unwrap_or(HttpApiDeploymentCreation::default_openapi_endpoint_prefix())),
                                         agents,
                                     },
                                 ));
