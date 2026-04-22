@@ -9,7 +9,7 @@ import {
 } from "./base.js";
 import * as log from "../log.js";
 
-const STARTUP_STALL_TIMEOUT_SECONDS = 90;
+const STARTUP_STALL_TIMEOUT_SECONDS = 120;
 
 export class OpenCodeAgentDriver extends BaseAgentDriver {
   protected readonly driverName = "opencode";
@@ -90,10 +90,21 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           `OPENCODE_MODEL=${model ? "present" : "absent"}`,
       );
 
-      const monitor = new ActivityMonitor(prefix, opts, (_kind) => {
-        killProcessTree(child);
-      });
+      // OpenCode in --format json mode writes nothing to stdout until the
+      // entire run completes. Its BubbleTea spinner may or may not produce
+      // stderr bytes depending on TTY detection. Disable idle timeout since
+      // it's unreliable here — the step timeout provides the safety net.
+      const monitor = new ActivityMonitor(
+        prefix,
+        { ...opts, idleTimeoutSeconds: 0 },
+        (_kind) => {
+          killProcessTree(child);
+        },
+      );
 
+      // Startup stall timer — fires if neither stdout nor stderr produces
+      // any output within the timeout. Uses a generous timeout since Gemini
+      // models can take a long time before the first response chunk.
       const startupTimer = setTimeout(() => {
         if (!receivedFirstOutput) {
           startupStalled = true;
@@ -135,6 +146,11 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         stderrBytes += data.length;
         rawOutput += chunk;
         stderrBuf += chunk;
+
+        if (!receivedFirstOutput) {
+          receivedFirstOutput = true;
+          clearTimeout(startupTimer);
+        }
 
         const lines = stderrBuf.split("\n");
         stderrBuf = lines.pop()!;
