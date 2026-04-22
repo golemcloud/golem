@@ -315,24 +315,8 @@ pub fn add_openapi_spec_routes(
     deployment: &HttpApiDeployment,
     current_route_id: &mut i32,
     compiled_routes: &mut Vec<UnboundCompiledRoute>,
-    errors: &mut Vec<DeployValidationError>,
 ) {
     let openapi_prefix = parse_literal_only_path_segments(&deployment.openapi_endpoint_prefix);
-
-    if openapi_prefix.last().iter().any(|ps| {
-        matches!(
-            ps.literal_value(),
-            Some("openapi.json") | Some("openapi.yaml")
-        )
-    }) {
-        errors.push(
-            DeployValidationError::HttpApiDeploymentInvalidOpenApiEndpoint {
-                domain: deployment.domain.clone(),
-                openapi_prefix: deployment.openapi_endpoint_prefix.to_string(),
-                error: "the prefix must not end in openapi.json or openapi.yaml".to_string(),
-            },
-        )
-    }
 
     for (format, openapi_path) in [
         (OpenApiSpecFormat::Json, "openapi.json"),
@@ -423,23 +407,6 @@ pub fn build_agent_http_api_deployment_details(
             ),
         })
         .collect::<Result<Vec<_>, _>>()?;
-
-    // check final webhook url forms a valid url.
-    {
-        let mut url_to_validate = format!("http://{}/", domain.0);
-
-        for segment in &agent_webhook {
-            url_to_validate.push_str(segment);
-            url_to_validate.push('/');
-        }
-
-        Url::parse(&url_to_validate).map_err(|_| {
-            DeployValidationError::HttpApiDeploymentInvalidWebhookUrl {
-                agent_type: agent_type_name.clone(),
-                url: url_to_validate,
-            }
-        })?;
-    }
 
     Ok(Some((domain.clone(), agent_webhook)))
 }
@@ -644,6 +611,31 @@ fn resolve_route_security(
         )),
         (false, _) => Ok(UnboundRouteSecurity::None),
     }
+}
+
+pub fn validate_path_segments(
+    segments: &[PathSegment],
+    domain: &Domain,
+) -> Result<(), &'static str> {
+    let rendered_path = segments
+        .iter()
+        .map(|p| match p {
+            PathSegment::Literal { value } => value.clone(),
+            PathSegment::Variable { .. } | PathSegment::CatchAll { .. } => "_".to_string(),
+        })
+        .join("/");
+
+    let url_to_validate = format!("http://{}/{}", domain.0, rendered_path);
+
+    let Ok(url) = Url::parse(&url_to_validate) else {
+        return Err("Does not form a valid url");
+    };
+
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err("may not contain query or fragment");
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -867,16 +859,9 @@ mod tests {
         let deployment = test_deployment_with_openapi("/docs");
         let mut route_id = 1;
         let mut compiled_routes = Vec::new();
-        let mut errors = Vec::new();
 
-        add_openapi_spec_routes(
-            &deployment,
-            &mut route_id,
-            &mut compiled_routes,
-            &mut errors,
-        );
+        add_openapi_spec_routes(&deployment, &mut route_id, &mut compiled_routes);
 
-        assert!(errors.is_empty());
         assert_eq!(compiled_routes.len(), 2);
 
         assert_eq!(
@@ -913,28 +898,6 @@ mod tests {
             RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
                 format: OpenApiSpecFormat::Yaml
             })
-        ));
-    }
-
-    #[test]
-    fn add_openapi_spec_routes_reports_invalid_prefix_error() {
-        let deployment = test_deployment_with_openapi("/docs?x=1");
-        let mut route_id = 1;
-        let mut compiled_routes = Vec::new();
-        let mut errors = Vec::new();
-
-        add_openapi_spec_routes(
-            &deployment,
-            &mut route_id,
-            &mut compiled_routes,
-            &mut errors,
-        );
-
-        assert!(compiled_routes.is_empty());
-        assert_eq!(errors.len(), 1);
-        assert!(matches!(
-            &errors[0],
-            DeployValidationError::HttpApiDeploymentInvalidOpenApiEndpoint { .. }
         ));
     }
 

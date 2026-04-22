@@ -1538,11 +1538,7 @@ mod test {
     fn arb_http_api_deployment_model() -> BoxedStrategy<HttpApiDeployment> {
         (
             arb_dns_label(),
-            arb_opt(
-                (arb_dns_label(), arb_ident())
-                    .prop_map(|(host, path)| format!("https://{host}.example.com/{path}"))
-                    .boxed(),
-            ),
+            arb_opt(arb_ident()),
             arb_opt(arb_ident()),
             prop::collection::vec(
                 (
