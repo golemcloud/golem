@@ -1077,7 +1077,8 @@ impl ComponentCommandHandler {
                 &ComponentCreation {
                     component_name: component_name.clone(),
                     agent_types,
-                    agent_type_provision_configs: component_stager.agent_type_provision_configs(),
+                    agent_type_provision_configs: component_stager
+                        .agent_type_provision_configs()?,
                 },
                 wasm,
                 OptionFuture::from(files.as_ref().map(|files| files.open_archive()))
@@ -1169,7 +1170,7 @@ impl ComponentCommandHandler {
                     current_revision: component.revision,
                     agent_types,
                     agent_type_provision_config_updates: component_stager
-                        .agent_type_provision_config_updates(&changed_files),
+                        .agent_type_provision_config_updates(&changed_files)?,
                 },
                 wasm,
                 changed_files.open_archive().await?,
