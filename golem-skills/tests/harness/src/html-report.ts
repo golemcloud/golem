@@ -1,5 +1,4 @@
 import type { StepResult } from "./executor.js";
-import { formatScenarioMatrixLabel } from "./summary.js";
 
 interface ScenarioReport {
   scenario: string;
