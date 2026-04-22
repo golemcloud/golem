@@ -297,6 +297,7 @@ jobs:
       - name: ${{ matrix.group.description }}
         env:
           QUIET: true
+          GOLEM_PRESET: quick
         run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 30
       - uses: ./.github/actions/publish-test-report
@@ -664,6 +665,8 @@ jobs:
 
       - name: Build test components
         working-directory: test-components
+        env:
+          GOLEM_TS_PRESET: quick
         run: ./build-components.sh ${{ matrix.chunk.name }}
 
       - name: Collect built WASMs
