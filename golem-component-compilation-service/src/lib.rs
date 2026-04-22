@@ -177,8 +177,7 @@ fn create_wasmtime_config(engine_config: &config::EngineConfig) -> wasmtime::Con
 
     if engine_config.enable_fs_cache {
         config.cache(Some(
-            wasmtime::Cache::new(wasmtime::CacheConfig::new())
-                .expect("Failed to initialize cache"),
+            wasmtime::Cache::new(wasmtime::CacheConfig::new()).expect("Failed to initialize cache"),
         ));
     }
 

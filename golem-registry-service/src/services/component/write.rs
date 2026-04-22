@@ -32,8 +32,8 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWi
 use golem_common::model::agent::{AgentConfigSource, AgentType};
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::component::{
-    AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId,
-    ComponentRevision, ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginInstallation,
+    AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentRevision,
+    ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginInstallation,
     PluginInstallationAction,
 };
 use golem_common::model::component::{
