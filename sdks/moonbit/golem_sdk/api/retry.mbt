@@ -1,24 +1,84 @@
 ///|
-pub using @raw {type RetryPolicy}
+pub using @retry {type NamedRetryPolicy}
 
 ///|
-/// Gets the current retry policy associated with the agent.
-pub fn get_retry_policy() -> RetryPolicy {
-  @raw.get_retry_policy()
+pub using @retry {type RetryPolicy}
+
+///|
+pub using @retry {type PredicateValue}
+
+///|
+/// Gets all retry policies active for this agent.
+pub fn get_retry_policies() -> Array[NamedRetryPolicy] {
+  @retry.get_retry_policies()
 }
 
 ///|
-/// Overrides the current retry policy associated with the agent.
-pub fn set_retry_policy(policy : RetryPolicy) -> Unit {
-  @raw.set_retry_policy(policy)
+/// Gets a specific retry policy by name.
+pub fn get_retry_policy_by_name(name : String) -> NamedRetryPolicy? {
+  @retry.get_retry_policy_by_name(name)
 }
 
 ///|
-/// Runs a function with the given retry policy, restoring the previous
-/// policy afterward (even if the function raises).
-pub fn[T] with_retry_policy(policy : RetryPolicy, f : () -> T) -> T {
-  let prev = @raw.get_retry_policy()
-  @raw.set_retry_policy(policy)
-  defer @raw.set_retry_policy(prev)
+/// Resolves the matching retry policy for a given operation context.
+/// Evaluates named policies in descending priority order; returns the
+/// policy from the first rule whose predicate matches, or None.
+pub fn resolve_retry_policy(
+  verb : String,
+  noun_uri : String,
+  properties : Array[(String, PredicateValue)],
+) -> RetryPolicy? {
+  @retry.resolve_retry_policy(verb, noun_uri, properties)
+}
+
+///|
+/// Add or overwrite a named retry policy (persisted to oplog).
+/// If a policy with the same name exists, it is replaced.
+pub fn set_retry_policy(policy : NamedRetryPolicy) -> Unit {
+  @retry.set_retry_policy(policy)
+}
+
+///|
+/// Remove a named retry policy by name (persisted to oplog).
+pub fn remove_retry_policy(name : String) -> Unit {
+  @retry.remove_retry_policy(name)
+}
+
+///|
+/// Temporarily sets a named retry policy. When the returned guard is dropped,
+/// the previous policy with the same name is restored (or removed if it
+/// didn't exist before).
+pub fn use_retry_policy(policy : NamedRetryPolicy) -> RetryPolicyGuard {
+  let previous = @retry.get_retry_policy_by_name(policy.name)
+  let name = policy.name
+  @retry.set_retry_policy(policy)
+  { previous, name }
+}
+
+///|
+/// Runs a function with a named retry policy temporarily set.
+/// The previous policy is restored (or removed) after the function completes,
+/// even if it raises.
+pub fn[T] with_retry_policy(policy : NamedRetryPolicy, f : () -> T) -> T {
+  let g = use_retry_policy(policy)
+  defer g.drop()
   f()
+}
+
+///|
+/// Guard that restores the previous state of a named retry policy on drop.
+/// If the policy existed before, it is restored; if it was newly added, it
+/// is removed.
+pub(all) struct RetryPolicyGuard {
+  previous : NamedRetryPolicy?
+  name : String
+}
+
+///|
+/// Restores the previous retry policy (or removes it if it was newly added).
+pub fn RetryPolicyGuard::drop(self : RetryPolicyGuard) -> Unit {
+  match self.previous {
+    Some(original) => @retry.set_retry_policy(original)
+    None => @retry.remove_retry_policy(self.name)
+  }
 }

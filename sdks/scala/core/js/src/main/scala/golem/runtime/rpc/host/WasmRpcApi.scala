@@ -18,6 +18,7 @@ package golem.runtime.rpc.host
 
 import golem.Datetime
 import golem.host.js._
+import golem.runtime.rpc.{CancellationToken, RawCancellationToken}
 
 import scala.annotation.unused
 import scala.scalajs.js
@@ -104,8 +105,8 @@ private[golem] object WasmRpcApi {
       datetime: Datetime,
       functionName: String,
       input: JsDataValue
-    ): Either[RpcError, js.Any] =
-      try Right(raw.scheduleCancelableInvocation(datetimeToJs(datetime), functionName, input))
+    ): Either[RpcError, CancellationToken] =
+      try Right(new CancellationToken(raw.scheduleCancelableInvocation(datetimeToJs(datetime), functionName, input).asInstanceOf[RawCancellationToken]))
       catch {
         case js.JavaScriptException(e) =>
           Left(decodeRpcError(e))

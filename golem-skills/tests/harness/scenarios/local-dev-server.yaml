@@ -1,0 +1,52 @@
+name: "local-dev-server"
+languageAgnostic: true
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+
+  - id: "write-start-script"
+    prompt: >
+      Write a shell script called start-server.sh in the test-app directory that starts the
+      local Golem development server on port 9999 with a custom data directory ./my-data,
+      a ports file at ./ports.json, and the --clean flag. Make the script executable.
+      Do not run the script.
+    expectedSkills:
+      - "golem-local-dev-server"
+
+  - id: "check-script-exists"
+    shell:
+      command: "test"
+      args: ["-x", "test-app/start-server.sh"]
+    expect:
+      exit_code: 0
+
+  - id: "check-server-run"
+    check_file:
+      path: "start-server.sh"
+    expect:
+      stdout_contains: "golem server run"
+
+  - id: "check-port"
+    check_file:
+      path: "start-server.sh"
+    expect:
+      stdout_matches: "--router-port\\s+9999"
+
+  - id: "check-data-dir"
+    check_file:
+      path: "start-server.sh"
+    expect:
+      stdout_matches: "--data-dir\\s+\\./my-data"
+
+  - id: "check-ports-file"
+    check_file:
+      path: "start-server.sh"
+    expect:
+      stdout_matches: "--ports-file\\s+\\./ports\\.json"
+
+  - id: "check-clean"
+    check_file:
+      path: "start-server.sh"
+    expect:
+      stdout_contains: "--clean"

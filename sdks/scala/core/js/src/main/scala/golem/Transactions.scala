@@ -97,26 +97,28 @@ object Transactions {
       val guard = Guards.markAtomicOperation()
       val begin = HostApi.getOplogIndex()
       val tx    = new InfallibleTransaction
-      body(tx).transform(
-        result => {
-          guard.drop()
-          result
-        },
-        {
-          case RetrySignal =>
-            HostApi.setOplogIndex(begin)
+      body(tx)
+        .transform(
+          result => {
             guard.drop()
-            // Cannot directly recurse here in transform's failure handler,
-            // so we throw and catch below
-            throw RetrySignal
-          case other =>
-            // Do NOT drop — leave the atomic region open so the executor
-            // sees the trap inside the region and can retry from the begin marker.
-            throw other
+            result
+          },
+          {
+            case RetrySignal =>
+              HostApi.setOplogIndex(begin)
+              guard.drop()
+              // Cannot directly recurse here in transform's failure handler,
+              // so we throw and catch below
+              throw RetrySignal
+            case other =>
+              // Do NOT drop — leave the atomic region open so the executor
+              // sees the trap inside the region and can retry from the begin marker.
+              throw other
+          }
+        )
+        .recoverWith { case RetrySignal =>
+          loop()
         }
-      ).recoverWith { case RetrySignal =>
-        loop()
-      }
     }
 
     loop()
@@ -144,14 +146,16 @@ object Transactions {
         guard.drop()
         Future.successful(Right(value))
       case Left(err) =>
-        tx.onFailure(err).map { failure =>
-          guard.drop()
-          Left(failure)
-        }.recover { case e =>
-          // Do NOT drop — leave the atomic region open so the executor
-          // sees the trap inside the region and can retry from the begin marker.
-          throw e
-        }
+        tx.onFailure(err)
+          .map { failure =>
+            guard.drop()
+            Left(failure)
+          }
+          .recover { case e =>
+            // Do NOT drop — leave the atomic region open so the executor
+            // sees the trap inside the region and can retry from the begin marker.
+            throw e
+          }
     }.recover { case e =>
       // Do NOT drop — leave the atomic region open for retry.
       throw e
@@ -178,7 +182,10 @@ object Transactions {
    */
   trait Operation[-In, Out, Err] {
 
-    /** Executes the operation, returning a Future of either an error or the result. */
+    /**
+     * Executes the operation, returning a Future of either an error or the
+     * result.
+     */
     def execute(input: In): Future[Either[Err, Out]]
 
     /** Compensates (undoes) a successful operation during rollback. */
@@ -277,7 +284,7 @@ object Transactions {
     def onFailure(error: Err): Future[TransactionFailure[Err]] = {
       def compensateLater(pending: List[() => Future[Either[Err, Unit]]]): Future[Option[Err]] =
         pending match {
-          case Nil => Future.successful(None)
+          case Nil          => Future.successful(None)
           case head :: tail =>
             head().flatMap {
               case Right(_)        => compensateLater(tail)

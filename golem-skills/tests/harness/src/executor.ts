@@ -8,6 +8,7 @@ import { SkillWatcher } from "./watcher.js";
 import { evaluate, ExpectSchema, type AssertionContext } from "./assertions.js";
 import { classifyFailure, type FailureClassification } from "./failure-classification.js";
 import { findGolemAppDir } from "./workspace.js";
+import { startPrerequisiteServices, type PrerequisiteServiceName } from "./services.js";
 import * as log from "./log.js";
 
 export const DEFAULT_STEP_TIMEOUT_SECONDS = 1800;
@@ -114,6 +115,12 @@ const CheckFileSchema = z.object({
   path: z.string(),
 });
 
+const McpCallSchema = z.object({
+  url: z.string(),
+  method: z.string(),
+  params: z.record(z.unknown()).optional(),
+});
+
 const InvokeSchema = z.object({
   agent: z.string(),
   method: langConditional(z.string()),
@@ -162,6 +169,7 @@ const ACTION_FIELDS = [
   "get_agent_type",
   "list_agent_types",
   "check_file",
+  "mcp_call",
 ] as const;
 
 // Language-conditional: accepts either T or { ts: T, rust: T, scala: T, ... }
@@ -203,6 +211,7 @@ const StepSpecSchema = z
     get_agent_type: GetAgentTypeSchema.optional(),
     list_agent_types: ListAgentTypesSchema.optional(),
     check_file: CheckFileSchema.optional(),
+    mcp_call: McpCallSchema.optional(),
     retry: RetrySchema.optional(),
     only_if: StepConditionSchema.optional(),
     skip_if: StepConditionSchema.optional(),
@@ -241,14 +250,17 @@ const SettingsSchema = z
     cleanup: z.boolean().optional(),
   })
   .optional();
+const ServiceNameSchema = z.enum(["postgres", "mysql", "ignite", "openai-mock"]);
 const PrerequisitesSchema = z
   .object({
     env: z.record(z.string()).optional(),
+    services: z.array(ServiceNameSchema).optional(),
   })
   .optional();
 
 const ScenarioSpecSchema = z.object({
   name: z.string({ required_error: 'Scenario must have a "name" field' }),
+  languageAgnostic: z.boolean().optional(),
   settings: SettingsSchema,
   prerequisites: PrerequisitesSchema,
   skip_if: StepConditionSchema.optional(),
@@ -324,6 +336,8 @@ type ListAgentTypesStep = StepCommon & {
 };
 type CheckFileSpec = { path: string };
 type CheckFileStep = StepCommon & { tag: "check_file"; check_file: CheckFileSpec };
+type McpCallSpec = { url: string; method: string; params?: Record<string, unknown> };
+type McpCallStep = StepCommon & { tag: "mcp_call"; mcp_call: McpCallSpec };
 
 export type StepSpec =
   | PromptStep
@@ -338,10 +352,12 @@ export type StepSpec =
   | HttpStep
   | GetAgentTypeStep
   | ListAgentTypesStep
-  | CheckFileStep;
+  | CheckFileStep
+  | McpCallStep;
 
 export interface ScenarioSpec {
   name: string;
+  languageAgnostic?: boolean;
   settings?: {
     timeout_per_subprompt?: number;
     golem_server?: {
@@ -352,6 +368,7 @@ export interface ScenarioSpec {
   };
   prerequisites?: {
     env?: Record<string, string>;
+    services?: PrerequisiteServiceName[];
   };
   skip_if?: StepCondition;
   steps: StepSpec[];
@@ -402,6 +419,8 @@ export function parseStep(raw: RawStepSpec): StepSpec {
       return { ...common, tag, list_agent_types: raw.list_agent_types ?? {} };
     case "check_file":
       return { ...common, tag, check_file: raw.check_file! };
+    case "mcp_call":
+      return { ...common, tag, mcp_call: raw.mcp_call! };
   }
 }
 
@@ -521,7 +540,7 @@ export class ScenarioExecutor {
   private watcherStarted = false;
   private currentSkillSessionBaseline: number | undefined;
   private workspace: string;
-  private bootstrapSkillSourceDir: string;
+  private bootstrapSkillSourceDirs: string[];
   private options: ScenarioExecutorOptions;
   private routerPort: number = 9881;
 
@@ -529,23 +548,27 @@ export class ScenarioExecutor {
     driver: AgentDriver,
     watcher: SkillWatcher,
     workspace: string,
-    bootstrapSkillSourceDir: string,
+    bootstrapSkillSourceDirs: string[],
     options?: ScenarioExecutorOptions,
   ) {
     this.driver = driver;
     this.watcher = watcher;
     this.workspace = workspace;
-    this.bootstrapSkillSourceDir = bootstrapSkillSourceDir;
+    this.bootstrapSkillSourceDirs = bootstrapSkillSourceDirs;
     this.options = options ?? {};
   }
 
-  private buildVariables(scenarioName: string): Record<string, string> {
+  private buildVariables(
+    scenarioName: string,
+    extraVariables?: Record<string, string>,
+  ): Record<string, string> {
     const vars: Record<string, string> = {
       workspace: this.workspace,
       scenario: scenarioName,
     };
     if (this.options.agent) vars["agent"] = this.options.agent;
     if (this.options.language) vars["language"] = this.options.language;
+    if (extraVariables) Object.assign(vars, extraVariables);
     return vars;
   }
 
@@ -667,6 +690,14 @@ export class ScenarioExecutor {
           check_file: {
             ...step.check_file,
             path: substituteVariables(step.check_file.path, variables),
+          },
+        };
+      case "mcp_call":
+        return {
+          ...step,
+          mcp_call: {
+            ...step.mcp_call,
+            url: substituteVariables(step.mcp_call.url, variables),
           },
         };
     }
@@ -862,6 +893,7 @@ export class ScenarioExecutor {
 
     const results: StepResult[] = [];
     const savedEnv: Record<string, string | undefined> = {};
+    const startedServices = await startPrerequisiteServices(spec.prerequisites?.services);
     // Validate resumeFromStepId if set
     if (this.options.resumeFromStepId) {
       const found = spec.steps.some((s) => s.id === this.options.resumeFromStepId);
@@ -872,10 +904,21 @@ export class ScenarioExecutor {
       }
     }
 
+    // Set prerequisite service env vars first, then scenario-provided env vars so
+    // the scenario can override defaults when needed.
+    for (const [key, value] of Object.entries(startedServices.env)) {
+      if (!(key in savedEnv)) {
+        savedEnv[key] = process.env[key];
+      }
+      process.env[key] = value;
+    }
+
     // Set prerequisites env vars
     if (spec.prerequisites?.env) {
       for (const [key, value] of Object.entries(spec.prerequisites.env)) {
-        savedEnv[key] = process.env[key];
+        if (!(key in savedEnv)) {
+          savedEnv[key] = process.env[key];
+        }
         process.env[key] = value;
       }
     }
@@ -883,13 +926,13 @@ export class ScenarioExecutor {
     // Setup workspace (each run gets a unique ID so no cleanup needed)
     this.currentSkillSessionBaseline = undefined;
     await fs.mkdir(this.workspace, { recursive: true });
-    await this.driver.setup(this.workspace, this.bootstrapSkillSourceDir);
+    await this.driver.setup(this.workspace, this.bootstrapSkillSourceDirs);
     await this.verifyGolemConnectivity(spec);
 
     // Build extra env for commands from settings
-    const commandEnv = this.buildCommandEnv(spec);
+    const commandEnv = this.buildCommandEnv(spec, startedServices.env);
     this.routerPort = spec.settings?.golem_server?.router_port ?? 9881;
-    const variables = this.buildVariables(spec.name);
+    const variables = this.buildVariables(spec.name, startedServices.variables);
     const conditionContext = {
       agent: this.options.agent,
       language: this.options.language,
@@ -1001,6 +1044,8 @@ export class ScenarioExecutor {
         if (!finalResult!.success) break; // Stop on failure
       }
     } finally {
+      await startedServices.stopAll();
+
       // Restore env vars
       for (const [key, value] of Object.entries(savedEnv)) {
         if (value === undefined) {
@@ -1170,6 +1215,9 @@ export class ScenarioExecutor {
         break;
       case "check_file":
         await this.executeCheckFile(stepLabel, step.check_file, step.expect, fail);
+        break;
+      case "mcp_call":
+        await this.executeMcpCall(stepLabel, step.mcp_call, step.expect, stepTimeoutSeconds, fail);
         break;
     }
 
@@ -1708,6 +1756,98 @@ export class ScenarioExecutor {
     }
   }
 
+  private async executeMcpCall(
+    stepLabel: string,
+    spec: McpCallSpec,
+    expect: StepCommon["expect"],
+    timeoutSeconds: number,
+    fail: (msg: string) => void,
+  ): Promise<void> {
+    log.stepAction(stepLabel, `MCP ${spec.method} → ${spec.url}`);
+
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { StreamableHTTPClientTransport } =
+      await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+    const { CallToolResultSchema } = await import("@modelcontextprotocol/sdk/types.js");
+
+    const client = new Client(
+      { name: "golem-skill-harness", version: "1.0.0" },
+      { capabilities: {} },
+    );
+    const transport = new StreamableHTTPClientTransport(new URL(spec.url));
+    let connected = false;
+
+    try {
+      await Promise.race([
+        client.connect(transport),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("MCP connect timed out")), timeoutSeconds * 1000),
+        ),
+      ]);
+      connected = true;
+
+      let body: string;
+
+      if (spec.method === "tools/list") {
+        const result = await client.listTools();
+        body = JSON.stringify(result);
+      } else if (spec.method === "tools/call") {
+        const params = spec.params ?? {};
+        const result = await client.callTool(
+          {
+            name: params.name as string,
+            arguments: (params.arguments as Record<string, unknown>) ?? {},
+          },
+          CallToolResultSchema,
+        );
+        body = JSON.stringify(result);
+      } else if (spec.method === "resources/list") {
+        const result = await client.listResources();
+        body = JSON.stringify(result);
+      } else if (spec.method === "prompts/list") {
+        const result = await client.listPrompts();
+        body = JSON.stringify(result);
+      } else {
+        log.mcpFailure(stepLabel, `unsupported MCP method: ${spec.method}`);
+        fail(`MCP_CALL_FAILED: unsupported method "${spec.method}"`);
+        return;
+      }
+
+      log.mcpResponse(stepLabel, spec.method, 200, body);
+
+      if (expect) {
+        this.evaluateAssertions(
+          { stdout: body, stderr: "", exitCode: 0, body, status: 200, headers: {} },
+          expect,
+          fail,
+          stepLabel,
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.mcpFailure(stepLabel, message);
+      fail(`MCP_CALL_FAILED: ${message}`);
+    } finally {
+      try {
+        if (connected) {
+          await client.close();
+        }
+      } catch {
+        // ignore client close errors
+      }
+      try {
+        await transport.terminateSession();
+      } catch {
+        // ignore terminateSession errors — server may not support it
+      }
+      try {
+        await transport.close();
+      } catch {
+        // ignore transport close errors
+      }
+    }
+  }
+
   // --- Shared helpers ---
 
   private evaluateAssertions(
@@ -1897,8 +2037,11 @@ export class ScenarioExecutor {
     return undefined;
   }
 
-  private buildCommandEnv(spec: ScenarioSpec): Record<string, string> {
-    const env: Record<string, string> = {};
+  private buildCommandEnv(
+    spec: ScenarioSpec,
+    serviceEnv?: Record<string, string>,
+  ): Record<string, string> {
+    const env: Record<string, string> = { ...(serviceEnv ?? {}) };
     if (spec.settings?.golem_server?.router_port) {
       env["GOLEM_ROUTER_PORT"] = String(spec.settings.golem_server.router_port);
     }

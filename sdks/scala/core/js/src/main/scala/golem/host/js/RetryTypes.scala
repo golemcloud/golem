@@ -61,8 +61,8 @@ sealed trait JsRetryPolicyTree extends js.Object {
 
 @js.native
 sealed trait JsNamedRetryPolicy extends js.Object {
-  def name: String               = js.native
-  def priority: Int              = js.native
+  def name: String                = js.native
+  def priority: Int               = js.native
   def predicate: JsRetryPredicate = js.native
-  def policy: JsRetryPolicyTree  = js.native
+  def policy: JsRetryPolicyTree   = js.native
 }

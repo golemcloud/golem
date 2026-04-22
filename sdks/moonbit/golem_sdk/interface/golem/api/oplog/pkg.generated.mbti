@@ -4,6 +4,7 @@ package "golemcloud/golem_sdk/interface/golem/api/oplog"
 import {
   "golemcloud/golem_sdk/interface/golem/api/context",
   "golemcloud/golem_sdk/interface/golem/api/host",
+  "golemcloud/golem_sdk/interface/golem/api/retry",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
 }
@@ -27,6 +28,7 @@ pub(all) suberror WorkerError {
   ExceededRpcCallLimit
   NodeOutOfFilesystemStorage
   AgentExceededFilesystemStorageLimit
+  AgentTerminatedByQuota(AgentTerminatedByQuotaError)
 } derive(Eq, Show)
 
 // Types and methods
@@ -54,7 +56,7 @@ pub(all) enum AgentInvocation {
 
 pub(all) struct AgentInvocationFinishedParameters {
   timestamp : @wallClock.Datetime
-  invocation_result : AgentInvocationResult
+  result : AgentInvocationResult
   consumed_fuel : Int64
   component_revision : UInt64
 } derive(Eq, Show)
@@ -86,6 +88,17 @@ pub(all) struct AgentMethodInvocationParameters {
   invocation_context : Array[Array[SpanData]]
 } derive(Eq, Show)
 
+pub(all) struct AgentTerminatedByQuotaError {
+  environment_id : @host.EnvironmentId
+  resource_name : String
+} derive(Eq, Show)
+
+pub(all) struct AndThenState {
+  left : Int
+  right : Int
+  on_right : Bool
+} derive(Eq, Show)
+
 pub(all) struct BeginRemoteTransactionParameters {
   timestamp : @wallClock.Datetime
   transaction_id : String
@@ -101,16 +114,15 @@ pub(all) struct ChangePersistenceLevelParameters {
   persistence_level : @host.PersistenceLevel
 } derive(Eq, Show)
 
-pub(all) struct ChangeRetryPolicyParameters {
-  timestamp : @wallClock.Datetime
-  new_policy : @host.RetryPolicy
+pub(all) struct CountBoxState {
+  attempts : UInt
+  inner : Int
 } derive(Eq, Show)
 
 pub(all) struct CreateParameters {
   timestamp : @wallClock.Datetime
   agent_id : @types.AgentId
   component_revision : UInt64
-  args : Array[String]
   env : Array[(String, String)]
   created_by : @types.AccountId
   environment_id : @host.EnvironmentId
@@ -120,11 +132,12 @@ pub(all) struct CreateParameters {
   initial_active_plugins : Array[PluginInstallationDescription]
   config_vars : Array[(String, String)]
   local_agent_config : Array[LocalAgentConfigEntry]
+  original_phantom_id : @types.Uuid?
 } derive(Eq, Show)
 
 pub(all) struct CreateResourceParameters {
   timestamp : @wallClock.Datetime
-  resource_id : UInt64
+  id : UInt64
   name : String
   owner : String
 } derive(Eq, Show)
@@ -136,7 +149,7 @@ pub(all) struct DeactivatePluginParameters {
 
 pub(all) struct DropResourceParameters {
   timestamp : @wallClock.Datetime
-  resource_id : UInt64
+  id : UInt64
   name : String
   owner : String
 } derive(Eq, Show)
@@ -159,6 +172,8 @@ pub(all) struct ErrorParameters {
   timestamp : @wallClock.Datetime
   error : String
   retry_from : UInt64
+  inside_atomic_region : Bool
+  retry_policy_state : RetryPolicyState?
 } derive(Eq, Show)
 
 pub(all) struct ExternalSpanData {
@@ -202,7 +217,7 @@ pub(all) struct HostCallParameters {
   function_name : String
   request : @types.ValueAndType
   response : @types.ValueAndType
-  wrapped_function_type : WrappedFunctionType
+  durable_function_type : WrappedFunctionType
 } derive(Eq, Show)
 
 pub(all) struct JumpParameters {
@@ -211,7 +226,7 @@ pub(all) struct JumpParameters {
 } derive(Eq, Show)
 
 pub(all) struct LoadSnapshotParameters {
-  snapshot : @host.Snapshot
+  snapshot : SnapshotData
 } derive(Eq, Show)
 
 pub(all) struct LocalAgentConfigEntry {
@@ -263,7 +278,6 @@ pub(all) enum OplogEntry {
   Jump(JumpParameters)
   Interrupted(Timestamp)
   Exited(Timestamp)
-  ChangeRetryPolicy(ChangeRetryPolicyParameters)
   BeginAtomicRegion(Timestamp)
   EndAtomicRegion(EndAtomicRegionParameters)
   BeginRemoteWrite(Timestamp)
@@ -293,6 +307,8 @@ pub(all) enum OplogEntry {
   RolledBackRemoteTransaction(RemoteTransactionParameters)
   Snapshot(RawSnapshotParameters)
   OplogProcessorCheckpoint(RawOplogProcessorCheckpointParameters)
+  SetRetryPolicy(SetRetryPolicyParameters)
+  RemoveRetryPolicy(RemoveRetryPolicyParameters)
 } derive(Eq, Show)
 
 pub(all) struct OplogExternalPayload {
@@ -319,6 +335,11 @@ pub(all) struct OplogRegion {
   end : UInt64
 } derive(Eq, Show)
 
+pub(all) struct PairState {
+  left : Int
+  right : Int
+} derive(Eq, Show)
+
 pub(all) struct PendingAgentInvocationParameters {
   timestamp : @wallClock.Datetime
   invocation : AgentInvocation
@@ -327,12 +348,14 @@ pub(all) struct PendingAgentInvocationParameters {
 pub(all) struct PendingUpdateParameters {
   timestamp : @wallClock.Datetime
   target_revision : UInt64
-  update_description : UpdateDescription
+  description : UpdateDescription
 } derive(Eq, Show)
 
 pub(all) struct PluginInstallationDescription {
-  name : String
-  version : String
+  environment_plugin_grant_id : EnvironmentPluginGrantId
+  plugin_priority : Int
+  plugin_name : String
+  plugin_version : String
   parameters : Array[(String, String)]
 } derive(Eq, Show)
 
@@ -351,7 +374,6 @@ pub(all) enum PublicOplogEntry {
   Jump(JumpParameters)
   Interrupted(Timestamp)
   Exited(Timestamp)
-  ChangeRetryPolicy(ChangeRetryPolicyParameters)
   BeginAtomicRegion(Timestamp)
   EndAtomicRegion(EndAtomicRegionParameters)
   BeginRemoteWrite(Timestamp)
@@ -381,6 +403,8 @@ pub(all) enum PublicOplogEntry {
   RolledBackRemoteTransaction(RemoteTransactionParameters)
   Snapshot(SnapshotParameters)
   OplogProcessorCheckpoint(OplogProcessorCheckpointParameters)
+  SetRetryPolicy(SetRetryPolicyParameters)
+  RemoveRetryPolicy(RemoveRetryPolicyParameters)
 } derive(Eq, Show)
 
 pub(all) struct RawActivatePluginParameters {
@@ -448,6 +472,7 @@ pub(all) struct RawErrorParameters {
   error : WorkerError
   retry_from : UInt64
   inside_atomic_region : Bool
+  retry_policy_state : RetryPolicyState?
 } derive(Eq, Show)
 
 pub(all) struct RawHostCallParameters {
@@ -515,9 +540,18 @@ pub(all) struct RemoteTransactionParameters {
   begin_index : UInt64
 } derive(Eq, Show)
 
+pub(all) struct RemoveRetryPolicyParameters {
+  timestamp : @wallClock.Datetime
+  name : String
+} derive(Eq, Show)
+
 pub(all) struct ResourceTypeId {
   name : String
   owner : String
+} derive(Eq, Show)
+
+pub(all) struct RetryPolicyState {
+  nodes : Array[StateNode]
 } derive(Eq, Show)
 
 pub(all) struct RevertParameters {
@@ -526,7 +560,7 @@ pub(all) struct RevertParameters {
 } derive(Eq, Show)
 
 pub(all) struct SaveSnapshotResultParameters {
-  snapshot : @host.Snapshot
+  snapshot : SnapshotData
 } derive(Eq, Show)
 
 pub(all) struct SearchOplog(Int) derive(Eq, Show)
@@ -536,6 +570,11 @@ pub fn SearchOplog::get_next(Self) -> Array[(UInt64, PublicOplogEntry)]?
 pub fn SearchOplog::inner(Self) -> Int
 pub fn SearchOplog::search_oplog(@types.AgentId, String) -> Self
 
+pub(all) struct SetRetryPolicyParameters {
+  timestamp : @wallClock.Datetime
+  policy : @retry.NamedRetryPolicy
+} derive(Eq, Show)
+
 pub(all) struct SetSpanAttributeParameters {
   timestamp : @wallClock.Datetime
   span_id : String
@@ -543,10 +582,14 @@ pub(all) struct SetSpanAttributeParameters {
   value : @context.AttributeValue
 } derive(Eq, Show)
 
-pub(all) struct SnapshotParameters {
-  timestamp : @wallClock.Datetime
+pub(all) struct SnapshotData {
   data : FixedArray[Byte]
   mime_type : String
+} derive(Eq, Show)
+
+pub(all) struct SnapshotParameters {
+  timestamp : @wallClock.Datetime
+  data : SnapshotData
 } derive(Eq, Show)
 
 pub(all) enum SpanData {
@@ -560,6 +603,15 @@ pub(all) struct StartSpanParameters {
   parent : String?
   linked_context_id : String?
   attributes : Array[@context.Attribute]
+} derive(Eq, Show)
+
+pub(all) enum StateNode {
+  Counter(UInt)
+  Terminal
+  Wrapper(Int)
+  CountBox(CountBoxState)
+  AndThen(AndThenState)
+  Pair(PairState)
 } derive(Eq, Show)
 
 pub(all) struct SuccessfulUpdateParameters {

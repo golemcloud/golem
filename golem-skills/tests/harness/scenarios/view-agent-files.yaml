@@ -1,0 +1,51 @@
+name: "view-agent-files"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "write-file"
+    prompt:
+      rust: >
+        In the test-app project, modify the CounterAgent so that every time increment is called,
+        it writes the current counter value to a file at /data/counter.txt using std::fs. Create
+        the /data directory if it doesn't exist. The file should contain just the number as a string.
+      ts: >
+        In the test-app project, modify the CounterAgent so that every time increment is called,
+        it writes the current counter value to a file at /data/counter.txt using the Node.js
+        fs module (node:fs). Create the /data directory if it doesn't exist. The file should
+        contain just the number as a string.
+      scala: >
+        In the test-app project, modify the CounterAgent so that every time increment is called,
+        it writes the current counter value to a file at /data/counter.txt using the Node.js
+        fs module (via scala.scalajs.js.Dynamic). Create the /data directory if it doesn't exist.
+        The file should contain just the number as a string.
+      moonbit: >
+        In the test-app project, modify the CounterAgent so that every time increment is called,
+        it writes the current counter value to a file at /data/counter.txt using the filesystem
+        API from @fs. Create the /data directory if it doesn't exist. The file should contain
+        just the number as a string.
+    verify:
+      build: true
+      deploy: true
+
+  - id: "invoke-increment"
+    invoke:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+
+  - id: "list-files"
+    prompt: >
+      Use the CLI to list the files of CounterAgent "c1" at the /data path and save the
+      full output to a file called files-output.txt in the test-app directory.
+    expectedSkills:
+      - "golem-view-agent-files"
+
+  - id: "check-files-output"
+    check_file:
+      path: "files-output.txt"
+    expect:
+      stdout_contains: "counter.txt"

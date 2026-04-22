@@ -26,7 +26,7 @@ pub fn save() -> @host.Snapshot {
             envelope_str.to_array().map(fn(c) { c.to_int().to_byte() }),
           )
           {
-            data: envelope_bytes.to_fixedarray(),
+            payload: envelope_bytes.to_fixedarray(),
             mime_type: "application/json",
           }
         }
@@ -51,14 +51,17 @@ pub fn save() -> @host.Snapshot {
           for i in 0..<state_bytes.length() {
             result[5 + principal_len + i] = state_bytes[i]
           }
-          { data: result, mime_type: "application/octet-stream" }
+          { payload: result, mime_type: "application/octet-stream" }
         }
         (Some(s), None) => {
           let data = s.save_snapshot()
-          { data: data.to_fixedarray(), mime_type: "application/octet-stream" }
+          {
+            payload: data.to_fixedarray(),
+            mime_type: "application/octet-stream",
+          }
         }
-        _ => { data: [], mime_type: "application/octet-stream" }
+        _ => { payload: [], mime_type: "application/octet-stream" }
       }
-    None => { data: [], mime_type: "application/octet-stream" }
+    None => { payload: [], mime_type: "application/octet-stream" }
   }
 }

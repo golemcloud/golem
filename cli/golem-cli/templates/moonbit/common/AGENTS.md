@@ -1,6 +1,72 @@
 <!-- golem-managed:guide:moonbit:start -->
 <!-- Golem manages this section. Do not edit manually. -->
 
+# Skills
+
+This project includes coding-agent skills in `.agents/skills/`. Load a skill when the task matches its description.
+
+| Skill | Description |
+|-------|-------------|
+| `golem-cloud-account-setup` | Setting up a Golem Cloud account — authentication, cloud profiles, API tokens, and first cloud deployment |
+| `golem-new-project` | Creating a new Golem application project with `golem new` |
+| `golem-add-component` | Adding a new component or agent templates to an existing application |
+| `golem-edit-manifest` | Editing the Golem Application Manifest (golem.yaml) — components, agents, templates, environments, httpApi, mcp, bridge SDKs, plugins, and more |
+| `golem-build` | Building a Golem application with `golem build` |
+| `golem-troubleshoot-build` | Troubleshooting Golem build failures and debugging manifest file (golem.yaml) configuration — diagnosing tool, dependency, env var, config, and manifest layer issues with `golem component manifest-trace` |
+| `golem-deploy` | Deploying a Golem application with `golem deploy` |
+| `golem-local-dev-server` | Starting and managing the local Golem development server with `golem server` |
+| `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
+| `golem-redeploy-agents` | Redeploying existing agents by deleting and recreating them |
+| `golem-create-agent-instance-moonbit` | Creating a new agent instance with `golem agent new` |
+| `golem-invoke-agent-moonbit` | Invoking a Golem agent method from the CLI |
+| `golem-trigger-agent-moonbit` | Triggering a fire-and-forget invocation on a Golem agent |
+| `golem-schedule-agent-moonbit` | Scheduling a future invocation on a Golem agent |
+| `golem-add-moonbit-package` | Adding a MoonBit mooncakes dependency to the project |
+| `golem-add-postgres-moonbit` | Connecting to PostgreSQL with `golem:rdbms/postgres` from MoonBit agents |
+| `golem-add-mysql-moonbit` | Connecting to MySQL with `golem:rdbms/mysql` from MoonBit agents |
+| `golem-add-ignite-moonbit` | Connecting to Apache Ignite 2 with `golem:rdbms/ignite2` from MoonBit agents |
+| `golem-add-agent-moonbit` | Adding a new agent type to a MoonBit Golem component |
+| `golem-stateless-agent-moonbit` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
+| `golem-annotate-agent-moonbit` | Adding prompt and description annotations to agent methods |
+| `golem-configure-durability-moonbit` | Choosing between durable and ephemeral agents |
+| `golem-call-another-agent-moonbit` | Calling another agent and awaiting the result (RPC) |
+| `golem-call-from-external-moonbit` | Calling agents from external applications (no bridge generator yet — use the REST API or a TS/Rust bridge) |
+| `golem-fire-and-forget-moonbit` | Triggering an agent invocation without waiting for the result |
+| `golem-parallel-workers-moonbit` | Fan out work to multiple parallel agents and collect results |
+| `golem-schedule-future-call-moonbit` | Scheduling a future agent invocation from within agent code |
+| `golem-recurring-task-moonbit` | Implementing recurring (cron-like) tasks via self-scheduling — periodic polling, cleanup, heartbeats, backoff, and cancellation |
+| `golem-wait-for-external-input-moonbit` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
+| `golem-add-webhook-moonbit` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
+| `golem-multi-instance-agent-moonbit` | Creating multiple agent instances with the same constructor parameters using phantom agents |
+| `golem-atomic-block-moonbit` | Atomic blocks, persistence control, and idempotency |
+| `golem-add-transactions-moonbit` | Saga-pattern transactions with compensation |
+| `golem-add-http-endpoint-moonbit` | Exposing an agent over HTTP with mount paths and endpoint annotations |
+| `golem-http-params-moonbit` | Mapping path, query, header, and body parameters for HTTP endpoints |
+| `golem-add-http-auth-moonbit` | Enabling authentication on HTTP endpoints |
+| `golem-add-cors-moonbit` | Configuring CORS allowed origins for HTTP endpoints |
+| `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
+| `golem-configure-mcp-server` | Configuring MCP (Model Context Protocol) server deployments in golem.yaml |
+| `golem-manage-plugins` | Managing Golem plugins — listing available plugins, installing and configuring plugins via golem.yaml or CLI, and understanding built-in plugins like the OTLP exporter |
+| `golem-add-config-moonbit` | Adding typed configuration to a MoonBit Golem agent |
+| `golem-add-secret-moonbit` | Adding secrets to MoonBit Golem agents |
+| `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
+| `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
+| `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
+| `golem-file-io-moonbit` | Reading and writing files from agent code |
+| `golem-add-llm-moonbit` | Adding LLM and AI capabilities by calling provider APIs with WASI HTTP |
+| `golem-make-http-request-moonbit` | Making outgoing HTTP requests from agent code |
+| `golem-view-agent-logs` | Viewing agent logs and output via streaming |
+| `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
+| `golem-list-and-filter-agents` | Listing and querying agents with filters |
+| `golem-get-agent-metadata` | Checking agent metadata and status |
+| `golem-debug-agent-history` | Querying the operation log |
+| `golem-undo-agent-state` | Reverting agent state by undoing operations |
+| `golem-interrupt-resume-agent` | Interrupting and resuming a Golem agent |
+| `golem-test-crash-recovery` | Simulating a crash on an agent for testing crash recovery |
+| `golem-cancel-queued-invocation` | Canceling a pending (queued) invocation on an agent |
+| `golem-delete-agent` | Deleting an agent instance |
+| `golem-interactive-repl-moonbit` | Using the Golem REPL for interactive testing and scripting of agents |
+
 # Golem Application Development Guide (MoonBit)
 
 ## Overview
@@ -45,9 +111,9 @@ golem-temp/                       # Build artifacts (gitignored)
 ## Building
 
 ```shell
-golem build -L                   # Build with the local (debug) preset
-golem build -E cloud             # Build with the cloud (release) preset
-golem build -L -P release        # Build with an explicit preset override
+golem build                      # Build all components
+golem component build my:comp    # Build a specific component
+golem build --build-profile release  # Build with release profile
 ```
 
 The build pipeline runs codegen (`reexports` + `agents`), then `moon build --target wasm`, then `wasm-tools component embed` and `component new`, then generates and composes the agent wrapper. Output goes to `golem-temp/`.
@@ -57,131 +123,64 @@ Do NOT run `moon build` directly — always use `golem build` which orchestrates
 ## Deploying and Running
 
 ```shell
-golem server run                 # Start local Golem server (in a separate terminal)
-golem deploy -L -Y               # Deploy all components to local server
-golem deploy -L --reset -Y       # Deploy and delete all previously created agents
-golem deploy -L -P release -Y   # Deploy with release preset to local
+golem server run                 # Start local Golem server
+golem deploy                     # Deploy all components to the configured server
+golem deploy --try-update-agents # Deploy and update running agents
+golem deploy --reset             # Deploy and delete all previously created agents
 ```
 
 **WARNING**: `golem server run --clean` deletes all existing state (agents, data, deployed components). Never run it without explicitly asking the user for confirmation first.
 
 After starting the server, components must be deployed with `golem deploy` before agents can be invoked. When iterating on code changes, use `golem deploy --reset` to delete all previously created agents — without this, existing agent instances continue running with the old component version. This is by design: Golem updates do not break existing running instances.
 
-The `-Y` flag auto-confirms prompts. The `-L` flag selects the `local` environment defined in `golem.yaml`.
+To try out agents after deploying, load the `golem-invoke-agent-moonbit` skill for invoking agent methods from the CLI, or write a script and run it with `golem repl` for interactive testing. The Golem server must be running in a separate process before invoking or testing agents.
+
+## Testing Agents with the REPL
+
+```shell
+golem repl                       # Interactive scripting REPL
+```
 
 ## Name Mapping
 
 All MoonBit identifiers are used **as-is** (matching the source code) when used externally in CLI commands, Rib scripts, REPL, and agent IDs:
 
-- **Agent type names**: `Counter` → `Counter`, `TaskManager` → `TaskManager` (PascalCase)
+- **Agent type names**: `CounterAgent` → `CounterAgent`, `TaskManager` → `TaskManager` (PascalCase)
 - **Method names**: `get_value` → `get_value`, `add_task` → `add_task` (snake_case)
 - **Record field names**: `field_name` → `field_name`
 - **Enum/variant case names**: `High` → `High`, `Low` → `Low` (PascalCase)
 
-## Testing Agents
-
-### Using `golem agent invoke`
-
-Invoke agent methods directly from the CLI. Use `golem component get -L <component>` to see available agent types and their method signatures with expected parameter types.
-
-```shell
-# Method name format: golem:agent-guest/<AgentType>.{method_name}
-# Agent type names are PascalCase, method names are snake_case
-
-# Counter agent — increment, then get value:
-golem agent invoke -L 'Counter("my-counter")' \
-  'golem:agent-guest/Counter.{increment}'
-golem agent invoke -L 'Counter("my-counter")' \
-  'golem:agent-guest/Counter.{get_value}'
-
-# Fire-and-forget (enqueue without waiting for result):
-golem agent invoke -L --enqueue 'Counter("my-counter")' \
-  'golem:agent-guest/Counter.{increment}'
-
-# With idempotency key:
-golem agent invoke -L --idempotency-key 'unique-key-123' \
-  'Counter("my-counter")' 'golem:agent-guest/Counter.{increment}'
-```
-
-**Note**: Methods returning `Unit` (void) will show `error: Agent result is not a single return value` — this is a cosmetic CLI display issue; the invocation itself succeeds.
-
-### Using the REPL
-
-```shell
-golem repl -L                    # Interactive Rib scripting REPL
-```
-
-In the REPL, use source-code names:
-```rib
-let agent = Counter("my-counter")
-agent.increment()
-agent.get_value()
-```
-
-## Value Encoding for CLI Arguments
-
-Arguments passed to `golem agent invoke` use a **compact positional encoding**. Use `golem component get -L <component>` to see the TypeScript-like type signatures and then encode values as follows:
-
-### Encoding Rules
-
-| Type | Encoding | Example |
-|---|---|---|
-| `string` | Double-quoted | `"hello world"` |
-| `bool` | `true` / `false` | `true` |
-| Numbers (`u8`, `u32`, `s32`, etc.) | Literal | `42`, `-7` |
-| `list<T>` (`Array[T]`) | Square brackets | `[1, 2, 3]` |
-| `option<T>` (Some) | `s(value)` | `s("hello")`, `s(42)` |
-| `option<T>` (None) | `n` | `n` |
-| `enum` (unit variants) | `v<index>` (0-based) | `v0`, `v1`, `v2` |
-| `record` (struct) | `(field1,field2,...)` positional | `("my task",v2,s("desc"))` |
-| `variant` (enum with data) | TBD | |
-
-**Enum index mapping**: Enum cases are indexed in declaration order starting from 0. For `enum Priority { Low, Medium, High }`: `v0` = Low, `v1` = Medium, `v2` = High.
-
-**Records are positional**: Fields are encoded in declaration order without names. For `struct TaskInfo { title: String, priority: Priority, description: String? }`: `("my task",v2,s("description"))`.
-
-**Output format**: Results are displayed in TypeScript-like syntax (e.g., `{ title: "my task", priority: "High", description: "a description" }` for records, `undefined` for None).
-
 ## Defining Agents
+
+Load the `golem-add-agent-moonbit` skill for defining agents and custom types. See also the skill table above for durability configuration, annotations, HTTP endpoints, RPC, atomic blocks, transactions, config, and secrets.
 
 Agents are defined using `#derive.agent` on a struct. The struct holds the agent's state, a `::new` constructor creates instances, and public methods define the API:
 
 ```moonbit
 /// Counter agent in MoonBit
 #derive.agent
-struct Counter {
+struct CounterAgent {
   name : String
   mut value : UInt64
 }
 
 /// Creates a new counter with the given name
-fn Counter::new(name : String) -> Counter {
+fn CounterAgent::new(name : String) -> CounterAgent {
   { name, value: 0 }
 }
 
 /// Increments the counter
-pub fn Counter::increment(self : Self) -> Unit {
+pub fn CounterAgent::increment(self : Self) -> Unit {
   self.value += 1
 }
 
 /// Returns the current value of the counter
-pub fn Counter::get_value(self : Self) -> UInt64 {
+pub fn CounterAgent::get_value(self : Self) -> UInt64 {
   self.value
 }
 ```
 
 The `fn main {}` block must exist in the main package (can be empty). Multiple agents can coexist in the same package — each gets registered in the generated `fn init {}` block.
-
-### Ephemeral Agents
-
-By default agents are durable (state persists indefinitely). For stateless per-invocation agents, pass `"ephemeral"` to the annotation:
-
-```moonbit
-#derive.agent("ephemeral")
-struct StatelessAgent {
-  // ...
-}
-```
 
 ### Custom Types
 
@@ -209,63 +208,6 @@ pub(all) struct TaskInfo {
 - **Structs** (records) — all fields serialized by name
 - **Simple enums** (all-unit variants) — serialized as WIT enums
 - **Variant enums** (with payloads) — serialized as WIT variants
-
-### Method Annotations
-
-```moonbit
-#derive.agent
-struct MyAgent {
-  // ...
-}
-
-fn MyAgent::new() -> MyAgent { ... }
-
-/// Description appears in the agent's metadata
-#derive.prompt_hint("Increment the counter by one")
-pub fn MyAgent::increment(self : Self) -> UInt64 {
-  // ...
-}
-```
-
-Available annotations:
-- `#derive.prompt_hint("...")` — adds a prompt hint to the method's agent definition
-- `#derive.text_languages("param_name", "en", "de")` — restricts an `UnstructuredText` parameter to specific languages
-- `#derive.mime_types("param_name", "image/png", "image/jpeg")` — restricts an `UnstructuredBinary` parameter to specific MIME types
-- Doc comments (`///`) on structs, constructors, and methods are extracted as descriptions
-
-### HTTP Endpoints
-
-Expose agents over HTTP with mount paths and endpoint annotations:
-
-```moonbit
-#derive.agent
-#derive.mount("/counters/{name}")
-struct Counter {
-  name : String
-  mut value : UInt64
-}
-
-fn Counter::new(name : String) -> Counter { { name, value: 0 } }
-
-#derive.endpoint(post="/increment")
-pub fn Counter::increment(self : Self) -> UInt64 {
-  self.value += 1
-  self.value
-}
-
-#derive.endpoint(get="/value")
-pub fn Counter::get_value(self : Self) -> UInt64 {
-  self.value
-}
-```
-
-Available HTTP annotations:
-- `#derive.mount("/path/{param}")` — mount path for the agent
-- `#derive.mount_auth(false)` — disable authentication on the mount
-- `#derive.mount_cors("https://app.example.com")` — configure CORS allowed origins
-- `#derive.endpoint(get="/path")` — HTTP GET endpoint
-- `#derive.endpoint(post="/path")` — HTTP POST endpoint
-- `#derive.endpoint_header("X-Header", "param_name")` — map HTTP header to a parameter
 
 ### Multimodal Types
 
@@ -316,100 +258,15 @@ pub fn MyAgent::do_work(self : Self) -> Unit {
 
 Logs are visible via `golem agent stream`.
 
-## Agent-to-Agent Communication (RPC)
-
-The `agents` code generation tool auto-generates a `<AgentName>Client` struct for calling agents remotely. Each method gets three variants:
-
-- `method(args)` — awaited call (blocks until result)
-- `trigger_method(args)` — fire-and-forget (returns immediately)
-- `schedule_method(scheduled_at, args)` — scheduled invocation at a future time
-
-```moonbit
-// Awaited call — use scoped for automatic resource cleanup
-CounterClient::scoped("my-counter", fn(counter) raise @common.AgentError {
-  counter.increment()
-  counter.increment()
-  let value = counter.get_value()
-  value
-})
-
-// Fire-and-forget
-CounterClient::scoped("my-counter", fn(counter) raise @common.AgentError {
-  counter.trigger_increment()
-})
-
-// Manual lifecycle management
-let counter = CounterClient::get("my-counter")
-counter.increment()
-let value = counter.get_value()
-counter.drop()  // must call drop when done
-
-// Phantom agents (multiple instances with same constructor params)
-let phantom = CounterClient::new_phantom("my-counter")
-let id = phantom.phantom_id()
-// Later, reconnect to the same phantom:
-let same = CounterClient::get_phantom("my-counter", id.unwrap())
-```
-
-Avoid RPC cycles (A calls B calls A) — use `trigger_` to break deadlocks.
-
-## Durability Features
-
-Golem provides **automatic durable execution** — all agents are durable by default without any special code. State is persisted via an oplog (operation log) and agents survive failures, restarts, and updates transparently.
-
-The durability APIs available via the SDK's `interface/golem/durability/durability/` package are **advanced controls** that most agents will never need. Only use them when you have specific requirements around persistence granularity or side-effect replay:
-
-```moonbit
-// Check current execution state
-let state = @durability.current_durable_execution_state()
-// state.is_live — true if executing live, false if replaying
-
-// Wrap a side-effecting call for durability
-let begin_idx = @durability.begin_durable_function(function_type)
-if state.is_live {
-  // Execute real operation, then persist result
-  @durability.persist_durable_function_invocation(name, request, response, function_type)
-} else {
-  // Replaying — read cached result
-  let cached = @durability.read_persisted_durable_function_invocation(begin_idx)
-}
-@durability.end_durable_function(function_type, begin_idx, forced_commit)
-```
-
-## Environments and Build Presets
-
-The `golem.yaml` defines two environments:
-
-- **local** — uses `golem server run` on localhost, selects the `debug` build preset
-- **cloud** — uses Golem Cloud, selects the `release` build preset
-
-Both presets run the same build pipeline but differ in `moon build` optimization level. You can override the preset with `-P <preset>`.
-
 ## Application Manifest (golem.yaml)
 
-The root `golem.yaml` defines:
-- `app`: application name
-- `environments`: server and preset mappings for local/cloud
-- `componentTemplates`: build pipeline templates (codegen → moon build → wasm-tools)
-- `components`: maps component names to templates
+Load the `golem-edit-manifest` skill for the complete reference on editing `golem.yaml`.
 
-The build pipeline for each component:
-1. Run `reexports` codegen (generates `golem_reexports.mbt`, updates `moon.pkg` link section)
-2. Run `agents` codegen (generates `golem_agents.mbt`, `golem_derive.mbt`, `golem_clients.mbt`)
-3. `moon build --target wasm`
-4. `wasm-tools component embed` (adds WIT type info, with `--encoding utf16`)
-5. `wasm-tools component new` (creates Component Model WASM)
-
-The agent wrapper generation and composition is handled automatically by the Golem CLI.
+Key fields: `app` (application name), `environments` (server and preset mappings for local/cloud), `componentTemplates` (build pipeline templates), `components` (maps component names to templates).
 
 ## Debugging
 
-```shell
-golem agent get -L '<agent-id>'          # Check agent state
-golem agent stream -L '<agent-id>'       # Stream live logs
-golem agent oplog -L '<agent-id>'        # View operation log
-golem agent invoke -L '<agent-id>' 'method' args   # Invoke method directly
-```
+Load the `golem-get-agent-metadata` skill for checking agent state. Load the `golem-view-agent-logs` skill for streaming agent stdout, stderr, and log channels. Load the `golem-debug-agent-history` skill for querying the operation log. Load the `golem-undo-agent-state` skill for reverting invocations. To invoke agent methods, load the `golem-invoke-agent-moonbit` skill.
 
 ## Key Constraints
 

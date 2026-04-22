@@ -130,7 +130,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
   private val mockCompId  = AgentHostApi.ComponentIdLiteral(mockUuid)
   private val mockAgentId = AgentHostApi.AgentIdLiteral(mockCompId, "test-agent")
 
-  private val allEntries: List[OplogEntry] = {
+  private val allEntries: List[OplogEntry] =
     List(
       OplogEntry.Create(
         CreateParameters(
@@ -210,7 +210,6 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         SetSpanAttributeParameters(ts, "span-1", "key", ContextApi.AttributeValue.StringValue("v"))
       )
     )
-  }
 
   def spec = suite("OplogApiCompileSpec")(
     test("all 38 OplogEntry variants constructed") {

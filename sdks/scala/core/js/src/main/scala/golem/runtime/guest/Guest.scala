@@ -132,9 +132,9 @@ object Guest {
     if (js.isUndefined(resolved)) {
       js.Promise.reject(invalidAgentId("Agent is not initialized")).asInstanceOf[js.Promise[js.Dynamic]]
     } else {
-      val r              = resolved.asInstanceOf[Resolved]
-      val mn             = normalizeMethodName(methodName)
-      val scalaPrincipal = PrincipalConverter.fromJs(principal)
+      val r                                                      = resolved.asInstanceOf[Resolved]
+      val mn                                                     = normalizeMethodName(methodName)
+      val scalaPrincipal                                         = PrincipalConverter.fromJs(principal)
       val onRejected: js.Function1[Any, js.Thenable[js.Dynamic]] =
         js.Any.fromFunction1 { (err: Any) =>
           // Only catch SDK-level errors (JsAgentError). User code errors must propagate

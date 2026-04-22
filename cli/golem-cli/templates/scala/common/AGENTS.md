@@ -7,20 +7,36 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 
 | Skill | Description |
 |-------|-------------|
+| `golem-cloud-account-setup` | Setting up a Golem Cloud account — authentication, cloud profiles, API tokens, and first cloud deployment |
 | `golem-new-project` | Creating a new Golem application project with `golem new` |
+| `golem-add-component` | Adding a new component or agent templates to an existing application |
+| `golem-edit-manifest` | Editing the Golem Application Manifest (golem.yaml) — components, agents, templates, environments, httpApi, mcp, bridge SDKs, plugins, and more |
 | `golem-build` | Building a Golem application with `golem build` |
+| `golem-troubleshoot-build` | Troubleshooting Golem build failures and debugging manifest file (golem.yaml) configuration — diagnosing tool, dependency, env var, config, and manifest layer issues with `golem component manifest-trace` |
 | `golem-deploy` | Deploying a Golem application with `golem deploy` |
+| `golem-local-dev-server` | Starting and managing the local Golem development server with `golem server` |
+| `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
+| `golem-redeploy-agents` | Redeploying existing agents by deleting and recreating them |
+| `golem-create-agent-instance-scala` | Creating a new agent instance with `golem agent new` |
 | `golem-invoke-agent-scala` | Invoking a Golem agent method from the CLI |
 | `golem-trigger-agent-scala` | Triggering a fire-and-forget invocation on a Golem agent |
 | `golem-schedule-agent-scala` | Scheduling a future invocation on a Golem agent |
 | `golem-add-scala-dependency` | Adding a library dependency to the project |
+| `golem-add-postgres-scala` | Connecting to PostgreSQL with `golem.host.Rdbms.Postgres` from Scala agents |
+| `golem-add-mysql-scala` | Connecting to MySQL with `golem.host.Rdbms.Mysql` from Scala agents |
+| `golem-add-ignite-scala` | Current Apache Ignite limitation in the Scala SDK and the SDK work required before using `golem:rdbms/ignite2` |
 | `golem-add-agent-scala` | Adding a new agent type to a Scala Golem component |
 | `golem-configure-durability-scala` | Choosing between durable and ephemeral agents |
 | `golem-stateless-agent-scala` | Creating ephemeral (stateless) agents with a fresh instance per invocation |
 | `golem-annotate-agent-scala` | Adding prompt and description annotations to agent methods |
 | `golem-call-another-agent-scala` | Calling another agent and awaiting the result (RPC) |
+| `golem-call-from-external-scala` | Calling agents from external applications (no bridge generator yet — use the REST API or a TS/Rust bridge) |
 | `golem-fire-and-forget-scala` | Triggering an agent invocation without waiting for the result |
+| `golem-parallel-workers-scala` | Fan out work to multiple parallel agents and collect results |
 | `golem-schedule-future-call-scala` | Scheduling a future agent invocation |
+| `golem-recurring-task-scala` | Implementing recurring (cron-like) tasks via self-scheduling — periodic polling, cleanup, heartbeats, backoff, and cancellation |
+| `golem-wait-for-external-input-scala` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
+| `golem-add-webhook-scala` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
 | `golem-multi-instance-agent-scala` | Creating multiple agent instances with the same constructor parameters using phantom agents |
 | `golem-atomic-block-scala` | Atomic blocks, persistence control, and oplog management |
 | `golem-add-transactions-scala` | Saga-pattern transactions with compensation |
@@ -29,17 +45,28 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-http-auth-scala` | Enabling authentication on HTTP endpoints |
 | `golem-add-cors-scala` | Configuring CORS allowed origins for HTTP endpoints |
 | `golem-configure-api-domain` | Configuring HTTP API domain deployments and security schemes in golem.yaml |
+| `golem-configure-mcp-server` | Configuring MCP (Model Context Protocol) server deployments in golem.yaml |
+| `golem-manage-plugins` | Managing Golem plugins — listing available plugins, installing and configuring plugins via golem.yaml or CLI, and understanding built-in plugins like the OTLP exporter |
 | `golem-add-config-scala` | Adding typed configuration to Scala Golem agents |
 | `golem-add-secret-scala` | Adding secrets to Scala Golem agents |
+| `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
 | `golem-file-io-scala` | Reading and writing files from agent code |
 | `golem-js-runtime` | JavaScript runtime environment: available Web APIs, Node.js modules, and npm compatibility |
+| `golem-add-llm-scala` | Adding LLM and AI capabilities by calling provider APIs with fetch or ZIO HTTP |
 | `golem-make-http-request-scala` | Making outgoing HTTP requests from agent code using fetch or ZIO HTTP |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
+| `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
+| `golem-list-and-filter-agents` | Listing and querying agents with filters |
 | `golem-get-agent-metadata` | Checking agent metadata and status |
 | `golem-debug-agent-history` | Querying the operation log |
 | `golem-undo-agent-state` | Reverting agent state by undoing operations |
+| `golem-interrupt-resume-agent` | Interrupting and resuming a Golem agent |
+| `golem-test-crash-recovery` | Simulating a crash on an agent for testing crash recovery |
+| `golem-cancel-queued-invocation` | Canceling a pending (queued) invocation on an agent |
+| `golem-delete-agent` | Deleting an agent instance |
+| `golem-interactive-repl-scala` | Using the Golem REPL for interactive testing and scripting of agents |
 
 # Golem Application Development Guide (Scala)
 

@@ -1,0 +1,85 @@
+name: "redeploy-agents"
+steps:
+  # 1. Create and deploy a default project (revision 0)
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  # 2. Create an agent and accumulate state (counter = 3)
+  - id: "invoke-increment-1"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  - id: "invoke-increment-2"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2
+
+  - id: "invoke-increment-3"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 3
+
+  # 3. Verify the agent exists and is on component revision 0
+  - id: "verify-agent-before-redeploy"
+    shell:
+      command: "golem"
+      args: ["agent", "get", "CounterAgent(\"c1\")"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_contains: "c1"
+
+  # 4. Modify the component so increment adds 10 instead of 1, then deploy (revision 1)
+  - id: "change-increment-step"
+    prompt: >
+      In the test-app project, modify the CounterAgent so that the `increment` method
+      increases the counter by 10 instead of 1. Do not change anything else — keep the
+      same method name, signature, and return type.
+    verify:
+      deploy: true
+
+  # 5. Redeploy existing agents — the agent should use the golem-redeploy-agents skill
+  - id: "redeploy-agents"
+    prompt: >
+      Redeploy all existing agents in the test-app project so they are deleted and
+      recreated with the latest component version.
+    expectedSkills:
+      - "golem-redeploy-agents"
+
+  # 6. Verify the agent still exists after redeploy (it was recreated, not just deleted)
+  - id: "verify-agent-exists-after-redeploy"
+    shell:
+      command: "golem"
+      args: ["agent", "get", "CounterAgent(\"c1\")"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_contains: "c1"
+
+  # 7. Verify the agent runs the new code AND state was reset:
+  #    first increment returns 10 (new code), not 4 (old code + old state) or 13 (new code + old state)
+  - id: "verify-state-reset-and-new-code"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 10

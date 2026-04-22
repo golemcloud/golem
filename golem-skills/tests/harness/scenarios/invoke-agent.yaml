@@ -19,6 +19,8 @@ steps:
         - "golem-invoke-agent-ts"
       scala:
         - "golem-invoke-agent-scala"
+      moonbit:
+        - "golem-invoke-agent-moonbit"
 
   - id: "verify-counter-incremented"
     invoke_json:

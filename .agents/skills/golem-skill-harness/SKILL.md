@@ -23,6 +23,7 @@ golem-skills/skills/
     golem-add-npm-package/
       SKILL.md
   scala/                   # Scala-specific skills (included only for Scala projects)
+  moonbit/                 # MoonBit-specific skills (included only for MoonBit projects)
 ```
 
 When `golem new` creates a project, it embeds the `common/` skills plus the language-specific skills into the project's `.agents/skills/` and `.claude/skills/` directories.
@@ -47,6 +48,7 @@ Without this step, `golem new` will still emit the old skill content, and the ha
 - **GOLEM_PATH** env var set to the golem repo root. If not set, the harness auto-detects it by walking up from `cwd` looking for `sdks/rust/golem-rust` and `sdks/ts/packages` directories (same markers as `golem-cli`). If auto-detection also fails, the harness exits with an error. The resolved target directory (`target/release` or `target/debug`) is prepended to `PATH` so all spawned processes — including agent drivers — use the correct `golem` and `golem-cli` binaries.
 - For Rust skills: `cargo-component` and `wasm32-wasip2` target
 - For TS skills: `pnpm`, `wasm-rquickjs-cli`, TS SDK built (`cargo make build-sdk-ts`)
+- For MoonBit skills: `moon` (MoonBit toolchain), `wasm-tools`
 
 ## Install and Build
 
@@ -144,6 +146,7 @@ Create the skill under the appropriate subdirectory of `golem-skills/skills/`:
 - `rust/<skill-name>/SKILL.md` — for Rust-specific skills
 - `ts/<skill-name>/SKILL.md` — for TypeScript-specific skills
 - `scala/<skill-name>/SKILL.md` — for Scala-specific skills
+- `moonbit/<skill-name>/SKILL.md` — for MoonBit-specific skills
 
 Use YAML frontmatter:
 
@@ -427,6 +430,37 @@ The file content is treated as `stdout` for assertion purposes.
     stdout_matches: "regex.*pattern"
 ```
 
+#### `mcp_call` — Call an MCP server method
+
+Initializes an MCP session via the Streamable HTTP transport, then sends a JSON-RPC method call.
+Session management (initialize + session ID forwarding) is handled automatically.
+
+```yaml
+- id: "list-tools"
+  mcp_call:
+    url: "http://my-app.localhost:9007/mcp"
+    method: "tools/list"
+  expect:
+    status: 200
+    body_contains: "my-tool-name"
+```
+
+With parameters (e.g., calling a tool):
+
+```yaml
+- id: "call-tool"
+  mcp_call:
+    url: "http://my-app.localhost:9007/mcp"
+    method: "tools/call"
+    params:
+      name: "CounterAgent-increment"
+      arguments:
+        name: "my-counter"
+  expect:
+    status: 200
+    body_contains: "1"
+```
+
 #### `sleep` — Wait for a duration
 
 ```yaml
@@ -441,12 +475,12 @@ Available assertion fields:
 | Field | Applies To | Description |
 |-------|-----------|-------------|
 | `exit_code` | shell, invoke | Assert process exit code |
-| `stdout_contains` | shell, invoke, check_file | Stdout includes substring |
-| `stdout_not_contains` | shell, invoke, check_file | Stdout must NOT include substring |
-| `stdout_matches` | shell, invoke, check_file | Stdout matches regex |
-| `status` | http | HTTP response status code |
-| `body_contains` | http | Response body includes substring |
-| `body_matches` | http | Response body matches regex |
+| `stdout_contains` | shell, invoke, check_file, mcp_call | Stdout includes substring |
+| `stdout_not_contains` | shell, invoke, check_file, mcp_call | Stdout must NOT include substring |
+| `stdout_matches` | shell, invoke, check_file, mcp_call | Stdout matches regex |
+| `status` | http, mcp_call | HTTP response status code |
+| `body_contains` | http, mcp_call | Response body includes substring |
+| `body_matches` | http, mcp_call | Response body matches regex |
 | `result_json` | invoke_json | JSONPath assertions on parsed JSON result |
 
 Regex-based assertions use JavaScript `RegExp` syntax because the harness evaluates them with
@@ -485,12 +519,13 @@ Another common pattern is language-specific invocation naming:
       rust: "list_items"
       ts: "listItems"
       scala: "listItems"
+      moonbit: "list_items"
 ```
 
 When method arguments contain records or other composite types, use per-language `args` because
 `golem agent invoke` parses arguments using language-specific syntax. Rust uses `{ field: value }`
-with `:`, TypeScript uses `{ field: value }` with `:`, and Scala uses `TypeName(field = value)`
-with `=`:
+with `:`, TypeScript uses `{ field: value }` with `:`, Scala uses `TypeName(field = value)`
+with `=`, and MoonBit uses `{ field: value }` with `:` (same as Rust):
 
 ```yaml
 - id: "create-item"
@@ -500,10 +535,12 @@ with `=`:
       rust: "create_item"
       ts: "createItem"
       scala: "createItem"
+      moonbit: "create_item"
     args:
       rust: '{ id: "item-1", name: "Hammer" }'
       ts: '{ id: "item-1", name: "Hammer" }'
       scala: 'Item(id = "item-1", name = "Hammer")'
+      moonbit: '{ id: "item-1", name: "Hammer" }'
 ```
 
 For simple scalar arguments (strings, numbers, booleans), the syntax is the same across all
@@ -519,10 +556,15 @@ languages, so a plain `args` string suffices:
   creation. This keeps skill activation expectations focused on the behavior under test.
 - Prefer `invoke_json` over `invoke` for behavioral verification. It is more stable for
   assertions, especially for records, lists, and other structured return values.
-- Use language-conditional `method` fields whenever Rust, TypeScript, and Scala differ in method
-  casing or naming style.
+- Use language-conditional `method` fields whenever Rust, TypeScript, Scala, and MoonBit differ in method
+  casing or naming style. MoonBit uses `snake_case` (same as Rust).
 - When writing prompts for new agents, it is fine to describe the intended public behavior in
   kebab-case, but the verification steps should invoke the real method names used in code.
+- **Avoid repetitive per-language prompts.** Only use language-conditional `prompt` when the
+  wording genuinely differs between languages (e.g., different file names, different syntax).
+  If the prompt is essentially the same for all languages, use a single `prompt` string and
+  let the skill handle language-specific details. The agent already knows the project language
+  from the AGENTS.md guide and will pick the right REPL language, file extension, etc.
 - **Helper agents with HTTP APIs for observable side effects**: Some skills (atomic blocks,
   transactions, durability controls) need an external service to observe side effects — e.g., to
   verify that operations were retried, compensated, or executed in the correct order. The harness
@@ -587,6 +629,7 @@ Failed steps are automatically classified:
 | `INVOKE_JSON_FAILED` | deploy | JSON agent invocation failed |
 | `SHELL_FAILED` | infra | Shell command returned non-zero exit |
 | `HTTP_FAILED` | network | HTTP request failed or timed out |
+| `MCP_CALL_FAILED` | network | MCP call failed (init, session, or method error) |
 | `CREATE_PROJECT_FAILED` | infra | `golem new` project creation failed |
 | `CREATE_AGENT_FAILED` | infra | `golem agent new` failed |
 | `DELETE_AGENT_FAILED` | infra | `golem agent delete` failed |
@@ -608,6 +651,7 @@ Skills in `golem-skills/skills/` (see [Skill Directory Structure](#skill-directo
 - `rust/golem-add-rust-crate` — adding Rust crate dependencies
 - `ts/golem-add-npm-package` — adding npm package dependencies
 - `scala/golem-add-scala-dependency` — adding Scala library dependencies
+- `moonbit/golem-add-moonbit-package` — adding MoonBit mooncakes dependencies
 
 Scenarios in `golem-skills/tests/harness/scenarios/`:
 - `create-a-new-project.yaml` — project creation, build, deploy, and invoke

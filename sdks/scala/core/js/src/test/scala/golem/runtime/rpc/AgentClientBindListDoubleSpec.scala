@@ -50,6 +50,13 @@ object AgentClientBindListDoubleSpec extends ZIOSpecDefault {
             input: JsDataValue
           ): Either[String, Unit] =
             Left("not used")
+
+          override def scheduleCancelableInvocation(
+            datetime: golem.Datetime,
+            functionName: String,
+            input: JsDataValue
+          ): Either[String, CancellationToken] =
+            Left("not used")
         }
 
         val invoker = new RecordingInvoker

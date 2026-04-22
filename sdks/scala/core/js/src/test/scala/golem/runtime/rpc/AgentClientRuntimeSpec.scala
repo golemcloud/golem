@@ -246,6 +246,13 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
       scheduleCalls += ((datetime, functionName, input))
       Right(())
     }
+
+    override def scheduleCancelableInvocation(
+      datetime: golem.Datetime,
+      functionName: String,
+      input: JsDataValue
+    ): Either[String, CancellationToken] =
+      Left("not used")
   }
 }
 

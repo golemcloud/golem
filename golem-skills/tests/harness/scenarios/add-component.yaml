@@ -1,0 +1,41 @@
+name: "add-component"
+languageAgnostic: true
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-template-to-existing-component"
+    prompt: >
+      In the test-app project, add the human-in-the-loop agent template to the
+      existing component. Use `golem new` with the `{{language}}/human-in-the-loop`
+      template inside the test-app directory. Make sure the project still builds
+      successfully.
+    expectedSkills:
+      - "golem-add-component"
+    verify:
+      build: true
+
+  - id: "add-rust-component"
+    prompt: >
+      In the test-app project, add a new Rust component called `test-app:backend`.
+      Use `golem new` with the `rust` template, specifying `--component-name test-app:backend`.
+      The default template creates a `CounterAgent` which will conflict with the existing
+      component's agent. Rename the new component's agent to `BackendAgent` (including the
+      HTTP mount path) to avoid conflicts. Make sure the project builds and deploys successfully.
+    expectedSkills:
+      - "golem-add-component"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "invoke-counter"
+    invoke_json:
+      agent: 'CounterAgent("test")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1

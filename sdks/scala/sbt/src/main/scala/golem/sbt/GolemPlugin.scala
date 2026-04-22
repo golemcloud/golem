@@ -59,18 +59,6 @@ object GolemPlugin extends AutoPlugin {
   private def sameSha256(file: File, expectedSha: Array[Byte]): Boolean =
     file.exists() && file.length() > 0 && java.util.Arrays.equals(sha256(IO.readBytes(file)), expectedSha)
 
-  private def latestModified(file: File): Long =
-    if (!file.exists()) 0L
-    else if (file.isFile) file.lastModified()
-    else (file ** "*").get.iterator.filter(_.isFile).map(_.lastModified()).foldLeft(0L)(math.max)
-
-  private def latestModified(files: Iterable[File]): Long =
-    files.foldLeft(0L)((currentMax, file) => math.max(currentMax, latestModified(file)))
-
-  private def latestLinkedJsModified(outDir: File): Long =
-    if (!outDir.exists()) 0L
-    else (outDir ** "*.js").get.iterator.map(_.lastModified()).foldLeft(0L)(math.max)
-
   private def linkedJsFile(report: Report, outDir: File): File =
     report.publicModules.headOption
       .map(module => outDir / module.jsFileName)
@@ -225,31 +213,11 @@ object GolemPlugin extends AutoPlugin {
             }
           }
 
-          (Compile / compile).value
-
-          val outDir =
-            (Compile / ScalaJSPlugin.autoImport.fullLinkJS / ScalaJSPlugin.autoImport.scalaJSLinkerOutputDirectory).value
-          val newestInputModified =
-            latestModified((Compile / sources).value ++ (Compile / products).value)
-          val staleLinkerOutputs = {
-            val newestLinkedOutput = latestLinkedJsModified(outDir)
-            newestLinkedOutput > 0L && newestLinkedOutput < newestInputModified
-          }
-
-          // Delete stale linker output here in the taskDyn body, BEFORE fullLinkJS
-          // is scheduled as a dependency of the inner Def.task. Deleting inside the
-          // Def.task body would run AFTER fullLinkJS (since .value dependencies are
-          // resolved first), destroying the freshly-linked output.
-          if (staleLinkerOutputs) {
-            log.warn(
-              s"[golem] Detected stale Scala.js linker output in ${outDir.getAbsolutePath}; deleting it before relinking."
-            )
-            IO.delete(outDir)
-          }
-
           Def.task {
             log.info(s"[golem] Building Scala.js bundle for $component ...")
             val report = (Compile / ScalaJSPlugin.autoImport.fullLinkJS).value.data
+            val outDir =
+              (Compile / ScalaJSPlugin.autoImport.fullLinkJS / ScalaJSPlugin.autoImport.scalaJSLinkerOutputDirectory).value
             val jsFile = linkedJsFile(report, outDir)
             ensureLinkedJsExists(jsFile)
             IO.createDirectory(out.getParentFile)

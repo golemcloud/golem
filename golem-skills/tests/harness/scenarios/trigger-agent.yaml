@@ -20,6 +20,8 @@ steps:
         - "golem-trigger-agent-ts"
       scala:
         - "golem-trigger-agent-scala"
+      moonbit:
+        - "golem-trigger-agent-moonbit"
 
   - id: "wait-for-trigger"
     sleep: 2

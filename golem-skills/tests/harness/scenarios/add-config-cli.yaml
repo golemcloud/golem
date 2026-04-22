@@ -36,6 +36,8 @@ steps:
         - "golem-add-config-ts"
       scala:
         - "golem-add-config-scala"
+      moonbit:
+        - "golem-add-config-moonbit"
     verify:
       build: true
       deploy: true
@@ -64,6 +66,7 @@ steps:
         rust: "greet"
         ts: "greet"
         scala: "greet"
+        moonbit: "greet"
       args: '"World"'
     expect:
       result_json:
