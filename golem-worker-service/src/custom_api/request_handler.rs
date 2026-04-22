@@ -19,7 +19,7 @@ use super::model::{OpenApiSpecFormat, RichRouteBehaviour};
 use super::oidc::handler::OidcHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver};
 use super::session_from_header_security::apply_session_from_header_security_middleware;
-use super::webhoooks::WebhookCallbackHandler;
+use super::webhooks::WebhookCallbackHandler;
 use super::{OidcCallbackBehaviour, ResponseBody, RouteExecutionResult};
 use crate::custom_api::RichRequest;
 use anyhow::anyhow;
@@ -180,7 +180,9 @@ fn route_execution_result_to_response(
             )
             .map_err(anyhow::Error::from)?;
 
-            Ok(response_builder.body(body))
+            Ok(response_builder
+                .body(body)
+                .set_content_type("application/json"))
         }
 
         ResponseBody::UnstructuredBinaryBody { body } => Ok(response_builder
