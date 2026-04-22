@@ -850,7 +850,7 @@ impl ComponentCommandHandler {
             .iter()
             .map(|agent_type| (agent_type.type_name.clone(), component_name.clone()))
             .collect::<BTreeMap<_, _>>();
-        let resolved_agents = app_ctx.application().resolve_agents(&mapping);
+        let resolved_agents = app_ctx.application().resolve_agents(&mapping)?;
 
         let mut agent_type_configs =
             BTreeMap::<AgentTypeName, AgentTypeManifestProvisionConfig>::new();
