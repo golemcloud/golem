@@ -1398,12 +1398,8 @@ impl WorkerCommandHandler {
             .component_by_agent_name_match(&agent_name_match)
             .await?;
 
-        let plugin_priority = self.resolve_plugin_priority(
-            &component,
-            &agent_name,
-            &plugin_name,
-            explicit_priority,
-        )?;
+        let plugin_priority =
+            self.resolve_plugin_priority(&component, &agent_name, &plugin_name, explicit_priority)?;
 
         log_action(
             "Activating plugin",
@@ -1446,12 +1442,8 @@ impl WorkerCommandHandler {
             .component_by_agent_name_match(&agent_name_match)
             .await?;
 
-        let plugin_priority = self.resolve_plugin_priority(
-            &component,
-            &agent_name,
-            &plugin_name,
-            explicit_priority,
-        )?;
+        let plugin_priority =
+            self.resolve_plugin_priority(&component, &agent_name, &plugin_name, explicit_priority)?;
 
         log_action(
             "Deactivating plugin",
@@ -1531,8 +1523,7 @@ impl WorkerCommandHandler {
                     if matching.iter().any(|p| p.priority.0 == priority) {
                         Ok(priority)
                     } else {
-                        let priorities: Vec<_> =
-                            matching.iter().map(|p| p.priority.0).collect();
+                        let priorities: Vec<_> = matching.iter().map(|p| p.priority.0).collect();
                         logln("");
                         log_error(format!(
                             "Plugin {} has no installation with priority {}. Available priorities: {:?}",
