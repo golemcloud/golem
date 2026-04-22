@@ -106,18 +106,14 @@ jobs:
         language: [ts, rust, scala, moonbit]
         model: ['']
         include:
-          - agent: opencode
+          - agent: gemini
             language: ts
-            model: google/gemini-3-pro-preview
-          - agent: opencode
+          - agent: gemini
             language: rust
-            model: google/gemini-3-pro-preview
-          - agent: opencode
+          - agent: gemini
             language: scala
-            model: google/gemini-3-pro-preview
-          - agent: opencode
+          - agent: gemini
             language: moonbit
-            model: google/gemini-3-pro-preview
           - agent: opencode
             language: ts
             model: openai/gpt-5.4
@@ -182,6 +178,10 @@ jobs:
       - name: Install OpenCode
         if: matrix.agent == 'opencode'
         run: npm install -g opencode-ai
+
+      - name: Install Gemini CLI
+        if: matrix.agent == 'gemini'
+        run: npm install -g @google/gemini-cli
 
       - name: Install Codex CLI
         if: matrix.agent == 'codex'

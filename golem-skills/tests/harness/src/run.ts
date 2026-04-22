@@ -15,6 +15,7 @@ import { AmpAgentDriver } from "./driver/amp.js";
 import { ClaudeAgentDriver } from "./driver/claude.js";
 import { OpenCodeAgentDriver } from "./driver/opencode.js";
 import { CodexAgentDriver } from "./driver/codex.js";
+import { GeminiAgentDriver } from "./driver/gemini.js";
 import type { AgentDriver } from "./driver/base.js";
 import { SkillWatcher } from "./watcher.js";
 import {
@@ -29,7 +30,7 @@ import { detectGolemWorkspaceRoot, resolveGolemTargetDir, GolemServer } from "./
 
 const DEFAULT_SCENARIO_RETRIES = 5;
 
-const SUPPORTED_AGENTS = ["amp", "claude-code", "opencode", "codex"] as const;
+const SUPPORTED_AGENTS = ["amp", "claude-code", "opencode", "codex", "gemini"] as const;
 const SUPPORTED_LANGUAGES = ["ts", "rust", "scala", "moonbit"] as const;
 
 type SupportedAgent = (typeof SUPPORTED_AGENTS)[number];
@@ -55,6 +56,8 @@ function createDriver(agent: SupportedAgent): AgentDriver {
       return new OpenCodeAgentDriver();
     case "codex":
       return new CodexAgentDriver();
+    case "gemini":
+      return new GeminiAgentDriver();
   }
 }
 
