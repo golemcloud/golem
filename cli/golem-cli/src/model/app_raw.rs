@@ -546,6 +546,8 @@ pub struct HttpApiDeployment {
     pub domain: Domain,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openapi_endpoint: Option<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub agents: IndexMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
 }
@@ -1536,11 +1538,8 @@ mod test {
     fn arb_http_api_deployment_model() -> BoxedStrategy<HttpApiDeployment> {
         (
             arb_dns_label(),
-            arb_opt(
-                (arb_dns_label(), arb_ident())
-                    .prop_map(|(host, path)| format!("https://{host}.example.com/{path}"))
-                    .boxed(),
-            ),
+            arb_opt(arb_ident()),
+            arb_opt(arb_ident()),
             prop::collection::vec(
                 (
                     arb_ident().prop_map(AgentTypeName),
@@ -1561,11 +1560,14 @@ mod test {
             )
             .prop_map(IndexMap::from_iter),
         )
-            .prop_map(|(domain, webhook_url, agents)| HttpApiDeployment {
-                domain: Domain(format!("{domain}.example.com")),
-                webhook_url,
-                agents,
-            })
+            .prop_map(
+                |(domain, webhook_url, openapi_endpoint, agents)| HttpApiDeployment {
+                    domain: Domain(format!("{domain}.example.com")),
+                    webhook_url,
+                    openapi_endpoint,
+                    agents,
+                },
+            )
             .boxed()
     }
 
