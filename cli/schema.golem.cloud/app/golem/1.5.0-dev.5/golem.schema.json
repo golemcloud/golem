@@ -184,6 +184,16 @@
             "type": "string"
           }
         },
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
+          "type": "object",
+          "description": "WASI configuration variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "pluginsMergeMode": {
           "$ref": "#/definitions/vecMergeMode"
         },
@@ -270,6 +280,16 @@
             "type": "string"
           }
         },
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
+          "type": "object",
+          "description": "WASI configuration variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "pluginsMergeMode": {
           "$ref": "#/definitions/vecMergeMode"
         },
@@ -309,6 +329,16 @@
         "env": {
           "type": "object",
           "description": "Environment variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
+          "type": "object",
+          "description": "WASI configuration variables for the agent.",
           "additionalProperties": {
             "type": "string"
           }
@@ -398,6 +428,16 @@
             "type": "string"
           }
         },
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
+          "type": "object",
+          "description": "WASI configuration variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "pluginsMergeMode": {
           "$ref": "#/definitions/vecMergeMode"
         },
@@ -477,6 +517,16 @@
             "type": "string"
           }
         },
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
+          "type": "object",
+          "description": "WASI configuration variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "pluginsMergeMode": {
           "$ref": "#/definitions/vecMergeMode"
         },
@@ -520,6 +570,16 @@
             "type": "string"
           }
         },
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
+          "type": "object",
+          "description": "WASI configuration variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "pluginsMergeMode": {
           "$ref": "#/definitions/vecMergeMode"
         },
@@ -556,6 +616,16 @@
         "env": {
           "type": "object",
           "description": "Environment variables for the agent.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "wasiConfigMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "wasiConfig": {
+          "type": "object",
+          "description": "WASI configuration variables for the agent.",
           "additionalProperties": {
             "type": "string"
           }
@@ -627,7 +697,11 @@
         },
         "webhookUrl": {
           "type": "string",
-          "description": "Webhook URL"
+          "description": "Webhook URL prefix"
+        },
+        "openapiEndpoint": {
+          "type": "string",
+          "description": "OpenApi endpoint URL prefix"
         },
         "agents": {
           "type": "object",

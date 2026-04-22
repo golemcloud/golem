@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::assert_json_content_type;
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
@@ -62,6 +63,7 @@ async fn string_path_var(agent: &HttpTestContext) -> anyhow::Result<()> {
         .send()
         .await?;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
 
@@ -83,6 +85,7 @@ async fn multi_path_vars(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "joined": "foo:bar" }));
@@ -104,6 +107,7 @@ async fn remaining_path_variable(agent: &HttpTestContext) -> anyhow::Result<()> 
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(
@@ -143,6 +147,7 @@ async fn path_and_query(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(
@@ -171,6 +176,7 @@ async fn path_and_header(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(
@@ -202,6 +208,7 @@ async fn json_body(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "ok": true }));
@@ -266,6 +273,7 @@ async fn unrestricted_unstructured_binary_inline(agent: &HttpTestContext) -> any
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!(5));
@@ -289,6 +297,7 @@ async fn unrestricted_unstructured_binary_missing_body(
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!(0));
@@ -313,6 +322,7 @@ async fn unrestricted_unstructured_binary_json_content_type(
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!(13));
@@ -336,6 +346,7 @@ async fn restricted_unstructured_binary_inline(agent: &HttpTestContext) -> anyho
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!(5));
@@ -413,6 +424,7 @@ async fn response_json(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "value": "ok" }));
@@ -434,6 +446,7 @@ async fn response_optional_found(agent: &HttpTestContext) -> anyhow::Result<()> 
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "value": "yes" }));
@@ -474,6 +487,7 @@ async fn response_result_ok(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "value": "ok" }));
@@ -498,6 +512,7 @@ async fn response_result_err(agent: &HttpTestContext) -> anyhow::Result<()> {
         response.status(),
         reqwest::StatusCode::INTERNAL_SERVER_ERROR
     );
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "error": "boom" }));
@@ -522,6 +537,7 @@ async fn response_result_void_err(agent: &HttpTestContext) -> anyhow::Result<()>
         response.status(),
         reqwest::StatusCode::INTERNAL_SERVER_ERROR
     );
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "error": "fail" }));
@@ -543,6 +559,7 @@ async fn response_result_json_void(agent: &HttpTestContext) -> anyhow::Result<()
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "value": "ok" }));
@@ -882,6 +899,7 @@ async fn webhook_callback(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body, json!({ "payload_length": 5 }));
@@ -914,6 +932,7 @@ async fn patch_resource_success(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(
@@ -942,6 +961,7 @@ async fn patch_partial_success(agent: &HttpTestContext) -> anyhow::Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(

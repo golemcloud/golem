@@ -15542,7 +15542,9 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
-        webhooksUrl:
+        webhooksPrefix:
+          type: string
+        openapiEndpointPrefix:
           type: string
         createdAt:
           type: string
@@ -15554,7 +15556,8 @@ components:
       - domain
       - hash
       - agents
-      - webhooksUrl
+      - webhooksPrefix
+      - openapiEndpointPrefix
       - createdAt
     HttpApiDeploymentAgentOptions:
       title: HttpApiDeploymentAgentOptions
@@ -15609,7 +15612,9 @@ components:
       properties:
         domain:
           type: string
-        webhooksUrl:
+        webhooksPrefix:
+          type: string
+        openapiEndpointPrefix:
           type: string
         agents:
           type: object
@@ -15617,7 +15622,8 @@ components:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
       required:
       - domain
-      - webhooksUrl
+      - webhooksPrefix
+      - openapiEndpointPrefix
       - agents
     HttpApiDeploymentUpdate:
       title: HttpApiDeploymentUpdate
@@ -15626,7 +15632,9 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        webhookUrl:
+        webhookPrefix:
+          type: string
+        openapiEndpointPrefix:
           type: string
         agents:
           type: object

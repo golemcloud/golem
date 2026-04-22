@@ -139,6 +139,9 @@ impl TextView for DeploymentDiff {
                             if diff.webhooks_url_changed {
                                 logln("    - webhooks_url");
                             }
+                            if diff.openapi_endpoint_changed {
+                                logln("    - openapi_endpoint");
+                            }
                             if !diff.agents_changes.is_empty() {
                                 logln("    - agents");
                                 for (agent_name, agent_diff) in &diff.agents_changes {

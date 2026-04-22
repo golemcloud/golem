@@ -1243,6 +1243,36 @@ pub mod worker {
             #[arg(long)]
             output: Option<String>,
         },
+        /// Activate a plugin for a specific agent instance.
+        ///
+        /// The plugin must be one of the installed plugins for the agent's current component version.
+        /// Use `golem component plugin get` to list installed plugins with their names and priorities.
+        ActivatePlugin {
+            #[command(flatten)]
+            agent_id: AgentIdArgs,
+            /// Name of the plugin to activate
+            #[arg(long)]
+            plugin_name: String,
+            /// Priority of the plugin installation to activate.
+            /// Only required when multiple installations of the same plugin exist.
+            #[arg(long)]
+            plugin_priority: Option<i32>,
+        },
+        /// Deactivate a plugin for a specific agent instance.
+        ///
+        /// The plugin must be one of the installed plugins for the agent's current component version.
+        /// Use `golem component plugin get` to list installed plugins with their names and priorities.
+        DeactivatePlugin {
+            #[command(flatten)]
+            agent_id: AgentIdArgs,
+            /// Name of the plugin to deactivate
+            #[arg(long)]
+            plugin_name: String,
+            /// Priority of the plugin installation to deactivate.
+            /// Only required when multiple installations of the same plugin exist.
+            #[arg(long)]
+            plugin_priority: Option<i32>,
+        },
     }
 }
 
