@@ -627,8 +627,8 @@ paths:
         explode: false
         style: simple
       responses:
-        '200':
-          description: Response 200
+        '204':
+          description: Response 204
           content:
             '*/*':
               schema:

@@ -516,6 +516,7 @@ description = "Runs integration tests (group 1/11 - worker, fork)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
+cargo-test-r run --package integration-tests --test integration :tag: -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 cargo-test-r run --package integration-tests --test integration :tag:group1 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
@@ -532,6 +533,7 @@ description = "Runs integration tests (group 3/11 - worker, fork with sqlite)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
 script = '''
+cargo-test-r run --package integration-tests --test integration :tag: -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 cargo-test-r run --package integration-tests --test integration :tag:group1 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
