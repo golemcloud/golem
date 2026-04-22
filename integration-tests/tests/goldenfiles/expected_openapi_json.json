@@ -276,6 +276,50 @@
         }
       }
     },
+    "/http-agents/{agent-name}/api": {
+      "options": {
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "endpoints": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "endpoints"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      }
+    },
     "/http-agents/{agent-name}/json-body/{id}": {
       "post": {
         "parameters": [
@@ -870,6 +914,21 @@
             "description": "Response 200"
           },
           "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Response 500"
           }
         }
@@ -939,7 +998,7 @@
           }
         ],
         "responses": {
-          "200": {
+          "204": {
             "content": {
               "*/*": {
                 "schema": {
@@ -948,9 +1007,24 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 204"
           },
           "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Response 500"
           }
         }
@@ -1106,6 +1180,118 @@
         }
       }
     },
+    "/http-agents/{agent-name}/trace": {
+      "trace": {
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "received_headers": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "timestamp": {
+                      "format": "int64",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "received_headers",
+                    "timestamp"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      }
+    },
+    "/http-agents/{agent-name}/trace/{path}": {
+      "trace": {
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: path",
+            "explode": false,
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "received_headers": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "timestamp": {
+                      "format": "int64",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "received_headers",
+                    "timestamp"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      }
+    },
+    "/http-agents/{agent-name}/tunnel/{host}/{port}": {},
     "/http-agents/{agent-name}/unrestricted-unstructured-binary/{bucket}": {
       "post": {
         "parameters": [

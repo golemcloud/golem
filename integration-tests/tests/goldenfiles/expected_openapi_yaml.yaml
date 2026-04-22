@@ -576,6 +576,15 @@ paths:
                 - value
         '500':
           description: Response 500
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                required:
+                - error
   /http-agents/{agent-name}/resp/result-json-void:
     get:
       parameters:
@@ -627,6 +636,15 @@ paths:
                 format: binary
         '500':
           description: Response 500
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                required:
+                - error
   /http-agents/{agent-name}/rest/{tail}:
     get:
       parameters:
