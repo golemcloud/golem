@@ -17,33 +17,6 @@ components:
   golem-it:agent-rpc-rust:
     dir: "golem-it-agent-rpc-rust"
     templates: rust, rust-test-component
-    presets:
-      quick:
-        build:
-        - command: cargo build --target wasm32-wasip2 --release
-          sources:
-          - "{{ componentDir }}/src"
-          - "{{ componentDir }}/Cargo.toml"
-          targets:
-          - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
-        componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
-        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
-        customCommands:
-          copy:
-          - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
-      optimized:
-        build:
-        - command: cargo build --target wasm32-wasip2 --release
-          sources:
-          - "{{ componentDir }}/src"
-          - "{{ componentDir }}/Cargo.toml"
-          targets:
-          - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
-        componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
-        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
-        customCommands:
-          copy:
-          - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
   golem-it:agent-rpc:
     dir: "golem-it-agent-rpc"
     templates: ts, ts-test-component

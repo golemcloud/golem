@@ -1,6 +1,28 @@
 manifestVersion: 1.5.0
 
 componentTemplates:
+  rust:
+    presets:
+      quick:
+        build:
+        - command: cargo build --target wasm32-wasip2 --release
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/Cargo.toml"
+          targets:
+          - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
+      optimized:
+        build:
+        - command: cargo build --target wasm32-wasip2 --release
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/Cargo.toml"
+          targets:
+          - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
   rust-test-component:
     presets:
       debug:
@@ -8,6 +30,14 @@ componentTemplates:
           copy:
           - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_debug.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_debug.wasm"
       release:
+        customCommands:
+          copy:
+          - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
+      quick:
+        customCommands:
+          copy:
+          - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
+      optimized:
         customCommands:
           copy:
           - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
