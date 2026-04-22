@@ -62,7 +62,7 @@ use golem_common::model::agent::{AgentType, DataValue, ParsedAgentId, UntypedJso
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::component_metadata::ParsedFunctionSite;
+use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{
@@ -2198,21 +2198,31 @@ impl WorkerCommandHandler {
         match ParsedAgentId::parse_and_resolve_type(&agent_name.0, &component.metadata) {
             Ok((agent_id, agent_type)) => match function_name {
                 Some(function_name) => {
-                    if let Some((namespace, package, interface)) = component
-                        .metadata
-                        .find_function(function_name)
-                        .ok()
-                        .flatten()
-                        .and_then(|f| match f.name.site {
-                            ParsedFunctionSite::Global => None,
-                            ParsedFunctionSite::Interface { .. } => None,
-                            ParsedFunctionSite::PackagedInterface {
-                                namespace,
-                                package,
-                                interface,
-                                ..
-                            } => Some((namespace, package, interface)),
-                        })
+                    let parsed = match ParsedFunctionName::parse(function_name) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            logln("");
+                            log_error(format!(
+                                "Incompatible agent type ({}) and method ({})",
+                                agent_id.agent_type.as_str().log_color_error_highlight(),
+                                function_name.log_color_error_highlight()
+                            ));
+                            logln("");
+                            log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                                component,
+                                &agent_id,
+                                &agent_type,
+                            ));
+                            bail!(NonSuccessfulExit);
+                        }
+                    };
+
+                    if let ParsedFunctionSite::PackagedInterface {
+                        namespace,
+                        package,
+                        interface,
+                        ..
+                    } = parsed.site()
                     {
                         let component_name = format!("{namespace}:{package}");
                         if *interface == agent_id.agent_type.0
