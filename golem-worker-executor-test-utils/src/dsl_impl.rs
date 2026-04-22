@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::TestWorkerExecutor;
+use crate::component_writer::AnalyzedComponent;
 use anyhow::anyhow;
 use applying::Apply;
 use bytes::Bytes;
@@ -30,13 +31,16 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::base_model::agent::{DataValue, ParsedAgentId, UntypedDataValue};
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::base_model::worker::TypedAgentConfigEntry;
 use golem_common::model::PromiseId;
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     ArchiveFilePath, ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
 };
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::deployment::DeploymentRevision;
+use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{
@@ -47,15 +51,48 @@ use golem_common::model::{AgentId, OplogIndex};
 use golem_common::widen_infallible;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
+use golem_service_base::model::component::Component;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream, rename_component_if_needed};
 use golem_test_framework::model::IFSEntry;
+use golem_wasm::ValueAndType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use tonic::Streaming;
 use tracing::debug;
 use uuid::Uuid;
+
+fn analyzed_component_to_component(
+    analyzed_component: &AnalyzedComponent,
+    component_name: ComponentName,
+    environment_id: EnvironmentId,
+    application_id: golem_common::model::application::ApplicationId,
+    account_id: golem_common::model::account::AccountId,
+) -> Component {
+    Component {
+        id: ComponentId(Uuid::nil()),
+        revision: ComponentRevision::INITIAL,
+        environment_id,
+        component_name,
+        hash: Hash::empty(),
+        application_id,
+        account_id,
+        component_size: 0,
+        metadata: ComponentMetadata::from_parts(
+            analyzed_component.exports.clone(),
+            analyzed_component.memories.clone(),
+            analyzed_component.root_package_name.clone(),
+            analyzed_component.root_package_version.clone(),
+            analyzed_component.agent_types.clone(),
+            BTreeMap::new(),
+        ),
+        created_at: Default::default(),
+        wasm_hash: analyzed_component.wasm_hash,
+        object_store_key: String::new(),
+    }
+}
 
 #[async_trait::async_trait]
 impl TestDsl for TestWorkerExecutor {
@@ -76,14 +113,6 @@ impl TestDsl for TestWorkerExecutor {
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
-        if agent_type_provision_configs
-            .values()
-            .any(|c| !c.config.is_empty())
-        {
-            return Err(anyhow!(
-                "Agent config isn't supported in worker executor tests"
-            ));
-        }
         if agent_type_provision_configs
             .values()
             .any(|c| !c.plugin_installations.is_empty())
@@ -115,6 +144,16 @@ impl TestDsl for TestWorkerExecutor {
             source_path
         };
 
+        if unverified
+            && agent_type_provision_configs
+                .values()
+                .any(|c| !c.config.is_empty())
+        {
+            return Err(anyhow!(
+                "Agent config isn't supported in unverified worker executor tests"
+            ));
+        }
+
         let mut file_map: std::collections::HashMap<ArchiveFilePath, (AgentFileContentHash, u64)> =
             std::collections::HashMap::new();
         for ifs_entry in &files_for_archive {
@@ -137,70 +176,115 @@ impl TestDsl for TestWorkerExecutor {
         }
 
         let stored_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig> =
-            agent_type_provision_configs
-                .into_iter()
-                .map(|(agent_type_name, creation)| {
-                    let files: Vec<InitialAgentFile> = creation
-                        .files
-                        .iter()
-                        .filter_map(|(archive_path, options)| {
-                            file_map
-                                .get(archive_path)
-                                .map(|(hash, size)| InitialAgentFile {
-                                    content_hash: *hash,
-                                    path: options.target_path.clone(),
-                                    permissions: options.permissions,
-                                    size: *size,
-                                })
-                        })
-                        .collect();
-                    (
-                        agent_type_name,
-                        AgentTypeProvisionConfig {
-                            env: creation.env,
-                            files,
-                            // config requires parse_with_type — not supported in executor tests
-                            config: vec![],
-                            // plugin grants cannot be resolved in executor tests
-                            plugins: vec![],
-                        },
-                    )
-                })
-                .collect();
-
-        let component = {
-            if unique {
-                self.deps
-                    .component_writer
-                    .add_component(
-                        &source_path,
-                        &component_name.0,
-                        stored_provision_configs,
-                        unverified,
-                        environment_id,
-                        self.context.application_id,
-                        self.context.account_id,
-                        HashSet::new(),
-                        Some(original_source_hash),
-                    )
-                    .await
-                    .expect("Failed to add component")
+            if unverified {
+                agent_type_provision_configs
+                    .into_iter()
+                    .map(|(agent_type_name, creation)| {
+                        let files: Vec<InitialAgentFile> = creation
+                            .files
+                            .iter()
+                            .filter_map(|(archive_path, options)| {
+                                file_map
+                                    .get(archive_path)
+                                    .map(|(hash, size)| InitialAgentFile {
+                                        content_hash: *hash,
+                                        path: options.target_path.clone(),
+                                        permissions: options.permissions,
+                                        size: *size,
+                                    })
+                            })
+                            .collect();
+                        (
+                            agent_type_name,
+                            AgentTypeProvisionConfig {
+                                env: creation.env,
+                                files,
+                                config: vec![],
+                                plugins: vec![],
+                            },
+                        )
+                    })
+                    .collect()
             } else {
-                self.deps
+                let analyzed_component = self
+                    .deps
                     .component_writer
-                    .get_or_add_component(
-                        &source_path,
-                        &component_name.0,
-                        stored_provision_configs,
-                        unverified,
-                        environment_id,
-                        self.context.application_id,
-                        self.context.account_id,
-                        HashSet::new(),
-                        Some(original_source_hash),
-                    )
-                    .await
-            }
+                    .analyze_component_metadata(&source_path, Some(original_source_hash))
+                    .await?;
+                let component_for_parsing = analyzed_component_to_component(
+                    &analyzed_component,
+                    component_name.clone(),
+                    environment_id,
+                    self.context.application_id,
+                    self.context.account_id,
+                );
+
+                agent_type_provision_configs
+                    .into_iter()
+                    .map(|(agent_type_name, creation)| -> anyhow::Result<_> {
+                        let files: Vec<InitialAgentFile> = creation
+                            .files
+                            .iter()
+                            .filter_map(|(archive_path, options)| {
+                                file_map
+                                    .get(archive_path)
+                                    .map(|(hash, size)| InitialAgentFile {
+                                        content_hash: *hash,
+                                        path: options.target_path.clone(),
+                                        permissions: options.permissions,
+                                        size: *size,
+                                    })
+                            })
+                            .collect();
+                        let config = parse_provision_config(
+                            &component_for_parsing,
+                            &agent_type_name,
+                            creation.config,
+                        )?;
+                        Ok((
+                            agent_type_name,
+                            AgentTypeProvisionConfig {
+                                env: creation.env,
+                                files,
+                                config,
+                                plugins: vec![],
+                            },
+                        ))
+                    })
+                    .collect::<anyhow::Result<_>>()?
+            };
+
+        let component = if unique {
+            self.deps
+                .component_writer
+                .add_component(
+                    &source_path,
+                    &component_name.0,
+                    stored_provision_configs,
+                    unverified,
+                    environment_id,
+                    self.context.application_id,
+                    self.context.account_id,
+                    HashSet::new(),
+                    Some(original_source_hash),
+                )
+                .await
+                .expect("Failed to add component")
+        } else {
+            self.deps
+                .component_writer
+                .get_or_add_component(
+                    &source_path,
+                    &component_name.0,
+                    stored_provision_configs,
+                    unverified,
+                    environment_id,
+                    self.context.application_id,
+                    self.context.account_id,
+                    HashSet::new(),
+                    Some(original_source_hash),
+                )
+                .await
         };
 
         Ok(component.into())
@@ -244,17 +328,12 @@ impl TestDsl for TestWorkerExecutor {
         >,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
-        if let Some(ref updates) = agent_type_provision_config_updates {
-            if updates.values().any(|u| u.config.is_some()) {
-                return Err(anyhow!(
-                    "Agent config isn't supported in worker executor tests"
-                ));
-            }
-            if updates.values().any(|u| !u.plugin_updates.is_empty()) {
-                return Err(anyhow!(
-                    "Plugin updates aren't supported in worker executor tests"
-                ));
-            }
+        if let Some(ref updates) = agent_type_provision_config_updates
+            && updates.values().any(|u| !u.plugin_updates.is_empty())
+        {
+            return Err(anyhow!(
+                "Plugin updates aren't supported in worker executor tests"
+            ));
         }
 
         let latest_revision = self
@@ -317,6 +396,12 @@ impl TestDsl for TestWorkerExecutor {
                 let existing = configs.get(&agent_type_name).cloned().unwrap_or_default();
 
                 let new_env = update.env.unwrap_or(existing.env);
+                let new_config = match update.config {
+                    Some(config) => {
+                        parse_provision_config(&latest_revision, &agent_type_name, config)?
+                    }
+                    None => existing.config,
+                };
 
                 let mut files: std::collections::HashMap<AgentFilePath, InitialAgentFile> =
                     existing
@@ -346,7 +431,7 @@ impl TestDsl for TestWorkerExecutor {
                     AgentTypeProvisionConfig {
                         env: new_env,
                         files: files.into_values().collect(),
-                        config: existing.config,
+                        config: new_config,
                         plugins: existing.plugins,
                     },
                 );
@@ -1187,4 +1272,47 @@ impl WorkerLogEventStream for GrpcWorkerLogEventStream {
             .await
             .map_err(|e| anyhow!("Failed to receive log event: {e}"))
     }
+}
+
+fn parse_provision_config(
+    component: &Component,
+    agent_type_name: &AgentTypeName,
+    config: Vec<AgentConfigEntryDto>,
+) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
+    let agent_type = component
+        .metadata
+        .find_agent_type_by_name(agent_type_name)
+        .ok_or_else(|| anyhow!("Agent type {agent_type_name} not found in component metadata"))?;
+
+    config
+        .into_iter()
+        .map(|entry| {
+            let declaration = agent_type
+                .config
+                .iter()
+                .find(|c| c.path == entry.path)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Agent type {agent_type_name} does not declare config {}",
+                        entry.path.join(".")
+                    )
+                })?;
+
+            let parsed_value =
+                ValueAndType::parse_with_type(&entry.value.0, &declaration.value_type).map_err(
+                    |err| {
+                        anyhow!(
+                            "config value for path {} does not match expected schema: [{}]",
+                            entry.path.join("."),
+                            err.join(", ")
+                        )
+                    },
+                )?;
+
+            Ok(TypedAgentConfigEntry {
+                path: entry.path,
+                value: parsed_value,
+            })
+        })
+        .collect()
 }
