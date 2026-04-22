@@ -245,6 +245,10 @@ jobs:
         if: matrix.language == 'moonbit'
         uses: hustcer/setup-moonbit@v1
 
+      - name: Install wasm-tools
+        if: matrix.language == 'moonbit'
+        run: cargo binstall --force --locked wasm-tools@1.227.1
+
       - name: Install Harness Dependencies
         working-directory: golem-skills/tests/harness
         run: |
