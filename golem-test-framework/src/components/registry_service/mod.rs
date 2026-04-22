@@ -44,6 +44,8 @@ pub trait RegistryService: Send + Sync {
     fn admin_account_email(&self) -> AccountEmail;
     fn admin_account_token(&self) -> TokenSecret;
 
+    fn builtin_plugin_owner_account_id(&self) -> AccountId;
+
     fn default_plan(&self) -> PlanId;
     fn low_fuel_plan(&self) -> PlanId;
     fn low_disk_space_plan(&self) -> PlanId;
@@ -84,15 +86,16 @@ async fn env_vars(
     rdb_private_connection: bool,
     component_compilation_service: Option<&Arc<dyn ComponentCompilationService>>,
     verbosity: Level,
-    admin_plan_id: &PlanId,
-    admin_account_id: &AccountId,
+    admin_plan_id: PlanId,
+    admin_account_id: AccountId,
     admin_account_email: &AccountEmail,
     admin_token: &TokenSecret,
-    default_plan_id: &PlanId,
-    low_fuel_plan_id: &PlanId,
-    low_disk_space_plan_id: &PlanId,
-    low_http_calls_plan_id: &PlanId,
-    low_rpc_calls_plan_id: &PlanId,
+    builtin_plugin_owner_account_id: AccountId,
+    default_plan_id: PlanId,
+    low_fuel_plan_id: PlanId,
+    low_disk_space_plan_id: PlanId,
+    low_http_calls_plan_id: PlanId,
+    low_rpc_calls_plan_id: PlanId,
     otlp: bool,
     otlp_wasm_path: Option<&Path>,
 ) -> HashMap<String, String> {
@@ -139,9 +142,9 @@ async fn env_vars(
             admin_token.secret().to_string(),
         )
         .with_str("GOLEM__INITIAL_ACCOUNTS__ROOT__ROLE", "admin")
-        .with_str(
+        .with(
             "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__ID",
-            "adb2694f-cd9f-425d-905d-ca2888c9c5de",
+            builtin_plugin_owner_account_id.to_string(),
         )
         .with_str(
             "GOLEM__INITIAL_ACCOUNTS__BUILTIN_PLUGIN_OWNER__NAME",

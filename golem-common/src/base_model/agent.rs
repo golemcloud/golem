@@ -164,8 +164,8 @@ pub enum RegistryInvalidationEvent {
     DeploymentChanged {
         event_id: u64,
         environment_id: EnvironmentId,
-        deployment_revision: u64,
-        current_deployment_revision: u64,
+        deployment_revision: DeploymentRevision,
+        current_deployment_revision: CurrentDeploymentRevision,
     },
     /// Domain registrations changed (created/deleted).
     DomainRegistrationChanged {

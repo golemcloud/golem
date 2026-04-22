@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use anyhow::anyhow;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateComponentError, RegistryServiceGetComponentError,
     RegistryServiceGetEnvironmentComponentError, RegistryServiceUpdateComponentError,
@@ -25,10 +24,9 @@ use golem_common::model::agent::{
 };
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{
-    AgentFileOptions, AgentFilePermissions, AgentTypeProvisionConfigCreation,
-    AgentTypeProvisionConfigUpdate, ArchiveFilePath, CanonicalFilePath, ComponentCreation,
-    ComponentName, ComponentUpdate, PluginInstallation, PluginInstallationAction,
-    PluginInstallationUpdate, PluginPriority, PluginUninstallation,
+    AgentFilePermissions, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
+    ComponentCreation, ComponentName, ComponentUpdate, PluginInstallation,
+    PluginInstallationAction, PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::plugin_registration::{
@@ -501,55 +499,27 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
 #[tracing::instrument]
 async fn create_component_with_ifs_files(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
-    let client = deps.registry_service().client(&user.token).await;
     let (_, env) = user.app_and_env().await?;
 
-    let component = client
-        .create_component(
-            &env.id.0,
-            &ComponentCreation {
-                component_name: ComponentName("it:initial-file-system".to_string()),
-                agent_types: Vec::new(),
-                agent_type_provision_configs: BTreeMap::from([(
-                    AgentTypeName("FileReadWrite".to_string()),
-                    AgentTypeProvisionConfigCreation {
-                        files: BTreeMap::from([(
-                            ArchiveFilePath(
-                                CanonicalFilePath::from_abs_str("/bar/baz.txt")
-                                    .map_err(|e| anyhow!(e))?,
-                            ),
-                            AgentFileOptions {
-                                target_path: golem_common::model::component::AgentFilePath(
-                                    CanonicalFilePath::from_abs_str("/bar/baz.txt")
-                                        .map_err(|e| anyhow!(e))?,
-                                ),
-                                permissions: AgentFilePermissions::ReadWrite,
-                            },
-                        )]),
-                        ..Default::default()
-                    },
-                )]),
-            },
-            tokio::fs::File::open(
-                deps.component_directory()
-                    .join("it_initial_file_system_release.wasm"),
-            )
-            .await?,
-            Some(
-                tokio::fs::File::open(
-                    deps.component_directory()
-                        .join("initial-file-system/files/archive.zip"),
-                )
-                .await?,
-            ),
-        )
+    let component = user
+        .component(&env.id, "it_initial_file_system_release")
+        .add_rw_file(
+            "FileReadWrite",
+            "/bar/baz.txt",
+            &deps
+                .component_directory()
+                .join("initial-file-system/files/archive.zip")
+                .to_string_lossy(),
+        )?
+        .store()
         .await?;
 
     let all_files = component
         .metadata
         .agent_type_files(&AgentTypeName("FileReadWrite".to_string()))
         .unwrap_or_default();
-    assert_eq!(all_files.len(), 2);
+
+    assert_eq!(all_files.len(), 1);
     assert_eq!(
         all_files
             .iter()
@@ -785,12 +755,12 @@ async fn create_component_with_duplicate_plugin_priorities_fails(
         )
         .await;
 
-    assert!(matches!(
+    assert_matches!(
         result,
         Err(golem_client::Error::Item(
-            RegistryServiceCreateComponentError::Error409(_)
+            RegistryServiceCreateComponentError::Error400(_)
         ))
-    ));
+    );
 
     Ok(())
 }
@@ -872,12 +842,12 @@ async fn create_component_with_duplicate_plugin_grant_ids_fails(
         )
         .await;
 
-    assert!(matches!(
+    assert_matches!(
         result,
         Err(golem_client::Error::Item(
-            RegistryServiceCreateComponentError::Error409(_)
+            RegistryServiceCreateComponentError::Error400(_)
         ))
-    ));
+    );
 
     Ok(())
 }

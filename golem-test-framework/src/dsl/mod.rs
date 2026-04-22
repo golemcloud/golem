@@ -926,6 +926,24 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
         self
     }
 
+    pub fn update_agent_provision_config(
+        mut self,
+        agent_type: &str,
+        f: impl FnOnce(&mut AgentTypeProvisionConfigCreation),
+    ) -> Self {
+        f(self.provision_config_entry_mut(agent_type));
+        self
+    }
+
+    pub fn try_update_agent_provision_config<E>(
+        mut self,
+        agent_type: &str,
+        f: impl FnOnce(&mut AgentTypeProvisionConfigCreation) -> Result<(), E>,
+    ) -> Result<Self, E> {
+        f(self.provision_config_entry_mut(agent_type))?;
+        Ok(self)
+    }
+
     /// Stores the component and returns the final component name too which is useful when used
     /// together with unique
     pub async fn store(self) -> anyhow::Result<ComponentDto> {

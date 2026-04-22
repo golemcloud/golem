@@ -178,6 +178,10 @@ jobs:
             description: "IT #8"
           - name: integration-tests-group9
             description: "IT #9"
+          - name: integration-tests-group10
+            description: "IT #10"
+          - name: integration-tests-group11
+            description: "IT #11"
           - name: cli-integration-tests-group1
             description: "CLI tests #1"
           - name: cli-integration-tests-group2

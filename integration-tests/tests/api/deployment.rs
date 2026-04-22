@@ -173,7 +173,7 @@ async fn get_component_version_from_previous_deployment(
                 current_revision: component.revision,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
-                    AgentTypeName("CounterAgent".to_string()),
+                    AgentTypeName("Counter".to_string()),
                     AgentTypeProvisionConfigUpdate {
                         env: Some(BTreeMap::from_iter(vec![(
                             "ENV_VAR".to_string(),
@@ -430,7 +430,7 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
                 current_revision: component.revision,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
-                    AgentTypeName("CounterAgent".to_string()),
+                    AgentTypeName("Counter".to_string()),
                     AgentTypeProvisionConfigUpdate {
                         env: Some(BTreeMap::from_iter(vec![(
                             "ENV_VAR".to_string(),

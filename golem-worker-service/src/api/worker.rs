@@ -1175,6 +1175,7 @@ fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
 mod tests {
     use super::normalize_agent_name_with_latest_component;
     use chrono::Utc;
+    use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::model::AgentId;
     use golem_common::model::Empty;
     use golem_common::model::account::AccountId;
@@ -1229,7 +1230,7 @@ mod tests {
             account_id: AccountId(Uuid::new_v4()),
             component_size: 0,
             metadata: ComponentMetadata::from_parts(
-                vec![],
+                KnownExports::default(),
                 vec![],
                 None,
                 None,
