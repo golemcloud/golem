@@ -526,6 +526,7 @@ jobs:
           use-cache: 'false'
           rust-targets: 'wasm32-wasip2'
           install-cargo-make: 'false'
+          install-cargo-binstall: 'true'
 
       - uses: ./.github/actions/setup-js-wasm-tools
         with:
