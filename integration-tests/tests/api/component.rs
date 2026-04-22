@@ -35,7 +35,7 @@ use golem_common::model::plugin_registration::{
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
-use golem_wasm::analysis::analysed_type::str;
+use golem_wasm::analysis::analysed_type::{option, str};
 use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
 use golem_wasm::{Value, ValueAndType};
 use pretty_assertions::{assert_eq, assert_matches, assert_ne};
@@ -188,7 +188,10 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             },
             golem_common::model::worker::TypedAgentConfigEntry {
                 path: vec!["var2".to_string()],
-                value: ValueAndType::new(Value::String("value2".to_string()), str())
+                value: ValueAndType::new(
+                    Value::Option(Some(Box::new(Value::String("value2".to_string())))),
+                    option(str())
+                )
             }
         ]
     );
