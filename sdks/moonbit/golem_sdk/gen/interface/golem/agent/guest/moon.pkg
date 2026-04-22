@@ -3,3 +3,5 @@ import {
   "golemcloud/golem_sdk/interface/golem/core/types" @types,
   "golemcloud/golem_sdk/agents" @agents,
 }
+
+warnings = "-44"

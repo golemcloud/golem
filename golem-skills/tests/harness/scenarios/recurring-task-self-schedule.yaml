@@ -1,0 +1,108 @@
+name: "recurring-task-self-schedule"
+settings:
+  golem_server:
+    custom_request_port: 9006
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-recurring-poller"
+    prompt: >
+      In the test-app project, add a second durable agent type called `RecordingPoller`
+      identified by a single name constructor parameter. Give it an HTTP mount under
+      `/pollers/{name}` and make sure it is exposed through the app HTTP API on
+      `test-app.localhost:9006`.
+
+      `RecordingPoller` must have mutable state:
+      - `poll_count` (u64, initially 0): how many times `poll` has executed
+      - `running` (bool, initially false): whether the recurring loop is active
+
+      It must expose these externally invokable methods:
+
+      - `start` — sets `running` to true and immediately calls `poll`.
+
+      - `poll` — if `running` is false, returns without doing anything. Otherwise,
+        increments `poll_count` by 1. If `poll_count` is less than 4, it schedules
+        itself (the same agent's `poll` method) to run again 5 seconds in the future.
+
+      - `stop` — sets `running` to false so the next scheduled `poll` becomes a no-op.
+
+      And these HTTP endpoints:
+
+      - `GET /count` — returns `poll_count` as a JSON number.
+
+      The self-scheduling must use the generated RPC client to schedule a future
+      invocation on the same agent instance, not a direct function call. The agent
+      schedules itself by getting a client for its own agent type and calling the
+      schedule variant of the `poll` method with a future datetime.
+
+      Make sure the project builds successfully.
+    expectedSkills:
+      rust:
+        - "golem-recurring-task-rust"
+      ts:
+        - "golem-recurring-task-ts"
+      scala:
+        - "golem-recurring-task-scala"
+      moonbit:
+        - "golem-recurring-task-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "start-poller"
+    invoke:
+      agent: 'RecordingPoller("p1")'
+      method:
+        rust: "start"
+        ts: "start"
+        scala: "start"
+        moonbit: "start"
+
+  - id: "verify-first-poll-ran"
+    http:
+      url: "http://test-app.localhost:9006/pollers/p1/count"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: 1
+
+  - id: "wait-for-second-poll"
+    sleep: 6
+
+  - id: "verify-second-poll-ran"
+    http:
+      url: "http://test-app.localhost:9006/pollers/p1/count"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: 2
+
+  - id: "stop-poller"
+    invoke:
+      agent: 'RecordingPoller("p1")'
+      method:
+        rust: "stop"
+        ts: "stop"
+        scala: "stop"
+        moonbit: "stop"
+
+  - id: "wait-for-stopped-poll-to-fire"
+    sleep: 6
+
+  - id: "verify-count-unchanged-after-stop"
+    http:
+      url: "http://test-app.localhost:9006/pollers/p1/count"
+      method: "GET"
+    expect:
+      status: 200
+      body_json:
+        - path: "$"
+          equals: 2

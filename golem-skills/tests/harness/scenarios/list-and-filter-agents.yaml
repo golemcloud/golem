@@ -1,0 +1,51 @@
+name: "list-and-filter-agents"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "create-agents"
+    shell:
+      command: "bash"
+      args:
+        - "-c"
+        - |
+          golem agent invoke 'CounterAgent("c1")' increment &&
+          golem agent invoke 'CounterAgent("c2")' increment &&
+          golem agent invoke 'CounterAgent("c3")' increment
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+
+  - id: "list-all-agents"
+    prompt: >
+      Use the CLI to list all agents in the test-app project and save the full output
+      to a file called all-agents.txt in the test-app directory.
+    expectedSkills:
+      - "golem-list-and-filter-agents"
+
+  - id: "check-all-agents"
+    check_file:
+      path: "all-agents.txt"
+    expect:
+      stdout_contains: "c1"
+      stdout_matches: "c2"
+
+  - id: "list-filtered-agents"
+    prompt: >
+      Now use the CLI to list agents in the test-app project, but only show agents whose
+      name contains "c1" using the --filter flag. Save the full output to a file called
+      filtered-agents.txt in the test-app directory.
+    continueSession: true
+    expectedSkills:
+      - "golem-list-and-filter-agents"
+
+  - id: "check-filtered-agents"
+    check_file:
+      path: "filtered-agents.txt"
+    expect:
+      stdout_contains: "c1"
+      stdout_not_contains: "c2"

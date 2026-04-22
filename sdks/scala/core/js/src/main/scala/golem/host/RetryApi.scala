@@ -25,9 +25,9 @@ import scala.scalajs.js.annotation.JSImport
 /**
  * Scala.js facade for `golem:api/retry@1.5.0`.
  *
- * Provides typed access to the semantic retry policy API. The tree-based
- * policy and predicate types are kept opaque — the SDK just passes them
- * through to/from the host.
+ * Provides typed access to the semantic retry policy API. The tree-based policy
+ * and predicate types are kept opaque — the SDK just passes them through
+ * to/from the host.
  */
 object RetryApi {
 
@@ -57,11 +57,15 @@ object RetryApi {
   @js.native
   @JSImport("golem:api/retry@1.5.0", JSImport.Namespace)
   private object RetryModule extends js.Object {
-    def getRetryPolicies(): js.Array[JsNamedRetryPolicy]                                                             = js.native
-    def getRetryPolicyByName(name: String): js.UndefOr[JsNamedRetryPolicy]                                           = js.native
-    def resolveRetryPolicy(verb: String, nounUri: String, properties: js.Array[js.Tuple2[String, JsPredicateValue]]): js.UndefOr[JsRetryPolicyTree] = js.native
-    def setRetryPolicy(policy: JsNamedRetryPolicy): Unit                                                             = js.native
-    def removeRetryPolicy(name: String): Unit                                                                        = js.native
+    def getRetryPolicies(): js.Array[JsNamedRetryPolicy]                   = js.native
+    def getRetryPolicyByName(name: String): js.UndefOr[JsNamedRetryPolicy] = js.native
+    def resolveRetryPolicy(
+      verb: String,
+      nounUri: String,
+      properties: js.Array[js.Tuple2[String, JsPredicateValue]]
+    ): js.UndefOr[JsRetryPolicyTree]                     = js.native
+    def setRetryPolicy(policy: JsNamedRetryPolicy): Unit = js.native
+    def removeRetryPolicy(name: String): Unit            = js.native
   }
 
   def raw: Any = RetryModule

@@ -121,6 +121,9 @@ object AgentClientRuntime {
     def schedule[In](method: AgentMethod[Trait, In, _], datetime: Datetime, input: In): Future[Unit] =
       runScheduled(method, datetime, input)
 
+    def scheduleCancelable[In](method: AgentMethod[Trait, In, _], datetime: Datetime, input: In): Future[CancellationToken] =
+      runScheduledCancelable(method, datetime, input)
+
     private def runAwaitable[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[Out] = {
       implicit val inSchema: GolemSchema[In] = method.inputSchema
 
@@ -162,6 +165,22 @@ object AgentClientRuntime {
         params <- RpcValueCodec.encodeArgs(input)
         _      <- client.rpc.scheduleInvocation(datetime, functionName, params)
       } yield ()
+
+      FutureInterop.fromEither(result)
+    }
+
+    private def runScheduledCancelable[In, Out0](
+      method: AgentMethod[Trait, In, Out0],
+      datetime: Datetime,
+      input: In
+    ): Future[CancellationToken] = {
+      implicit val inSchema: GolemSchema[In] = method.inputSchema
+
+      val functionName                               = method.functionName
+      val result: Either[String, CancellationToken] = for {
+        params <- RpcValueCodec.encodeArgs(input)
+        token  <- client.rpc.scheduleCancelableInvocation(datetime, functionName, params)
+      } yield token
 
       FutureInterop.fromEither(result)
     }

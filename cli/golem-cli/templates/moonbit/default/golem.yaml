@@ -5,4 +5,4 @@ httpApi:
     local:
     - domain: app-name.localhost:9006
       agents:
-        Counter: {}
+        CounterAgent: {}

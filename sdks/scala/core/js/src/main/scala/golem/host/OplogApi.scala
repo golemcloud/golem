@@ -464,12 +464,12 @@ object OplogApi {
           AgentInvocationFinished(
             parseAgentInvocationFinishedParameters(v.asInstanceOf[JsAgentInvocationFinishedParameters])
           )
-        case "suspend"             => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "error"               => Error(parseErrorParameters(v.asInstanceOf[JsErrorParameters]))
-        case "no-op"               => NoOp(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "jump"                => Jump(parseJumpParameters(v.asInstanceOf[JsJumpParameters]))
-        case "interrupted"         => Interrupted(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "exited"              => Exited(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "suspend"          => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "error"            => Error(parseErrorParameters(v.asInstanceOf[JsErrorParameters]))
+        case "no-op"            => NoOp(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "jump"             => Jump(parseJumpParameters(v.asInstanceOf[JsJumpParameters]))
+        case "interrupted"      => Interrupted(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "exited"           => Exited(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "set-retry-policy" =>
           SetRetryPolicy(parseSetRetryPolicyParameters(v.asInstanceOf[JsSetRetryPolicyParameters]))
         case "remove-retry-policy" =>

@@ -38,6 +38,7 @@ pub fn CancellationToken::drop(Self) -> Unit
 pub fn CancellationToken::inner(Self) -> Int
 
 pub(all) struct FutureInvokeResult(Int) derive(Eq, Show)
+pub fn FutureInvokeResult::cancel(Self) -> Unit
 pub fn FutureInvokeResult::drop(Self) -> Unit
 pub fn FutureInvokeResult::get(Self) -> Result[@types.DataValue, RpcError]?
 #deprecated

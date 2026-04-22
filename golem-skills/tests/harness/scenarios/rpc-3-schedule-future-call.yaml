@@ -31,6 +31,8 @@ steps:
         - "golem-schedule-future-call-ts"
       scala:
         - "golem-schedule-future-call-scala"
+      moonbit:
+        - "golem-schedule-future-call-moonbit"
     verify:
       build: true
       deploy: true
@@ -42,6 +44,7 @@ steps:
         rust: "schedule_report"
         ts: "scheduleReport"
         scala: "scheduleReport"
+        moonbit: "schedule_report"
     expect:
       result_json:
         - path: "$"
@@ -54,6 +57,7 @@ steps:
         rust: "recorded_counts"
         ts: "recordedCounts"
         scala: "recordedCounts"
+        moonbit: "recorded_counts"
     expect:
       result_json:
         - path: "$"
@@ -69,6 +73,7 @@ steps:
         rust: "recorded_counts"
         ts: "recordedCounts"
         scala: "recordedCounts"
+        moonbit: "recorded_counts"
     expect:
       result_json:
         - path: "$"

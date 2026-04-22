@@ -1,0 +1,56 @@
+name: "edit-manifest-presets-and-env-cascade"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-agent-with-presets"
+    prompt: >
+      In the test-app project, do the following:
+
+      1. Add a new durable agent type called `ConfigReporter` identified by a single
+         constructor parameter for the instance name.
+
+      2. ConfigReporter must expose a method called `get-mode` that takes no arguments,
+         reads the `APP_MODE` environment variable from the process environment, and returns
+         its value as a string. If the variable is not set, return the string `unknown`.
+
+      3. In `golem.yaml`, set environment variables on the component (under the existing
+         component entry in `components`):
+         - `APP_MODE` set to `production`
+
+      4. Also in the same component entry in `golem.yaml`, add a `presets` section with a
+         preset called `debug` that is marked as the default preset (`default: true`) and
+         overrides `APP_MODE` to `development`.
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      - "golem-edit-manifest"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-component-env"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*components:[\\s\\S]*env:[\\s\\S]*APP_MODE:[\\s\\S]*production[\\s\\S]*"
+
+  - id: "verify-preset"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*presets:[\\s\\S]*debug:[\\s\\S]*APP_MODE:[\\s\\S]*development[\\s\\S]*"
+
+  - id: "invoke-get-mode"
+    invoke:
+      agent: 'ConfigReporter("test")'
+      method:
+        rust: "get_mode"
+        ts: "getMode"
+        scala: "getMode"
+        moonbit: "get_mode"
+    expect:
+      stdout_contains: "development"

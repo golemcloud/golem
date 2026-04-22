@@ -43,6 +43,8 @@ steps:
         - "golem-add-http-auth-ts"
       scala:
         - "golem-add-http-auth-scala"
+      moonbit:
+        - "golem-add-http-auth-moonbit"
     verify:
       build: true
       deploy: true

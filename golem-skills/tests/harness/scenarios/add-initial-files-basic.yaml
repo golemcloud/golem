@@ -55,5 +55,6 @@ steps:
         rust: "read_greeting"
         ts: "readGreeting"
         scala: "readGreeting"
+        moonbit: "read_greeting"
     expect:
       stdout_contains: "Hello from Golem!"

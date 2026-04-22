@@ -53,7 +53,7 @@ export interface DriverTimeoutOptions {
 }
 
 export interface AgentDriver {
-  setup(workspace: string, bootstrapSkillSourceDir: string): Promise<void>;
+  setup(workspace: string, bootstrapSkillSourceDirs: string[]): Promise<void>;
   sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult>;
   sendFollowup(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult>;
   teardown(): Promise<void>;
@@ -199,7 +199,7 @@ export class ActivityMonitor {
 
 export abstract class BaseAgentDriver implements AgentDriver {
   protected workspace: string = ".";
-  protected bootstrapSkillSourceDir: string = "";
+  protected bootstrapSkillSourceDirs: string[] = [];
 
   /** Short tag used in log output (e.g. "claude-code", "amp") */
   protected abstract readonly driverName: string;
@@ -212,24 +212,27 @@ export abstract class BaseAgentDriver implements AgentDriver {
     return this.driverName;
   }
 
-  async setup(workspace: string, bootstrapSkillSourceDir: string): Promise<void> {
+  async setup(workspace: string, bootstrapSkillSourceDirs: string[]): Promise<void> {
     this.workspace = workspace;
-    this.bootstrapSkillSourceDir = bootstrapSkillSourceDir;
-    await this.seedBootstrapSkill();
+    this.bootstrapSkillSourceDirs = bootstrapSkillSourceDirs;
+    await this.seedBootstrapSkills();
   }
 
   setWorkingDirectory(dir: string): void {
     this.workspace = dir;
   }
 
-  protected async seedBootstrapSkill(): Promise<void> {
-    const sourceDir = path.resolve(this.bootstrapSkillSourceDir);
-    await fs.access(path.join(sourceDir, "SKILL.md"));
+  protected async seedBootstrapSkills(): Promise<void> {
+    for (const bootstrapSkillSourceDir of this.bootstrapSkillSourceDirs) {
+      const sourceDir = path.resolve(bootstrapSkillSourceDir);
+      await fs.access(path.join(sourceDir, "SKILL.md"));
+      const skillName = path.basename(sourceDir);
 
-    for (const targetDir of this.skillDirs) {
-      const destDir = path.join(this.workspace, targetDir, "golem-new-project");
-      await fs.mkdir(path.dirname(destDir), { recursive: true });
-      await fs.cp(sourceDir, destDir, { recursive: true });
+      for (const targetDir of this.skillDirs) {
+        const destDir = path.join(this.workspace, targetDir, skillName);
+        await fs.mkdir(path.dirname(destDir), { recursive: true });
+        await fs.cp(sourceDir, destDir, { recursive: true });
+      }
     }
   }
 

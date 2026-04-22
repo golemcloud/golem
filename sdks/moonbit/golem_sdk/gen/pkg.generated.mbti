@@ -4,30 +4,6 @@ package "golemcloud/golem_sdk/gen"
 // Values
 pub fn mbt_ffi_cabi_realloc(Int, Int, Int, Int) -> Int
 
-pub fn wasmExportDiscoverAgentTypes() -> Int
-
-pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
-
-pub fn wasmExportGetDefinition() -> Int
-
-pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
-
-pub fn wasmExportInitialize(Int) -> Int
-
-pub fn wasmExportInitializePostReturn(Int) -> Unit
-
-pub fn wasmExportInvoke(Int) -> Int
-
-pub fn wasmExportInvokePostReturn(Int) -> Unit
-
-pub fn wasmExportLoad(Int, Int, Int, Int) -> Int
-
-pub fn wasmExportLoadPostReturn(Int) -> Unit
-
-pub fn wasmExportSave() -> Int
-
-pub fn wasmExportSavePostReturn(Int) -> Unit
-
 // Errors
 
 // Types and methods

@@ -25,4 +25,6 @@ private[rpc] trait RpcInvoker {
   def invoke(functionName: String, input: JsDataValue): Either[String, Unit]
 
   def scheduleInvocation(datetime: Datetime, functionName: String, input: JsDataValue): Either[String, Unit]
+
+  def scheduleCancelableInvocation(datetime: Datetime, functionName: String, input: JsDataValue): Either[String, CancellationToken]
 }

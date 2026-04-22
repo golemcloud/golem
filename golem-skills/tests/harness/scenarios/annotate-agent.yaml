@@ -25,6 +25,8 @@ steps:
         - "golem-annotate-agent-ts"
       scala:
         - "golem-annotate-agent-scala"
+      moonbit:
+        - "golem-annotate-agent-moonbit"
     verify:
       build: true
       deploy: true
@@ -59,4 +61,13 @@ steps:
           - path: "$.agentType.methods[?(@.name=='getDouble')].promptHint"
             contains: "Get the doubled value of the counter"
           - path: "$.agentType.methods[?(@.name=='getDouble')].description"
+            contains: "Returns the current count multiplied by two"
+      moonbit:
+        status: 200
+        body_json:
+          - path: "$.agentType.description"
+            contains: "A test counter agent for tracking numeric values"
+          - path: "$.agentType.methods[?(@.name=='get_double')].promptHint"
+            contains: "Get the doubled value of the counter"
+          - path: "$.agentType.methods[?(@.name=='get_double')].description"
             contains: "Returns the current count multiplied by two"

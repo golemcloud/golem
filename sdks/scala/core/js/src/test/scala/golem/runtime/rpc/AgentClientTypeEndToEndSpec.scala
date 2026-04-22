@@ -72,6 +72,13 @@ object AgentClientTypeEndToEndSpec extends ZIOSpecDefault {
             @unused input: JsDataValue
           ): Either[String, Unit] =
             Left("not used")
+
+          override def scheduleCancelableInvocation(
+            @unused datetime: golem.Datetime,
+            @unused functionName: String,
+            @unused input: JsDataValue
+          ): Either[String, CancellationToken] =
+            Left("not used")
         }
 
         val resolvedAgent =

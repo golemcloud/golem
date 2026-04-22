@@ -152,7 +152,7 @@ private[golem] sealed trait JsDbTransaction extends js.Object {
 
 @js.native
 private[golem] sealed trait JsDbColumn extends js.Object {
-  def ordinal: Double    = js.native
+  def ordinal: js.Any    = js.native
   def name: String       = js.native
   def dbTypeName: String = js.native
 }

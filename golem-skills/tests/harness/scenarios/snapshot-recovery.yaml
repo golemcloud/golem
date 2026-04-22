@@ -1,0 +1,88 @@
+name: "snapshot-recovery"
+steps:
+  # 1. Create and deploy a default project (revision 0)
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  # 2. Add snapshot support with snapshotting enabled on every invocation
+  - id: "add-snapshot-support"
+    prompt: >
+      In the test-app project, add custom save/load snapshot functions to the
+      CounterAgent that serialize the counter value as 4 big-endian bytes. 
+      Enable snapshotting on every invocation. Build and deploy.
+    expectedSkills:
+      rust:
+        - "golem-custom-snapshot-rust"
+      ts:
+        - "golem-custom-snapshot-ts"
+      scala:
+        - "golem-custom-snapshot-scala"
+      moonbit:
+        - "golem-custom-snapshot-moonbit"
+    verify:
+      deploy: true
+
+  # 3. Invoke several times to build up state and trigger snapshots
+  - id: "invoke-increment-1"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  - id: "invoke-increment-2"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2
+
+  - id: "invoke-increment-3"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 3
+
+  # 4. Verify snapshots were actually taken in the oplog
+  - id: "verify-snapshots-in-oplog"
+    shell:
+      command: "golem"
+      args: ["agent", "oplog", "CounterAgent(\"c1\")"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_contains: "SNAPSHOT"
+
+  # 5. Simulate a crash
+  - id: "simulate-crash"
+    shell:
+      command: "golem"
+      args: ["agent", "simulate-crash", "CounterAgent(\"c1\")"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+
+  # 6. Wait for recovery
+  - id: "wait-for-recovery"
+    sleep: 2
+
+  # 7. Verify state was fully recovered
+  - id: "verify-recovered"
+    invoke_json:
+      agent: 'CounterAgent("c1")'
+      method: "increment"
+    expect:
+      result_json:
+        - path: "$"
+          equals: 4

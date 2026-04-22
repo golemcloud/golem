@@ -1,0 +1,22 @@
+name: "troubleshoot-build-force-rebuild"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "troubleshoot-stale-build"
+    prompt: >
+      The test-app project was built previously but I made some changes and the build
+      seems to skip steps because of up-to-date checks. How do I force a full rebuild
+      of the project? Please run the appropriate build command with the flag that
+      bypasses up-to-date checks.
+    expectedSkills:
+      - "golem-troubleshoot-build"
+    verify:
+      expectedFiles:
+        rust: ["test-app/golem-temp/agents/test_app_rust_main_debug.wasm"]
+        ts: ["test-app/golem-temp/agents/test_app_ts_main.wasm"]
+        scala: ["test-app/golem-temp/agents/test_app_scala_main.wasm"]
+        moonbit: ["test-app/golem-temp/final-wasm/test-app:moonbit-main.wasm"]
