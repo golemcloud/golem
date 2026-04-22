@@ -603,7 +603,7 @@ Options:
           log.scenarioResultLine(allPassed, spec.name, results.length, spec.steps.length);
 
           if (scenarioResult!.creditInsufficient) {
-            log.error("Credit balance too low — aborting all remaining scenarios.");
+            log.error("Credit balance too low — marking all remaining scenarios as failed.");
             abortController.abort();
             break;
           }
@@ -611,6 +611,42 @@ Options:
         if (abortController.signal.aborted) break;
       }
       if (abortController.signal.aborted) break;
+    }
+
+    // When aborted due to credit exhaustion, mark all remaining scenarios as failed
+    if (abortController.signal.aborted) {
+      const reportedKeys = new Set(
+        scenarioReports.map((r) => `${r.matrix.agent}|${r.matrix.language}|${r.scenario}`),
+      );
+
+      for (const agent of agents) {
+        for (const lang of languages) {
+          for (const file of scenarioFiles) {
+            const spec = await ScenarioLoader.load(path.join(scenariosDir, file));
+            if (scenarioFilter && spec.name !== scenarioFilter) continue;
+            if (spec.languageAgnostic && lang !== languages[0]) continue;
+
+            const key = `${agent}|${lang}|${spec.name}`;
+            if (reportedKeys.has(key)) continue;
+
+            hasFailures = true;
+            const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const report: ScenarioReport = {
+              scenario: spec.name,
+              matrix: { agent, language: lang, model: modelArg },
+              run_id: runId,
+              status: "fail",
+              durationSeconds: 0,
+              results: [],
+              artifactPaths: [],
+            };
+            const reportPath = path.join(resultsDir, `${agent}-${lang}-${spec.name}.json`);
+            await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
+            scenarioReports.push(report);
+            log.scenarioFail(`${spec.name} [${agent} x ${lang}] (credit insufficient — skipped)`);
+          }
+        }
+      }
     }
 
     // Aggregated summary report
