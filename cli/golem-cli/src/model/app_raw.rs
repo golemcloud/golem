@@ -546,12 +546,7 @@ pub struct HttpApiDeployment {
     pub domain: Domain,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "openapi_endpoint",
-        alias = "openapiEndpoint"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openapi_endpoint: Option<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub agents: IndexMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
@@ -1569,12 +1564,14 @@ mod test {
             )
             .prop_map(IndexMap::from_iter),
         )
-            .prop_map(|(domain, webhook_url, openapi_endpoint, agents)| HttpApiDeployment {
-                domain: Domain(format!("{domain}.example.com")),
-                webhook_url,
-                openapi_endpoint,
-                agents,
-            })
+            .prop_map(
+                |(domain, webhook_url, openapi_endpoint, agents)| HttpApiDeployment {
+                    domain: Domain(format!("{domain}.example.com")),
+                    webhook_url,
+                    openapi_endpoint,
+                    agents,
+                },
+            )
             .boxed()
     }
 

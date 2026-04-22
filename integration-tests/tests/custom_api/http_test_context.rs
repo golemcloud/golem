@@ -41,7 +41,7 @@ pub async fn make_test_context(
         agent_and_http_options,
         component_name,
         package_name,
-        None,
+        HttpApiDeploymentCreation::default_openapi_endpoint_prefix(),
     )
     .await
 }
@@ -51,7 +51,7 @@ pub async fn make_test_context_with_openapi_endpoint(
     agent_and_http_options: Vec<(AgentTypeName, HttpApiDeploymentAgentOptions)>,
     component_name: &str,
     package_name: &str,
-    openapi_endpoint: Option<String>,
+    openapi_endpoint: String,
 ) -> anyhow::Result<HttpTestContext> {
     let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
@@ -82,8 +82,8 @@ pub async fn make_test_context_with_openapi_endpoint(
     let http_api_deployment_creation = HttpApiDeploymentCreation {
         domain: domain.clone(),
         agents: BTreeMap::from_iter(agent_and_http_options),
-        webhooks_url: HttpApiDeploymentCreation::default_webhooks_url(),
-        openapi_endpoint,
+        webhooks_prefix: HttpApiDeploymentCreation::default_webhooks_prefix(),
+        openapi_endpoint_prefix: openapi_endpoint,
     };
 
     client

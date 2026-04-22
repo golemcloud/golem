@@ -317,13 +317,22 @@ pub fn add_openapi_spec_routes(
     compiled_routes: &mut Vec<UnboundCompiledRoute>,
     errors: &mut Vec<DeployValidationError>,
 ) {
-    let openapi_prefix = match parse_openapi_endpoint_path_segments(deployment) {
-        Ok(path) => path,
-        Err(error) => {
-            errors.push(error);
-            return;
-        }
-    };
+    let openapi_prefix = parse_literal_only_path_segments(&deployment.openapi_endpoint_prefix);
+
+    if openapi_prefix.last().iter().any(|ps| {
+        matches!(
+            ps.literal_value(),
+            Some("openapi.json") | Some("openapi.yaml")
+        )
+    }) {
+        errors.push(
+            DeployValidationError::HttpApiDeploymentInvalidOpenApiEndpoint {
+                domain: deployment.domain.clone(),
+                openapi_prefix: deployment.openapi_endpoint_prefix.to_string(),
+                error: "the prefix must not end in openapi.json or openapi.yaml".to_string(),
+            },
+        )
+    }
 
     for (format, openapi_path) in [
         (OpenApiSpecFormat::Json, "openapi.json"),
@@ -388,7 +397,7 @@ pub fn build_agent_http_api_deployment_details(
     };
 
     let agent_webhook_prefix: Vec<PathSegment> =
-        parse_literal_only_path_segments(&agent_http_api_deployment.webhooks_url);
+        parse_literal_only_path_segments(&agent_http_api_deployment.webhooks_prefix);
 
     let mut agent_webhook_suffix: Vec<PathSegment> = agent_http_mount
         .webhook_suffix
@@ -591,55 +600,6 @@ fn parse_literal_only_path_segments(input: &str) -> Vec<PathSegment> {
         .collect()
 }
 
-fn parse_openapi_endpoint_path_segments(
-    deployment: &HttpApiDeployment,
-) -> Result<Vec<PathSegment>, DeployValidationError> {
-    let Some(openapi_endpoint) = deployment.openapi_endpoint.as_deref() else {
-        return Ok(Vec::new());
-    };
-
-    let make_error = |error: &str| DeployValidationError::HttpApiDeploymentInvalidOpenApiEndpoint {
-        domain: deployment.domain.clone(),
-        openapi_endpoint: openapi_endpoint.to_string(),
-        error: error.to_string(),
-    };
-
-    if openapi_endpoint.contains('?') {
-        return Err(make_error("query parameters are not allowed"));
-    }
-
-    if openapi_endpoint.contains('#') {
-        return Err(make_error("fragments are not allowed"));
-    }
-
-    let trimmed = openapi_endpoint.trim_matches('/');
-
-    if trimmed.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    if trimmed.contains("//") {
-        return Err(make_error("empty path segments are not allowed"));
-    }
-
-    trimmed
-        .split('/')
-        .map(|segment| {
-            if segment == "openapi.json" || segment == "openapi.yaml" {
-                Err(make_error(
-                    "the prefix must not include openapi.json or openapi.yaml",
-                ))
-            } else if segment == "*" || (segment.starts_with('{') && segment.ends_with('}')) {
-                Err(make_error("only literal path segments are allowed"))
-            } else {
-                Ok(PathSegment::Literal {
-                    value: segment.to_string(),
-                })
-            }
-        })
-        .collect()
-}
-
 fn resolve_route_security(
     environment: &Environment,
     deployment_agent_options: &HttpApiDeploymentAgentOptions,
@@ -702,9 +662,11 @@ mod tests {
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::diff::Hash;
     use golem_common::model::domain_registration::Domain;
-    use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentId, HttpApiDeploymentAgentOptions};
     use golem_common::model::environment::{
         Environment, EnvironmentId, EnvironmentName, EnvironmentRevision,
+    };
+    use golem_common::model::http_api_deployment::{
+        HttpApiDeployment, HttpApiDeploymentAgentOptions, HttpApiDeploymentId,
     };
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
@@ -784,8 +746,8 @@ mod tests {
             domain: Domain("example.com".to_string()),
             hash: Hash::empty(),
             agents: BTreeMap::new(),
-            webhooks_url: "/webhooks".to_string(),
-            openapi_endpoint: None,
+            webhooks_prefix: "/webhooks".to_string(),
+            openapi_endpoint_prefix: "/".to_string(),
             created_at: Utc::now(),
         }
     }
@@ -828,7 +790,7 @@ mod tests {
         call_agent.phantom
     }
 
-    fn test_deployment_with_openapi(openapi_endpoint: Option<&str>) -> HttpApiDeployment {
+    fn test_deployment_with_openapi(openapi_endpoint: &str) -> HttpApiDeployment {
         HttpApiDeployment {
             id: HttpApiDeploymentId::new(),
             revision:
@@ -838,8 +800,8 @@ mod tests {
             domain: Domain("example.com".to_string()),
             hash: Hash::empty(),
             agents: BTreeMap::new(),
-            webhooks_url: "/webhooks".to_string(),
-            openapi_endpoint: openapi_endpoint.map(|value| value.to_string()),
+            webhooks_prefix: "/webhooks".to_string(),
+            openapi_endpoint_prefix: openapi_endpoint.to_string(),
             created_at: Utc::now(),
         }
     }
@@ -901,55 +863,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_openapi_endpoint_segments_for_literal_prefix() {
-        let result = parse_openapi_endpoint_path_segments(&test_deployment_with_openapi(Some("/docs/specs/")))
-            .expect("expected valid openapi prefix");
-
-        assert_eq!(
-            result,
-            vec![
-                PathSegment::Literal {
-                    value: "docs".to_string(),
-                },
-                PathSegment::Literal {
-                    value: "specs".to_string(),
-                }
-            ]
-        );
-    }
-
-    #[test]
-    fn parses_openapi_endpoint_as_root_when_unset() {
-        let result = parse_openapi_endpoint_path_segments(&test_deployment_with_openapi(None))
-            .expect("expected root openapi prefix");
-
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn rejects_invalid_openapi_prefixes() {
-        for invalid_prefix in [
-            "/docs?x=1",
-            "/docs#fragment",
-            "/docs//bad",
-            "/docs/{id}",
-            "/docs/{*rest}",
-            "/docs/*",
-            "/docs/openapi.json",
-        ] {
-            let result =
-                parse_openapi_endpoint_path_segments(&test_deployment_with_openapi(Some(invalid_prefix)));
-
-            assert!(matches!(
-                result,
-                Err(DeployValidationError::HttpApiDeploymentInvalidOpenApiEndpoint { .. })
-            ));
-        }
-    }
-
-    #[test]
     fn add_openapi_spec_routes_uses_custom_prefix_and_formats() {
-        let deployment = test_deployment_with_openapi(Some("/docs"));
+        let deployment = test_deployment_with_openapi("/docs");
         let mut route_id = 1;
         let mut compiled_routes = Vec::new();
         let mut errors = Vec::new();
@@ -1003,7 +918,7 @@ mod tests {
 
     #[test]
     fn add_openapi_spec_routes_reports_invalid_prefix_error() {
-        let deployment = test_deployment_with_openapi(Some("/docs?x=1"));
+        let deployment = test_deployment_with_openapi("/docs?x=1");
         let mut route_id = 1;
         let mut compiled_routes = Vec::new();
         let mut errors = Vec::new();
@@ -1085,7 +1000,8 @@ mod tests {
             },
         ];
 
-        let deployment = test_deployment_with_openapi(None);
+        let environment_id = EnvironmentId(Uuid::new_v4());
+        let deployment = test_deployment(environment_id);
 
         let mut route_id = 3;
         add_cors_preflight_http_routes(&deployment, &mut route_id, &mut compiled_routes);

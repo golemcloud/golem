@@ -801,8 +801,8 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
                 AgentTypeName("test-agent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
             )]),
-            webhooks_url: "/webhooks/".to_string(),
-            openapi_endpoint: None,
+            webhooks_prefix: "/webhooks/".to_string(),
+            openapi_endpoint_prefix: "/".to_string(),
         }),
     }
     .with_updated_hash()

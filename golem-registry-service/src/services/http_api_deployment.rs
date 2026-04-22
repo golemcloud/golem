@@ -151,8 +151,10 @@ impl HttpApiDeploymentService {
         let id = HttpApiDeploymentId::new();
         let record = HttpApiDeploymentRevisionRecord::creation(
             id,
-            HttpApiDeploymentCreation::normalize_webhooks_url(data.webhooks_url),
-            HttpApiDeploymentCreation::normalize_openapi_endpoint(data.openapi_endpoint),
+            HttpApiDeploymentCreation::normalize_webhooks_prefix(data.webhooks_prefix),
+            HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix(
+                data.openapi_endpoint_prefix,
+            ),
             data.agents,
             auth.account_id(),
         )?;
@@ -219,13 +221,13 @@ impl HttpApiDeploymentService {
         };
 
         http_api_deployment.revision = http_api_deployment.revision.next()?;
-        if let Some(webhooks_url) = update.webhook_url {
-            http_api_deployment.webhooks_url =
-                HttpApiDeploymentCreation::normalize_webhooks_url(webhooks_url);
+        if let Some(webhooks_url) = update.webhook_prefix {
+            http_api_deployment.webhooks_prefix =
+                HttpApiDeploymentCreation::normalize_webhooks_prefix(webhooks_url);
         };
-        if let Some(openapi_endpoint) = update.openapi_endpoint {
-            http_api_deployment.openapi_endpoint =
-                HttpApiDeploymentCreation::normalize_openapi_endpoint(openapi_endpoint);
+        if let Some(openapi_endpoint) = update.openapi_endpoint_prefix {
+            http_api_deployment.openapi_endpoint_prefix =
+                HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix(openapi_endpoint);
         };
         if let Some(api_definitions) = update.agents {
             http_api_deployment.agents = api_definitions;

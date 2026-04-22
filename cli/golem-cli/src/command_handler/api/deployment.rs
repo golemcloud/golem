@@ -234,8 +234,10 @@ impl ApiDeploymentCommandHandler {
                     &environment.environment_id.0,
                     &HttpApiDeploymentCreation {
                         domain: domain.clone(),
-                        webhooks_url: deployable_http_api_deployment.webhooks_url.clone(),
-                        openapi_endpoint: deployable_http_api_deployment.openapi_endpoint.clone(),
+                        webhooks_prefix: deployable_http_api_deployment.webhooks_prefix.clone(),
+                        openapi_endpoint_prefix: deployable_http_api_deployment
+                            .openapi_prefix
+                            .clone(),
                         agents: deployable_http_api_deployment.agents.clone(),
                     },
                 )
@@ -345,13 +347,13 @@ impl ApiDeploymentCommandHandler {
                 &http_api_deployment.id.0,
                 &HttpApiDeploymentUpdate {
                     current_revision: http_api_deployment.revision,
-                    webhook_url: if webhook_url_changed {
-                        Some(deployable_http_api_deployment.webhooks_url.clone())
+                    webhook_prefix: if webhook_url_changed {
+                        Some(deployable_http_api_deployment.webhooks_prefix.clone())
                     } else {
                         None
                     },
-                    openapi_endpoint: if openapi_endpoint_changed {
-                        Some(deployable_http_api_deployment.openapi_endpoint.clone())
+                    openapi_endpoint_prefix: if openapi_endpoint_changed {
+                        Some(deployable_http_api_deployment.openapi_prefix.clone())
                     } else {
                         None
                     },

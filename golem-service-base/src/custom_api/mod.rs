@@ -43,6 +43,15 @@ pub enum PathSegment {
     CatchAll { display_name: String },
 }
 
+impl PathSegment {
+    pub fn literal_value(&self) -> Option<&str> {
+        match self {
+            Self::Literal { value } => Some(value),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for PathSegment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

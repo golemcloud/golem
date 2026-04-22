@@ -18,8 +18,8 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Debug)]
 pub struct HttpApiDeploymentDeployProperties {
-    pub webhooks_url: String,
-    pub openapi_endpoint: Option<String>,
+    pub webhooks_prefix: String,
+    pub openapi_prefix: String,
     pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
 }
 

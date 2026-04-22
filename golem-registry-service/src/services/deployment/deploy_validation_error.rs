@@ -96,11 +96,11 @@ pub enum DeployValidationError {
         url: String,
     },
     #[error(
-        "Http api deployment {domain} has an invalid OpenAPI endpoint prefix {openapi_endpoint}: {error}"
+        "Http api deployment {domain} has an invalid OpenAPI endpoint prefix {openapi_prefix}: {error}"
     )]
     HttpApiDeploymentInvalidOpenApiEndpoint {
         domain: Domain,
-        openapi_endpoint: String,
+        openapi_prefix: String,
         error: String,
     },
     #[error("Overriding security scheme is only allowed if the environment level option is set")]

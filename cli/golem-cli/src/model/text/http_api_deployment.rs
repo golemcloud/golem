@@ -44,9 +44,9 @@ fn http_api_deployment_fields(dep: &HttpApiDeployment) -> Vec<(String, String)> 
         .fmt_field("Environment ID", &dep.environment_id, format_main_id)
         .fmt_field("Revision", &dep.revision, format_main_id)
         .fmt_field("Created at", &dep.created_at, |d| d.to_string())
-        .fmt_field("Webhooks url", &dep.webhooks_url, |d| d.clone())
-        .fmt_field("OpenAPI endpoint", &dep.openapi_endpoint, |endpoint| {
-            endpoint.clone().unwrap_or_else(|| "/".to_string())
+        .fmt_field("Webhooks url", &dep.webhooks_prefix, |d| d.clone())
+        .fmt_field("OpenAPI endpoint", &dep.openapi_endpoint_prefix, |d| {
+            d.clone()
         })
         .fmt_field("Agents", &dep.agents, |agents| {
             let mut result = String::new();

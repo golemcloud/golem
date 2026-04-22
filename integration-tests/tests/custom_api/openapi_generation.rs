@@ -125,7 +125,7 @@ async fn test_open_api_custom_prefix_json_generation(
         ],
         "golem_it_agent_sdk_rust_release",
         "golem-it:agent-sdk-rust",
-        Some("/docs".to_string()),
+        "/docs".to_string(),
     )
     .await?;
 

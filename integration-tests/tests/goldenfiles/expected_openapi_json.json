@@ -276,6 +276,40 @@
         }
       }
     },
+    "/docs/openapi.json": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      }
+    },
+    "/docs/openapi.yaml": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/yaml": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      }
+    },
     "/http-agents/{agent-name}/json-body/{id}": {
       "post": {
         "parameters": [
@@ -1181,40 +1215,6 @@
                 "schema": {
                   "format": "int64",
                   "type": "integer"
-                }
-              }
-            },
-            "description": "Response 200"
-          }
-        }
-      }
-    },
-    "/docs/openapi.json": {
-      "get": {
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Response 200"
-          }
-        }
-      }
-    },
-    "/docs/openapi.yaml": {
-      "get": {
-        "responses": {
-          "200": {
-            "content": {
-              "application/yaml": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
                 }
               }
             },

@@ -62,15 +62,15 @@ declare_structs! {
 
     pub struct HttpApiDeploymentCreation {
         pub domain: Domain,
-        pub webhooks_url: String,
-        pub openapi_endpoint: Option<String>,
+        pub webhooks_prefix: String,
+        pub openapi_endpoint_prefix: String,
         pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>
     }
 
     pub struct HttpApiDeploymentUpdate {
         pub current_revision: HttpApiDeploymentRevision,
-        pub webhook_url: Option<String>,
-        pub openapi_endpoint: Option<Option<String>>,
+        pub webhook_prefix: Option<String>,
+        pub openapi_endpoint_prefix: Option<String>,
         pub agents: Option<BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>>
     }
 
@@ -81,15 +81,19 @@ declare_structs! {
         pub domain: Domain,
         pub hash: diff::Hash,
         pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
-        pub webhooks_url: String,
-        pub openapi_endpoint: Option<String>,
+        pub webhooks_prefix: String,
+        pub openapi_endpoint_prefix: String,
         pub created_at: DateTime<chrono::Utc>,
     }
 }
 
 impl HttpApiDeploymentCreation {
-    pub fn default_webhooks_url() -> String {
+    pub fn default_webhooks_prefix() -> String {
         "/webhooks/".to_string()
+    }
+
+    pub fn default_openapi_endpoint_prefix() -> String {
+        "/".to_string()
     }
 
     fn normalize_path_prefix(path: &str, trailing_slash: bool) -> String {
@@ -104,14 +108,12 @@ impl HttpApiDeploymentCreation {
         }
     }
 
-    pub fn normalize_webhooks_url(webhooks_url: String) -> String {
-        Self::normalize_path_prefix(&webhooks_url, true)
+    pub fn normalize_webhooks_prefix(webhooks_prefix: String) -> String {
+        Self::normalize_path_prefix(&webhooks_prefix, true)
     }
 
-    pub fn normalize_openapi_endpoint(openapi_endpoint: Option<String>) -> Option<String> {
-        openapi_endpoint
-            .map(|value| Self::normalize_path_prefix(&value, false))
-            .filter(|value| value != "/")
+    pub fn normalize_openapi_endpoint_prefix(openapi_endpoint_prefix: String) -> String {
+        Self::normalize_path_prefix(&openapi_endpoint_prefix, true)
     }
 }
 
@@ -121,53 +123,51 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn normalize_openapi_endpoint_treats_root_variants_as_unset() {
+    fn normalize_openapi_endpoint_treats_root_variants_as_root_prefix() {
         assert_eq!(
-            HttpApiDeploymentCreation::normalize_openapi_endpoint(None),
-            None
+            HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix("".to_string()),
+            "/".to_string()
         );
         assert_eq!(
-            HttpApiDeploymentCreation::normalize_openapi_endpoint(Some("".to_string())),
-            None
+            HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix("/".to_string()),
+            "/".to_string()
         );
         assert_eq!(
-            HttpApiDeploymentCreation::normalize_openapi_endpoint(Some("/".to_string())),
-            None
-        );
-        assert_eq!(
-            HttpApiDeploymentCreation::normalize_openapi_endpoint(Some("///".to_string())),
-            None
+            HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix("///".to_string()),
+            "/".to_string()
         );
     }
 
     #[test]
     fn normalize_openapi_endpoint_canonicalizes_slashes() {
         assert_eq!(
-            HttpApiDeploymentCreation::normalize_openapi_endpoint(Some("docs".to_string())),
-            Some("/docs".to_string())
+            HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix("docs".to_string()),
+            "/docs/".to_string()
         );
         assert_eq!(
-            HttpApiDeploymentCreation::normalize_openapi_endpoint(Some("/docs/".to_string())),
-            Some("/docs".to_string())
+            HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix("/docs".to_string()),
+            "/docs/".to_string()
         );
         assert_eq!(
-            HttpApiDeploymentCreation::normalize_openapi_endpoint(Some("/docs/specs/".to_string())),
-            Some("/docs/specs".to_string())
+            HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix(
+                "/docs/specs/".to_string()
+            ),
+            "/docs/specs/".to_string()
         );
     }
 
     #[test]
     fn normalize_webhooks_url_treats_root_variants_as_root_prefix() {
         assert_eq!(
-            HttpApiDeploymentCreation::normalize_webhooks_url("".to_string()),
+            HttpApiDeploymentCreation::normalize_webhooks_prefix("".to_string()),
             "/".to_string()
         );
         assert_eq!(
-            HttpApiDeploymentCreation::normalize_webhooks_url("/".to_string()),
+            HttpApiDeploymentCreation::normalize_webhooks_prefix("/".to_string()),
             "/".to_string()
         );
         assert_eq!(
-            HttpApiDeploymentCreation::normalize_webhooks_url("///".to_string()),
+            HttpApiDeploymentCreation::normalize_webhooks_prefix("///".to_string()),
             "/".to_string()
         );
     }
@@ -175,15 +175,15 @@ mod tests {
     #[test]
     fn normalize_webhooks_url_canonicalizes_slashes() {
         assert_eq!(
-            HttpApiDeploymentCreation::normalize_webhooks_url("webhooks".to_string()),
+            HttpApiDeploymentCreation::normalize_webhooks_prefix("webhooks".to_string()),
             "/webhooks/".to_string()
         );
         assert_eq!(
-            HttpApiDeploymentCreation::normalize_webhooks_url("/webhooks".to_string()),
+            HttpApiDeploymentCreation::normalize_webhooks_prefix("/webhooks".to_string()),
             "/webhooks/".to_string()
         );
         assert_eq!(
-            HttpApiDeploymentCreation::normalize_webhooks_url("/webhooks/v2/".to_string()),
+            HttpApiDeploymentCreation::normalize_webhooks_prefix("/webhooks/v2/".to_string()),
             "/webhooks/v2/".to_string()
         );
     }

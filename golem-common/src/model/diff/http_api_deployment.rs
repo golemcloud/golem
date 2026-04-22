@@ -52,8 +52,8 @@ impl Diffable for HttpApiDeploymentAgentOptions {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpApiDeployment {
-    pub webhooks_url: String,
-    pub openapi_endpoint: Option<String>,
+    pub webhooks_prefix: String,
+    pub openapi_endpoint_prefix: String,
     pub agents: BTreeMap<String, HttpApiDeploymentAgentOptions>,
 }
 
@@ -76,8 +76,9 @@ impl Diffable for HttpApiDeployment {
     type DiffResult = HttpApiDeploymentDiff;
 
     fn diff(new: &Self, current: &Self) -> Result<Option<Self::DiffResult>, DiffError> {
-        let webhooks_url_changed = new.webhooks_url != current.webhooks_url;
-        let openapi_endpoint_changed = new.openapi_endpoint != current.openapi_endpoint;
+        let webhooks_url_changed = new.webhooks_prefix != current.webhooks_prefix;
+        let openapi_endpoint_changed =
+            new.openapi_endpoint_prefix != current.openapi_endpoint_prefix;
         let agents_changes = new
             .agents
             .diff_with_current(&current.agents)?
