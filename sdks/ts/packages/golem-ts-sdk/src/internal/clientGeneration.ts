@@ -446,7 +446,8 @@ class WasmRpcProxyHandler implements ProxyHandler<any> {
       invokeAndAwaitInternal(args, signal);
     methodFn.trigger = (...args: any[]) => invokeFireAndForget(...args);
     methodFn.schedule = (ts: Datetime, ...args: any[]) => invokeSchedule(ts, ...args);
-    methodFn.scheduleCancelable = (ts: Datetime, ...args: any[]) => invokeScheduleCancelable(ts, ...args);
+    methodFn.scheduleCancelable = (ts: Datetime, ...args: any[]) =>
+      invokeScheduleCancelable(ts, ...args);
 
     return methodFn as RemoteMethod<any[], any>;
   }

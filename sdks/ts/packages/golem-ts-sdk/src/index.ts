@@ -196,7 +196,12 @@ function deserializePrincipal(obj: any): Principal {
         val: { accountId: { uuid: parseUuid(obj.val.accountId) } },
       };
     case 'oidc': {
-      if (!obj.val || typeof obj.val.sub !== 'string' || typeof obj.val.issuer !== 'string' || typeof obj.val.claims !== 'string') {
+      if (
+        !obj.val ||
+        typeof obj.val.sub !== 'string' ||
+        typeof obj.val.issuer !== 'string' ||
+        typeof obj.val.claims !== 'string'
+      ) {
         throw new Error('Missing required fields (sub, issuer, claims) in oidc principal');
       }
       return {
@@ -307,7 +312,9 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     }
 
     const envelope = JSON.parse(new TextDecoder().decode(parts[stateIdx].body));
-    principal = envelope.principal ? deserializePrincipal(envelope.principal) : (initializationPrincipal ?? { tag: 'anonymous' });
+    principal = envelope.principal
+      ? deserializePrincipal(envelope.principal)
+      : (initializationPrincipal ?? { tag: 'anonymous' });
 
     if (envelope.state === undefined) {
       throw `multipart state part missing 'state' field`;
@@ -326,7 +333,9 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   } else if (snapshot.mimeType === 'application/json') {
     // JSON snapshot: unwrap envelope { version, principal, state }
     const envelope = JSON.parse(new TextDecoder().decode(bytes));
-    principal = envelope.principal ? deserializePrincipal(envelope.principal) : (initializationPrincipal ?? { tag: 'anonymous' });
+    principal = envelope.principal
+      ? deserializePrincipal(envelope.principal)
+      : (initializationPrincipal ?? { tag: 'anonymous' });
     if (envelope.state === undefined) {
       throw `JSON snapshot missing 'state' field`;
     }
