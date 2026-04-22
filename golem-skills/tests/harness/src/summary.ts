@@ -1,6 +1,7 @@
 export interface ScenarioMatrix {
   agent: string;
   language: string;
+  model?: string;
 }
 
 export interface MatrixScenarioLabel {
@@ -19,7 +20,8 @@ export interface GitHubSummaryFailure extends MatrixScenarioLabel {
 }
 
 export function formatScenarioMatrixLabel({ scenario, matrix }: MatrixScenarioLabel): string {
-  return `${scenario} [${matrix.agent} x ${matrix.language}]`;
+  const agentLabel = matrix.model ? `${matrix.agent}/${matrix.model}` : matrix.agent;
+  return `${scenario} [${agentLabel} x ${matrix.language}]`;
 }
 
 export function renderGitHubStepSummary(options: {

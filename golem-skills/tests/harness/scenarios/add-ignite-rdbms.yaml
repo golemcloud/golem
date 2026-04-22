@@ -2,8 +2,6 @@ name: "add-ignite-rdbms"
 prerequisites:
   services:
     - ignite
-skip_if:
-  language: "scala"
 steps:
   - id: "create-project"
     create_project:
@@ -27,6 +25,8 @@ steps:
         - "golem-add-ignite-ts"
       moonbit:
         - "golem-add-ignite-moonbit"
+      scala:
+        - "golem-add-ignite-scala"
     verify:
       build: true
       deploy: true
@@ -38,6 +38,7 @@ steps:
         rust: "check_ignite"
         ts: "checkIgnite"
         moonbit: "check_ignite"
+        scala: "checkIgnite"
     expect:
       result_json:
         - path: "$"

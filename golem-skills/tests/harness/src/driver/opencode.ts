@@ -94,13 +94,9 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       // entire run completes. Its BubbleTea spinner may or may not produce
       // stderr bytes depending on TTY detection. Disable idle timeout since
       // it's unreliable here — the step timeout provides the safety net.
-      const monitor = new ActivityMonitor(
-        prefix,
-        { ...opts, idleTimeoutSeconds: 0 },
-        (_kind) => {
-          killProcessTree(child);
-        },
-      );
+      const monitor = new ActivityMonitor(prefix, { ...opts, idleTimeoutSeconds: 0 }, (_kind) => {
+        killProcessTree(child);
+      });
 
       // Startup stall timer — fires if neither stdout nor stderr produces
       // any output within the timeout. Uses a generous timeout since Gemini

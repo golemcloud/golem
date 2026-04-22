@@ -37,7 +37,7 @@ type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 
 interface ScenarioReport {
   scenario: string;
-  matrix: { agent: string; language: string };
+  matrix: { agent: string; language: string; model?: string };
   run_id: string;
   status: "pass" | "fail";
   durationSeconds: number;
@@ -141,6 +141,7 @@ async function mergeReports(reportsDir: string, outputDir: string): Promise<void
       agent,
       language: lang,
       os: sOs,
+      model: s.model,
       total: s.total,
       passed: s.passed,
       failed: s.failed,
@@ -584,7 +585,7 @@ Options:
           const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           const report: ScenarioReport = {
             scenario: spec.name,
-            matrix: { agent: currentAgent, language: currentLanguage },
+            matrix: { agent: currentAgent, language: currentLanguage, model: modelArg },
             run_id: runId,
             status: scenarioResult!.status,
             durationSeconds: scenarioResult!.durationSeconds,
@@ -634,6 +635,7 @@ Options:
 
       const summary: Summary = {
         agent: agents.join(","),
+        model: modelArg,
         language: languages.join(","),
         os: os.platform(),
         timestamp: new Date().toISOString(),
