@@ -57,6 +57,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-llm-scala` | Adding LLM and AI capabilities by calling provider APIs with fetch or ZIO HTTP |
 | `golem-make-http-request-scala` | Making outgoing HTTP requests from agent code using fetch or ZIO HTTP |
 | `golem-logging-scala` | Adding logging to a Scala Golem agent using `golem.wasi.Logging` and `wasi:logging` |
+| `golem-enable-otlp-scala` | Enabling the OpenTelemetry (OTLP) plugin for a Scala agent — exporting traces, logs, and metrics to an OTLP collector, adding custom spans with the invocation context API |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
 | `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
 | `golem-list-and-filter-agents` | Listing and querying agents with filters |

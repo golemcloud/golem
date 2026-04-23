@@ -56,6 +56,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-llm-moonbit` | Adding LLM and AI capabilities by calling provider APIs with WASI HTTP |
 | `golem-make-http-request-moonbit` | Making outgoing HTTP requests from agent code |
 | `golem-logging-moonbit` | Adding logging to a MoonBit Golem agent using the `@logging` module and `wasi:logging` |
+| `golem-enable-otlp-moonbit` | Enabling the OpenTelemetry (OTLP) plugin for a MoonBit agent — exporting traces, logs, and metrics to an OTLP collector, adding custom spans with the `@context` API |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
 | `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
 | `golem-list-and-filter-agents` | Listing and querying agents with filters |

@@ -57,6 +57,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-llm-ts` | Adding LLM and AI capabilities using third-party npm libraries |
 | `golem-make-http-request-ts` | Making outgoing HTTP requests from agent code using fetch |
 | `golem-logging-ts` | Adding logging to a TypeScript Golem agent using `console` methods |
+| `golem-enable-otlp-ts` | Enabling the OpenTelemetry (OTLP) plugin for a TypeScript agent — exporting traces, logs, and metrics to an OTLP collector, adding custom spans with the invocation context API or `node:diagnostics_channel` |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
 | `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
 | `golem-list-and-filter-agents` | Listing and querying agents with filters |
