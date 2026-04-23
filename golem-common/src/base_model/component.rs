@@ -148,9 +148,6 @@ declare_structs! {
         pub env: BTreeMap<String, String>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub wasi_config: BTreeMap<String, String>,
-        #[serde(default)]
-        #[cfg_attr(feature = "full", oai(default))]
         pub config: Vec<AgentConfigEntryDto>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
@@ -164,7 +161,6 @@ declare_structs! {
     #[derive(Default)]
     pub struct AgentTypeProvisionConfigUpdate {
         pub env: Option<BTreeMap<String, String>>,
-        pub wasi_config: Option<BTreeMap<String, String>>,
         pub config: Option<Vec<AgentConfigEntryDto>>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]

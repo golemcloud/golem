@@ -78,7 +78,7 @@ use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::Itertools;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Stdout, Write};
 use std::path::Path;
@@ -108,9 +108,8 @@ impl WorkerCommandHandler {
                 AgentSubcommand::New {
                     agent_id: agent_name,
                     env,
-                    wasi_config,
                     config,
-                } => self.cmd_new(agent_name, env, wasi_config, config).await,
+                } => self.cmd_new(agent_name, env, config).await,
                 AgentSubcommand::Invoke {
                     agent_id: agent_name,
                     function_name,
@@ -258,7 +257,6 @@ impl WorkerCommandHandler {
         &self,
         agent_name: AgentIdArgs,
         env: Vec<(String, String)>,
-        wasi_config: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
@@ -298,7 +296,6 @@ impl WorkerCommandHandler {
             component.id.0,
             agent_name.0.clone(),
             env.into_iter().collect(),
-            BTreeMap::from_iter(wasi_config),
             config,
         )
         .await?;
@@ -1036,31 +1033,57 @@ impl WorkerCommandHandler {
                 )
                 .await?;
 
-            view.agents.extend(workers.into_iter().map(|w| {
-                let raw_agent_name = w.agent_id.agent_id.clone();
-                let source_language = ParsedAgentId::parse_agent_type_name(&raw_agent_name)
-                    .ok()
+            for worker in workers {
+                let raw_agent_name = worker.agent_id.agent_id.clone();
+
+                let worker_component = self
+                    .ctx
+                    .component_handler()
+                    .get_component_revision_by_id(
+                        &worker.agent_id.component_id,
+                        worker.component_revision,
+                    )
+                    .await?;
+
+                let parsed_agent_type_name =
+                    ParsedAgentId::parse_agent_type_name(&raw_agent_name).ok();
+
+                let defaults = parsed_agent_type_name
+                    .as_ref()
+                    .and_then(|agent_type_name| {
+                        worker_component
+                            .metadata
+                            .agent_type_provision_configs()
+                            .get(agent_type_name)
+                            .cloned()
+                    })
+                    .unwrap_or_default();
+
+                let source_language = parsed_agent_type_name
+                    .as_ref()
                     .and_then(|type_name| {
-                        component
+                        worker_component
                             .metadata
                             .agent_types()
                             .iter()
-                            .find(|at| at.type_name == type_name)
+                            .find(|at| &at.type_name == type_name)
                             .map(|at| SourceLanguage::from(at.source_language.as_str()))
                     })
                     .unwrap_or_default();
 
-                let mut view = AgentMetadataView::from(w);
+                let mut agent_view = AgentMetadataView::from(worker).with_defaults(defaults);
 
                 if source_language.is_known()
-                    && let Ok(parsed) = ParsedAgentId::parse(&raw_agent_name, &component.metadata)
+                    && let Ok(parsed) =
+                        ParsedAgentId::parse(&raw_agent_name, &worker_component.metadata)
                 {
-                    view.agent_name =
+                    agent_view.agent_name =
                         crate::agent_id_display::render_agent_id(&parsed, &source_language).into();
                 }
 
-                view.with_source_language(source_language)
-            }));
+                view.agents
+                    .push(agent_view.with_source_language(source_language));
+            }
             component_scan_cursor
                 .into_iter()
                 .for_each(|component_scan_cursor| {
@@ -1196,7 +1219,7 @@ impl WorkerCommandHandler {
 
         let clients = self.ctx.golem_clients().await?;
 
-        let result = {
+        let metadata = {
             let result = clients
                 .worker
                 .get_worker_metadata(&component.id.0, &agent_name.0)
@@ -1206,9 +1229,18 @@ impl WorkerCommandHandler {
             AgentMetadata::from(agent_name_match.component_name, result)
         };
 
+        let defaults = component
+            .metadata
+            .agent_type_provision_configs()
+            .get(&agent_name_match.agent_type_name)
+            .cloned()
+            .unwrap_or_default();
+
+        let metadata_view = AgentMetadataView::from(metadata).with_defaults(defaults);
+
         self.ctx
             .log_handler()
-            .log_view(&WorkerGetView::from_metadata(result, true));
+            .log_view(&WorkerGetView::from_metadata(metadata_view, true));
 
         Ok(())
     }
@@ -1556,7 +1588,6 @@ impl WorkerCommandHandler {
         component_id: Uuid,
         agent_name: String,
         env: HashMap<String, String>,
-        wasi_config: BTreeMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
@@ -1568,7 +1599,6 @@ impl WorkerCommandHandler {
                 &golem_client::model::AgentCreationRequest {
                     name: agent_name,
                     env,
-                    wasi_config,
                     config,
                 },
             )
@@ -1582,16 +1612,15 @@ impl WorkerCommandHandler {
         component_id: Uuid,
         component_name: &ComponentName,
         agent_name: &RawAgentId,
-    ) -> anyhow::Result<AgentMetadata> {
+    ) -> anyhow::Result<Option<AgentMetadata>> {
         let clients = self.ctx.golem_clients().await?;
 
-        let result = clients
+        Ok(clients
             .worker
             .get_worker_metadata(&component_id, &agent_name.0)
             .await
-            .map_service_error()?;
-
-        Ok(AgentMetadata::from(component_name.clone(), result))
+            .map_service_error_not_found_as_opt()?
+            .map(|result| AgentMetadata::from(component_name.clone(), result)))
     }
 
     async fn delete(&self, component_id: Uuid, agent_name: &str) -> anyhow::Result<()> {
@@ -1954,7 +1983,6 @@ impl WorkerCommandHandler {
             worker_metadata.agent_id.component_id.0,
             worker_metadata.agent_id.agent_id,
             worker_metadata.env,
-            worker_metadata.wasi_config,
             worker_metadata.config,
         )
         .await?;
@@ -2242,6 +2270,7 @@ impl WorkerCommandHandler {
             environment,
             component_name_match_kind: ComponentNameMatchKind::Unknown,
             component_name: component.component_name,
+            agent_type_name: parsed_agent_type_name,
             agent_name: agent_name.into(),
             source_language: SourceLanguage::from(agent_type.agent_type.source_language.as_str()),
         })

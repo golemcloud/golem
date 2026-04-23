@@ -336,9 +336,9 @@ cross-language scenarios, `method` and `args` can be language-conditional:
     args: '{id: "item-1", name: "Hammer"}'
 ```
 
-Prompts can still describe public API behavior in kebab-case if that is clearer for the coding
-agent, but invocation steps should use the source-language method names that the generated code
-actually exposes.
+Prompts must use language-appropriate method name casing (snake_case for Rust/MoonBit,
+camelCase for TypeScript/Scala) — not kebab-case. Invocation steps must also use the
+source-language method names that the generated code actually exposes.
 
 #### `invoke_json` — Invoke with `--json` output
 
@@ -558,13 +558,20 @@ languages, so a plain `args` string suffices:
   assertions, especially for records, lists, and other structured return values.
 - Use language-conditional `method` fields whenever Rust, TypeScript, Scala, and MoonBit differ in method
   casing or naming style. MoonBit uses `snake_case` (same as Rust).
-- When writing prompts for new agents, it is fine to describe the intended public behavior in
-  kebab-case, but the verification steps should invoke the real method names used in code.
-- **Avoid repetitive per-language prompts.** Only use language-conditional `prompt` when the
-  wording genuinely differs between languages (e.g., different file names, different syntax).
-  If the prompt is essentially the same for all languages, use a single `prompt` string and
-  let the skill handle language-specific details. The agent already knows the project language
-  from the AGENTS.md guide and will pick the right REPL language, file extension, etc.
+- **Prompts MUST use language-appropriate method name casing, not kebab-case.** When a
+  prompt mentions method names that the agent should create, use the casing convention for
+  each target language: TypeScript and Scala use `camelCase` (e.g., `createItem`, `getTag`),
+  Rust and MoonBit use `snake_case` (e.g., `create_item`, `get_tag`). If a prompt mentions
+  method names, use per-language prompt syntax even if the rest of the text is identical.
+  Agents (especially Codex) may interpret kebab-case method names literally and generate
+  code with computed property syntax like `async ["create-item"]()`, producing kebab-case
+  WIT exports that don't match the `invoke`/`invoke_json` step's expected method names.
+- **Avoid repetitive per-language prompts beyond method naming.** Use language-conditional
+  `prompt` when the wording genuinely differs between languages (e.g., different method
+  names, file names, or syntax). If the prompt is essentially the same for all languages
+  except for method name casing, still use per-language prompts for correctness. The agent
+  already knows the project language from the AGENTS.md guide and will pick the right REPL
+  language, file extension, etc.
 - **Helper agents with HTTP APIs for observable side effects**: Some skills (atomic blocks,
   transactions, durability controls) need an external service to observe side effects — e.g., to
   verify that operations were retried, compensated, or executed in the correct order. The harness

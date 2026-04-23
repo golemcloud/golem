@@ -154,7 +154,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
-        worker_config_vars: Option<BTreeMap<String, String>>,
         worker_agent_config: Vec<AgentConfigEntryDto>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
@@ -169,7 +168,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 deps,
                 owned_agent_id,
                 worker_env,
-                worker_config_vars,
                 worker_agent_config,
                 component_revision,
                 parent,
@@ -184,7 +182,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
-        worker_config_vars: Option<BTreeMap<String, String>>,
         worker_agent_config: Vec<AgentConfigEntryDto>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
@@ -198,7 +195,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps,
             owned_agent_id,
             worker_env,
-            worker_config_vars,
             worker_agent_config,
             component_revision,
             parent,
@@ -242,7 +238,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
-        worker_config: Option<BTreeMap<String, String>>,
         worker_agent_config: Vec<AgentConfigEntryDto>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
@@ -261,7 +256,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             &owned_agent_id,
             component_revision,
             worker_env,
-            worker_config,
             worker_agent_config,
             parent,
         )
@@ -1792,7 +1786,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         component_revision: Option<ComponentRevision>,
         worker_env: Option<Vec<(String, String)>>,
-        worker_config_vars: Option<BTreeMap<String, String>>,
         worker_agent_config: Vec<AgentConfigEntryDto>,
         parent: Option<AgentId>,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
@@ -1918,17 +1911,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     &component,
                 )?;
 
-                let default_agent_env = agent_id
-                    .as_ref()
-                    .and_then(|agent_id| {
-                        component
-                            .metadata
-                            .agent_type_env(&agent_id.agent_type)
-                            .cloned()
-                    })
-                    .unwrap_or_default();
-                let worker_env = merge_agent_env_with_default_env(worker_env, default_agent_env);
-
+                // Store only the per-worker env overrides. Agent-type defaults are applied
+                // at runtime in get_environment
+                let worker_env: Vec<(String, String)> = worker_env.unwrap_or_default();
                 let created_at = Timestamp::now_utc();
 
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
@@ -1961,11 +1946,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // environment for correct metric attribution and quota enforcement.
                 let initial_worker_metadata = AgentMetadata {
                     agent_id: owned_agent_id.agent_id(),
-                    // TODO: these environment variables already contain the component level values,
-                    // but we should only have the worker-level overrides here as we can't compute
-                    // the new effective set as the component revision changes otherwise.
                     env: worker_env,
-                    wasi_config: worker_config_vars.unwrap_or_default(),
                     config: initial_agent_config,
                     environment_id: component.environment_id,
                     created_by: component.account_id,
@@ -1993,7 +1974,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .last_known_status
                         .active_plugins
                         .clone(),
-                    initial_worker_metadata.wasi_config.clone(),
                     initial_worker_metadata
                         .config
                         .iter()
@@ -2605,7 +2585,6 @@ impl RunningWorker {
                     .current_filesystem_storage_usage,
                 component_version_for_replay,
                 worker_metadata.created_by,
-                worker_metadata.wasi_config,
                 worker_metadata.config,
                 last_snapshot_index,
             ),

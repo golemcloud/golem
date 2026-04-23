@@ -128,53 +128,6 @@ golem-temp/                           # Build artifacts (gitignored)
 - sbt (Scala build tool)
 - Golem CLI (`golem`): download from https://github.com/golemcloud/golem/releases
 
-## Building
-
-```shell
-golem build                      # Build all components
-golem component build my:comp    # Build a specific component
-```
-
-The build runs Scala.js compilation, JavaScript linking, QuickJS WASM injection, agent wrapper generation, and WASM composition. Output goes to `golem-temp/`.
-
-Do NOT run `sbt compile` or `sbt fastLinkJS` directly — always use `golem build` which orchestrates the full pipeline including WASM component linking.
-
-## Deploying and Running
-
-```shell
-golem server run                 # Start local Golem server
-golem deploy                     # Deploy all components to the configured server
-golem deploy --try-update-agents # Deploy and update running agents
-golem deploy --reset             # Deploy and delete all previously created agents
-```
-
-**WARNING**: `golem server run --clean` deletes all existing state (agents, data, deployed components). Never run it without explicitly asking the user for confirmation first.
-
-After starting the server, components must be deployed with `golem deploy` before agents can be invoked. When iterating on code changes, use `golem deploy --reset` to delete all previously created agents — without this, existing agent instances continue running with the old component version. This is by design: Golem updates do not break existing running instances.
-
-To try out agents after deploying, load the `golem-invoke-agent-scala` skill for invoking agent methods from the CLI, or write a script and run it with `golem repl` for interactive testing. The Golem server must be running in a separate process before invoking or testing agents.
-
-## Testing Agents with the REPL
-
-```shell
-golem repl                       # Interactive scripting REPL
-```
-
-## Defining Agents
-
-Load the `golem-add-agent-scala` skill for defining agents, custom types, and HTTP API annotations. See also the skill table above for durability configuration, annotations, RPC, atomic blocks, and transactions.
-
-## Application Manifest (golem.yaml)
-
-- Root `golem.yaml`: app name, includes, environments, and `components` entries
-- `golem-temp/common/scala/golem.yaml`: generated on-demand build templates (Scala.js compilation, QuickJS WASM injection, WASM composition) shared by all Scala components
-
-Key fields in each `components.<name>` entry:
-- `dir`: component directory (`"."` for single-component apps)
-- `templates`: references a template from common golem.yaml (e.g., `scala`)
-- `env`: environment variables passed to agents at runtime
-- `dependencies`: WASM dependencies (e.g., LLM providers from golem-ai)
-
 ## Available Libraries
 
 From `build.sbt` / `project/plugins.sbt`:
@@ -185,10 +138,6 @@ From `build.sbt` / `project/plugins.sbt`:
 - `sbt-scalajs` — Scala.js compilation plugin
 
 Libraries must be **Scala.js-compatible** — use the `%%%` operator in `build.sbt` so sbt resolves the `_sjs1_` cross-published variant. JVM-only libraries (reflection, `java.io.File`, threads, etc.) will not work.
-
-## Debugging
-
-Load the `golem-get-agent-metadata` skill for checking agent state. Load the `golem-view-agent-logs` skill for streaming agent stdout, stderr, and log channels. Load the `golem-debug-agent-history` skill for querying the operation log. Load the `golem-undo-agent-state` skill for reverting invocations. To invoke agent methods, load the `golem-invoke-agent-scala` skill.
 
 ## Key Constraints
 

@@ -9709,11 +9709,6 @@ components:
           type: object
           additionalProperties:
             type: string
-        wasiConfig:
-          default: {}
-          type: object
-          additionalProperties:
-            type: string
         config:
           default: []
           type: array
@@ -9778,7 +9773,7 @@ components:
           And: '#/components/schemas/AgentFilter_AgentAndFilter'
           Or: '#/components/schemas/AgentFilter_AgentOrFilter'
           Not: '#/components/schemas/AgentFilter_AgentNotFilter'
-          WasiConfig: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
+          Config: '#/components/schemas/AgentFilter_AgentConfigVarsFilter'
       type: object
       oneOf:
       - $ref: '#/components/schemas/AgentFilter_AgentNameFilter'
@@ -9807,10 +9802,10 @@ components:
       - type: object
         properties:
           type:
-            example: WasiConfig
+            example: Config
             type: string
             enum:
-            - WasiConfig
+            - Config
         required:
         - type
       - $ref: '#/components/schemas/AgentConfigVarsFilter'
@@ -10017,10 +10012,6 @@ components:
           type: object
           additionalProperties:
             type: string
-        wasiConfig:
-          type: object
-          additionalProperties:
-            type: string
         config:
           type: array
           items:
@@ -10078,7 +10069,6 @@ components:
       - environmentId
       - createdBy
       - env
-      - wasiConfig
       - config
       - status
       - componentRevision
@@ -13785,10 +13775,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
-        configVars:
-          type: object
-          additionalProperties:
-            type: string
         localAgentConfig:
           type: array
           items:
@@ -13806,7 +13792,6 @@ components:
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
-      - configVars
       - localAgentConfig
     r#CreateResourceParams:
       title: r#CreateResourceParams
@@ -14611,11 +14596,6 @@ components:
           type: object
           additionalProperties:
             type: string
-        wasiConfig:
-          default: {}
-          type: object
-          additionalProperties:
-            type: string
         config:
           default: []
           type: array
@@ -14636,11 +14616,6 @@ components:
       type: object
       properties:
         env:
-          default: {}
-          type: object
-          additionalProperties:
-            type: string
-        wasiConfig:
           default: {}
           type: object
           additionalProperties:
@@ -14666,10 +14641,6 @@ components:
       type: object
       properties:
         env:
-          type: object
-          additionalProperties:
-            type: string
-        wasiConfig:
           type: object
           additionalProperties:
             type: string
@@ -14839,7 +14810,7 @@ components:
             $ref: '#/components/schemas/AgentType'
         agentTypeProvisionConfigs:
           description: |-
-            Per-agent-type provisioning configuration: env, wasi_config, config, plugins, files.
+            Per-agent-type provisioning configuration: env, config, plugins, files.
             Kept separate from agent type declarations so AgentType stays a pure declaration type.
           default: {}
           type: object

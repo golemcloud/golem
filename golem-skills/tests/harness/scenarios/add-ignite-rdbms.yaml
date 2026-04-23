@@ -2,8 +2,6 @@ name: "add-ignite-rdbms"
 prerequisites:
   services:
     - ignite
-skip_if:
-  language: "scala"
 steps:
   - id: "create-project"
     create_project:
@@ -13,13 +11,35 @@ steps:
       deploy: true
 
   - id: "add-ignite-method"
-    prompt: >
-      In the test-app project, modify the existing CounterAgent so it adds a new method called
-      `check-ignite` that returns a string. Implement it using the Golem RDBMS Ignite API.
-      Hardcode the Ignite connection string `{{ignite_url}}`, open a connection, run
-      `SELECT 'ignite-ok'`, read the first row and first column, and return that string. Keep the
-      existing increment method unchanged. The method must return a plain string, not a result
-      type. Make sure the project builds and deploys successfully.
+    prompt:
+      rust: >
+        In the test-app project, modify the existing CounterAgent so it adds a new method called
+        `check_ignite` that returns a string. Implement it using the Golem RDBMS Ignite API.
+        Hardcode the Ignite connection string `{{ignite_url}}`, open a connection, run
+        `SELECT 'ignite-ok'`, read the first row and first column, and return that string. Keep the
+        existing increment method unchanged. The method must return a plain string, not a result
+        type. Make sure the project builds and deploys successfully.
+      ts: >
+        In the test-app project, modify the existing CounterAgent so it adds a new method called
+        `checkIgnite` that returns a string. Implement it using the Golem RDBMS Ignite API.
+        Hardcode the Ignite connection string `{{ignite_url}}`, open a connection, run
+        `SELECT 'ignite-ok'`, read the first row and first column, and return that string. Keep the
+        existing increment method unchanged. The method must return a plain string, not a result
+        type. Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, modify the existing CounterAgent so it adds a new method called
+        `checkIgnite` that returns a string. Implement it using the Golem RDBMS Ignite API.
+        Hardcode the Ignite connection string `{{ignite_url}}`, open a connection, run
+        `SELECT 'ignite-ok'`, read the first row and first column, and return that string. Keep the
+        existing increment method unchanged. The method must return a plain string, not a result
+        type. Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, modify the existing CounterAgent so it adds a new method called
+        `check_ignite` that returns a string. Implement it using the Golem RDBMS Ignite API.
+        Hardcode the Ignite connection string `{{ignite_url}}`, open a connection, run
+        `SELECT 'ignite-ok'`, read the first row and first column, and return that string. Keep the
+        existing increment method unchanged. The method must return a plain string, not a result
+        type. Make sure the project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-add-ignite-rust"
@@ -27,6 +47,8 @@ steps:
         - "golem-add-ignite-ts"
       moonbit:
         - "golem-add-ignite-moonbit"
+      scala:
+        - "golem-add-ignite-scala"
     verify:
       build: true
       deploy: true
@@ -38,6 +60,7 @@ steps:
         rust: "check_ignite"
         ts: "checkIgnite"
         moonbit: "check_ignite"
+        scala: "checkIgnite"
     expect:
       result_json:
         - path: "$"

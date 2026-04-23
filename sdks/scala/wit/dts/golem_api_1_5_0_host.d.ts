@@ -257,7 +257,7 @@ declare module 'golem:api/host@1.5.0' {
     val: AgentEnvFilter
   } |
   {
-    tag: 'wasi-config-vars'
+    tag: 'config'
     val: AgentConfigVarsFilter
   };
   /**
@@ -283,7 +283,7 @@ declare module 'golem:api/host@1.5.0' {
     /** Environment variables seen by the agent */
     env: [string, string][];
     /** Configuration variables seen by the agent */
-    configVars: [string, string][];
+    config: [string, string][];
     /** The current agent status */
     status: AgentStatus;
     /** The component version the agent is running with */

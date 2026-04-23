@@ -1521,8 +1521,8 @@ impl TryFrom<golem_api_1_x::host::AgentPropertyFilter> for golem_common::model::
                     filter.value.into(),
                 )
             }
-            golem_api_1_x::host::AgentPropertyFilter::WasiConfigVars(filter) => {
-                golem_common::model::AgentFilter::new_wasi_config(
+            golem_api_1_x::host::AgentPropertyFilter::Config(filter) => {
+                golem_common::model::AgentFilter::new_config(
                     filter.name,
                     filter.comparator.into(),
                     filter.value,
@@ -1563,7 +1563,7 @@ impl From<AgentMetadataForGuests> for golem_api_1_x::host::AgentMetadata {
             agent_id: value.agent_id.into(),
             args: vec![],
             env: value.env,
-            config_vars: value.wasi_config.into_iter().collect(),
+            config: value.config.into_iter().collect(),
             status: value.status.into(),
             component_revision: value.component_revision.into(),
             retry_count: 0,

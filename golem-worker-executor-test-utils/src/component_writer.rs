@@ -38,12 +38,13 @@ use uuid::Uuid;
 const WASMS_DIRNAME: &str = "wasms";
 
 #[derive(Clone)]
-struct CachedAnalysis {
-    memories: Vec<LinearMemory>,
-    known_exports: KnownExports,
-    agent_types: Vec<AgentType>,
-    root_package_name: Option<String>,
-    root_package_version: Option<String>,
+pub(crate) struct CachedAnalysis {
+    pub(crate) memories: Vec<LinearMemory>,
+    pub(crate) known_exports: KnownExports,
+    pub(crate) agent_types: Vec<AgentType>,
+    pub(crate) root_package_name: Option<String>,
+    pub(crate) root_package_version: Option<String>,
+    pub(crate) wasm_hash: Hash,
 }
 
 pub struct FileSystemComponentWriter {
@@ -113,55 +114,36 @@ impl FileSystemComponentWriter {
         let wasm_filename = format!("{WASMS_DIRNAME}/{component_id}-{component_revision}.wasm");
         let target_path = target_dir.join(&wasm_filename);
 
-        let content = tokio::fs::read(source_path).await?;
-        let blake3_hash = blake3::hash(&content);
-        let analysis_cache_key = original_source_hash.unwrap_or(blake3_hash);
-        let wasm_hash = golem_common::model::diff::Hash::from(blake3_hash);
-
-        tokio::fs::copy(source_path, &target_path)
-            .await
-            .map_err(|err| anyhow!("Failed to copy WASM to the local component store: {err:#}"))?;
-
         let CachedAnalysis {
             memories,
             known_exports,
             agent_types,
             root_package_name,
             root_package_version,
-        } = if skip_analysis {
-            CachedAnalysis {
-                memories: vec![],
-                known_exports: KnownExports::default(),
-                agent_types: vec![],
-                root_package_name: None,
-                root_package_version: None,
+            wasm_hash,
+        } = {
+            if skip_analysis {
+                let content = tokio::fs::read(source_path).await?;
+                let blake3_hash = blake3::hash(&content);
+                let wasm_hash = Hash::from(blake3_hash);
+
+                CachedAnalysis {
+                    memories: vec![],
+                    known_exports: KnownExports::default(),
+                    agent_types: vec![],
+                    root_package_name: None,
+                    root_package_version: None,
+                    wasm_hash,
+                }
+            } else {
+                self.analyze_component(source_path, original_source_hash)
+                    .await?
             }
-        } else {
-            let target_path_clone = target_path.clone();
-            self.analysis_cache
-                .get_or_insert_simple(&analysis_cache_key, async || {
-                    debug!("Analyzing component {component_id} (hash {blake3_hash})");
-
-                    let (raw_component_metadata, memories, known_exports) =
-                        Self::analyze_memories_and_known_exports(&target_path_clone)
-                            .await
-                            .map_err(|err| format!("Failed to analyze component: {err:#}"))?;
-
-                    let agent_types = extract_agent_types(&target_path_clone, false, true)
-                        .await
-                        .map_err(|err| format!("Failed analyzing component: {err}"))?;
-
-                    Ok(CachedAnalysis {
-                        memories,
-                        known_exports,
-                        agent_types,
-                        root_package_name: raw_component_metadata.root_package_name,
-                        root_package_version: raw_component_metadata.root_package_version,
-                    })
-                })
-                .await
-                .map_err(|err| anyhow!("{err}"))?
         };
+
+        tokio::fs::copy(source_path, &target_path)
+            .await
+            .map_err(|err| anyhow!("Failed to copy WASM to the local component store: {err:#}"))?;
 
         let size = tokio::fs::metadata(&target_path)
             .await
@@ -228,6 +210,49 @@ impl FileSystemComponentWriter {
         Ok((raw_component_metadata, linear_memories, known_exports))
     }
 
+    async fn analyze_component(
+        &self,
+        source_path: &Path,
+        original_source_hash: Option<blake3::Hash>,
+    ) -> anyhow::Result<CachedAnalysis> {
+        if !source_path.exists() {
+            return Err(anyhow!("Source file does not exist: {source_path:?}"));
+        }
+
+        let content = tokio::fs::read(source_path).await?;
+        let blake3_hash = blake3::hash(&content);
+        let analysis_cache_key = original_source_hash.unwrap_or(blake3_hash);
+        let wasm_hash = Hash::from(blake3_hash);
+
+        self.analysis_cache
+            .get_or_insert_simple(&analysis_cache_key, async || {
+                debug!(
+                    "Analyzing component {source_path} (hash {blake3_hash})",
+                    source_path = source_path.display()
+                );
+
+                let (raw_component_metadata, memories, known_exports) =
+                    Self::analyze_memories_and_known_exports(source_path)
+                        .await
+                        .map_err(|err| format!("Failed to analyze component: {err:#}"))?;
+
+                let agent_types = extract_agent_types(source_path, false, true)
+                    .await
+                    .map_err(|err| format!("Failed analyzing component: {err}"))?;
+
+                Ok(CachedAnalysis {
+                    memories,
+                    known_exports,
+                    agent_types,
+                    root_package_name: raw_component_metadata.root_package_name,
+                    root_package_version: raw_component_metadata.root_package_version,
+                    wasm_hash,
+                })
+            })
+            .await
+            .map_err(|err| anyhow!("{err}"))
+    }
+
     async fn load_metadata(
         &self,
         component_id: &ComponentId,
@@ -286,6 +311,15 @@ impl FileSystemComponentWriter {
             original_source_hash,
         )
         .await
+    }
+
+    pub(crate) async fn analyze_component_metadata(
+        &self,
+        local_path: &Path,
+        original_source_hash: Option<blake3::Hash>,
+    ) -> anyhow::Result<CachedAnalysis> {
+        self.analyze_component(local_path, original_source_hash)
+            .await
     }
 
     pub async fn add_component_with_id(
@@ -392,6 +426,7 @@ impl FileSystemComponentWriter {
                     agent_types,
                     root_package_name: raw_component_metadata.root_package_name,
                     root_package_version: raw_component_metadata.root_package_version,
+                    wasm_hash: blake3_hash.into(),
                 })
             })
             .await

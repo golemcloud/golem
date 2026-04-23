@@ -177,7 +177,6 @@ export type CreateParameters = {
   componentSize: bigint;
   initialTotalLinearMemorySize: bigint;
   initialActivePlugins: PluginInstallationDescription[];
-  configVars: [string, string][];
   localAgentConfig: LocalAgentConfigEntry[];
 };
 

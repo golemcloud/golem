@@ -26,7 +26,9 @@ use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::worker::{AgentFileSystemNode, AgentFileSystemNodeKind};
+use golem_common::model::worker::{
+    AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
+};
 use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
     StringFilterComparator,
@@ -491,13 +493,7 @@ async fn get_running_workers(
     for _i in 0..workers_count {
         let aid = phantom_agent_id!("HttpClient2", Uuid::new_v4());
         let agent_id = user
-            .start_agent_with(
-                &component.id,
-                aid.clone(),
-                env.clone(),
-                HashMap::new(),
-                Vec::new(),
-            )
+            .start_agent_with(&component.id, aid.clone(), env.clone(), Vec::new())
             .await?;
 
         workers.push((agent_id, aid));
@@ -1075,13 +1071,7 @@ async fn worker_use_initial_files(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let parsed_agent_id = agent_id!("FileReadWrite", "initial-file-read-write-1");
     let agent_id = user
-        .start_agent_with(
-            &component.id,
-            parsed_agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, parsed_agent_id.clone(), env, Vec::new())
         .await?;
 
     let result = user
@@ -1274,13 +1264,7 @@ async fn worker_read_files(
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let parsed_agent_id = agent_id!("FileReadWrite", "initial-file-read-write-3");
     let agent_id = user
-        .start_agent_with(
-            &component.id,
-            parsed_agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, parsed_agent_id.clone(), env, Vec::new())
         .await?;
 
     // run the worker so it can update the files.
@@ -1615,13 +1599,7 @@ async fn worker_suspends_when_running_out_of_fuel(
 
     let http_agent_id = agent_id!("HttpClient");
     let agent_id = user
-        .start_agent_with(
-            &component.id,
-            http_agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, http_agent_id.clone(), env, Vec::new())
         .await?;
 
     let invoker_task = tokio::spawn({
@@ -1694,6 +1672,13 @@ async fn agent_update_constructor_signature(
     let component = user
         .component(&env.id, "it_agent_update_v1_release")
         .name("it:agent-update")
+        .with_agent_config(
+            "CounterAgent",
+            vec![AgentConfigEntryDto {
+                path: vec!["var1".to_string()],
+                value: serde_json::Value::String("value1".to_string()).into(),
+            }],
+        )
         .store()
         .await?;
 
@@ -1817,6 +1802,13 @@ async fn deployment_invalidates_agent_resolution_cache(
     let component = user
         .component(&env.id, "it_agent_update_v1_release")
         .name("it:agent-update")
+        .with_agent_config(
+            "CounterAgent",
+            vec![AgentConfigEntryDto {
+                path: vec!["var1".to_string()],
+                value: serde_json::Value::String("value1".to_string()).into(),
+            }],
+        )
         .store()
         .await?;
 
@@ -2010,13 +2002,7 @@ async fn worker_suspends_when_monthly_http_call_limit_exhausted(
 
     let http_agent_id = agent_id!("HttpClient");
     let agent_id = user
-        .start_agent_with(
-            &component.id,
-            http_agent_id.clone(),
-            env_vars,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, http_agent_id.clone(), env_vars, Vec::new())
         .await?;
 
     // First `run` succeeds — consumes the 1 available HTTP call (remaining → 0).

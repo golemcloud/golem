@@ -21,7 +21,9 @@ use crate::model::environment::{
 use clap::ValueEnum;
 use clap_verbosity_flag::Verbosity;
 use colored::control::SHOULD_COLORIZE;
+use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
@@ -30,7 +32,6 @@ use serde_derive::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
-
 // TODO: move things to model/agent
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -96,7 +97,9 @@ pub struct AgentMetadataView {
     pub created_by: AccountId,
     pub environment_id: EnvironmentId,
     pub env: HashMap<String, String>,
-    pub wasi_config: BTreeMap<String, String>,
+    pub default_env: HashMap<String, String>,
+    pub config: Vec<AgentConfigEntryDto>,
+    pub default_config: Vec<AgentConfigEntryDto>,
     pub status: AgentStatus,
     pub component_revision: ComponentRevision,
     pub retry_count: u32,
@@ -120,7 +123,9 @@ impl From<AgentMetadata> for AgentMetadataView {
             created_by: value.created_by,
             environment_id: value.environment_id,
             env: value.env,
-            wasi_config: value.wasi_config,
+            default_env: HashMap::new(),
+            config: value.config,
+            default_config: Vec::new(),
             status: value.status,
             component_revision: value.component_revision,
             retry_count: value.retry_count,
@@ -137,6 +142,12 @@ impl From<AgentMetadata> for AgentMetadataView {
 }
 
 impl AgentMetadataView {
+    pub fn with_defaults(mut self, defaults: AgentTypeProvisionConfig) -> Self {
+        self.default_env = defaults.env.into_iter().collect();
+        self.default_config = defaults.config.into_iter().map(Into::into).collect();
+        self
+    }
+
     pub fn with_source_language(mut self, source_language: SourceLanguage) -> Self {
         self.source_language = source_language;
         self
@@ -150,7 +161,6 @@ pub struct AgentMetadata {
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub env: HashMap<String, String>,
-    pub wasi_config: BTreeMap<String, String>,
     pub config: Vec<AgentConfigEntryDto>,
     pub status: AgentStatus,
     pub component_revision: ComponentRevision,
@@ -175,7 +185,6 @@ impl AgentMetadata {
             created_by: value.created_by,
             environment_id: value.environment_id,
             env: value.env,
-            wasi_config: value.wasi_config,
             config: value.config.into_iter().map(Into::into).collect(),
             status: value.status,
             component_revision: value.component_revision,
@@ -230,6 +239,7 @@ pub struct AgentNameMatch {
     pub environment: ResolvedEnvironmentIdentity,
     pub component_name_match_kind: ComponentNameMatchKind,
     pub component_name: ComponentName,
+    pub agent_type_name: AgentTypeName,
     pub agent_name: RawAgentId,
     pub source_language: SourceLanguage,
 }

@@ -19,7 +19,7 @@ use crate::model::environment::EnvironmentReference;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
 use crate::model::worker::{
-    AgentMetadata, AgentMetadataView, AgentNameMatch, AgentsMetadataResponseView, RawAgentId,
+    AgentMetadataView, AgentNameMatch, AgentsMetadataResponseView, RawAgentId,
 };
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
@@ -41,11 +41,12 @@ use golem_common::model::oplog::{
     PublicAgentInvocationResult, PublicAttributeValue, PublicOplogEntry, PublicSnapshotData,
     PublicUpdateDescription, StringAttributeValue,
 };
-use golem_common::model::worker::UpdateRecord;
+use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
 use golem_wasm::{ValueAndType, print_value_and_type};
 use indoc::indoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,19 +90,26 @@ pub struct WorkerGetView {
 }
 
 impl WorkerGetView {
-    pub fn from_metadata(metadata: AgentMetadata, precise: bool) -> Self {
-        Self {
-            metadata: AgentMetadataView::from(metadata),
-            precise,
-        }
+    pub fn from_metadata(metadata: AgentMetadataView, precise: bool) -> Self {
+        Self { metadata, precise }
     }
+}
 
-    pub fn from_metadata_view(metadata: AgentMetadataView) -> Self {
-        Self {
-            metadata,
-            precise: false,
-        }
-    }
+fn format_untyped_config(config: &[AgentConfigEntryDto]) -> String {
+    config
+        .iter()
+        .map(|entry| {
+            format!(
+                "{}={}",
+                entry.path.join(".").log_color_highlight(),
+                entry.value.0
+            )
+        })
+        .join("\n")
+}
+
+fn to_sorted_btree_map(map: &HashMap<String, String>) -> BTreeMap<String, String> {
+    map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
 impl MessageWithFields for WorkerGetView {
@@ -181,14 +189,28 @@ impl MessageWithFields for WorkerGetView {
                 format_binary_size,
             )
             .fmt_field_optional(
-                "Environment variables",
+                "Environment variables - defaults",
+                &self.metadata.default_env,
+                !self.metadata.default_env.is_empty(),
+                |env| format_env(true, &to_sorted_btree_map(env)),
+            )
+            .fmt_field_optional(
+                "Environment variables - overrides",
                 &self.metadata.env,
                 !self.metadata.env.is_empty(),
-                |env| {
-                    env.iter()
-                        .map(|(k, v)| format!("{}={}", k, v.bold()))
-                        .join(";")
-                },
+                |env| format_env(true, &to_sorted_btree_map(env)),
+            )
+            .fmt_field_optional(
+                "Config - defaults",
+                &self.metadata.default_config,
+                !self.metadata.default_config.is_empty(),
+                |config| format_untyped_config(config),
+            )
+            .fmt_field_optional(
+                "Config - overrides",
+                &self.metadata.config,
+                !self.metadata.config.is_empty(),
+                |config| format_untyped_config(config),
             )
             .fmt_field_optional("Status", &self.metadata.status, self.precise, format_status)
             .fmt_field_optional(

@@ -2635,7 +2635,6 @@ impl Rpc for FailingRpc {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
         config: Vec<AgentConfigEntryDto>,
     ) -> Result<Box<dyn RpcDemand>, ServiceRpcError> {
@@ -2645,7 +2644,6 @@ impl Rpc for FailingRpc {
                 self_created_by,
                 self_agent_id,
                 self_env,
-                self_config,
                 self_stack,
                 config,
             )
@@ -2661,7 +2659,6 @@ impl Rpc for FailingRpc {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<UntypedDataValue, ServiceRpcError> {
         if self
@@ -2682,7 +2679,6 @@ impl Rpc for FailingRpc {
                     self_created_by,
                     self_agent_id,
                     self_env,
-                    self_config,
                     self_stack,
                 )
                 .await
@@ -2698,7 +2694,6 @@ impl Rpc for FailingRpc {
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
-        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), ServiceRpcError> {
         self.inner
@@ -2710,7 +2705,6 @@ impl Rpc for FailingRpc {
                 self_created_by,
                 self_agent_id,
                 self_env,
-                self_config,
                 self_stack,
             )
             .await

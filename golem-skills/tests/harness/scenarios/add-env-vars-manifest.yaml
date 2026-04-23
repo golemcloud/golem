@@ -7,22 +7,71 @@ steps:
       build: true
 
   - id: "add-agent-with-env"
-    prompt: >
-      In the test-app project, add a new durable agent type called `ConfigAgent` identified by
-      a single constructor parameter for the instance name.
+    prompt:
+      rust: >
+        In the test-app project, add a new durable agent type called `ConfigAgent` identified by
+        a single constructor parameter for the instance name.
 
-      ConfigAgent must read two environment variables from the process environment: `APP_MODE`
-      and `GREETING_PREFIX`. It must expose a method called `get-config` that returns a record
-      with exactly two string fields: `app-mode` and `greeting-prefix`, containing the values
-      of the corresponding environment variables.
+        ConfigAgent must read two environment variables from the process environment: `APP_MODE`
+        and `GREETING_PREFIX`. It must expose a method called `get_config` that returns a record
+        with exactly two string fields: `app_mode` and `greeting_prefix`, containing the values
+        of the corresponding environment variables.
 
-      In `golem.yaml`, define these environment variables in the top-level `agents` map under
-      `ConfigAgent`'s `env` section (note: `agents` is a top-level key in `golem.yaml`, not
-      nested under `components`):
-      - `APP_MODE` set to `production`
-      - `GREETING_PREFIX` set to `Hello`
+        In `golem.yaml`, define these environment variables in the top-level `agents` map under
+        `ConfigAgent`'s `env` section (note: `agents` is a top-level key in `golem.yaml`, not
+        nested under `components`):
+        - `APP_MODE` set to `production`
+        - `GREETING_PREFIX` set to `Hello`
 
-      Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully.
+      ts: >
+        In the test-app project, add a new durable agent type called `ConfigAgent` identified by
+        a single constructor parameter for the instance name.
+
+        ConfigAgent must read two environment variables from the process environment: `APP_MODE`
+        and `GREETING_PREFIX`. It must expose a method called `getConfig` that returns a record
+        with exactly two string fields: `appMode` and `greetingPrefix`, containing the values
+        of the corresponding environment variables.
+
+        In `golem.yaml`, define these environment variables in the top-level `agents` map under
+        `ConfigAgent`'s `env` section (note: `agents` is a top-level key in `golem.yaml`, not
+        nested under `components`):
+        - `APP_MODE` set to `production`
+        - `GREETING_PREFIX` set to `Hello`
+
+        Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, add a new durable agent type called `ConfigAgent` identified by
+        a single constructor parameter for the instance name.
+
+        ConfigAgent must read two environment variables from the process environment: `APP_MODE`
+        and `GREETING_PREFIX`. It must expose a method called `getConfig` that returns a record
+        with exactly two string fields: `appMode` and `greetingPrefix`, containing the values
+        of the corresponding environment variables.
+
+        In `golem.yaml`, define these environment variables in the top-level `agents` map under
+        `ConfigAgent`'s `env` section (note: `agents` is a top-level key in `golem.yaml`, not
+        nested under `components`):
+        - `APP_MODE` set to `production`
+        - `GREETING_PREFIX` set to `Hello`
+
+        Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, add a new durable agent type called `ConfigAgent` identified by
+        a single constructor parameter for the instance name.
+
+        ConfigAgent must read two environment variables from the process environment: `APP_MODE`
+        and `GREETING_PREFIX`. It must expose a method called `get_config` that returns a record
+        with exactly two string fields: `app_mode` and `greeting_prefix`, containing the values
+        of the corresponding environment variables.
+
+        In `golem.yaml`, define these environment variables in the top-level `agents` map under
+        `ConfigAgent`'s `env` section (note: `agents` is a top-level key in `golem.yaml`, not
+        nested under `components`):
+        - `APP_MODE` set to `production`
+        - `GREETING_PREFIX` set to `Hello`
+
+        Make sure the project builds and deploys successfully.
     expectedSkills:
       - "golem-add-env-vars"
     verify:

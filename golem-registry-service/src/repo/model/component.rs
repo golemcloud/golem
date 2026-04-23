@@ -157,7 +157,6 @@ impl ComponentRevisionRecord {
                     let state =
                         AgentTypeProvisionConfig {
                             env: config.env.clone(),
-                            wasi_config: config.wasi_config.clone(),
                             config: config
                                 .config
                                 .iter()

@@ -14,14 +14,17 @@
 
 use crate::model::component::{CanonicalFilePath, ComponentRevision};
 use crate::model::environment::EnvironmentId;
-use crate::model::oplog::OplogIndex;
+use crate::model::oplog::{OplogIndex, TimestampedUpdateDescription, UpdateDescription};
+use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
-    AccountId, AgentFilter, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, ComponentId,
-    FilterComparator, IdempotencyKey, StringFilterComparator, Timestamp,
+    AccountId, AgentFilter, AgentId, AgentInvocation, AgentMetadata, AgentStatus,
+    AgentStatusRecord, ComponentId, FilterComparator, IdempotencyKey, StringFilterComparator,
+    Timestamp, TimestampedAgentInvocation,
 };
 use desert_rust::BinaryCodec;
+use golem_wasm::ValueAndType;
+use golem_wasm::analysis::analysed_type::str;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::vec;
 use test_r::test;
@@ -214,8 +217,10 @@ fn worker_filter_matches() {
         ],
         environment_id: EnvironmentId::new(),
         created_by: AccountId(uuid!("f935056f-e2f0-4183-a40f-d8ef3011f0bc")),
-        wasi_config: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
-        config: Vec::new(),
+        config: vec![TypedAgentConfigEntry {
+            path: vec!["var1".to_string()],
+            value: ValueAndType::new(golem_wasm::Value::String("value1".to_string()), str()),
+        }],
         created_at: Timestamp::now_utc(),
         parent: None,
         last_known_status: AgentStatusRecord {
@@ -297,7 +302,7 @@ fn worker_filter_matches() {
     );
 
     assert!(
-        AgentFilter::new_wasi_config(
+        AgentFilter::new_config(
             "var1".to_string(),
             StringFilterComparator::Equal,
             "value1".to_string(),
@@ -306,13 +311,47 @@ fn worker_filter_matches() {
     );
 
     assert!(
-        !AgentFilter::new_wasi_config(
+        !AgentFilter::new_config(
             "var1".to_string(),
             StringFilterComparator::Equal,
             "value2".to_string(),
         )
         .matches(&worker_metadata)
     );
+}
+
+#[test]
+fn agent_status_record_has_pending_work_for_pending_invocations() {
+    let mut status = AgentStatusRecord::default();
+    status.pending_invocations.push(TimestampedAgentInvocation {
+        timestamp: Timestamp::now_utc(),
+        invocation: AgentInvocation::ManualUpdate {
+            target_revision: ComponentRevision::INITIAL,
+        },
+    });
+
+    assert!(status.has_pending_work());
+}
+
+#[test]
+fn agent_status_record_has_pending_work_for_pending_updates() {
+    let mut status = AgentStatusRecord::default();
+    status
+        .pending_updates
+        .push_back(TimestampedUpdateDescription {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL,
+            description: UpdateDescription::Automatic {
+                target_revision: ComponentRevision::INITIAL,
+            },
+        });
+
+    assert!(status.has_pending_work());
+}
+
+#[test]
+fn agent_status_record_has_pending_work_is_false_without_pending_queues() {
+    assert!(!AgentStatusRecord::default().has_pending_work());
 }
 
 #[test]

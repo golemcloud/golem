@@ -1,11 +1,18 @@
-use golem_rust::{agent_definition, agent_implementation, description};
+use golem_rust::agentic::Config;
+use golem_rust::{ConfigSchema, agent_definition, agent_implementation, description};
 use wstd::http::{Client, Request};
+
+#[derive(ConfigSchema)]
+pub struct CounterAgentConfig {
+    pub var1: String,
+    pub var2: Option<String>,
+}
 
 #[agent_definition]
 #[description("Counter agent V1")]
 pub trait CounterAgent {
     // The agent constructor, it's parameters identify the agent
-    fn new(name: String) -> Self;
+    fn new(name: String, #[agent_config] _config: Config<CounterAgentConfig>) -> Self;
 
     fn increment(&mut self) -> u32;
 }
@@ -17,7 +24,7 @@ struct CounterImpl {
 
 #[agent_implementation]
 impl CounterAgent for CounterImpl {
-    fn new(name: String) -> Self {
+    fn new(name: String, #[agent_config] _config: Config<CounterAgentConfig>) -> Self {
         Self {
             _name: name,
             count: 0,
