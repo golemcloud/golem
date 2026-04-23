@@ -201,18 +201,6 @@ impl MessageWithFields for WorkerGetView {
                 |env| format_env(true, &to_sorted_btree_map(env)),
             )
             .fmt_field_optional(
-                "WASI config - defaults",
-                &self.metadata.default_wasi_config,
-                !self.metadata.default_wasi_config.is_empty(),
-                format_wasi_config,
-            )
-            .fmt_field_optional(
-                "WASI config - overrides",
-                &self.metadata.wasi_config,
-                !self.metadata.wasi_config.is_empty(),
-                format_wasi_config,
-            )
-            .fmt_field_optional(
                 "Config - defaults",
                 &self.metadata.default_config,
                 !self.metadata.default_config.is_empty(),
