@@ -25,7 +25,7 @@ import scala.scalajs.js
 object OplogApiCompileSpec extends ZIOSpecDefault {
   import OplogApi._
 
-  private val ts        = ContextApi.DateTime(BigInt(1700000000L), 500000000L)
+  private val ts        = ContextApi.DateTime(BigInt(1700000000L), 500000000)
   private val attr      = ContextApi.Attribute("k", ContextApi.AttributeValue.StringValue("v"))
   private val sampleVat = WitValueTypes.ValueAndType(
     WitValueTypes.WitValue(List(WitValueTypes.WitNode.PrimString("test"))),
