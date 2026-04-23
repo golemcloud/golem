@@ -32,8 +32,8 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWi
 use golem_common::model::agent::{AgentConfigSource, AgentType};
 use golem_common::model::agent::{AgentFileContentHash, AgentTypeName};
 use golem_common::model::component::{
-    AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentName,
-    ComponentRevision, ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginInstallation,
+    AgentFilePath, ArchiveFilePath, ComponentCreation, ComponentId, ComponentRevision,
+    ComponentUpdate, InitialAgentFile, InstalledPlugin, PluginInstallation,
     PluginInstallationAction,
 };
 use golem_common::model::component::{
@@ -206,7 +206,6 @@ impl ComponentWriteService {
         }
 
         let component_metadata = analyze_and_validate_component_wasm(
-            &component_creation.component_name,
             component_creation.agent_types,
             wasm.clone(),
             provision_configs,
@@ -337,7 +336,6 @@ impl ComponentWriteService {
             let existing_provision_configs =
                 component.metadata.agent_type_provision_configs().clone();
             component.metadata = analyze_and_validate_component_wasm(
-                &component.component_name,
                 agent_types,
                 new_wasm.clone(),
                 existing_provision_configs,
@@ -353,7 +351,6 @@ impl ComponentWriteService {
             let existing_provision_configs =
                 component.metadata.agent_type_provision_configs().clone();
             component.metadata = analyze_and_validate_component_wasm(
-                &component.component_name,
                 agent_types,
                 Arc::from(old_data),
                 existing_provision_configs,
@@ -928,7 +925,6 @@ fn check_config_entries_match(
 }
 
 async fn analyze_and_validate_component_wasm(
-    component_name: &ComponentName,
     agent_types: Vec<AgentType>,
     wasm: Arc<[u8]>,
     agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
@@ -937,15 +933,6 @@ async fn analyze_and_validate_component_wasm(
         ComponentMetadata::analyse_component(&wasm, agent_types, agent_type_provision_configs)
     })
     .await?;
-
-    if let Some(known_root_package_name) = &component_metadata.root_package_name()
-        && component_name.0 != *known_root_package_name
-    {
-        return Err(ComponentError::InvalidComponentName {
-            actual: component_name.0.clone(),
-            expected: known_root_package_name.clone(),
-        });
-    }
 
     Ok(component_metadata)
 }

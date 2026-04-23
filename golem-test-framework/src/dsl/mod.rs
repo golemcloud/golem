@@ -37,7 +37,7 @@ use golem_common::model::component::{
     CanonicalFilePath, ComponentDto, ComponentId, ComponentRevision, PluginInstallation,
     PluginPriority,
 };
-use golem_common::model::component_metadata::RawComponentMetadata;
+
 use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, DeploymentRevision};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{Environment, EnvironmentId};
@@ -53,13 +53,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tempfile::{Builder, TempDir};
+use tempfile::TempDir;
 use tokio::fs::File;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
 use tracing::{Instrument, debug, info};
 use uuid::Uuid;
-use wasm_metadata::{AddMetadata, AddMetadataField};
 
 /// Represents a test component whose analysis cache has been pre-warmed
 /// during test-r dependency initialization. Tests that depend on a
@@ -140,7 +139,6 @@ pub trait TestDsl {
         environment_id: EnvironmentId,
         name: &str,
         unique: bool,
-        unverified: bool,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto>;
@@ -773,7 +771,6 @@ pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {
     name: String,
     wasm_name: String,
     unique: bool,
-    unverified: bool,
     agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
     files_for_archive: Vec<IFSEntry>,
 }
@@ -786,7 +783,6 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
             wasm_name: name.clone(),
             name,
             unique: false,
-            unverified: false,
             agent_type_provision_configs: BTreeMap::new(),
             files_for_archive: Vec::new(),
         }
@@ -808,18 +804,6 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
     /// Reuse an existing component of the same WASM if it exists
     pub fn reused(mut self) -> Self {
         self.unique = false;
-        self
-    }
-
-    /// Local filesystem mode only - do not try to parse the component
-    pub fn unverified(mut self) -> Self {
-        self.unverified = true;
-        self
-    }
-
-    /// Local filesystem mode only - parse the component before storing
-    pub fn verified(mut self) -> Self {
-        self.unverified = false;
         self
     }
 
@@ -967,7 +951,6 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
                 self.environment_id,
                 &self.name,
                 self.unique,
-                self.unverified,
                 self.agent_type_provision_configs,
                 self.files_for_archive,
             )
@@ -1191,42 +1174,6 @@ pub fn worker_error_logs(error: &WorkerExecutorError) -> Option<String> {
         WorkerExecutorError::InvocationFailed { stderr, .. } => Some(stderr.clone()),
         WorkerExecutorError::PreviousInvocationFailed { stderr, .. } => Some(stderr.clone()),
         _ => None,
-    }
-}
-
-pub fn rename_component_if_needed(
-    temp_dir: &Path,
-    path: &Path,
-    name: &str,
-) -> anyhow::Result<PathBuf> {
-    // Check metadata
-    let source = std::fs::read(path)?;
-    let metadata = RawComponentMetadata::analyse_component(&source)?;
-    if metadata.root_package_name.is_none() || metadata.root_package_name == Some(name.to_string())
-    {
-        info!(
-            "Name in metadata is {:?}, used component name is {}, using the original WASM: {:?}",
-            metadata.root_package_name, name, path
-        );
-        Ok(path.to_path_buf())
-    } else {
-        let new_path = Builder::new().disable_cleanup(true).tempfile_in(temp_dir)?;
-        let mut add_metadata = AddMetadata::default();
-        add_metadata.name = AddMetadataField::Set(name.to_string());
-        add_metadata.version = if let Some(v) = &metadata.root_package_version {
-            AddMetadataField::Set(wasm_metadata::Version::new(v.to_string()))
-        } else {
-            AddMetadataField::Clear
-        };
-
-        info!(
-            "Name in metadata is {:?}, used component name is {}, using an updated WASM: {:?}",
-            metadata.root_package_name, name, new_path
-        );
-
-        let updated_wasm = add_metadata.to_wasm(&source)?;
-        std::fs::write(&new_path, updated_wasm)?;
-        Ok(new_path.path().to_path_buf())
     }
 }
 

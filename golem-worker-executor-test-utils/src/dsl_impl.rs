@@ -49,7 +49,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
-use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream, rename_component_if_needed};
+use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -72,7 +72,6 @@ impl TestDsl for TestWorkerExecutor {
         environment_id: EnvironmentId,
         name: &str,
         unique: bool,
-        unverified: bool,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
@@ -102,17 +101,6 @@ impl TestDsl for TestWorkerExecutor {
             ComponentName(format!("{name}-{uuid}"))
         } else {
             ComponentName(name.to_string())
-        };
-
-        let source_path = if !unverified {
-            rename_component_if_needed(
-                self.deps.component_temp_directory.path(),
-                &source_path,
-                &component_name.0,
-            )
-            .expect("Failed to verify and change component metadata")
-        } else {
-            source_path
         };
 
         let mut file_map: std::collections::HashMap<ArchiveFilePath, (AgentFileContentHash, u64)> =
@@ -177,7 +165,6 @@ impl TestDsl for TestWorkerExecutor {
                         &source_path,
                         &component_name.0,
                         stored_provision_configs,
-                        unverified,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
@@ -193,7 +180,6 @@ impl TestDsl for TestWorkerExecutor {
                         &source_path,
                         &component_name.0,
                         stored_provision_configs,
-                        unverified,
                         environment_id,
                         self.context.application_id,
                         self.context.account_id,
@@ -276,11 +262,6 @@ impl TestDsl for TestWorkerExecutor {
         let (source_path, original_source_hash) = if let Some(wasm_name) = wasm_name {
             let source_path = component_dir.join(format!("{wasm_name}.wasm"));
             let original_hash = blake3::hash(&std::fs::read(&source_path)?);
-            let source_path = rename_component_if_needed(
-                self.deps.component_temp_directory.path(),
-                &source_path,
-                &latest_revision.component_name.0,
-            )?;
             (Some(source_path), Some(original_hash))
         } else {
             (None, None)
