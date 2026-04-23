@@ -19,7 +19,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "v0.2.1"
+  WASM_RQUICKJS_VERSION: "0.2.2"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 
@@ -182,6 +182,10 @@ jobs:
             description: "IT #10"
           - name: integration-tests-group11
             description: "IT #11"
+          - name: integration-tests-group12
+            description: "IT #12"
+          - name: integration-tests-group13
+            description: "IT #13"
           - name: cli-integration-tests-group1
             description: "CLI tests #1"
           - name: cli-integration-tests-group2
@@ -297,6 +301,7 @@ jobs:
       - name: ${{ matrix.group.description }}
         env:
           QUIET: true
+          GOLEM_PRESET: quick
         run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 30
       - uses: ./.github/actions/publish-test-report
@@ -525,6 +530,7 @@ jobs:
           use-cache: 'false'
           rust-targets: 'wasm32-wasip2'
           install-cargo-make: 'false'
+          install-cargo-binstall: 'true'
 
       - uses: ./.github/actions/setup-js-wasm-tools
         with:
@@ -664,6 +670,8 @@ jobs:
 
       - name: Build test components
         working-directory: test-components
+        env:
+          GOLEM_TS_PRESET: quick
         run: ./build-components.sh ${{ matrix.chunk.name }}
 
       - name: Collect built WASMs

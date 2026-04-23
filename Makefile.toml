@@ -508,6 +508,8 @@ dependencies = [
     "integration-tests-group7",
     "integration-tests-group8",
     "integration-tests-group9",
+    "integration-tests-group12",
+    "integration-tests-group13",
     "cli-integration-tests",
 ]
 
@@ -521,7 +523,7 @@ cargo-test-r run --package integration-tests --test integration :tag:group1 -- -
 '''
 
 [tasks.integration-tests-group2]
-description = "Runs integration tests (group 2/11 - agent_config, api, custom_api)"
+description = "Runs integration tests (group 2/13 - api)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -538,7 +540,7 @@ cargo-test-r run --package integration-tests --test integration :tag:group1 -- -
 '''
 
 [tasks.integration-tests-group4]
-description = "Runs integration tests (group 4/11 - agent_config, api, custom_api with sqlite)"
+description = "Runs integration tests (group 4/13 - api with sqlite)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
 script = '''
@@ -597,11 +599,27 @@ cargo-test-r run --package integration-tests --test integration :tag:group10 -- 
 '''
 
 [tasks.integration-tests-group11]
-description = "Runs integration tests (group 11/11 - custom_api, quota with sqlite)"
+description = "Runs integration tests (group 11/13 - custom_api, quota with sqlite)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
 script = '''
 cargo-test-r run --package integration-tests --test integration :tag:group10 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group12]
+description = "Runs integration tests (group 12/13 - agent_config)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script = '''
+cargo-test-r run --package integration-tests --test integration :tag:group12 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group13]
+description = "Runs integration tests (group 13/13 - agent_config with sqlite)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+script = '''
+cargo-test-r run --package integration-tests --test integration :tag:group12 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.cli-integration-tests]

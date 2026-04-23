@@ -176,9 +176,10 @@ build_node_apps() {
       "$GOLEM_CLI" build --step check --yes
     elif [ "$clean_only" = false ]; then
       echo "Building $subdir..."
+      local preset="${GOLEM_TS_PRESET:-optimized}"
       npm install
-      "$GOLEM_CLI" build --yes --skip-check
-      "$GOLEM_CLI" exec copy
+      "$GOLEM_CLI" --preset "$preset" build --yes --skip-check
+      "$GOLEM_CLI" --preset "$preset" exec copy
     fi
 
     popd || exit
@@ -213,5 +214,5 @@ elif [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
 fi
 
 if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then
-  NODE_GROUP_LABEL="benchmark" build_node_apps "${benchmark_apps[@]}"
+  GOLEM_TS_PRESET=optimized NODE_GROUP_LABEL="benchmark" build_node_apps "${benchmark_apps[@]}"
 fi
