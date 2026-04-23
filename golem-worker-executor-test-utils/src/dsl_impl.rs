@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::TestWorkerExecutor;
-use crate::component_writer::AnalyzedComponent;
+use crate::component_writer::CachedAnalysis;
 use anyhow::anyhow;
 use applying::Apply;
 use bytes::Bytes;
@@ -38,9 +38,7 @@ use golem_common::model::component::{
     AgentFilePath, AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
     ArchiveFilePath, ComponentDto, ComponentId, ComponentName, ComponentRevision, InitialAgentFile,
 };
-use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{
@@ -51,7 +49,6 @@ use golem_common::model::{AgentId, OplogIndex};
 use golem_common::widen_infallible;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::ComponentFileSystemNode;
-use golem_service_base::model::component::Component;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream};
@@ -63,36 +60,6 @@ use std::sync::Arc;
 use tonic::Streaming;
 use tracing::debug;
 use uuid::Uuid;
-
-fn analyzed_component_to_component(
-    analyzed_component: &AnalyzedComponent,
-    component_name: ComponentName,
-    environment_id: EnvironmentId,
-    application_id: golem_common::model::application::ApplicationId,
-    account_id: golem_common::model::account::AccountId,
-) -> Component {
-    Component {
-        id: ComponentId(Uuid::nil()),
-        revision: ComponentRevision::INITIAL,
-        environment_id,
-        component_name,
-        hash: Hash::empty(),
-        application_id,
-        account_id,
-        component_size: 0,
-        metadata: ComponentMetadata::from_parts(
-            analyzed_component.exports.clone(),
-            analyzed_component.memories.clone(),
-            analyzed_component.root_package_name.clone(),
-            analyzed_component.root_package_version.clone(),
-            analyzed_component.agent_types.clone(),
-            BTreeMap::new(),
-        ),
-        created_at: Default::default(),
-        wasm_hash: analyzed_component.wasm_hash,
-        object_store_key: String::new(),
-    }
-}
 
 #[async_trait::async_trait]
 impl TestDsl for TestWorkerExecutor {
@@ -157,13 +124,6 @@ impl TestDsl for TestWorkerExecutor {
             .component_writer
             .analyze_component_metadata(&source_path, Some(original_source_hash))
             .await?;
-        let component_for_parsing = analyzed_component_to_component(
-            &analyzed_component,
-            component_name.clone(),
-            environment_id,
-            self.context.application_id,
-            self.context.account_id,
-        );
 
         let stored_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig> =
             agent_type_provision_configs
@@ -183,8 +143,8 @@ impl TestDsl for TestWorkerExecutor {
                                 })
                         })
                         .collect();
-                    let config = parse_provision_config(
-                        &component_for_parsing,
+                    let config = parse_provision_config_from_cached_analysis(
+                        &analyzed_component,
                         &agent_type_name,
                         creation.config,
                     )?;
@@ -338,9 +298,11 @@ impl TestDsl for TestWorkerExecutor {
 
                 let new_env = update.env.unwrap_or(existing.env);
                 let new_config = match update.config {
-                    Some(config) => {
-                        parse_provision_config(&latest_revision, &agent_type_name, config)?
-                    }
+                    Some(config) => parse_provision_config_from_component_metadata(
+                        &latest_revision.metadata,
+                        &agent_type_name,
+                        config,
+                    )?,
                     None => existing.config,
                 };
 
@@ -1215,16 +1177,37 @@ impl WorkerLogEventStream for GrpcWorkerLogEventStream {
     }
 }
 
-fn parse_provision_config(
-    component: &Component,
+fn parse_provision_config_from_cached_analysis(
+    cached_analysis: &CachedAnalysis,
     agent_type_name: &AgentTypeName,
     config: Vec<AgentConfigEntryDto>,
 ) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
-    let agent_type = component
-        .metadata
+    let agent_type = cached_analysis
+        .agent_types
+        .iter()
+        .find(|agent_type| &agent_type.type_name == agent_type_name)
+        .ok_or_else(|| anyhow!("Agent type {agent_type_name} not found in cached analysis"))?;
+
+    parse_provision_config_from_agent_type(agent_type, agent_type_name, config)
+}
+
+fn parse_provision_config_from_component_metadata(
+    component_metadata: &golem_common::model::component_metadata::ComponentMetadata,
+    agent_type_name: &AgentTypeName,
+    config: Vec<AgentConfigEntryDto>,
+) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
+    let agent_type = component_metadata
         .find_agent_type_by_name(agent_type_name)
         .ok_or_else(|| anyhow!("Agent type {agent_type_name} not found in component metadata"))?;
 
+    parse_provision_config_from_agent_type(&agent_type, agent_type_name, config)
+}
+
+fn parse_provision_config_from_agent_type(
+    agent_type: &golem_common::model::agent::AgentType,
+    agent_type_name: &AgentTypeName,
+    config: Vec<AgentConfigEntryDto>,
+) -> anyhow::Result<Vec<TypedAgentConfigEntry>> {
     config
         .into_iter()
         .map(|entry| {
