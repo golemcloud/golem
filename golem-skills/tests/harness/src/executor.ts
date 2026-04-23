@@ -3,7 +3,12 @@ import { spawn } from "node:child_process";
 import * as path from "node:path";
 import * as yaml from "yaml";
 import { z } from "zod";
-import { AgentDriver, killProcessTree, type DriverTimeoutOptions } from "./driver/base.js";
+import {
+  AgentDriver,
+  killProcessTree,
+  type DriverTimeoutOptions,
+  type UsageStats,
+} from "./driver/base.js";
 import { SkillWatcher } from "./watcher.js";
 import { evaluate, ExpectSchema, type AssertionContext } from "./assertions.js";
 import { classifyFailure, type FailureClassification } from "./failure-classification.js";
@@ -142,7 +147,7 @@ const TriggerSchema = z.object({
 const CreateAgentSchema = z.object({
   name: z.string(),
   env: z.record(z.string()).optional(),
-  config: z.record(z.string()).optional(),
+  config: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
 });
 
 const DeleteAgentSchema = z.object({
@@ -304,7 +309,7 @@ type ResolvedTriggerSpec = { agent: string; method: string; args?: string };
 type CreateAgentSpec = {
   name: string;
   env?: Record<string, string>;
-  config?: Record<string, string>;
+  config?: Record<string, string | number | boolean>;
 };
 type DeleteAgentSpec = { name: string };
 type CreateProjectSpec = { name: string; presets?: LangConditional<string[]> };
@@ -449,6 +454,7 @@ export interface StepAttemptResult {
   activatedSkills: string[];
   timedOut?: boolean;
   timeoutKind?: "step" | "idle";
+  usage?: UsageStats;
 }
 
 export interface StepResult {
@@ -462,6 +468,7 @@ export interface StepResult {
   classification?: FailureClassification;
   timedOut?: boolean;
   timeoutKind?: "step" | "idle";
+  usage?: UsageStats;
 }
 
 export interface ScenarioRunResult {
@@ -470,6 +477,9 @@ export interface ScenarioRunResult {
   stepResults: StepResult[];
   artifactPaths: string[];
   workspace: string;
+  /** True when a step detected a credit-balance-too-low error from the LLM provider. */
+  creditInsufficient?: boolean;
+  usage?: UsageStats;
 }
 
 interface LocalCommandResult {
@@ -942,6 +952,7 @@ export class ScenarioExecutor {
     const startTime = Date.now();
     let isFirstPrompt = true;
     let resumeReached = !this.options.resumeFromStepId;
+    let creditInsufficient = false;
     try {
       for (const originalStep of spec.steps) {
         // Check abort signal
@@ -994,6 +1005,8 @@ export class ScenarioExecutor {
               isFirstPrompt: boolean;
               timedOut?: boolean;
               timeoutKind?: "step" | "idle";
+              creditInsufficient?: boolean;
+              usage?: UsageStats;
             }
           | undefined;
 
@@ -1016,9 +1029,14 @@ export class ScenarioExecutor {
             activatedSkills: bodyResult.activatedSkills,
             timedOut: bodyResult.timedOut,
             timeoutKind: bodyResult.timeoutKind,
+            usage: bodyResult.usage,
           });
 
           finalResult = bodyResult;
+          if (bodyResult.creditInsufficient) {
+            creditInsufficient = true;
+            break;
+          }
           if (bodyResult.success) break;
         }
 
@@ -1039,6 +1057,7 @@ export class ScenarioExecutor {
           classification,
           timedOut: finalResult!.timedOut,
           timeoutKind: finalResult!.timeoutKind,
+          usage: finalResult!.usage,
         });
 
         if (!finalResult!.success) break; // Stop on failure
@@ -1060,12 +1079,40 @@ export class ScenarioExecutor {
       await this.driver.teardown();
     }
 
+    const aggregatedUsage = this.aggregateUsage(results);
+
     return {
       status: results.every((result) => result.success) ? "pass" : "fail",
       durationSeconds: (Date.now() - startTime) / 1000,
       stepResults: results,
       artifactPaths: [this.workspace],
       workspace: this.workspace,
+      creditInsufficient,
+      usage: aggregatedUsage,
+    };
+  }
+
+  private aggregateUsage(results: StepResult[]): UsageStats | undefined {
+    let hasAny = false;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let costUsd = 0;
+    let numTurns = 0;
+    for (const r of results) {
+      if (r.usage) {
+        hasAny = true;
+        inputTokens += r.usage.inputTokens ?? 0;
+        outputTokens += r.usage.outputTokens ?? 0;
+        costUsd += r.usage.costUsd ?? 0;
+        numTurns += r.usage.numTurns ?? 0;
+      }
+    }
+    if (!hasAny) return undefined;
+    return {
+      ...(inputTokens > 0 && { inputTokens }),
+      ...(outputTokens > 0 && { outputTokens }),
+      ...(costUsd > 0 && { costUsd }),
+      ...(numTurns > 0 && { numTurns }),
     };
   }
 
@@ -1081,11 +1128,15 @@ export class ScenarioExecutor {
     isFirstPrompt: boolean;
     timedOut?: boolean;
     timeoutKind?: "step" | "idle";
+    creditInsufficient?: boolean;
+    usage?: UsageStats;
   }> {
     const errors: string[] = [];
     let success = true;
     let stepTimedOut: boolean | undefined;
     let stepTimeoutKind: "step" | "idle" | undefined;
+    let stepCreditInsufficient: boolean | undefined;
+    let stepUsage: UsageStats | undefined;
     const stepTimeoutSeconds =
       step.timeout ??
       spec.settings?.timeout_per_subprompt ??
@@ -1157,7 +1208,10 @@ export class ScenarioExecutor {
         );
         break;
       case "prompt": {
-        const idleTimeout = this.options.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS;
+        const idleTimeout =
+          this.options.idleTimeoutSeconds ??
+          this.driver.getDefaultIdleTimeoutSeconds() ??
+          DEFAULT_IDLE_TIMEOUT_SECONDS;
         const promptResult = await this.executePrompt(
           stepLabel,
           step.prompt as string,
@@ -1169,6 +1223,8 @@ export class ScenarioExecutor {
         );
         stepTimedOut = promptResult.timedOut;
         stepTimeoutKind = promptResult.timeoutKind;
+        stepCreditInsufficient = promptResult.creditInsufficient;
+        stepUsage = promptResult.usage;
         break;
       }
       case "invoke":
@@ -1259,6 +1315,8 @@ export class ScenarioExecutor {
       isFirstPrompt: step.tag === "prompt" && success ? false : isFirstPrompt,
       timedOut: stepTimedOut,
       timeoutKind: stepTimeoutKind,
+      creditInsufficient: stepCreditInsufficient,
+      usage: stepUsage,
     };
   }
 
@@ -1294,7 +1352,7 @@ export class ScenarioExecutor {
     }
     if (spec.config) {
       for (const [k, v] of Object.entries(spec.config)) {
-        args.push("-c", `${k}=${v}`);
+        args.push("-c", `${k}=${JSON.stringify(v)}`);
       }
     }
     const result = await this.runLocalCommand("golem", args, timeout, projectDir, commandEnv);
@@ -1439,7 +1497,12 @@ export class ScenarioExecutor {
     timeout: number,
     idleTimeout: number | undefined,
     fail: (msg: string) => void,
-  ): Promise<{ timedOut?: boolean; timeoutKind?: "step" | "idle" }> {
+  ): Promise<{
+    timedOut?: boolean;
+    timeoutKind?: "step" | "idle";
+    creditInsufficient?: boolean;
+    usage?: UsageStats;
+  }> {
     const opts: DriverTimeoutOptions = {
       stepTimeoutSeconds: timeout,
       idleTimeoutSeconds: idleTimeout,
@@ -1449,12 +1512,22 @@ export class ScenarioExecutor {
       log.stepPrompt(stepLabel, prompt, "followup");
       const result = await this.driver.sendFollowup(prompt, opts);
       if (!result.success) fail(`Agent failed: ${result.output}`);
-      return { timedOut: result.timedOut, timeoutKind: result.timeoutKind };
+      return {
+        timedOut: result.timedOut,
+        timeoutKind: result.timeoutKind,
+        creditInsufficient: result.creditInsufficient,
+        usage: result.usage,
+      };
     } else {
       log.stepPrompt(stepLabel, prompt, "initial");
       const result = await this.driver.sendPrompt(prompt, opts);
       if (!result.success) fail(`Agent failed: ${result.output}`);
-      return { timedOut: result.timedOut, timeoutKind: result.timeoutKind };
+      return {
+        timedOut: result.timedOut,
+        timeoutKind: result.timeoutKind,
+        creditInsufficient: result.creditInsufficient,
+        usage: result.usage,
+      };
     }
   }
 

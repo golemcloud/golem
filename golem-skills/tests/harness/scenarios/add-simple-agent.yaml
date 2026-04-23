@@ -5,18 +5,55 @@ steps:
       name: test-app
 
   - id: "add-item-repository-agent"
-    prompt: >
-      In the test-app project, add a new durable agent type named `ItemRepositoryAgent`
-      with a single constructor or identity parameter for the repository name. It must
-      represent a simple item repository and expose externally invokable CRUD methods
-      named `create-item`, `get-item`, `update-item`, `delete-item`, and `list-items`.
-      Use an `Item` record, object type, or case class with exactly two fields: `id`
-      and `name`. `create-item` must take an `Item` and return the stored `Item`.
-      `get-item` must take an item id string and return the stored `Item`. `update-item`
-      must take an `Item`, replace the stored value with the same id, and return the
-      updated `Item`. `delete-item` must take an item id string and return `true` when
-      the item was removed. `list-items` must return all stored items. Store the items
-      in agent state keyed by id. Make sure the project builds and deploys successfully.
+    prompt:
+      rust: >
+        In the test-app project, add a new durable agent type named `ItemRepositoryAgent`
+        with a single constructor or identity parameter for the repository name. It must
+        represent a simple item repository and expose externally invokable CRUD methods
+        named `create_item`, `get_item`, `update_item`, `delete_item`, and `list_items`.
+        Use an `Item` record, object type, or case class with exactly two fields: `id`
+        and `name`. `create_item` must take an `Item` and return the stored `Item`.
+        `get_item` must take an item id string and return the stored `Item`. `update_item`
+        must take an `Item`, replace the stored value with the same id, and return the
+        updated `Item`. `delete_item` must take an item id string and return `true` when
+        the item was removed. `list_items` must return all stored items. Store the items
+        in agent state keyed by id. Make sure the project builds and deploys successfully.
+      ts: >
+        In the test-app project, add a new durable agent type named `ItemRepositoryAgent`
+        with a single constructor or identity parameter for the repository name. It must
+        represent a simple item repository and expose externally invokable CRUD methods
+        named `createItem`, `getItem`, `updateItem`, `deleteItem`, and `listItems`.
+        Use an `Item` record, object type, or case class with exactly two fields: `id`
+        and `name`. `createItem` must take an `Item` and return the stored `Item`.
+        `getItem` must take an item id string and return the stored `Item`. `updateItem`
+        must take an `Item`, replace the stored value with the same id, and return the
+        updated `Item`. `deleteItem` must take an item id string and return `true` when
+        the item was removed. `listItems` must return all stored items. Store the items
+        in agent state keyed by id. Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, add a new durable agent type named `ItemRepositoryAgent`
+        with a single constructor or identity parameter for the repository name. It must
+        represent a simple item repository and expose externally invokable CRUD methods
+        named `createItem`, `getItem`, `updateItem`, `deleteItem`, and `listItems`.
+        Use an `Item` record, object type, or case class with exactly two fields: `id`
+        and `name`. `createItem` must take an `Item` and return the stored `Item`.
+        `getItem` must take an item id string and return the stored `Item`. `updateItem`
+        must take an `Item`, replace the stored value with the same id, and return the
+        updated `Item`. `deleteItem` must take an item id string and return `true` when
+        the item was removed. `listItems` must return all stored items. Store the items
+        in agent state keyed by id. Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, add a new durable agent type named `ItemRepositoryAgent`
+        with a single constructor or identity parameter for the repository name. It must
+        represent a simple item repository and expose externally invokable CRUD methods
+        named `create_item`, `get_item`, `update_item`, `delete_item`, and `list_items`.
+        Use an `Item` record, object type, or case class with exactly two fields: `id`
+        and `name`. `create_item` must take an `Item` and return the stored `Item`.
+        `get_item` must take an item id string and return the stored `Item`. `update_item`
+        must take an `Item`, replace the stored value with the same id, and return the
+        updated `Item`. `delete_item` must take an item id string and return `true` when
+        the item was removed. `list_items` must return all stored items. Store the items
+        in agent state keyed by id. Make sure the project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-add-agent-rust"

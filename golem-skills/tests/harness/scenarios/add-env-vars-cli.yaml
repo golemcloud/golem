@@ -7,18 +7,55 @@ steps:
       build: true
 
   - id: "add-env-reading-agent"
-    prompt: >
-      In the test-app project, add a new durable agent type called `EnvAgent` identified by
-      a single constructor parameter for the instance name.
+    prompt:
+      rust: >
+        In the test-app project, add a new durable agent type called `EnvAgent` identified by
+        a single constructor parameter for the instance name.
 
-      EnvAgent must read an environment variable called `INSTANCE_TAG` from the process
-      environment. It must expose a method called `get-tag` that returns the value of the
-      `INSTANCE_TAG` environment variable as a string.
+        EnvAgent must read an environment variable called `INSTANCE_TAG` from the process
+        environment. It must expose a method called `get_tag` that returns the value of the
+        `INSTANCE_TAG` environment variable as a string.
 
-      Do NOT define `INSTANCE_TAG` in `golem.yaml` — it will be provided when creating
-      individual agent instances via the CLI.
+        Do NOT define `INSTANCE_TAG` in `golem.yaml` — it will be provided when creating
+        individual agent instances via the CLI.
 
-      Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully.
+      ts: >
+        In the test-app project, add a new durable agent type called `EnvAgent` identified by
+        a single constructor parameter for the instance name.
+
+        EnvAgent must read an environment variable called `INSTANCE_TAG` from the process
+        environment. It must expose a method called `getTag` that returns the value of the
+        `INSTANCE_TAG` environment variable as a string.
+
+        Do NOT define `INSTANCE_TAG` in `golem.yaml` — it will be provided when creating
+        individual agent instances via the CLI.
+
+        Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, add a new durable agent type called `EnvAgent` identified by
+        a single constructor parameter for the instance name.
+
+        EnvAgent must read an environment variable called `INSTANCE_TAG` from the process
+        environment. It must expose a method called `getTag` that returns the value of the
+        `INSTANCE_TAG` environment variable as a string.
+
+        Do NOT define `INSTANCE_TAG` in `golem.yaml` — it will be provided when creating
+        individual agent instances via the CLI.
+
+        Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, add a new durable agent type called `EnvAgent` identified by
+        a single constructor parameter for the instance name.
+
+        EnvAgent must read an environment variable called `INSTANCE_TAG` from the process
+        environment. It must expose a method called `get_tag` that returns the value of the
+        `INSTANCE_TAG` environment variable as a string.
+
+        Do NOT define `INSTANCE_TAG` in `golem.yaml` — it will be provided when creating
+        individual agent instances via the CLI.
+
+        Make sure the project builds and deploys successfully.
     expectedSkills:
       - "golem-add-env-vars"
     verify:

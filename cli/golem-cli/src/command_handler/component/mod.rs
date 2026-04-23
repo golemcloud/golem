@@ -719,21 +719,16 @@ impl ComponentCommandHandler {
                         .ctx
                         .worker_handler()
                         .worker_metadata(component.id.0, &component.component_name, agent_name)
-                        .await
-                        .ok()
+                        .await?
                         .map(|worker_metadata| worker_metadata.component_revision),
                     ComponentRevisionSelection::ByExplicitRevision(revision) => Some(revision),
                 };
 
                 match revision {
                     Some(revision) => {
-                        let clients = self.ctx.golem_clients().await?;
-
-                        let component = clients
-                            .component
-                            .get_component_revision(&component.id.0, revision.into())
-                            .await
-                            .map_service_error()?;
+                        let component = self
+                            .get_component_revision_by_id(&component.id, revision)
+                            .await?;
 
                         Ok(Some(component))
                     }

@@ -5,14 +5,39 @@ steps:
       name: test-app
 
   - id: "add-stateless-agent"
-    prompt: >
-      In the test-app project, add a new ephemeral (stateless) agent type named
-      `TextProcessorAgent` with a single constructor or identity parameter for the
-      processor name. It should be a pure request-handler style agent that gets a
-      fresh instance for every invocation with no shared state between calls. The
-      agent must expose two externally invokable methods: `to-upper` which takes a
-      string and returns it uppercased, and `to-lower` which takes a string and
-      returns it lowercased. Make sure the project builds and deploys successfully.
+    prompt:
+      rust: >
+        In the test-app project, add a new ephemeral (stateless) agent type named
+        `TextProcessorAgent` with a single constructor or identity parameter for the
+        processor name. It should be a pure request-handler style agent that gets a
+        fresh instance for every invocation with no shared state between calls. The
+        agent must expose two externally invokable methods: `to_upper` which takes a
+        string and returns it uppercased, and `to_lower` which takes a string and
+        returns it lowercased. Make sure the project builds and deploys successfully.
+      ts: >
+        In the test-app project, add a new ephemeral (stateless) agent type named
+        `TextProcessorAgent` with a single constructor or identity parameter for the
+        processor name. It should be a pure request-handler style agent that gets a
+        fresh instance for every invocation with no shared state between calls. The
+        agent must expose two externally invokable methods: `toUpper` which takes a
+        string and returns it uppercased, and `toLower` which takes a string and
+        returns it lowercased. Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, add a new ephemeral (stateless) agent type named
+        `TextProcessorAgent` with a single constructor or identity parameter for the
+        processor name. It should be a pure request-handler style agent that gets a
+        fresh instance for every invocation with no shared state between calls. The
+        agent must expose two externally invokable methods: `toUpper` which takes a
+        string and returns it uppercased, and `toLower` which takes a string and
+        returns it lowercased. Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, add a new ephemeral (stateless) agent type named
+        `TextProcessorAgent` with a single constructor or identity parameter for the
+        processor name. It should be a pure request-handler style agent that gets a
+        fresh instance for every invocation with no shared state between calls. The
+        agent must expose two externally invokable methods: `to_upper` which takes a
+        string and returns it uppercased, and `to_lower` which takes a string and
+        returns it lowercased. Make sure the project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-stateless-agent-rust"

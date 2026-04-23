@@ -1,6 +1,7 @@
 export interface ScenarioMatrix {
   agent: string;
   language: string;
+  model?: string;
 }
 
 export interface MatrixScenarioLabel {
@@ -11,6 +12,7 @@ export interface MatrixScenarioLabel {
 export interface GitHubSummaryScenario extends MatrixScenarioLabel {
   status: "pass" | "fail";
   durationSeconds: number;
+  usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
 }
 
 export interface GitHubSummaryFailure extends MatrixScenarioLabel {
@@ -19,7 +21,8 @@ export interface GitHubSummaryFailure extends MatrixScenarioLabel {
 }
 
 export function formatScenarioMatrixLabel({ scenario, matrix }: MatrixScenarioLabel): string {
-  return `${scenario} [${matrix.agent} x ${matrix.language}]`;
+  const agentLabel = matrix.model ? `${matrix.agent}/${matrix.model}` : matrix.agent;
+  return `${scenario} [${agentLabel} x ${matrix.language}]`;
 }
 
 export function renderGitHubStepSummary(options: {
@@ -35,13 +38,28 @@ export function renderGitHubStepSummary(options: {
   const lines: string[] = [];
   lines.push("## Skill Test Results");
   lines.push("");
-  lines.push("| Scenario | Agent | Language | Status | Duration |");
-  lines.push("|----------|-------|----------|--------|----------|");
+  const anyUsage = scenarioReports.some((r) => r.usage);
+  if (anyUsage) {
+    lines.push("| Scenario | Agent | Language | Status | Duration | Tokens | Cost |");
+    lines.push("|----------|-------|----------|--------|----------|--------|------|");
+  } else {
+    lines.push("| Scenario | Agent | Language | Status | Duration |");
+    lines.push("|----------|-------|----------|--------|----------|");
+  }
   for (const report of scenarioReports) {
     const icon = report.status === "pass" ? "\u2705" : "\u274c";
-    lines.push(
-      `| ${report.scenario} | ${report.matrix.agent} | ${report.matrix.language} | ${icon} ${report.status} | ${report.durationSeconds.toFixed(1)}s |`,
-    );
+    const baseCols = `| ${report.scenario} | ${report.matrix.agent} | ${report.matrix.language} | ${icon} ${report.status} | ${report.durationSeconds.toFixed(1)}s`;
+    if (anyUsage) {
+      const u = report.usage;
+      const tokens =
+        u?.inputTokens || u?.outputTokens
+          ? `${(u?.inputTokens ?? 0).toLocaleString()}/${(u?.outputTokens ?? 0).toLocaleString()}`
+          : "-";
+      const cost = u?.costUsd ? `$${u.costUsd.toFixed(4)}` : "-";
+      lines.push(`${baseCols} | ${tokens} | ${cost} |`);
+    } else {
+      lines.push(`${baseCols} |`);
+    }
   }
   lines.push("");
   lines.push(

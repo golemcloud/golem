@@ -7,23 +7,75 @@ steps:
       build: true
 
   - id: "add-delayed-recorder-agent"
-    prompt: >
-      In the test-app project, add a second agent type called `DelayedRecorder` that has
-      the same constructor parameter as the existing CounterAgent. `DelayedRecorder` must
-      expose two externally invokable methods: `record-count(value)` and
-      `recorded-counts()`. `record-count` must append the received counter value to the
-      recorder agent's durable state. `recorded-counts` must return all recorded values
-      in order.
+    prompt:
+      rust: >
+        In the test-app project, add a second agent type called `DelayedRecorder` that has
+        the same constructor parameter as the existing CounterAgent. `DelayedRecorder` must
+        expose two externally invokable methods: `record_count(value)` and
+        `recorded_counts()`. `record_count` must append the received counter value to the
+        recorder agent's durable state. `recorded_counts` must return all recorded values
+        in order.
 
-      Then modify `CounterAgent` so it has a new externally invokable method called
-      `schedule-report`. That method must increment the counter exactly like the existing
-      `increment` method, then schedule `DelayedRecorder("<same name>")`'s
-      `record-count` method to run 30 seconds in the future with the new counter value,
-      and then return the new counter value immediately. Do not directly invoke or await
-      `record-count` in `schedule-report`; the update to `DelayedRecorder` must happen
-      only via the scheduled future call.
+        Then modify `CounterAgent` so it has a new externally invokable method called
+        `schedule_report`. That method must increment the counter exactly like the existing
+        `increment` method, then schedule `DelayedRecorder("<same name>")`'s
+        `record_count` method to run 30 seconds in the future with the new counter value,
+        and then return the new counter value immediately. Do not directly invoke or await
+        `record_count` in `schedule_report`; the update to `DelayedRecorder` must happen
+        only via the scheduled future call.
 
-      Make sure the project builds successfully.
+        Make sure the project builds successfully.
+      ts: >
+        In the test-app project, add a second agent type called `DelayedRecorder` that has
+        the same constructor parameter as the existing CounterAgent. `DelayedRecorder` must
+        expose two externally invokable methods: `recordCount(value)` and
+        `recordedCounts()`. `recordCount` must append the received counter value to the
+        recorder agent's durable state. `recordedCounts` must return all recorded values
+        in order.
+
+        Then modify `CounterAgent` so it has a new externally invokable method called
+        `scheduleReport`. That method must increment the counter exactly like the existing
+        `increment` method, then schedule `DelayedRecorder("<same name>")`'s
+        `recordCount` method to run 30 seconds in the future with the new counter value,
+        and then return the new counter value immediately. Do not directly invoke or await
+        `recordCount` in `scheduleReport`; the update to `DelayedRecorder` must happen
+        only via the scheduled future call.
+
+        Make sure the project builds successfully.
+      scala: >
+        In the test-app project, add a second agent type called `DelayedRecorder` that has
+        the same constructor parameter as the existing CounterAgent. `DelayedRecorder` must
+        expose two externally invokable methods: `recordCount(value)` and
+        `recordedCounts()`. `recordCount` must append the received counter value to the
+        recorder agent's durable state. `recordedCounts` must return all recorded values
+        in order.
+
+        Then modify `CounterAgent` so it has a new externally invokable method called
+        `scheduleReport`. That method must increment the counter exactly like the existing
+        `increment` method, then schedule `DelayedRecorder("<same name>")`'s
+        `recordCount` method to run 30 seconds in the future with the new counter value,
+        and then return the new counter value immediately. Do not directly invoke or await
+        `recordCount` in `scheduleReport`; the update to `DelayedRecorder` must happen
+        only via the scheduled future call.
+
+        Make sure the project builds successfully.
+      moonbit: >
+        In the test-app project, add a second agent type called `DelayedRecorder` that has
+        the same constructor parameter as the existing CounterAgent. `DelayedRecorder` must
+        expose two externally invokable methods: `record_count(value)` and
+        `recorded_counts()`. `record_count` must append the received counter value to the
+        recorder agent's durable state. `recorded_counts` must return all recorded values
+        in order.
+
+        Then modify `CounterAgent` so it has a new externally invokable method called
+        `schedule_report`. That method must increment the counter exactly like the existing
+        `increment` method, then schedule `DelayedRecorder("<same name>")`'s
+        `record_count` method to run 30 seconds in the future with the new counter value,
+        and then return the new counter value immediately. Do not directly invoke or await
+        `record_count` in `schedule_report`; the update to `DelayedRecorder` must happen
+        only via the scheduled future call.
+
+        Make sure the project builds successfully.
     expectedSkills:
       rust:
         - "golem-schedule-future-call-rust"
