@@ -262,7 +262,9 @@ impl<'a> ComponentStager<'a> {
 
         let files_to_archive = self.changed_manifest_files()?;
         let archive_paths_by_source = resolve_archive_paths_for_sources(
-            files_to_archive.iter().map(|file| file.source.as_url().clone()),
+            files_to_archive
+                .iter()
+                .map(|file| file.source.as_url().clone()),
         )?;
         let new_or_updated_content = if files_to_archive.is_empty() {
             None
@@ -483,8 +485,8 @@ impl<'a> ComponentStager<'a> {
             .map(|(agent_type_name, manifest_config)| {
                 let resolved_plugins = self.resolve_plugins_for(manifest_config);
                 let mut creation = manifest_config.to_provision_config_creation(resolved_plugins);
-                creation.files =
-                    self.resolve_archive_files_for_agent(manifest_config, &archive_paths_by_source)?;
+                creation.files = self
+                    .resolve_archive_files_for_agent(manifest_config, &archive_paths_by_source)?;
                 Ok((agent_type_name.clone(), creation))
             })
             .collect()
@@ -552,7 +554,8 @@ impl<'a> ComponentStager<'a> {
                 .filter(|(name, _)| changed.contains(name.0.as_str()))
                 .map(|(name, manifest_config)| {
                     let resolved_plugins = self.resolve_plugins_for(manifest_config);
-                    let mut creation = manifest_config.to_provision_config_creation(resolved_plugins);
+                    let mut creation =
+                        manifest_config.to_provision_config_creation(resolved_plugins);
                     creation.files = self.resolve_archive_files_for_agent(
                         manifest_config,
                         &changed_files.archive_paths_by_source,

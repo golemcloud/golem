@@ -100,7 +100,9 @@ fn add_counter_suffix(file_name: &str, counter: usize) -> String {
     }
 }
 
-pub fn resolve_archive_paths_for_sources<I>(sources: I) -> anyhow::Result<BTreeMap<String, ArchiveFilePath>>
+pub fn resolve_archive_paths_for_sources<I>(
+    sources: I,
+) -> anyhow::Result<BTreeMap<String, ArchiveFilePath>>
 where
     I: IntoIterator<Item = Url>,
 {
@@ -166,9 +168,8 @@ impl IfsFileManager {
             );
         }
 
-        let archive_path_map = resolve_archive_paths_for_sources(
-            loaded_files.iter().map(|file| file.source.clone()),
-        )?;
+        let archive_path_map =
+            resolve_archive_paths_for_sources(loaded_files.iter().map(|file| file.source.clone()))?;
 
         let mut seen_archive_paths: HashSet<ArchiveFilePath> = HashSet::new();
 
@@ -183,16 +184,15 @@ impl IfsFileManager {
             }
 
             let zip_entry_name = archive_path.to_rel_string();
-                let builder =
-                    ZipEntryBuilder::new(zip_entry_name.clone().into(), Compression::Deflate);
+            let builder = ZipEntryBuilder::new(zip_entry_name.clone().into(), Compression::Deflate);
 
-                log_action(
-                    "Adding",
-                    format!(
-                        "entry {} to IFS archive",
-                        zip_entry_name.log_color_highlight()
-                    ),
-                );
+            log_action(
+                "Adding",
+                format!(
+                    "entry {} to IFS archive",
+                    zip_entry_name.log_color_highlight()
+                ),
+            );
 
             zip_writer
                 .write_entry_whole(builder, &content)
@@ -297,7 +297,7 @@ impl IfsFileManager {
                     entries.push(entry.context("Error reading directory entry")?);
                 }
 
-                entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+                entries.sort_by_key(|a| a.file_name());
 
                 for entry in entries {
                     let next_path = entry.path();
@@ -371,8 +371,12 @@ impl FileProcessor<LoadedFile> for FileLoader {
             .await
             .with_context(|| anyhow!("Error reading local IFS file: {}", path.display()))?;
 
-        let source = Url::from_file_path(path)
-            .map_err(|_| anyhow!("Failed to convert local IFS file path to URL: {}", path.display()))?;
+        let source = Url::from_file_path(path).map_err(|_| {
+            anyhow!(
+                "Failed to convert local IFS file path to URL: {}",
+                path.display()
+            )
+        })?;
 
         Ok(LoadedFile { content, source })
     }
@@ -520,8 +524,9 @@ mod tests {
         let first_source = Url::parse("file:///tmp/some/path/main.ts").unwrap();
         let second_source = Url::parse("file:///tmp/some/path/other-main.ts").unwrap();
 
-        let paths = resolve_archive_paths_for_sources(vec![first_source.clone(), second_source.clone()])
-            .unwrap();
+        let paths =
+            resolve_archive_paths_for_sources(vec![first_source.clone(), second_source.clone()])
+                .unwrap();
 
         let first = paths.get(first_source.as_str()).unwrap();
         let second = paths.get(second_source.as_str()).unwrap();
