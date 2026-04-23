@@ -1616,9 +1616,12 @@ impl ForwardingOplogState {
                 s.target_agent_id = Some(new_target.clone());
             }
             tracing::info!(
+                source_worker = %self.initial_worker_metadata.agent_id,
                 plugin = %grant_id,
                 old_target = %old_target,
                 new_target = %new_target,
+                confirmed_up_to = confirmed.as_u64(),
+                last_batch_start = last_batch_start.as_u64(),
                 "Locality recovery: migrated plugin to new local target"
             );
         }

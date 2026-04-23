@@ -2990,11 +2990,15 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             .on_shard_assignment_changed()
             .await?;
 
-        info!("Recovering workers");
+        let current_assignment = this.shard_service().try_get_current_assignment();
+        info!(
+            current_assignment = ?current_assignment,
+            "Investigation: starting shard assignment recovery"
+        );
 
         let workers = this.worker_service().get_running_workers_in_shards().await;
 
-        debug!("Recovering running workers: {:?}", workers);
+        debug!(workers = ?workers, "Recovering running workers");
 
         for worker in workers {
             let owned_agent_id = worker.initial_worker_metadata.owned_agent_id();
@@ -3006,11 +3010,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             .await;
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
-            match latest_worker_status.status {
-                AgentStatus::Running
-                | AgentStatus::Idle
-                | AgentStatus::Retrying
-                | AgentStatus::Interrupted => {
+            if should_restart_after_shard_assignment_change(&latest_worker_status) {
                     let _ = Worker::get_or_create_running(
                         this,
                         &owned_agent_id,
@@ -3022,13 +3022,76 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         Principal::anonymous(),
                     )
                     .await?;
-                }
-                _ => {}
+
             }
         }
 
-        info!("Finished recovering workers");
+        info!(
+            current_assignment = ?current_assignment,
+            "Investigation: finished shard assignment recovery"
+        );
         Ok(())
+    }
+}
+
+fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> bool {
+    matches!(
+        status.status,
+        AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying | AgentStatus::Interrupted
+    ) || status.has_pending_work()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::AgentInvocation;
+    use golem_common::model::TimestampedAgentInvocation;
+    use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
+    use test_r::test;
+
+    #[test]
+    fn shard_assignment_recovery_restarts_idle_workers_with_pending_invocations() {
+        let mut status = AgentStatusRecord {
+            status: AgentStatus::Idle,
+            ..AgentStatusRecord::default()
+        };
+        status.pending_invocations.push(TimestampedAgentInvocation {
+            timestamp: Timestamp::now_utc(),
+            invocation: AgentInvocation::ManualUpdate {
+                target_revision: ComponentRevision::INITIAL,
+            },
+        });
+
+        assert!(should_restart_after_shard_assignment_change(&status));
+    }
+
+    #[test]
+    fn shard_assignment_recovery_restarts_idle_workers_with_pending_updates() {
+        let mut status = AgentStatusRecord {
+            status: AgentStatus::Idle,
+            ..AgentStatusRecord::default()
+        };
+        status
+            .pending_updates
+            .push_back(TimestampedUpdateDescription {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::INITIAL,
+                description: UpdateDescription::Automatic {
+                    target_revision: ComponentRevision::INITIAL,
+                },
+            });
+
+        assert!(should_restart_after_shard_assignment_change(&status));
+    }
+
+    #[test]
+    fn shard_assignment_recovery_skips_suspended_workers_without_pending_work() {
+        let status = AgentStatusRecord {
+            status: AgentStatus::Suspended,
+            ..AgentStatusRecord::default()
+        };
+
+        assert!(!should_restart_after_shard_assignment_change(&status));
     }
 }
 
