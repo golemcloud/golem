@@ -37,6 +37,13 @@ export function killProcessTree(child: ChildProcess): void {
   }, 5000);
 }
 
+export interface UsageStats {
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  numTurns?: number;
+}
+
 export interface AgentResult {
   success: boolean;
   output: string;
@@ -44,7 +51,14 @@ export interface AgentResult {
   exitCode: number | null;
   timedOut?: boolean;
   timeoutKind?: "step" | "idle";
+  /** The agent reported that the credit balance is too low to continue. */
+  creditInsufficient?: boolean;
+  usage?: UsageStats;
 }
+
+/** Pattern that matches credit-balance / quota errors emitted by LLM providers. */
+export const CREDIT_INSUFFICIENT_PATTERN =
+  /credit balance is too low|quota exceeded[.]? check your plan and billing|you have reached your specified API usage limits/i;
 
 export interface DriverTimeoutOptions {
   stepTimeoutSeconds: number;
@@ -71,6 +85,12 @@ export interface AgentDriver {
    * prompt in a scenario, or any prompt with `continueSession: false`).
    */
   getActivatedSkills(): string[] | undefined;
+
+  /**
+   * Per-driver default idle timeout override in seconds. Returns `undefined`
+   * if the driver has no preference (use the global default).
+   */
+  getDefaultIdleTimeoutSeconds(): number | undefined;
 
   /**
    * Clear the driver's internal list of activated skills.
@@ -207,6 +227,14 @@ export abstract class BaseAgentDriver implements AgentDriver {
   /** Directories relative to workspace where the bootstrap skill should be copied. */
   protected abstract readonly skillDirs: string[];
 
+  /**
+   * Per-driver default idle timeout in seconds. If set, overrides the global
+   * default when the executor doesn't provide an explicit idle timeout.
+   * Drivers whose underlying CLI has long silent gaps (e.g. retry backoff)
+   * can increase this.
+   */
+  protected readonly defaultIdleTimeoutOverride: number | undefined = undefined;
+
   /** Returns the driver log tag, e.g. `claude-code` */
   protected get logPrefix(): string {
     return this.driverName;
@@ -238,6 +266,10 @@ export abstract class BaseAgentDriver implements AgentDriver {
 
   getActivatedSkills(): string[] | undefined {
     return undefined;
+  }
+
+  getDefaultIdleTimeoutSeconds(): number | undefined {
+    return this.defaultIdleTimeoutOverride;
   }
 
   resetActivatedSkills(): void {

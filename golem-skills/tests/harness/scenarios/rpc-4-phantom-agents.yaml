@@ -7,32 +7,111 @@ steps:
       build: true
 
   - id: "add-collector-and-phantom-rpc"
-    prompt: >
-      In the test-app project, add a second agent type called `Collector` with a single
-      constructor parameter for its name. It must expose three externally invokable
-      methods: `add-value(value: u64)`, `get-values() -> list<u64>`, and
-      `get-total() -> u64`. `add-value` appends the value to the agent's durable state.
-      `get-values` returns all stored values in insertion order. `get-total` returns the
-      sum of all stored values.
+    prompt:
+      rust: >
+        In the test-app project, add a second agent type called `Collector` with a single
+        constructor parameter for its name. It must expose three externally invokable
+        methods: `add_value(value: u64)`, `get_values() -> list<u64>`, and
+        `get_total() -> u64`. `add_value` appends the value to the agent's durable state.
+        `get_values` returns all stored values in insertion order. `get_total` returns the
+        sum of all stored values.
 
-      Then modify the existing `CounterAgent` so it has three new externally invokable
-      methods:
+        Then modify the existing `CounterAgent` so it has three new externally invokable
+        methods:
 
-      1. `spawn-and-fill-phantom` — creates a **new phantom** instance of the `Collector`
-         agent using the counter's own name as the constructor parameter (use the phantom
-         agent / `new_phantom` / `newPhantom` API), calls `add-value(10)` and then
-         `add-value(20)` on it, and returns the phantom collector's total (should be 30).
+        1. `spawn_and_fill_phantom` — creates a **new phantom** instance of the `Collector`
+           agent using the counter's own name as the constructor parameter (use the phantom
+           agent / `new_phantom` API), calls `add_value(10)` and then
+           `add_value(20)` on it, and returns the phantom collector's total (should be 30).
 
-      2. `spawn-two-phantoms` — creates **two** new phantom `Collector` instances (both
-         using the counter's own name as the constructor parameter). Calls `add-value(1)`
-         on the first phantom and `add-value(2)` on the second phantom. Then returns the
-         total from each as a two-element list: `[total_of_first, total_of_second]`.
+        2. `spawn_two_phantoms` — creates **two** new phantom `Collector` instances (both
+           using the counter's own name as the constructor parameter). Calls `add_value(1)`
+           on the first phantom and `add_value(2)` on the second phantom. Then returns the
+           total from each as a two-element list: `[total_of_first, total_of_second]`.
 
-      3. `read-non-phantom-collector` — gets the **non-phantom** `Collector` agent with
-         the counter's own name (using the regular `get` constructor, not `new_phantom`
-         or `get_phantom`) and returns its total.
+        3. `read_non_phantom_collector` — gets the **non-phantom** `Collector` agent with
+           the counter's own name (using the regular `get` constructor, not `new_phantom`
+           or `get_phantom`) and returns its total.
 
-      Make sure the project builds successfully.
+        Make sure the project builds successfully.
+      ts: >
+        In the test-app project, add a second agent type called `Collector` with a single
+        constructor parameter for its name. It must expose three externally invokable
+        methods: `addValue(value: number)`, `getValues(): number[]`, and
+        `getTotal(): number`. `addValue` appends the value to the agent's durable state.
+        `getValues` returns all stored values in insertion order. `getTotal` returns the
+        sum of all stored values.
+
+        Then modify the existing `CounterAgent` so it has three new externally invokable
+        methods:
+
+        1. `spawnAndFillPhantom` — creates a **new phantom** instance of the `Collector`
+           agent using the counter's own name as the constructor parameter (use the phantom
+           agent / `newPhantom` API), calls `addValue(10)` and then
+           `addValue(20)` on it, and returns the phantom collector's total (should be 30).
+
+        2. `spawnTwoPhantoms` — creates **two** new phantom `Collector` instances (both
+           using the counter's own name as the constructor parameter). Calls `addValue(1)`
+           on the first phantom and `addValue(2)` on the second phantom. Then returns the
+           total from each as a two-element list: `[total_of_first, total_of_second]`.
+
+        3. `readNonPhantomCollector` — gets the **non-phantom** `Collector` agent with
+           the counter's own name (using the regular `get` constructor, not `newPhantom`
+           or `getPhantom`) and returns its total.
+
+        Make sure the project builds successfully.
+      scala: >
+        In the test-app project, add a second agent type called `Collector` with a single
+        constructor parameter for its name. It must expose three externally invokable
+        methods: `addValue(value: Long)`, `getValues(): List[Long]`, and
+        `getTotal(): Long`. `addValue` appends the value to the agent's durable state.
+        `getValues` returns all stored values in insertion order. `getTotal` returns the
+        sum of all stored values.
+
+        Then modify the existing `CounterAgent` so it has three new externally invokable
+        methods:
+
+        1. `spawnAndFillPhantom` — creates a **new phantom** instance of the `Collector`
+           agent using the counter's own name as the constructor parameter (use the phantom
+           agent / `newPhantom` API), calls `addValue(10)` and then
+           `addValue(20)` on it, and returns the phantom collector's total (should be 30).
+
+        2. `spawnTwoPhantoms` — creates **two** new phantom `Collector` instances (both
+           using the counter's own name as the constructor parameter). Calls `addValue(1)`
+           on the first phantom and `addValue(2)` on the second phantom. Then returns the
+           total from each as a two-element list: `[total_of_first, total_of_second]`.
+
+        3. `readNonPhantomCollector` — gets the **non-phantom** `Collector` agent with
+           the counter's own name (using the regular `get` constructor, not `newPhantom`
+           or `getPhantom`) and returns its total.
+
+        Make sure the project builds successfully.
+      moonbit: >
+        In the test-app project, add a second agent type called `Collector` with a single
+        constructor parameter for its name. It must expose three externally invokable
+        methods: `add_value(value: UInt64)`, `get_values() -> Array[UInt64]`, and
+        `get_total() -> UInt64`. `add_value` appends the value to the agent's durable state.
+        `get_values` returns all stored values in insertion order. `get_total` returns the
+        sum of all stored values.
+
+        Then modify the existing `CounterAgent` so it has three new externally invokable
+        methods:
+
+        1. `spawn_and_fill_phantom` — creates a **new phantom** instance of the `Collector`
+           agent using the counter's own name as the constructor parameter (use the phantom
+           agent / `new_phantom` API), calls `add_value(10)` and then
+           `add_value(20)` on it, and returns the phantom collector's total (should be 30).
+
+        2. `spawn_two_phantoms` — creates **two** new phantom `Collector` instances (both
+           using the counter's own name as the constructor parameter). Calls `add_value(1)`
+           on the first phantom and `add_value(2)` on the second phantom. Then returns the
+           total from each as a two-element list: `[total_of_first, total_of_second]`.
+
+        3. `read_non_phantom_collector` — gets the **non-phantom** `Collector` agent with
+           the counter's own name (using the regular `get` constructor, not `new_phantom`
+           or `get_phantom`) and returns its total.
+
+        Make sure the project builds successfully.
     expectedSkills:
       rust:
         - "golem-multi-instance-agent-rust"

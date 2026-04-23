@@ -45,12 +45,31 @@ steps:
   # 4. Make a breaking change: remove increment, add get_double. Keep snapshot support.
   #    Deploy as a new revision. This is incompatible with auto-update.
   - id: "breaking-change"
-    prompt: >
-      In the test-app project, make a breaking change to CounterAgent: remove the
-      `increment` method entirely, and add a new method called `get-double` that returns
-      the current counter value multiplied by 2. Keep the save/load snapshot
-      functions unchanged so the counter value is still preserved across updates. Build
-      and deploy, but do not update existing running agents.
+    prompt:
+      rust: >
+        In the test-app project, make a breaking change to CounterAgent: remove the
+        `increment` method entirely, and add a new method called `get_double` that returns
+        the current counter value multiplied by 2. Keep the save/load snapshot
+        functions unchanged so the counter value is still preserved across updates. Build
+        and deploy, but do not update existing running agents.
+      ts: >
+        In the test-app project, make a breaking change to CounterAgent: remove the
+        `increment` method entirely, and add a new method called `getDouble` that returns
+        the current counter value multiplied by 2. Keep the save/load snapshot
+        functions unchanged so the counter value is still preserved across updates. Build
+        and deploy, but do not update existing running agents.
+      scala: >
+        In the test-app project, make a breaking change to CounterAgent: remove the
+        `increment` method entirely, and add a new method called `getDouble` that returns
+        the current counter value multiplied by 2. Keep the save/load snapshot
+        functions unchanged so the counter value is still preserved across updates. Build
+        and deploy, but do not update existing running agents.
+      moonbit: >
+        In the test-app project, make a breaking change to CounterAgent: remove the
+        `increment` method entirely, and add a new method called `get_double` that returns
+        the current counter value multiplied by 2. Keep the save/load snapshot
+        functions unchanged so the counter value is still preserved across updates. Build
+        and deploy, but do not update existing running agents.
     verify:
       deploy: true
 

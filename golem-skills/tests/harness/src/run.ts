@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { ReportBuilder, TestBuilder, stringify } from "ctrf";
 import {
   ScenarioLoader,
@@ -15,7 +16,8 @@ import { AmpAgentDriver } from "./driver/amp.js";
 import { ClaudeAgentDriver } from "./driver/claude.js";
 import { OpenCodeAgentDriver } from "./driver/opencode.js";
 import { CodexAgentDriver } from "./driver/codex.js";
-import type { AgentDriver } from "./driver/base.js";
+import { GeminiAgentDriver } from "./driver/gemini.js";
+import type { AgentDriver, UsageStats } from "./driver/base.js";
 import { SkillWatcher } from "./watcher.js";
 import {
   generateHtmlReport,
@@ -29,7 +31,7 @@ import { detectGolemWorkspaceRoot, resolveGolemTargetDir, GolemServer } from "./
 
 const DEFAULT_SCENARIO_RETRIES = 5;
 
-const SUPPORTED_AGENTS = ["amp", "claude-code", "opencode", "codex"] as const;
+const SUPPORTED_AGENTS = ["amp", "claude-code", "opencode", "codex", "gemini"] as const;
 const SUPPORTED_LANGUAGES = ["ts", "rust", "scala", "moonbit"] as const;
 
 type SupportedAgent = (typeof SUPPORTED_AGENTS)[number];
@@ -37,12 +39,13 @@ type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 
 interface ScenarioReport {
   scenario: string;
-  matrix: { agent: string; language: string };
+  matrix: { agent: string; language: string; model?: string };
   run_id: string;
   status: "pass" | "fail";
   durationSeconds: number;
   results: ScenarioRunResult["stepResults"];
   artifactPaths: string[];
+  usage?: UsageStats;
 }
 
 function createDriver(agent: SupportedAgent): AgentDriver {
@@ -55,6 +58,8 @@ function createDriver(agent: SupportedAgent): AgentDriver {
       return new OpenCodeAgentDriver();
     case "codex":
       return new CodexAgentDriver();
+    case "gemini":
+      return new GeminiAgentDriver();
   }
 }
 
@@ -141,9 +146,11 @@ async function mergeReports(reportsDir: string, outputDir: string): Promise<void
       agent,
       language: lang,
       os: sOs,
+      model: s.model,
       total: s.total,
       passed: s.passed,
       failed: s.failed,
+      usage: s.usage,
     });
   }
 
@@ -164,7 +171,62 @@ async function mergeReports(reportsDir: string, outputDir: string): Promise<void
   await fs.writeFile(mergedPath, JSON.stringify(merged, null, 2));
   log.success(`Merged summary written to ${mergedPath}`);
 
+  const scenarioReportsPath = path.join(outputDir, "scenario-reports.json");
+  await fs.writeFile(scenarioReportsPath, JSON.stringify(scenarioReports, null, 2));
+  log.success(`Scenario reports written to ${scenarioReportsPath}`);
+
   const htmlContent = generateHtmlReport(merged, scenarioReports as HtmlScenarioReport[]);
+  const htmlPath = path.join(outputDir, "report.html");
+  await fs.writeFile(htmlPath, htmlContent);
+  log.success(`HTML report written to ${htmlPath}`);
+}
+
+const DEFAULT_REPORT_URL = "https://golemcloud.github.io/benchmark-results/skills";
+
+async function regenerateReport(baseUrl: string, outputDir: string): Promise<void> {
+  await fs.mkdir(outputDir, { recursive: true });
+
+  const summaryUrl = `${baseUrl.replace(/\/$/, "")}/merged-summary.json`;
+  const scenarioUrl = `${baseUrl.replace(/\/$/, "")}/scenario-reports.json`;
+
+  log.info(`Fetching merged summary from ${summaryUrl}`);
+  const summaryResp = await fetch(summaryUrl);
+  if (!summaryResp.ok) {
+    log.error(`Failed to fetch merged summary: ${summaryResp.status} ${summaryResp.statusText}`);
+    process.exit(1);
+  }
+  const merged = (await summaryResp.json()) as MergedSummary;
+
+  log.info(`Fetching scenario reports from ${scenarioUrl}`);
+  let scenarioReports: HtmlScenarioReport[];
+  const scenarioResp = await fetch(scenarioUrl);
+  if (scenarioResp.ok) {
+    scenarioReports = (await scenarioResp.json()) as HtmlScenarioReport[];
+  } else {
+    // Fallback: extract __REPORT_DATA__ from the published HTML
+    const htmlUrl = `${baseUrl.replace(/\/$/, "")}/`;
+    log.info(
+      `scenario-reports.json not available (${scenarioResp.status}), extracting from HTML at ${htmlUrl}`,
+    );
+    const htmlResp = await fetch(htmlUrl);
+    if (!htmlResp.ok) {
+      log.error(`Failed to fetch HTML report: ${htmlResp.status} ${htmlResp.statusText}`);
+      process.exit(1);
+    }
+    const html = await htmlResp.text();
+    const match = html.match(/window\.__REPORT_DATA__\s*=\s*(\[.*\]);/);
+    if (!match) {
+      log.error("Could not extract __REPORT_DATA__ from the published HTML report.");
+      process.exit(1);
+    }
+    scenarioReports = JSON.parse(match[1]) as HtmlScenarioReport[];
+  }
+
+  log.success(
+    `Downloaded ${scenarioReports.length} scenario reports (${merged.overallTotal} total, ${merged.overallPassed} passed, ${merged.overallFailed} failed)`,
+  );
+
+  const htmlContent = generateHtmlReport(merged, scenarioReports);
   const htmlPath = path.join(outputDir, "report.html");
   await fs.writeFile(htmlPath, htmlContent);
   log.success(`HTML report written to ${htmlPath}`);
@@ -185,6 +247,7 @@ async function main() {
       "resume-from": { type: "string" },
       workspace: { type: "string" },
       "merge-reports": { type: "string" },
+      "regenerate-report": { type: "string" },
       "idle-timeout": { type: "string" },
       retries: { type: "string" },
       ctrf: { type: "string" },
@@ -218,6 +281,15 @@ async function main() {
   if (mergeReportsDir) {
     const outputDir = path.resolve(process.cwd(), output!);
     await mergeReports(path.resolve(process.cwd(), mergeReportsDir), outputDir);
+    return;
+  }
+
+  // Regenerate-report mode — download data from a published URL and regenerate HTML locally
+  const regenerateUrl = values["regenerate-report"];
+  if (regenerateUrl) {
+    const baseUrl = regenerateUrl === "latest" ? DEFAULT_REPORT_URL : regenerateUrl;
+    const outputDir = path.resolve(process.cwd(), output!);
+    await regenerateReport(baseUrl, outputDir);
     return;
   }
 
@@ -266,6 +338,8 @@ Options:
   --resume-from <id>    Resume execution from the given step ID
   --workspace <path>    Override workspace directory
   --merge-reports <dir> Merge summary.json files from <dir> into aggregated report
+  --regenerate-report <url>  Download data from a published report URL and regenerate HTML locally
+                             (default URL: ${DEFAULT_REPORT_URL})
   --ctrf <path>         Write a CTRF JSON report to the given file path
   -h, --help            Show this help message
 `.trim();
@@ -340,15 +414,17 @@ Options:
     bootstrapSkillSourceDirs.push(skillDir);
   }
 
-  const scenarioFiles = (await fs.readdir(scenariosDir)).filter(
-    (f) => f.endsWith(".yaml") || f.endsWith(".yml"),
+  const scenarioFiles = (await fs.readdir(scenariosDir))
+    .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
+    .sort();
+
+  // Pre-load all scenario specs (reused for validation, counting, and dry-run)
+  const allSpecs = await Promise.all(
+    scenarioFiles.map((f) => ScenarioLoader.load(path.join(scenariosDir, f))),
   );
 
   // Validate that the --scenario filter matches an existing scenario
   if (scenarioFilter) {
-    const allSpecs = await Promise.all(
-      scenarioFiles.map((f) => ScenarioLoader.load(path.join(scenariosDir, f))),
-    );
     const scenarioNames = allSpecs.map((s) => s.name);
     if (!scenarioNames.includes(scenarioFilter)) {
       log.error(
@@ -429,6 +505,7 @@ Options:
   // Set up graceful Ctrl+C handling
   const abortController = new AbortController();
   let interrupted = false;
+  let abortedForCreditInsufficient = false;
 
   const stopServerAndExit = (code: number) => {
     golemServer.stop().finally(() => {
@@ -465,6 +542,49 @@ Options:
   let hasFailures = false;
   let isFirstScenario = true;
 
+  // Compute total runnable scenario count for progress tracking
+  let totalScenarios = 0;
+  for (const _currentAgent of agents) {
+    for (const currentLanguage of languages) {
+      for (const spec of allSpecs) {
+        if (scenarioFilter && spec.name !== scenarioFilter) continue;
+        if (spec.languageAgnostic && currentLanguage !== languages[0]) continue;
+        totalScenarios++;
+      }
+    }
+  }
+  let completedScenarios = 0;
+
+  /** Rebuild and write the CTRF report from all scenario results collected so far. */
+  async function flushCtrf(): Promise<void> {
+    if (!ctrfOutputPath || scenarioReports.length === 0) return;
+
+    const ctrfBuilder = new ReportBuilder({ autoGenerateId: true, autoTimestamp: true })
+      .tool({ name: "golem-skill-harness", version: "0.1.0" })
+      .environment({
+        buildName: `${agents.join(",")}/${languages.join(",")}`,
+        ...(process.env.GITHUB_SHA ? { testEnvironment: "ci" } : {}),
+      });
+
+    for (const r of scenarioReports) {
+      const failedStep = r.results.find((s) => !s.success);
+      ctrfBuilder.addTest(
+        new TestBuilder()
+          .name(r.scenario)
+          .status(r.status === "pass" ? "passed" : "failed")
+          .duration(Math.round(r.durationSeconds * 1000))
+          .suite([r.matrix.agent, r.matrix.language])
+          .message(failedStep?.error ?? "")
+          .build(),
+      );
+    }
+
+    const ctrfReport = ctrfBuilder.build();
+    const resolvedCtrfPath = path.resolve(process.cwd(), ctrfOutputPath);
+    await fs.mkdir(path.dirname(resolvedCtrfPath), { recursive: true });
+    await fs.writeFile(resolvedCtrfPath, stringify(ctrfReport));
+  }
+
   try {
     for (const currentAgent of agents) {
       for (const currentLanguage of languages) {
@@ -486,6 +606,9 @@ Options:
 
           // Language-agnostic scenarios run only once per agent (on the first language)
           if (spec.languageAgnostic && currentLanguage !== languages[0]) continue;
+
+          // Log progress separator
+          log.scenarioSeparator(completedScenarios, totalScenarios, spec.name);
 
           // Restart Golem server between scenarios to get a clean state
           if (!isFirstScenario) {
@@ -542,6 +665,61 @@ Options:
             if (scenarioResult.status === "pass") break;
             if (interrupted) break;
 
+            // Credit exhaustion: retry with exponential backoff before giving up
+            if (scenarioResult.creditInsufficient) {
+              const creditBackoffs = [5, 30, 120]; // seconds
+              let creditResolved = false;
+              for (let ci = 0; ci < creditBackoffs.length; ci++) {
+                const delaySec = creditBackoffs[ci];
+                log.warn(
+                  `Credit insufficient — waiting ${delaySec}s before retry ${ci + 1}/${creditBackoffs.length}...`,
+                );
+                try {
+                  await delay(delaySec * 1000, undefined, { signal: abortController.signal });
+                } catch {
+                  break; // aborted during backoff
+                }
+                if (abortController.signal.aborted) break;
+
+                log.dim("Restarting Golem server for credit retry...");
+                await golemServer.restart();
+                log.success("Golem server restarted.");
+
+                const retrySuffix =
+                  attempt > 1
+                    ? `/attempt-${attempt}/credit-retry-${ci + 1}`
+                    : `/credit-retry-${ci + 1}`;
+                const retryWorkspace = path.join(
+                  workspacesRoot,
+                  scenarioDir,
+                  currentLanguage + retrySuffix,
+                );
+                const retryWatcher = new SkillWatcher(retryWorkspace);
+                const retryExecutor = new ScenarioExecutor(
+                  driver,
+                  retryWatcher,
+                  retryWorkspace,
+                  bootstrapSkillSourceDirs,
+                  {
+                    globalTimeoutSeconds,
+                    idleTimeoutSeconds,
+                    agent: currentAgent,
+                    language: currentLanguage,
+                    abortSignal: abortController.signal,
+                    resumeFromStepId: resumeFrom,
+                  },
+                );
+                scenarioResult = await retryExecutor.execute(spec);
+                if (!scenarioResult.creditInsufficient) {
+                  creditResolved = true;
+                  break;
+                }
+              }
+              if (!creditResolved) break;
+              // Credit resolved — fall through to normal result handling
+              if (scenarioResult.status === "pass") break;
+            }
+
             if (!canRetry || attempt >= totalAttempts) break;
 
             const failedDueToIdleTimeout = scenarioResult.stepResults.some(
@@ -583,12 +761,13 @@ Options:
           const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
           const report: ScenarioReport = {
             scenario: spec.name,
-            matrix: { agent: currentAgent, language: currentLanguage },
+            matrix: { agent: currentAgent, language: currentLanguage, model: modelArg },
             run_id: runId,
             status: scenarioResult!.status,
             durationSeconds: scenarioResult!.durationSeconds,
             results,
             artifactPaths: scenarioResult!.artifactPaths,
+            usage: scenarioResult!.usage,
           };
 
           const reportPath = path.join(
@@ -598,9 +777,67 @@ Options:
           await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
           scenarioReports.push(report);
 
+          completedScenarios++;
           log.scenarioResultLine(allPassed, spec.name, results.length, spec.steps.length);
+          await flushCtrf();
+
+          if (scenarioResult!.creditInsufficient) {
+            log.error("Credit balance too low — marking all remaining scenarios as failed.");
+            abortedForCreditInsufficient = true;
+            abortController.abort();
+            break;
+          }
+        }
+        if (abortController.signal.aborted) break;
+      }
+      if (abortController.signal.aborted) break;
+    }
+
+    // When aborted due to credit exhaustion, mark all remaining scenarios as failed
+    if (abortedForCreditInsufficient) {
+      const reportedKeys = new Set(
+        scenarioReports.map((r) => `${r.matrix.agent}|${r.matrix.language}|${r.scenario}`),
+      );
+
+      for (const agent of agents) {
+        for (const lang of languages) {
+          for (const file of scenarioFiles) {
+            const spec = await ScenarioLoader.load(path.join(scenariosDir, file));
+            if (scenarioFilter && spec.name !== scenarioFilter) continue;
+            if (spec.languageAgnostic && lang !== languages[0]) continue;
+
+            const key = `${agent}|${lang}|${spec.name}`;
+            if (reportedKeys.has(key)) continue;
+
+            hasFailures = true;
+            const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const report: ScenarioReport = {
+              scenario: spec.name,
+              matrix: { agent, language: lang, model: modelArg },
+              run_id: runId,
+              status: "fail",
+              durationSeconds: 0,
+              results: [
+                {
+                  step: { tag: "prompt" as const, prompt: "skipped" },
+                  success: false,
+                  durationSeconds: 0,
+                  expectedSkills: [],
+                  activatedSkills: [],
+                  error:
+                    "Skipped: API credit balance exhausted. A previous scenario triggered credit exhaustion and retries did not resolve it.",
+                },
+              ],
+              artifactPaths: [],
+            };
+            const reportPath = path.join(resultsDir, `${agent}-${lang}-${spec.name}.json`);
+            await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
+            scenarioReports.push(report);
+            log.scenarioFail(`${spec.name} [${agent} x ${lang}] (credit insufficient — skipped)`);
+          }
         }
       }
+      await flushCtrf();
     }
 
     // Aggregated summary report
@@ -609,6 +846,20 @@ Options:
       const passed = scenarioReports.filter((r) => r.status === "pass").length;
       const failed = scenarioReports.filter((r) => r.status === "fail").length;
       const totalDuration = scenarioReports.reduce((sum, r) => sum + r.durationSeconds, 0);
+
+      // Aggregate usage across all scenarios
+      const totalUsage: UsageStats = {};
+      for (const r of scenarioReports) {
+        if (r.usage) {
+          if (r.usage.inputTokens)
+            totalUsage.inputTokens = (totalUsage.inputTokens ?? 0) + r.usage.inputTokens;
+          if (r.usage.outputTokens)
+            totalUsage.outputTokens = (totalUsage.outputTokens ?? 0) + r.usage.outputTokens;
+          if (r.usage.costUsd) totalUsage.costUsd = (totalUsage.costUsd ?? 0) + r.usage.costUsd;
+          if (r.usage.numTurns) totalUsage.numTurns = (totalUsage.numTurns ?? 0) + r.usage.numTurns;
+        }
+      }
+      const hasUsage = Object.keys(totalUsage).length > 0;
 
       const worstFailures = scenarioReports
         .filter((r) => r.status === "fail")
@@ -625,6 +876,7 @@ Options:
 
       const summary: Summary = {
         agent: agents.join(","),
+        model: modelArg,
         language: languages.join(","),
         os: os.platform(),
         timestamp: new Date().toISOString(),
@@ -643,7 +895,9 @@ Options:
           name: r.scenario,
           status: r.status,
           durationSeconds: r.durationSeconds,
+          usage: r.usage,
         })),
+        ...(hasUsage && { usage: totalUsage }),
       };
 
       const summaryPath = path.join(resultsDir, "summary.json");
@@ -682,6 +936,14 @@ Options:
       log.summaryLine("Passed:   ", passed, "green");
       log.summaryLine("Failed:   ", failed, failed > 0 ? "red" : undefined);
       log.plain(`Duration: ${totalDuration.toFixed(1)}s`);
+      if (hasUsage) {
+        const parts: string[] = [];
+        if (totalUsage.inputTokens) parts.push(`${totalUsage.inputTokens.toLocaleString()} in`);
+        if (totalUsage.outputTokens) parts.push(`${totalUsage.outputTokens.toLocaleString()} out`);
+        if (parts.length > 0) log.plain(`Tokens:   ${parts.join(" / ")}`);
+        if (totalUsage.costUsd) log.plain(`Cost:     $${totalUsage.costUsd.toFixed(4)}`);
+        if (totalUsage.numTurns) log.plain(`Turns:    ${totalUsage.numTurns}`);
+      }
 
       if (worstFailures.length > 0) {
         log.blank();
@@ -702,34 +964,8 @@ Options:
 
       log.dim(`Reports: ${summaryPath}, ${path.join(resultsDir, "report.html")}`);
 
-      // Generate CTRF report if requested
-      if (ctrfOutputPath) {
-        const ctrfBuilder = new ReportBuilder({ autoGenerateId: true, autoTimestamp: true })
-          .tool({ name: "golem-skill-harness", version: "0.1.0" })
-          .environment({
-            buildName: `${agents.join(",")}/${languages.join(",")}`,
-            ...(process.env.GITHUB_SHA ? { testEnvironment: "ci" } : {}),
-          });
-
-        for (const r of scenarioReports) {
-          const failedStep = r.results.find((s) => !s.success);
-          ctrfBuilder.addTest(
-            new TestBuilder()
-              .name(r.scenario)
-              .status(r.status === "pass" ? "passed" : "failed")
-              .duration(Math.round(r.durationSeconds * 1000))
-              .suite([r.matrix.agent, r.matrix.language])
-              .message(failedStep?.error ?? "")
-              .build(),
-          );
-        }
-
-        const ctrfReport = ctrfBuilder.build();
-        const resolvedCtrfPath = path.resolve(process.cwd(), ctrfOutputPath);
-        await fs.mkdir(path.dirname(resolvedCtrfPath), { recursive: true });
-        await fs.writeFile(resolvedCtrfPath, stringify(ctrfReport));
-        log.dim(`CTRF report: ${resolvedCtrfPath}`);
-      }
+      // Final CTRF flush (already written incrementally after each scenario)
+      await flushCtrf();
     }
 
     if (hasFailures) {

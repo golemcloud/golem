@@ -1911,17 +1911,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     &component,
                 )?;
 
-                let default_agent_env = agent_id
-                    .as_ref()
-                    .and_then(|agent_id| {
-                        component
-                            .metadata
-                            .agent_type_env(&agent_id.agent_type)
-                            .cloned()
-                    })
-                    .unwrap_or_default();
-                let worker_env = merge_agent_env_with_default_env(worker_env, default_agent_env);
-
+                // Store only the per-worker env overrides. Agent-type defaults are applied
+                // at runtime in get_environment
+                let worker_env: Vec<(String, String)> = worker_env.unwrap_or_default();
                 let created_at = Timestamp::now_utc();
 
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
@@ -1954,9 +1946,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // environment for correct metric attribution and quota enforcement.
                 let initial_worker_metadata = AgentMetadata {
                     agent_id: owned_agent_id.agent_id(),
-                    // TODO: these environment variables already contain the component level values,
-                    // but we should only have the worker-level overrides here as we can't compute
-                    // the new effective set as the component revision changes otherwise.
                     env: worker_env,
                     config: initial_agent_config,
                     environment_id: component.environment_id,

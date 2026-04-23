@@ -166,6 +166,45 @@ object RdbmsCompileSpec extends ZIOSpecDefault {
     PostgresDbValue.Null
   )
 
+  private val allIgniteValues: List[IgniteDbValue] = List(
+    IgniteDbValue.DbNull,
+    IgniteDbValue.DbBoolean(true),
+    IgniteDbValue.DbByte(42.toByte),
+    IgniteDbValue.DbShort(1000.toShort),
+    IgniteDbValue.DbInt(100000),
+    IgniteDbValue.DbLong(1000000000L),
+    IgniteDbValue.DbFloat(3.14f),
+    IgniteDbValue.DbDouble(2.718),
+    IgniteDbValue.DbChar('A'),
+    IgniteDbValue.DbString("hello"),
+    IgniteDbValue.DbUuid((BigInt("123456789012345678"), BigInt("987654321098765432"))),
+    IgniteDbValue.DbDate(1719446400000L),
+    IgniteDbValue.DbTimestamp((1719446400000L, 123456)),
+    IgniteDbValue.DbTime(52245000000000L),
+    IgniteDbValue.DbDecimal("99999.99"),
+    IgniteDbValue.DbByteArray(Array[Byte](1, 2, 3))
+  )
+
+  @SuppressWarnings(Array("all"))
+  private def describeIgnite(v: IgniteDbValue): String = v match {
+    case IgniteDbValue.DbNull        => "null"
+    case IgniteDbValue.DbBoolean(b)  => s"boolean($b)"
+    case IgniteDbValue.DbByte(n)     => s"byte($n)"
+    case IgniteDbValue.DbShort(n)    => s"short($n)"
+    case IgniteDbValue.DbInt(n)      => s"int($n)"
+    case IgniteDbValue.DbLong(n)     => s"long($n)"
+    case IgniteDbValue.DbFloat(n)    => s"float($n)"
+    case IgniteDbValue.DbDouble(n)   => s"double($n)"
+    case IgniteDbValue.DbChar(c)     => s"char($c)"
+    case IgniteDbValue.DbString(s)   => s"string($s)"
+    case IgniteDbValue.DbUuid(t)     => s"uuid($t)"
+    case IgniteDbValue.DbDate(ms)    => s"date($ms)"
+    case IgniteDbValue.DbTimestamp(t) => s"timestamp($t)"
+    case IgniteDbValue.DbTime(ns)    => s"time($ns)"
+    case IgniteDbValue.DbDecimal(s)  => s"decimal($s)"
+    case IgniteDbValue.DbByteArray(b) => s"byte-array(${b.length})"
+  }
+
   @SuppressWarnings(Array("all"))
   private def describePg(v: PostgresDbValue): String = v match {
     case PostgresDbValue.Character(n)    => s"char($n)"
@@ -350,6 +389,28 @@ object RdbmsCompileSpec extends ZIOSpecDefault {
     test("connection return types compile") {
       val _: Either[DbError, PostgresConnection] = Left(DbError.Other("test"))
       val _: Either[DbError, MysqlConnection]    = Left(DbError.Other("test"))
+      assertCompletes
+    },
+
+    test("all 16 IgniteDbValue variants constructed") {
+      assertTrue(allIgniteValues.size == 16)
+    },
+
+    test("exhaustive IgniteDbValue match compiles") {
+      allIgniteValues.foreach(v => Predef.assert(describeIgnite(v).nonEmpty))
+      assertCompletes
+    },
+
+    test("Ignite row types construction and accessors") {
+      val row = IgniteDbRow(List(IgniteDbValue.DbString("hello"), IgniteDbValue.DbInt(42), IgniteDbValue.DbNull))
+      Predef.assert(row.getString(0).nonEmpty)
+      Predef.assert(row.getInt(1).contains(42))
+      Predef.assert(row.getString(2).isEmpty)
+      assertCompletes
+    },
+
+    test("Ignite connection return type compiles") {
+      val _: Either[DbError, IgniteConnection] = Left(DbError.Other("test"))
       assertCompletes
     }
   )

@@ -1079,14 +1079,12 @@ async fn component_env_variables_update(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
+    // Worker metadata env contains only per-worker overrides — agent-type defaults
+    // (FOO=bar is set on the component, not passed as a per-worker override) are
+    // not stored in the worker record; they are applied at runtime in get_environment.
     let AgentMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;
-
     env.retain(|k, _| k == "FOO");
-
-    assert_eq!(
-        env,
-        HashMap::from_iter(vec![("FOO".to_string(), "bar".to_string())])
-    );
+    assert_eq!(env, HashMap::new());
 
     let updated_component = executor
         .update_component_with_env(
@@ -1117,7 +1115,7 @@ async fn component_env_variables_update(
 
     let env = get_env_result_from_value(env);
 
-    assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
+    assert_eq!(env.get("FOO"), None); // Only applied at runtime, not an ovveride
     assert_eq!(env.get("BAR"), Some(&"baz".to_string()));
     let worker_name = agent_id.to_string();
     assert_eq!(env.get("GOLEM_AGENT_ID"), Some(&worker_name));

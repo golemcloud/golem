@@ -6,7 +6,9 @@ import {
   AgentResult,
   killProcessTree,
   ActivityMonitor,
+  CREDIT_INSUFFICIENT_PATTERN,
   type DriverTimeoutOptions,
+  type UsageStats,
 } from "./base.js";
 import * as log from "../log.js";
 
@@ -88,6 +90,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
     const startTime = Date.now();
     const prefix = this.logPrefix;
     const outputParts: string[] = [];
+    const usage: UsageStats = {};
 
     return new Promise((resolve) => {
       const child = spawn("claude", args, {
@@ -103,15 +106,16 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
 
       let stdoutBuf = "";
       let stderrBuf = "";
+      let creditInsufficient = false;
 
-      const processLine = (line: string): void => {
-        if (!line.trim()) return;
+      const processLine = (line: string): boolean => {
+        if (!line.trim()) return false;
         let msg: Record<string, unknown>;
         try {
           msg = JSON.parse(line);
         } catch {
           log.driver(prefix, line);
-          return;
+          return false;
         }
 
         if (msg.type === "system" && msg.subtype === "init") {
@@ -131,7 +135,18 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
             }
           }
         } else if (msg.type === "assistant") {
-          const message = msg.message as { content?: unknown[] } | undefined;
+          const message = msg.message as
+            | { content?: unknown[]; usage?: Record<string, unknown> }
+            | undefined;
+          if (message?.usage && typeof message.usage === "object") {
+            const u = message.usage;
+            if (typeof u.input_tokens === "number") {
+              usage.inputTokens = (usage.inputTokens ?? 0) + u.input_tokens;
+            }
+            if (typeof u.output_tokens === "number") {
+              usage.outputTokens = (usage.outputTokens ?? 0) + u.output_tokens;
+            }
+          }
           if (message && Array.isArray(message.content)) {
             for (const block of message.content as Record<string, unknown>[]) {
               if (block.type === "text" && typeof block.text === "string") {
@@ -139,6 +154,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
                 for (const textLine of block.text.split("\n")) {
                   log.driver(prefix, textLine);
                 }
+                if (CREDIT_INSUFFICIENT_PATTERN.test(block.text)) return true;
               } else if (block.type === "tool_use") {
                 log.driverToolUse(
                   prefix,
@@ -163,6 +179,13 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
             this.sessionId = msg.session_id;
           }
 
+          if (typeof msg.num_turns === "number") {
+            usage.numTurns = msg.num_turns;
+          }
+          if (typeof msg.total_cost_usd === "number") {
+            usage.costUsd = msg.total_cost_usd;
+          }
+
           if (msg.subtype === "success" && msg.is_error === false) {
             const extra = typeof msg.num_turns === "number" ? `turns=${msg.num_turns}` : undefined;
             if (typeof msg.total_cost_usd === "number") {
@@ -174,6 +197,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
           } else {
             const errors = Array.isArray(msg.errors) ? (msg.errors as string[]).join("; ") : "";
             log.driverError(prefix, errors, durationStr);
+            if (CREDIT_INSUFFICIENT_PATTERN.test(errors)) return true;
           }
         } else if (msg.type === "tool_progress") {
           // Silently ignore progress updates
@@ -181,7 +205,10 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
           const attempt = msg.attempt ?? "?";
           const error = typeof msg.error === "string" ? msg.error : "";
           log.driverErr(prefix, `API retry attempt=${attempt} ${error}`);
+          if (CREDIT_INSUFFICIENT_PATTERN.test(error)) return true;
         }
+
+        return false;
       };
 
       child.stdout?.on("data", (data: Buffer) => {
@@ -190,7 +217,12 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
         const lines = stdoutBuf.split("\n");
         stdoutBuf = lines.pop()!;
         for (const line of lines) {
-          processLine(line);
+          if (processLine(line)) {
+            creditInsufficient = true;
+            log.driverFatal(prefix, "✗ credit balance too low — aborting run");
+            killProcessTree(child);
+            return;
+          }
         }
       });
 
@@ -206,9 +238,24 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
 
       child.on("close", (exitCode) => {
         monitor.finish();
-        if (stdoutBuf) processLine(stdoutBuf);
+        if (stdoutBuf) {
+          if (processLine(stdoutBuf)) creditInsufficient = true;
+        }
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
         const durationSeconds = (Date.now() - startTime) / 1000;
+
+        if (creditInsufficient) {
+          resolve({
+            success: false,
+            output: `Credit balance too low. ${outputParts.join("")}`,
+            durationSeconds,
+            exitCode,
+            creditInsufficient: true,
+            usage,
+          });
+          return;
+        }
+
         resolve({
           success: !monitor.isTimedOut && exitCode === 0,
           output: monitor.isTimedOut
@@ -218,6 +265,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
           exitCode: monitor.isTimedOut ? null : exitCode,
           timedOut: monitor.isTimedOut || undefined,
           timeoutKind: monitor.timeoutKind,
+          usage,
         });
       });
 
@@ -231,6 +279,7 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
           output: outputParts.join("") + errMsg,
           durationSeconds,
           exitCode: null,
+          usage,
         });
       });
     });
