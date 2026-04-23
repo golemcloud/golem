@@ -1,0 +1,205 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/wasi/http/types"
+
+import {
+  "golemcloud/golem_sdk/interface/wasi/io/error",
+  "golemcloud/golem_sdk/interface/wasi/io/poll",
+  "golemcloud/golem_sdk/interface/wasi/io/streams",
+}
+
+// Values
+pub fn http_error_code(@error.Error_) -> ErrorCode?
+
+// Errors
+pub(all) suberror ErrorCode {
+  DnsTimeout
+  DnsError(DnsErrorPayload)
+  DestinationNotFound
+  DestinationUnavailable
+  DestinationIpProhibited
+  DestinationIpUnroutable
+  ConnectionRefused
+  ConnectionTerminated
+  ConnectionTimeout
+  ConnectionReadTimeout
+  ConnectionWriteTimeout
+  ConnectionLimitReached
+  TlsProtocolError
+  TlsCertificateError
+  TlsAlertReceived(TlsAlertReceivedPayload)
+  HttpRequestDenied
+  HttpRequestLengthRequired
+  HttpRequestBodySize(UInt64?)
+  HttpRequestMethodInvalid
+  HttpRequestUriInvalid
+  HttpRequestUriTooLong
+  HttpRequestHeaderSectionSize(UInt?)
+  HttpRequestHeaderSize(FieldSizePayload?)
+  HttpRequestTrailerSectionSize(UInt?)
+  HttpRequestTrailerSize(FieldSizePayload)
+  HttpResponseIncomplete
+  HttpResponseHeaderSectionSize(UInt?)
+  HttpResponseHeaderSize(FieldSizePayload)
+  HttpResponseBodySize(UInt64?)
+  HttpResponseTrailerSectionSize(UInt?)
+  HttpResponseTrailerSize(FieldSizePayload)
+  HttpResponseTransferCoding(String?)
+  HttpResponseContentCoding(String?)
+  HttpResponseTimeout
+  HttpUpgradeFailed
+  HttpProtocolError
+  LoopDetected
+  ConfigurationError
+  InternalError(String?)
+} derive(Eq, Show)
+
+pub(all) suberror HeaderError {
+  InvalidSyntax
+  Forbidden
+  Immutable
+} derive(Eq, Show)
+
+// Types and methods
+pub(all) struct DnsErrorPayload {
+  rcode : String?
+  info_code : UInt?
+} derive(Eq, Show)
+
+pub(all) struct FieldSizePayload {
+  field_name : String?
+  field_size : UInt?
+} derive(Eq, Show)
+
+pub(all) struct Fields(Int) derive(Eq, Show)
+pub fn Fields::append(Self, String, FixedArray[Byte]) -> Result[Unit, HeaderError]
+pub fn Fields::clone(Self) -> Self
+pub fn Fields::delete(Self, String) -> Result[Unit, HeaderError]
+pub fn Fields::drop(Self) -> Unit
+pub fn Fields::entries(Self) -> Array[(String, FixedArray[Byte])]
+pub fn Fields::fields() -> Self
+pub fn Fields::from_list(Array[(String, FixedArray[Byte])]) -> Result[Self, HeaderError]
+pub fn Fields::get(Self, String) -> Array[FixedArray[Byte]]
+pub fn Fields::has(Self, String) -> Bool
+#deprecated
+pub fn Fields::inner(Self) -> Int
+pub fn Fields::set(Self, String, Array[FixedArray[Byte]]) -> Result[Unit, HeaderError]
+
+pub(all) struct FutureIncomingResponse(Int) derive(Eq, Show)
+pub fn FutureIncomingResponse::drop(Self) -> Unit
+pub fn FutureIncomingResponse::get(Self) -> Result[Result[IncomingResponse, ErrorCode], Unit]?
+#deprecated
+pub fn FutureIncomingResponse::inner(Self) -> Int
+pub fn FutureIncomingResponse::subscribe(Self) -> @poll.Pollable
+
+pub(all) struct FutureTrailers(Int) derive(Eq, Show)
+pub fn FutureTrailers::drop(Self) -> Unit
+pub fn FutureTrailers::get(Self) -> Result[Result[Fields?, ErrorCode], Unit]?
+#deprecated
+pub fn FutureTrailers::inner(Self) -> Int
+pub fn FutureTrailers::subscribe(Self) -> @poll.Pollable
+
+pub(all) struct IncomingBody(Int) derive(Eq, Show)
+pub fn IncomingBody::drop(Self) -> Unit
+pub fn IncomingBody::finish(Self) -> FutureTrailers
+#deprecated
+pub fn IncomingBody::inner(Self) -> Int
+pub fn IncomingBody::stream(Self) -> Result[@streams.InputStream, Unit]
+
+pub(all) struct IncomingRequest(Int) derive(Eq, Show)
+pub fn IncomingRequest::authority(Self) -> String?
+pub fn IncomingRequest::consume(Self) -> Result[IncomingBody, Unit]
+pub fn IncomingRequest::drop(Self) -> Unit
+pub fn IncomingRequest::headers(Self) -> Fields
+#deprecated
+pub fn IncomingRequest::inner(Self) -> Int
+pub fn IncomingRequest::method_(Self) -> Method
+pub fn IncomingRequest::path_with_query(Self) -> String?
+pub fn IncomingRequest::scheme(Self) -> Scheme?
+
+pub(all) struct IncomingResponse(Int) derive(Eq, Show)
+pub fn IncomingResponse::consume(Self) -> Result[IncomingBody, Unit]
+pub fn IncomingResponse::drop(Self) -> Unit
+pub fn IncomingResponse::headers(Self) -> Fields
+#deprecated
+pub fn IncomingResponse::inner(Self) -> Int
+pub fn IncomingResponse::status(Self) -> UInt
+
+pub(all) enum Method {
+  Get
+  Head
+  Post
+  Put
+  Delete
+  Connect
+  Options
+  Trace
+  Patch
+  Other(String)
+} derive(Eq, Show)
+
+pub(all) struct OutgoingBody(Int) derive(Eq, Show)
+pub fn OutgoingBody::drop(Self) -> Unit
+pub fn OutgoingBody::finish(Self, Fields?) -> Result[Unit, ErrorCode]
+#deprecated
+pub fn OutgoingBody::inner(Self) -> Int
+pub fn OutgoingBody::write(Self) -> Result[@streams.OutputStream, Unit]
+
+pub(all) struct OutgoingRequest(Int) derive(Eq, Show)
+pub fn OutgoingRequest::authority(Self) -> String?
+pub fn OutgoingRequest::body(Self) -> Result[OutgoingBody, Unit]
+pub fn OutgoingRequest::drop(Self) -> Unit
+pub fn OutgoingRequest::headers(Self) -> Fields
+#deprecated
+pub fn OutgoingRequest::inner(Self) -> Int
+pub fn OutgoingRequest::method_(Self) -> Method
+pub fn OutgoingRequest::outgoing_request(Fields) -> Self
+pub fn OutgoingRequest::path_with_query(Self) -> String?
+pub fn OutgoingRequest::scheme(Self) -> Scheme?
+pub fn OutgoingRequest::set_authority(Self, String?) -> Result[Unit, Unit]
+pub fn OutgoingRequest::set_method(Self, Method) -> Result[Unit, Unit]
+pub fn OutgoingRequest::set_path_with_query(Self, String?) -> Result[Unit, Unit]
+pub fn OutgoingRequest::set_scheme(Self, Scheme?) -> Result[Unit, Unit]
+
+pub(all) struct OutgoingResponse(Int) derive(Eq, Show)
+pub fn OutgoingResponse::body(Self) -> Result[OutgoingBody, Unit]
+pub fn OutgoingResponse::drop(Self) -> Unit
+pub fn OutgoingResponse::headers(Self) -> Fields
+#deprecated
+pub fn OutgoingResponse::inner(Self) -> Int
+pub fn OutgoingResponse::outgoing_response(Fields) -> Self
+pub fn OutgoingResponse::set_status_code(Self, UInt) -> Result[Unit, Unit]
+pub fn OutgoingResponse::status_code(Self) -> UInt
+
+pub(all) struct RequestOptions(Int) derive(Eq, Show)
+pub fn RequestOptions::between_bytes_timeout(Self) -> UInt64?
+pub fn RequestOptions::connect_timeout(Self) -> UInt64?
+pub fn RequestOptions::drop(Self) -> Unit
+pub fn RequestOptions::first_byte_timeout(Self) -> UInt64?
+#deprecated
+pub fn RequestOptions::inner(Self) -> Int
+pub fn RequestOptions::request_options() -> Self
+pub fn RequestOptions::set_between_bytes_timeout(Self, UInt64?) -> Result[Unit, Unit]
+pub fn RequestOptions::set_connect_timeout(Self, UInt64?) -> Result[Unit, Unit]
+pub fn RequestOptions::set_first_byte_timeout(Self, UInt64?) -> Result[Unit, Unit]
+
+pub(all) struct ResponseOutparam(Int) derive(Eq, Show)
+pub fn ResponseOutparam::drop(Self) -> Unit
+#deprecated
+pub fn ResponseOutparam::inner(Self) -> Int
+pub fn ResponseOutparam::set(Self, Result[OutgoingResponse, ErrorCode]) -> Unit
+
+pub(all) enum Scheme {
+  Http
+  Https
+  Other(String)
+} derive(Eq, Show)
+
+pub(all) struct TlsAlertReceivedPayload {
+  alert_id : Byte?
+  alert_message : String?
+} derive(Eq, Show)
+
+// Type aliases
+
+// Traits
+

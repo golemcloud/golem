@@ -234,7 +234,10 @@ impl ApiDeploymentCommandHandler {
                     &environment.environment_id.0,
                     &HttpApiDeploymentCreation {
                         domain: domain.clone(),
-                        webhooks_url: deployable_http_api_deployment.webhooks_url.clone(),
+                        webhooks_prefix: deployable_http_api_deployment.webhooks_prefix.clone(),
+                        openapi_endpoint_prefix: deployable_http_api_deployment
+                            .openapi_prefix
+                            .clone(),
                         agents: deployable_http_api_deployment.agents.clone(),
                     },
                 )
@@ -325,6 +328,11 @@ impl ApiDeploymentCommandHandler {
             diff::DiffForHashOf::ValueDiff { diff } => diff.webhooks_url_changed,
         };
 
+        let openapi_endpoint_changed = match diff {
+            diff::DiffForHashOf::HashDiff { .. } => true,
+            diff::DiffForHashOf::ValueDiff { diff } => diff.openapi_endpoint_changed,
+        };
+
         let agents_changed = match diff {
             diff::DiffForHashOf::HashDiff { .. } => true,
             diff::DiffForHashOf::ValueDiff { diff } => !diff.agents_changes.is_empty(),
@@ -339,8 +347,13 @@ impl ApiDeploymentCommandHandler {
                 &http_api_deployment.id.0,
                 &HttpApiDeploymentUpdate {
                     current_revision: http_api_deployment.revision,
-                    webhook_url: if webhook_url_changed {
-                        Some(deployable_http_api_deployment.webhooks_url.clone())
+                    webhook_prefix: if webhook_url_changed {
+                        Some(deployable_http_api_deployment.webhooks_prefix.clone())
+                    } else {
+                        None
+                    },
+                    openapi_endpoint_prefix: if openapi_endpoint_changed {
+                        Some(deployable_http_api_deployment.openapi_prefix.clone())
                     } else {
                         None
                     },

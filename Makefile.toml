@@ -508,19 +508,22 @@ dependencies = [
     "integration-tests-group7",
     "integration-tests-group8",
     "integration-tests-group9",
+    "integration-tests-group12",
+    "integration-tests-group13",
     "cli-integration-tests",
 ]
 
 [tasks.integration-tests-group1]
-description = "Runs integration tests (group 1/9 - worker, fork)"
+description = "Runs integration tests (group 1/11 - worker, fork)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
+cargo-test-r run --package integration-tests --test integration :tag: -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 cargo-test-r run --package integration-tests --test integration :tag:group1 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group2]
-description = "Runs integration tests (group 2/9 - agent_config, api, custom_api)"
+description = "Runs integration tests (group 2/13 - api)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -528,15 +531,16 @@ cargo-test-r run --package integration-tests --test integration :tag:group2 -- -
 '''
 
 [tasks.integration-tests-group3]
-description = "Runs integration tests (group 3/9 - worker, fork with sqlite)"
+description = "Runs integration tests (group 3/11 - worker, fork with sqlite)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
 script = '''
+cargo-test-r run --package integration-tests --test integration :tag: -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 cargo-test-r run --package integration-tests --test integration :tag:group1 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group4]
-description = "Runs integration tests (group 4/9 - agent_config, api, custom_api with sqlite)"
+description = "Runs integration tests (group 4/13 - api with sqlite)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
 script = '''
@@ -544,7 +548,7 @@ cargo-test-r run --package integration-tests --test integration :tag:group2 -- -
 '''
 
 [tasks.integration-tests-group5]
-description = "Runs integration tests (group 5/9 - service tests)"
+description = "Runs integration tests (group 5/11 - service tests)"
 dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -555,7 +559,7 @@ RUST_LOG=debug cargo-test-r run --package golem-debugging-service --test '*' -- 
 '''
 
 [tasks.integration-tests-group6]
-description = "Runs integration tests (group 6/9 - sharding)"
+description = "Runs integration tests (group 6/11 - sharding)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
 script = '''
@@ -563,7 +567,7 @@ cargo-test-r run --package integration-tests --test sharding -- --nocapture --re
 '''
 
 [tasks.integration-tests-group7]
-description = "Runs integration tests (group 7/9 - otlp_plugin, plugins)"
+description = "Runs integration tests (group 7/11 - otlp_plugin, plugins)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -571,7 +575,7 @@ cargo-test-r run --package integration-tests --test integration :tag:group7 -- -
 '''
 
 [tasks.integration-tests-group8]
-description = "Runs integration tests (group 8/9 - live agent secret mutation)"
+description = "Runs integration tests (group 8/11 - live agent secret mutation)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
@@ -579,11 +583,43 @@ cargo-test-r run --package integration-tests --test agent-config-live-mutation -
 '''
 
 [tasks.integration-tests-group9]
-description = "Runs integration tests (group 9/9 - live agent secret mutation with sqlite)"
+description = "Runs integration tests (group 9/11 - live agent secret mutation with sqlite)"
 dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
 script = '''
 cargo-test-r run --package integration-tests --test agent-config-live-mutation -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group10]
+description = "Runs integration tests (group 10/11 - custom_api, quota)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script = '''
+cargo-test-r run --package integration-tests --test integration :tag:group10 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group11]
+description = "Runs integration tests (group 11/13 - custom_api, quota with sqlite)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+script = '''
+cargo-test-r run --package integration-tests --test integration :tag:group10 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group12]
+description = "Runs integration tests (group 12/13 - agent_config)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script = '''
+cargo-test-r run --package integration-tests --test integration :tag:group12 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group13]
+description = "Runs integration tests (group 13/13 - agent_config with sqlite)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_TEST_DB" = "sqlite" }
+script = '''
+cargo-test-r run --package integration-tests --test integration :tag:group12 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
 
 [tasks.cli-integration-tests]
@@ -794,6 +830,7 @@ args = [
     "merge",
     "--spec-yaml",
     "./target/golem-registry-service.yaml",
+    "--spec-yaml",
     "./target/golem-worker-service.yaml",
     "--output-yaml",
     "./target/golem-service.yaml",

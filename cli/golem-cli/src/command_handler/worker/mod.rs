@@ -58,11 +58,13 @@ use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, ComponentDto, RevertWorkerTarget,
     UpdateWorkerRequest,
 };
-use golem_common::model::agent::{AgentType, DataValue, ParsedAgentId, UntypedJsonDataValue};
+use golem_common::model::agent::{
+    AgentType, AgentTypeName, DataValue, ParsedAgentId, UntypedJsonDataValue,
+};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::component_metadata::ParsedFunctionSite;
+use golem_common::model::component_metadata::{ParsedFunctionName, ParsedFunctionSite};
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::worker::{
@@ -232,6 +234,22 @@ impl WorkerCommandHandler {
                     path,
                     output,
                 } => self.cmd_file_contents(agent_name, path, output).await,
+                AgentSubcommand::ActivatePlugin {
+                    agent_id: agent_name,
+                    plugin_name,
+                    plugin_priority,
+                } => {
+                    self.cmd_activate_plugin(agent_name, plugin_name, plugin_priority)
+                        .await
+                }
+                AgentSubcommand::DeactivatePlugin {
+                    agent_id: agent_name,
+                    plugin_name,
+                    plugin_priority,
+                } => {
+                    self.cmd_deactivate_plugin(agent_name, plugin_name, plugin_priority)
+                        .await
+                }
             }
         })
     }
@@ -1368,6 +1386,171 @@ impl WorkerCommandHandler {
         }
     }
 
+    async fn cmd_activate_plugin(
+        &self,
+        agent_name: AgentIdArgs,
+        plugin_name: String,
+        explicit_priority: Option<i32>,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_name_match = self.match_agent_name(agent_name.agent_id).await?;
+        let (component, agent_name) = self
+            .component_by_agent_name_match(&agent_name_match)
+            .await?;
+
+        let plugin_priority =
+            self.resolve_plugin_priority(&component, &agent_name, &plugin_name, explicit_priority)?;
+
+        log_action(
+            "Activating plugin",
+            format!(
+                "{} for agent {}",
+                plugin_name.log_color_highlight(),
+                format_agent_name_match(&agent_name_match)
+            ),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+        clients
+            .worker
+            .activate_plugin(&component.id.0, &agent_name.0, plugin_priority)
+            .await
+            .map(|_| ())
+            .map_service_error()?;
+
+        log_action(
+            "Activated plugin",
+            format!(
+                "{} for agent {}",
+                plugin_name.log_color_highlight(),
+                format_agent_name_match(&agent_name_match)
+            ),
+        );
+
+        Ok(())
+    }
+
+    async fn cmd_deactivate_plugin(
+        &self,
+        agent_name: AgentIdArgs,
+        plugin_name: String,
+        explicit_priority: Option<i32>,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let agent_name_match = self.match_agent_name(agent_name.agent_id).await?;
+        let (component, agent_name) = self
+            .component_by_agent_name_match(&agent_name_match)
+            .await?;
+
+        let plugin_priority =
+            self.resolve_plugin_priority(&component, &agent_name, &plugin_name, explicit_priority)?;
+
+        log_action(
+            "Deactivating plugin",
+            format!(
+                "{} for agent {}",
+                plugin_name.log_color_highlight(),
+                format_agent_name_match(&agent_name_match)
+            ),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+        clients
+            .worker
+            .deactivate_plugin(&component.id.0, &agent_name.0, plugin_priority)
+            .await
+            .map(|_| ())
+            .map_service_error()?;
+
+        log_action(
+            "Deactivated plugin",
+            format!(
+                "{} for agent {}",
+                plugin_name.log_color_highlight(),
+                format_agent_name_match(&agent_name_match)
+            ),
+        );
+
+        Ok(())
+    }
+
+    fn resolve_plugin_priority(
+        &self,
+        component: &ComponentDto,
+        agent_name: &RawAgentId,
+        plugin_name: &str,
+        explicit_priority: Option<i32>,
+    ) -> anyhow::Result<i32> {
+        let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_name.0)
+            .map(|n| n.0)
+            .unwrap_or_default();
+
+        let agent_type = AgentTypeName(agent_type_name.clone());
+        let plugins = component
+            .metadata
+            .agent_type_plugins(&agent_type)
+            .unwrap_or_default();
+
+        let matching: Vec<_> = plugins
+            .iter()
+            .filter(|p| p.plugin_name == plugin_name)
+            .collect();
+
+        match matching.len() {
+            0 => {
+                let available: Vec<_> = plugins
+                    .iter()
+                    .map(|p| format!("{} (priority {})", p.plugin_name, p.priority.0))
+                    .collect();
+                logln("");
+                log_error(format!(
+                    "Plugin {} is not installed for agent type {}.",
+                    plugin_name.log_color_error_highlight(),
+                    agent_type_name.log_color_error_highlight(),
+                ));
+                if !available.is_empty() {
+                    logln(format!(
+                        "Installed plugins: {}",
+                        available.join(", ").log_color_highlight()
+                    ));
+                }
+                logln("");
+                bail!(NonSuccessfulExit);
+            }
+            1 => Ok(matching[0].priority.0),
+            _ => {
+                if let Some(priority) = explicit_priority {
+                    if matching.iter().any(|p| p.priority.0 == priority) {
+                        Ok(priority)
+                    } else {
+                        let priorities: Vec<_> = matching.iter().map(|p| p.priority.0).collect();
+                        logln("");
+                        log_error(format!(
+                            "Plugin {} has no installation with priority {}. Available priorities: {:?}",
+                            plugin_name.log_color_error_highlight(),
+                            priority,
+                            priorities,
+                        ));
+                        logln("");
+                        bail!(NonSuccessfulExit);
+                    }
+                } else {
+                    let priorities: Vec<_> = matching.iter().map(|p| p.priority.0).collect();
+                    logln("");
+                    log_error(format!(
+                        "Multiple installations of plugin {} found (priorities: {:?}).",
+                        plugin_name.log_color_error_highlight(),
+                        priorities,
+                    ));
+                    logln("Use --plugin-priority to specify which installation to target.");
+                    logln("Use `golem component plugin get` to list installed plugins.");
+                    logln("");
+                    bail!(NonSuccessfulExit);
+                }
+            }
+        }
+    }
+
     async fn new_worker(
         &self,
         component_id: Uuid,
@@ -2198,21 +2381,31 @@ impl WorkerCommandHandler {
         match ParsedAgentId::parse_and_resolve_type(&agent_name.0, &component.metadata) {
             Ok((agent_id, agent_type)) => match function_name {
                 Some(function_name) => {
-                    if let Some((namespace, package, interface)) = component
-                        .metadata
-                        .find_function(function_name)
-                        .ok()
-                        .flatten()
-                        .and_then(|f| match f.name.site {
-                            ParsedFunctionSite::Global => None,
-                            ParsedFunctionSite::Interface { .. } => None,
-                            ParsedFunctionSite::PackagedInterface {
-                                namespace,
-                                package,
-                                interface,
-                                ..
-                            } => Some((namespace, package, interface)),
-                        })
+                    let parsed = match ParsedFunctionName::parse(function_name) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            logln("");
+                            log_error(format!(
+                                "Incompatible agent type ({}) and method ({})",
+                                agent_id.agent_type.as_str().log_color_error_highlight(),
+                                function_name.log_color_error_highlight()
+                            ));
+                            logln("");
+                            log_text_view(&AvailableFunctionNamesHelp::new_agent(
+                                component,
+                                &agent_id,
+                                &agent_type,
+                            ));
+                            bail!(NonSuccessfulExit);
+                        }
+                    };
+
+                    if let ParsedFunctionSite::PackagedInterface {
+                        namespace,
+                        package,
+                        interface,
+                        ..
+                    } = parsed.site()
                     {
                         let component_name = format!("{namespace}:{package}");
                         if *interface == agent_id.agent_type.0

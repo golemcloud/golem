@@ -227,7 +227,8 @@ mod tests {
     use golem_common::model::account::AccountId;
     use golem_common::model::environment::EnvironmentId;
     use golem_service_base::custom_api::{
-        CorsOptions, OpenApiSpecBehaviour, OriginPattern, PathSegment, RequestBodySchema,
+        CorsOptions, OpenApiSpecBehaviour, OpenApiSpecFormat, OriginPattern, PathSegment,
+        RequestBodySchema,
     };
     use poem::{Body, Request};
     use std::sync::Arc;
@@ -400,7 +401,9 @@ mod tests {
                     value: "notes".to_string(),
                 }],
                 body: RequestBodySchema::Unused,
-                behavior: RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {}),
+                behavior: RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
+                    format: OpenApiSpecFormat::Json,
+                }),
                 security: RichRouteSecurity::None,
                 cors: CorsOptions { allowed_patterns },
             }),

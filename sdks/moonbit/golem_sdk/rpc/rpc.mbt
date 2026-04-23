@@ -138,6 +138,16 @@ pub fn AgentClient::schedule_invocation(
 }
 
 ///|
+pub fn AgentClient::schedule_cancelable_invocation(
+  self : AgentClient,
+  scheduled_at : @wallClock.Datetime,
+  function_name : String,
+  input : @types.DataValue,
+) -> @agentHost.CancellationToken {
+  self.rpc.schedule_cancelable_invocation(scheduled_at, function_name, input)
+}
+
+///|
 pub fn AgentClient::drop(self : AgentClient) -> Unit {
   self.rpc.drop()
 }

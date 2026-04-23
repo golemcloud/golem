@@ -125,6 +125,9 @@ prerequisites:
   env:
     MY_VAR: "test_value"
     OTHER_VAR: "other"
+  services:
+    - postgres
+    - ignite
 steps:
   - prompt: "hello"
 `);
@@ -133,6 +136,7 @@ steps:
       MY_VAR: "test_value",
       OTHER_VAR: "other",
     });
+    assert.deepEqual(spec.prerequisites?.services, ["postgres", "ignite"]);
   });
 
   it("loads step with timeout and continueSession", async () => {

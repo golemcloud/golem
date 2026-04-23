@@ -20,6 +20,8 @@ steps:
         - "golem-stateless-agent-ts"
       scala:
         - "golem-stateless-agent-scala"
+      moonbit:
+        - "golem-stateless-agent-moonbit"
     verify:
       build: true
       deploy: true
@@ -39,6 +41,7 @@ steps:
         rust: "to_upper"
         ts: "toUpper"
         scala: "toUpper"
+        moonbit: "to_upper"
       args: '"hello world"'
     expect:
       result_json:
@@ -52,6 +55,7 @@ steps:
         rust: "to_lower"
         ts: "toLower"
         scala: "toLower"
+        moonbit: "to_lower"
       args: '"HELLO WORLD"'
     expect:
       result_json:

@@ -8,7 +8,7 @@ priv suberror SnapshotLoadError {
 /// Supports both JSON and binary envelopes, as well as snapshot-based updates
 /// on uninitialized agents (reads GOLEM_AGENT_ID from environment).
 pub fn load(snapshot : @host.Snapshot) -> Result[Unit, String] {
-  if snapshot.data.length() == 0 {
+  if snapshot.payload.length() == 0 {
     return Ok(())
   }
   let result = parse_snapshot_envelope(snapshot) catch {
@@ -77,8 +77,8 @@ fn parse_snapshot_envelope(
 ) -> (@common.Principal, Bytes) raise SnapshotLoadError {
   if snapshot.mime_type == "application/json" {
     let chars : Array[Char] = []
-    for i in 0..<snapshot.data.length() {
-      chars.push(Char::from_int(snapshot.data[i].to_int()))
+    for i in 0..<snapshot.payload.length() {
+      chars.push(Char::from_int(snapshot.payload[i].to_int()))
     }
     let json_str = String::from_array(chars)
     let json = @json.parse(json_str) catch {
@@ -105,7 +105,7 @@ fn parse_snapshot_envelope(
     )
     (principal, state_bytes)
   } else {
-    let data = snapshot.data
+    let data = snapshot.payload
     if data.length() == 0 {
       raise SnapshotLoadError("Empty binary snapshot")
     }

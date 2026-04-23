@@ -28,6 +28,8 @@ steps:
         - "golem-call-another-agent-ts"
       scala:
         - "golem-call-another-agent-scala"
+      moonbit:
+        - "golem-call-another-agent-moonbit"
     verify:
       build: true
       deploy: true
@@ -102,6 +104,7 @@ steps:
         rust: "get_all"
         ts: "getAll"
         scala: "getAll"
+        moonbit: "get_all"
     expect:
       result_json:
         - path: "$"

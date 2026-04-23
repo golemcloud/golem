@@ -24,6 +24,7 @@ use super::route_compilation::{
 use crate::model::agent_secret::{DeploymentAgentSecretCreation, DeploymentAgentSecretUpdate};
 use crate::model::api_definition::UnboundCompiledRoute;
 use crate::repo::model::retry_policy::RetryPolicyCreationRecord;
+use crate::services::deployment::route_compilation::validate_path_segments;
 use golem_common::base_model::account::AccountId;
 use golem_common::model::agent::{
     AgentConfigSource, AgentType, AgentTypeName, DeployedRegisteredAgentType,
@@ -216,11 +217,7 @@ impl DeploymentContext {
                 );
             }
 
-            add_openapi_spec_routes(
-                &deployment.domain,
-                &mut current_route_id,
-                &mut deployment_routes,
-            );
+            add_openapi_spec_routes(deployment, &mut current_route_id, &mut deployment_routes);
 
             add_cors_preflight_http_routes(
                 deployment,
@@ -616,6 +613,17 @@ fn validate_final_http_api_router(
                     method: compiled_route.method.clone(),
                 }
             }),
+            errors
+        );
+
+        ok_or_continue!(
+            validate_path_segments(&compiled_route.path, domain).map_err(|e| {
+                DeployValidationError::HttpApiDeploymentInvalidRoute {
+                    domain: domain.clone(),
+                    path: compiled_route.path.clone(),
+                    error: e.to_string(),
+                }
+            },),
             errors
         );
 

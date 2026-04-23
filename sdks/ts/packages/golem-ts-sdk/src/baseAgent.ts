@@ -17,6 +17,7 @@ import { ParsedAgentId } from './agentId';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { AgentClassName } from './agentClassName';
 import { Datetime } from 'wasi:clocks/wall-clock@0.2.3';
+import { CancellationToken } from 'golem:agent/host@1.5.0';
 import { Uuid } from './uuid';
 import { Principal } from './principal';
 import { getAgentId } from './internal/registry/agentId';
@@ -444,6 +445,7 @@ export type RemoteMethod<Args extends unknown[], R> = {
   abortable: (signal: AbortSignal, ...args: Args) => Promise<R>;
   trigger: (...args: Args) => void;
   schedule: (ts: Datetime, ...args: Args) => void;
+  scheduleCancelable: (ts: Datetime, ...args: Args) => CancellationToken;
 };
 
 type IsPrincipal<T> = T extends Principal ? true : false;

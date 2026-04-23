@@ -563,8 +563,8 @@ object AgentDefinitionMacro {
   private def extractStringArray(using Quotes)(term: quotes.reflect.Term): List[String] = {
     import quotes.reflect.*
     term match {
-      case Inlined(_, _, inner)                         => extractStringArray(inner)
-      case Typed(inner, _)                              => extractStringArray(inner)
+      case Inlined(_, _, inner) => extractStringArray(inner)
+      case Typed(inner, _)      => extractStringArray(inner)
       // Curried form: Array.apply[T](elems*)(ClassTag[T]) — produced by Scala 3 for Array("a","b")
       case Apply(inner @ Apply(_, _), _)                => extractStringArray(inner)
       case Apply(_, List(Typed(Repeated(elems, _), _))) =>

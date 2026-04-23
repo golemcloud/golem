@@ -1734,7 +1734,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5146,7 +5146,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -8084,7 +8084,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls 0.23.37",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -8122,7 +8122,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -10851,9 +10851,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "3.0.3"
+version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29af3b851f27a4f4223b7638cfc197601e04f86cd0057e9dc8b3760771b653e9"
+checksum = "85c6250e70e3947965bec44d8586c4488dbb646d90f563af097dff204c89d663"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -10863,9 +10863,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "6.0.3"
+version = "6.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0f22fa86d211b7b94c5f6f2472d44fd953d381ad4e93a46e806833d48a28fef"
+checksum = "d5eb8f308aa34162cda6d66401e4e237d406b1cac9d80a8a77d4314495e58496"
 dependencies = [
  "anstream",
  "anstyle",
@@ -10889,9 +10889,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "1.4.3"
+version = "1.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f96550a7e63f9cdc5ced794757e31f43e6a2d5402192edcadaeb578bc58ba0c9"
+checksum = "36a468d0c15d54fdb963558e64c957500fca408284820b16c72b9e79abf5857f"
 dependencies = [
  "darling 0.21.3",
  "humantime",
@@ -12359,7 +12359,7 @@ dependencies = [
 [[package]]
 name = "wasm-rquickjs"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rquickjs.git?tag=v0.2.1#ad888e2e31a2ea9079903a06602b1093d2c368fc"
+source = "git+https://github.com/golemcloud/wasm-rquickjs.git?tag=v0.2.2#b319b27e39217716f9f2f88ad25281f3e91a0fee"
 dependencies = [
  "anyhow",
  "camino",
@@ -12982,7 +12982,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

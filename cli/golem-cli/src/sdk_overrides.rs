@@ -440,7 +440,10 @@ fn running_from_golem_workspace_checkout() -> bool {
 }
 
 fn should_apply_test_layer() -> bool {
-    cfg!(debug_assertions)
+    // Workspace detection below is the real guard. Even release binaries built
+    // from the repo should use local SDK artifacts when invoked from that same
+    // checkout, otherwise local SDK/plugin changes cannot be exercised end-to-end.
+    true
 }
 
 fn has_local_workspace_sdks(workspace_root: &Path) -> bool {

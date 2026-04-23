@@ -345,11 +345,6 @@ impl From<ComponentError> for ApiError {
                 code: api::error_code::INVALID_FILE_PATH.to_string(),
                 cause: None,
             })),
-            ComponentError::InvalidComponentName { .. } => Self::BadRequest(Json(ErrorsBody {
-                errors: vec![error],
-                code: api::error_code::INVALID_COMPONENT_NAME.to_string(),
-                cause: None,
-            })),
             ComponentError::InvalidOplogProcessorPlugin => Self::BadRequest(Json(ErrorsBody {
                 errors: vec![error],
                 code: api::error_code::INVALID_OPLOG_PROCESSOR_PLUGIN.to_string(),
@@ -639,7 +634,7 @@ impl From<DeploymentWriteError> for ApiError {
                 Self::conflict(api::error_code::DEPLOYMENT_VERSION_ALREADY_EXISTS, error)
             }
             DeploymentWriteError::DeploymentHashMismatch { .. } => {
-                Self::bad_request(api::error_code::DEPLOYMENT_HASH_MISMATCH, error)
+                Self::conflict(api::error_code::DEPLOYMENT_HASH_MISMATCH, error)
             }
             DeploymentWriteError::EnvironmentNotYetDeployed => {
                 Self::conflict(api::error_code::ENVIRONMENT_NOT_DEPLOYED, error)

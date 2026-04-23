@@ -40,6 +40,22 @@ Datetime.afterSeconds(60)     // 60 seconds from now
 Datetime.afterSeconds(3600)   // 1 hour from now
 ```
 
+## Cancelable Variant
+
+Every method also has a `scheduleCancelableAt` variant that returns a `Future[CancellationToken]`. Call `.cancel()` on the token to prevent the scheduled invocation from firing:
+
+```scala
+import golem.runtime.rpc.CancellationToken
+
+val token: CancellationToken = Await.result(
+  counter.increment.scheduleCancelableAt(Datetime.afterSeconds(60)),
+  Duration.Inf
+)
+
+// Later, to cancel the pending invocation:
+token.cancel()
+```
+
 ## Use Cases
 
 - **Periodic tasks**: Schedule the next run at the end of each invocation

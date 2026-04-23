@@ -84,7 +84,8 @@ pub async fn run(
     let compiled_component =
         compiled_component::configured(&config.compiled_component_service, blob_storage.clone());
 
-    let engine = wasmtime::Engine::new(&create_wasmtime_config()).expect("Failed to create engine");
+    let engine = wasmtime::Engine::new(&create_wasmtime_config(&config.engine))
+        .expect("Failed to create engine");
 
     // Start metrics and healthcheck server.
     let address = config.http_addr().expect("Invalid HTTP address");
@@ -165,7 +166,7 @@ async fn start_grpc_server(
     Ok(grpc_port)
 }
 
-fn create_wasmtime_config() -> wasmtime::Config {
+fn create_wasmtime_config(engine_config: &config::EngineConfig) -> wasmtime::Config {
     let mut config = wasmtime::Config::default();
 
     config.wasm_multi_value(true);
@@ -173,6 +174,12 @@ fn create_wasmtime_config() -> wasmtime::Config {
     config.epoch_interruption(true);
     config.consume_fuel(true);
     config.wasm_backtrace_details(WasmBacktraceDetails::Enable);
+
+    if engine_config.enable_fs_cache {
+        config.cache(Some(
+            wasmtime::Cache::new(wasmtime::CacheConfig::new()).expect("Failed to initialize cache"),
+        ));
+    }
 
     config
 }

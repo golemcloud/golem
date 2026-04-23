@@ -5,6 +5,75 @@ pub suberror JsonCodecError {
 } derive(Show)
 
 ///|
+let hex_chars : FixedArray[Char] = [
+  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e',
+  'f',
+]
+
+///|
+fn uint64_hex(value : UInt64, width : Int) -> String {
+  let buf = StringBuilder::new()
+  for i = width - 1; i >= 0; i = i - 1 {
+    let nibble = ((value >> (i * 4)) & 0xFUL).to_int()
+    buf.write_char(hex_chars[nibble])
+  }
+  buf.to_string()
+}
+
+///|
+fn hex_code_to_uint64(c : Int) -> UInt64 raise JsonCodecError {
+  if c >= 0x30 && c <= 0x39 {
+    (c - 0x30).to_uint64()
+  } else if c >= 0x61 && c <= 0x66 {
+    (c - 0x61 + 10).to_uint64()
+  } else if c >= 0x41 && c <= 0x46 {
+    (c - 0x41 + 10).to_uint64()
+  } else {
+    raise JsonCodecError("Invalid hex character code: \{c}")
+  }
+}
+
+///|
+pub fn uuid_to_standard_string(uuid : @rpcTypes.Uuid) -> String {
+  let hi = uuid.high_bits
+  let lo = uuid.low_bits
+  let p1 = uint64_hex((hi >> 32) & 0xFFFFFFFFUL, 8)
+  let p2 = uint64_hex((hi >> 16) & 0xFFFFUL, 4)
+  let p3 = uint64_hex(hi & 0xFFFFUL, 4)
+  let p4 = uint64_hex((lo >> 48) & 0xFFFFUL, 4)
+  let p5 = uint64_hex(lo & 0xFFFFFFFFFFFFUL, 12)
+  "\{p1}-\{p2}-\{p3}-\{p4}-\{p5}"
+}
+
+///|
+pub fn uuid_from_standard_string(
+  s : String,
+) -> @rpcTypes.Uuid raise JsonCodecError {
+  let mut hi : UInt64 = 0UL
+  let mut lo : UInt64 = 0UL
+  let mut hex_count = 0
+  for i = 0; i < s.length(); i = i + 1 {
+    let c = s[i].to_int()
+    if c == 0x2D {
+      continue
+    }
+    let d = hex_code_to_uint64(c)
+    if hex_count < 16 {
+      hi = (hi << 4) | d
+    } else {
+      lo = (lo << 4) | d
+    }
+    hex_count = hex_count + 1
+  }
+  if hex_count != 32 {
+    raise JsonCodecError(
+      "Invalid UUID string: expected 32 hex digits, got \{hex_count}",
+    )
+  }
+  { high_bits: hi, low_bits: lo }
+}
+
+///|
 /// Serializes a `Principal` to JSON, matching the format used by Rust/TS SDKs.
 pub fn principal_to_json(principal : @common.Principal) -> Json {
   match principal {
@@ -13,49 +82,49 @@ pub fn principal_to_json(principal : @common.Principal) -> Json {
       let fields : Map[String, Json] = {}
       fields["sub"] = Json::string(oidc.sub)
       fields["issuer"] = Json::string(oidc.issuer)
-      match oidc.email {
-        Some(v) => fields["email"] = Json::string(v)
-        None => ()
+      fields["email"] = match oidc.email {
+        Some(v) => Json::string(v)
+        None => Json::null()
       }
-      match oidc.name {
-        Some(v) => fields["name"] = Json::string(v)
-        None => ()
+      fields["name"] = match oidc.name {
+        Some(v) => Json::string(v)
+        None => Json::null()
       }
-      match oidc.email_verified {
-        Some(v) => fields["email_verified"] = Json::boolean(v)
-        None => ()
+      fields["emailVerified"] = match oidc.email_verified {
+        Some(v) => Json::boolean(v)
+        None => Json::null()
       }
-      match oidc.given_name {
-        Some(v) => fields["given_name"] = Json::string(v)
-        None => ()
+      fields["givenName"] = match oidc.given_name {
+        Some(v) => Json::string(v)
+        None => Json::null()
       }
-      match oidc.family_name {
-        Some(v) => fields["family_name"] = Json::string(v)
-        None => ()
+      fields["familyName"] = match oidc.family_name {
+        Some(v) => Json::string(v)
+        None => Json::null()
       }
-      match oidc.picture {
-        Some(v) => fields["picture"] = Json::string(v)
-        None => ()
+      fields["picture"] = match oidc.picture {
+        Some(v) => Json::string(v)
+        None => Json::null()
       }
-      match oidc.preferred_username {
-        Some(v) => fields["preferred_username"] = Json::string(v)
-        None => ()
+      fields["preferredUsername"] = match oidc.preferred_username {
+        Some(v) => Json::string(v)
+        None => Json::null()
       }
       fields["claims"] = Json::string(oidc.claims)
       Json::object({ "tag": Json::string("oidc"), "val": Json::object(fields) })
     }
     Agent(agent) => {
-      let agent_id_json = agent_id_to_json(agent.agent_id)
       Json::object({
         "tag": Json::string("agent"),
-        "val": Json::object({ "agent_id": agent_id_json }),
+        "val": agent_id_to_json(agent.agent_id),
       })
     }
     GolemUser(user) => {
-      let account_id_json = account_id_to_json(user.account_id)
       Json::object({
         "tag": Json::string("golem-user"),
-        "val": Json::object({ "account_id": account_id_json }),
+        "val": Json::object({
+          "accountId": account_id_to_json(user.account_id),
+        }),
       })
     }
   }
@@ -98,16 +167,16 @@ pub fn principal_from_json(
         Some(String(s)) => Some(s)
         _ => None
       }
-      let email_verified : Bool? = match val.get("email_verified") {
+      let email_verified : Bool? = match val.get("emailVerified") {
         Some(True) => Some(true)
         Some(False) => Some(false)
         _ => None
       }
-      let given_name : String? = match val.get("given_name") {
+      let given_name : String? = match val.get("givenName") {
         Some(String(s)) => Some(s)
         _ => None
       }
-      let family_name : String? = match val.get("family_name") {
+      let family_name : String? = match val.get("familyName") {
         Some(String(s)) => Some(s)
         _ => None
       }
@@ -115,13 +184,13 @@ pub fn principal_from_json(
         Some(String(s)) => Some(s)
         _ => None
       }
-      let preferred_username : String? = match val.get("preferred_username") {
+      let preferred_username : String? = match val.get("preferredUsername") {
         Some(String(s)) => Some(s)
         _ => None
       }
       let claims = match val.get("claims") {
         Some(String(s)) => s
-        _ => ""
+        _ => raise JsonCodecError("Missing 'claims' in oidc principal")
       }
       @common.Principal::Oidc({
         sub,
@@ -138,13 +207,10 @@ pub fn principal_from_json(
     }
     "agent" => {
       let val = match obj.get("val") {
-        Some(Object(m)) => m
+        Some(Object(_)) as json => json.unwrap()
         _ => raise JsonCodecError("Missing 'val' for agent principal")
       }
-      let agent_id = match val.get("agent_id") {
-        Some(json) => agent_id_from_json(json)
-        _ => raise JsonCodecError("Missing 'agent_id' in agent principal")
-      }
+      let agent_id = agent_id_from_json(val)
       @common.Principal::Agent({ agent_id, })
     }
     "golem-user" => {
@@ -152,67 +218,24 @@ pub fn principal_from_json(
         Some(Object(m)) => m
         _ => raise JsonCodecError("Missing 'val' for golem-user principal")
       }
-      let account_id = match val.get("account_id") {
-        Some(json) => account_id_from_json(json)
+      let account_id_str = match val.get("accountId") {
+        Some(String(s)) => s
         _ =>
-          raise JsonCodecError("Missing 'account_id' in golem-user principal")
+          raise JsonCodecError("Missing 'accountId' in golem-user principal")
       }
-      @common.Principal::GolemUser({ account_id, })
+      @common.Principal::GolemUser({
+        account_id: { uuid: uuid_from_standard_string(account_id_str) },
+      })
     }
     other => raise JsonCodecError("Unknown principal tag: \{other}")
   }
 }
 
 ///|
-fn uuid_to_json(uuid : @rpcTypes.Uuid) -> Json {
-  Json::object({
-    "high_bits": Json::number(uuid.high_bits.to_double()),
-    "low_bits": Json::number(uuid.low_bits.to_double()),
-  })
-}
-
-///|
-fn uuid_from_json(json : Json) -> @rpcTypes.Uuid raise JsonCodecError {
-  let obj = match json {
-    Object(m) => m
-    _ => raise JsonCodecError("Expected JSON object for Uuid")
-  }
-  let high_bits = match obj.get("high_bits") {
-    Some(Number(n, ..)) => n.to_uint64()
-    _ => raise JsonCodecError("Missing 'high_bits' in Uuid")
-  }
-  let low_bits = match obj.get("low_bits") {
-    Some(Number(n, ..)) => n.to_uint64()
-    _ => raise JsonCodecError("Missing 'low_bits' in Uuid")
-  }
-  { high_bits, low_bits }
-}
-
-///|
-fn component_id_to_json(id : @rpcTypes.ComponentId) -> Json {
-  Json::object({ "uuid": uuid_to_json(id.uuid) })
-}
-
-///|
-fn component_id_from_json(
-  json : Json,
-) -> @rpcTypes.ComponentId raise JsonCodecError {
-  let obj = match json {
-    Object(m) => m
-    _ => raise JsonCodecError("Expected JSON object for ComponentId")
-  }
-  let uuid = match obj.get("uuid") {
-    Some(json) => uuid_from_json(json)
-    _ => raise JsonCodecError("Missing 'uuid' in ComponentId")
-  }
-  { uuid, }
-}
-
-///|
 fn agent_id_to_json(id : @rpcTypes.AgentId) -> Json {
   Json::object({
-    "component_id": component_id_to_json(id.component_id),
-    "agent_id": Json::string(id.agent_id),
+    "componentId": Json::string(uuid_to_standard_string(id.component_id.uuid)),
+    "agentId": Json::string(id.agent_id),
   })
 }
 
@@ -222,33 +245,23 @@ fn agent_id_from_json(json : Json) -> @rpcTypes.AgentId raise JsonCodecError {
     Object(m) => m
     _ => raise JsonCodecError("Expected JSON object for AgentId")
   }
-  let component_id = match obj.get("component_id") {
-    Some(json) => component_id_from_json(json)
-    _ => raise JsonCodecError("Missing 'component_id' in AgentId")
-  }
-  let agent_id = match obj.get("agent_id") {
+  let component_id_str = match obj.get("componentId") {
     Some(String(s)) => s
-    _ => raise JsonCodecError("Missing 'agent_id' in AgentId")
+    _ => raise JsonCodecError("Missing 'componentId' in agent val")
   }
-  { component_id, agent_id }
+  let agent_id = match obj.get("agentId") {
+    Some(String(s)) => s
+    _ => raise JsonCodecError("Missing 'agentId' in agent val")
+  }
+  {
+    component_id: { uuid: uuid_from_standard_string(component_id_str) },
+    agent_id,
+  }
 }
 
 ///|
 fn account_id_to_json(id : @rpcTypes.AccountId) -> Json {
-  Json::object({ "uuid": uuid_to_json(id.uuid) })
+  Json::string(uuid_to_standard_string(id.uuid))
 }
 
-///|
-fn account_id_from_json(
-  json : Json,
-) -> @rpcTypes.AccountId raise JsonCodecError {
-  let obj = match json {
-    Object(m) => m
-    _ => raise JsonCodecError("Expected JSON object for AccountId")
-  }
-  let uuid = match obj.get("uuid") {
-    Some(json) => uuid_from_json(json)
-    _ => raise JsonCodecError("Missing 'uuid' in AccountId")
-  }
-  { uuid, }
-}
+

@@ -38,6 +38,7 @@ steps:
         rust: "get_tag"
         ts: "getTag"
         scala: "getTag"
+        moonbit: "get_tag"
     expect:
       result_json:
         - path: "$"

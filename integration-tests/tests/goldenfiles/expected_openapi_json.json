@@ -276,41 +276,31 @@
         }
       }
     },
-    "/http-agents/{agent-name}/api": {
-      "options": {
-        "parameters": [
-          {
-            "description": "Path parameter: agent-name",
-            "explode": false,
-            "in": "path",
-            "name": "agent-name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "style": "simple"
-          }
-        ],
+    "/docs/openapi.json": {
+      "get": {
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "properties": {
-                    "endpoints": {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    },
-                    "version": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "version",
-                    "endpoints"
-                  ],
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      }
+    },
+    "/docs/openapi.yaml": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/yaml": {
+                "schema": {
+                  "additionalProperties": true,
                   "type": "object"
                 }
               }
@@ -583,126 +573,7 @@
         }
       }
     },
-    "/http-agents/{agent-name}/proxy/{target}": {},
     "/http-agents/{agent-name}/resource/{id}": {
-      "head": {
-        "parameters": [
-          {
-            "description": "Path parameter: agent-name",
-            "explode": false,
-            "in": "path",
-            "name": "agent-name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "style": "simple"
-          },
-          {
-            "description": "Path parameter: id",
-            "explode": false,
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "style": "simple"
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "content_length": {
-                      "format": "int64",
-                      "minimum": 0,
-                      "nullable": true,
-                      "type": "integer"
-                    },
-                    "exists": {
-                      "type": "boolean"
-                    },
-                    "id": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "exists"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Response 200"
-          }
-        }
-      },
-      "options": {
-        "parameters": [
-          {
-            "description": "Path parameter: agent-name",
-            "explode": false,
-            "in": "path",
-            "name": "agent-name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "style": "simple"
-          },
-          {
-            "description": "Path parameter: id",
-            "explode": false,
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "style": "simple"
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "allowed_headers": {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    },
-                    "allowed_methods": {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    },
-                    "max_age": {
-                      "format": "int64",
-                      "minimum": 0,
-                      "type": "integer"
-                    }
-                  },
-                  "required": [
-                    "allowed_methods",
-                    "allowed_headers",
-                    "max_age"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Response 200"
-          }
-        }
-      },
       "patch": {
         "parameters": [
           {
@@ -787,39 +658,6 @@
               }
             },
             "description": "Response 200"
-          }
-        }
-      }
-    },
-    "/http-agents/{agent-name}/resource/{id}/exists": {
-      "head": {
-        "parameters": [
-          {
-            "description": "Path parameter: agent-name",
-            "explode": false,
-            "in": "path",
-            "name": "agent-name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "style": "simple"
-          },
-          {
-            "description": "Path parameter: id",
-            "explode": false,
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "style": "simple"
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Response 204"
           }
         }
       }
@@ -1332,118 +1170,6 @@
         }
       }
     },
-    "/http-agents/{agent-name}/trace": {
-      "trace": {
-        "parameters": [
-          {
-            "description": "Path parameter: agent-name",
-            "explode": false,
-            "in": "path",
-            "name": "agent-name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "style": "simple"
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "path": {
-                      "type": "string"
-                    },
-                    "received_headers": {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    },
-                    "timestamp": {
-                      "format": "int64",
-                      "minimum": 0,
-                      "type": "integer"
-                    }
-                  },
-                  "required": [
-                    "path",
-                    "received_headers",
-                    "timestamp"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Response 200"
-          }
-        }
-      }
-    },
-    "/http-agents/{agent-name}/trace/{path}": {
-      "trace": {
-        "parameters": [
-          {
-            "description": "Path parameter: agent-name",
-            "explode": false,
-            "in": "path",
-            "name": "agent-name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "style": "simple"
-          },
-          {
-            "description": "Path parameter: path",
-            "explode": false,
-            "in": "path",
-            "name": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "style": "simple"
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "path": {
-                      "type": "string"
-                    },
-                    "received_headers": {
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
-                    },
-                    "timestamp": {
-                      "format": "int64",
-                      "minimum": 0,
-                      "type": "integer"
-                    }
-                  },
-                  "required": [
-                    "path",
-                    "received_headers",
-                    "timestamp"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Response 200"
-          }
-        }
-      }
-    },
-    "/http-agents/{agent-name}/tunnel/{host}/{port}": {},
     "/http-agents/{agent-name}/unrestricted-unstructured-binary/{bucket}": {
       "post": {
         "parameters": [
@@ -1489,40 +1215,6 @@
                 "schema": {
                   "format": "int64",
                   "type": "integer"
-                }
-              }
-            },
-            "description": "Response 200"
-          }
-        }
-      }
-    },
-    "/openapi.json": {
-      "get": {
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Response 200"
-          }
-        }
-      }
-    },
-    "/openapi.yaml": {
-      "get": {
-        "responses": {
-          "200": {
-            "content": {
-              "application/yaml": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
                 }
               }
             },

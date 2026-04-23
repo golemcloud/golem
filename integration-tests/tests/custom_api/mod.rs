@@ -23,3 +23,15 @@ use golem_test_framework::config::EnvBasedTestDependencies;
 use test_r::inherit_test_dep;
 
 inherit_test_dep!(EnvBasedTestDependencies);
+
+fn assert_json_content_type(response: &reqwest::Response) {
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        content_type.starts_with("application/json"),
+        "expected Content-Type: application/json, got: {content_type:?}"
+    );
+}

@@ -20,26 +20,14 @@ use crate::base_model::component::InitialAgentFile;
 pub use crate::base_model::component_metadata::*;
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::{AgentType, AgentTypeName};
-use crate::model::base64::Base64;
 use crate::model::component::InstalledPlugin;
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
-use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
-use golem_wasm::analysis::{
-    AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
-    AnalysedType, TypeHandle,
-};
+use golem_wasm::analysis::{AnalysedExport, AnalysisFailure, AnalysisResult};
 use golem_wasm::metadata::Producers as WasmAstProducers;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
 use wasmtime::component::__internal::wasmtime_environ::wasmparser;
-
-/// Describes an exported function that can be invoked on a worker
-#[derive(Debug, Clone)]
-pub struct InvokableFunction {
-    pub name: ParsedFunctionName,
-    pub analysed_export: AnalysedFunction,
-}
 
 impl ComponentMetadata {
     pub fn analyse_component(
@@ -50,12 +38,11 @@ impl ComponentMetadata {
         let raw = RawComponentMetadata::analyse_component(data)?;
         Ok(Self {
             data: Arc::new(raw.into_metadata(agent_types, agent_type_provision_configs)),
-            cache: Arc::default(),
         })
     }
 
     pub fn from_parts(
-        exports: Vec<AnalysedExport>,
+        known_exports: KnownExports,
         memories: Vec<LinearMemory>,
         root_package_name: Option<String>,
         root_package_version: Option<String>,
@@ -64,21 +51,19 @@ impl ComponentMetadata {
     ) -> Self {
         Self {
             data: Arc::new(ComponentMetadataInnerData {
-                exports,
+                known_exports,
                 producers: vec![],
                 memories,
-                binary_wit: Base64(vec![]),
                 root_package_name,
                 root_package_version,
                 agent_types,
                 agent_type_provision_configs,
             }),
-            cache: Arc::default(),
         }
     }
 
     /// Returns a new `ComponentMetadata` with the provision configs replaced.
-    /// All other analysed fields (exports, memories, agent types, etc.) are preserved.
+    /// All other analysed fields (known_exports, memories, agent types, etc.) are preserved.
     /// Use this when provision configs are updated independently of the WASM binary.
     pub fn with_provision_configs(
         &self,
@@ -87,16 +72,14 @@ impl ComponentMetadata {
         let data = self.data.as_ref();
         Self {
             data: Arc::new(ComponentMetadataInnerData {
-                exports: data.exports.clone(),
+                known_exports: data.known_exports.clone(),
                 producers: data.producers.clone(),
                 memories: data.memories.clone(),
-                binary_wit: data.binary_wit.clone(),
                 root_package_name: data.root_package_name.clone(),
                 root_package_version: data.root_package_version.clone(),
                 agent_types: data.agent_types.clone(),
                 agent_type_provision_configs,
             }),
-            cache: Arc::default(),
         }
     }
 
@@ -108,8 +91,8 @@ impl ComponentMetadata {
         &self.data.memories
     }
 
-    pub fn binary_wit(&self) -> &Base64 {
-        &self.data.binary_wit
+    pub fn known_exports(&self) -> &KnownExports {
+        &self.data.known_exports
     }
 
     pub fn root_package_name(&self) -> &Option<String> {
@@ -169,45 +152,73 @@ impl ComponentMetadata {
         !self.data.agent_types.is_empty()
     }
 
-    pub fn load_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
-        self.cache.lock().unwrap().load_snapshot(&self.data)
+    pub fn has_load_snapshot(&self) -> bool {
+        self.data.known_exports.load_snapshot_interface.is_some()
     }
 
-    pub fn save_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
-        self.cache.lock().unwrap().save_snapshot(&self.data)
+    pub fn has_save_snapshot(&self) -> bool {
+        self.data.known_exports.save_snapshot_interface.is_some()
     }
 
-    pub fn agent_initialize(&self) -> Result<Option<InvokableFunction>, String> {
-        self.cache.lock().unwrap().agent_initialize(&self.data)
+    pub fn has_agent_guest(&self) -> bool {
+        self.data.known_exports.agent_guest_interface.is_some()
     }
 
-    pub fn agent_invoke(&self) -> Result<Option<InvokableFunction>, String> {
-        self.cache.lock().unwrap().agent_invoke(&self.data)
+    pub fn has_oplog_processor(&self) -> bool {
+        self.data.known_exports.oplog_processor_interface.is_some()
     }
 
-    pub fn oplog_processor(&self) -> Result<Option<InvokableFunction>, String> {
-        self.cache.lock().unwrap().oplog_processor(&self.data)
+    /// Returns the fully-qualified WIT function name for `golem:api/load-snapshot.load`
+    pub fn load_snapshot_function_name(&self) -> Option<String> {
+        self.data
+            .known_exports
+            .load_snapshot_interface
+            .as_ref()
+            .map(|iface| format!("{iface}.{{load}}"))
     }
 
-    pub fn find_function(&self, name: &str) -> Result<Option<InvokableFunction>, String> {
-        self.cache.lock().unwrap().find_function(&self.data, name)
+    /// Returns the fully-qualified WIT function name for `golem:api/save-snapshot.save`
+    pub fn save_snapshot_function_name(&self) -> Option<String> {
+        self.data
+            .known_exports
+            .save_snapshot_interface
+            .as_ref()
+            .map(|iface| format!("{iface}.{{save}}"))
     }
 
-    pub fn find_parsed_function(
-        &self,
-        parsed: &ParsedFunctionName,
-    ) -> Result<Option<InvokableFunction>, String> {
-        self.cache
-            .lock()
-            .unwrap()
-            .find_parsed_function(&self.data, parsed)
+    /// Returns the fully-qualified WIT function name for `golem:agent/guest.initialize`
+    pub fn agent_initialize_function_name(&self) -> Option<String> {
+        self.data
+            .known_exports
+            .agent_guest_interface
+            .as_ref()
+            .map(|iface| format!("{iface}.{{initialize}}"))
+    }
+
+    /// Returns the fully-qualified WIT function name for `golem:agent/guest.invoke`
+    pub fn agent_invoke_function_name(&self) -> Option<String> {
+        self.data
+            .known_exports
+            .agent_guest_interface
+            .as_ref()
+            .map(|iface| format!("{iface}.{{invoke}}"))
+    }
+
+    /// Returns the fully-qualified WIT function name for `golem:api/oplog-processor.process`
+    pub fn oplog_processor_function_name(&self) -> Option<String> {
+        self.data
+            .known_exports
+            .oplog_processor_interface
+            .as_ref()
+            .map(|iface| format!("{iface}.{{process}}"))
     }
 
     pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Option<AgentType> {
-        self.cache
-            .lock()
-            .unwrap()
-            .find_agent_type_by_name(&self.data, agent_type)
+        self.data
+            .agent_types
+            .iter()
+            .find(|t| &t.type_name == agent_type)
+            .cloned()
     }
 }
 
@@ -249,7 +260,6 @@ impl poem_openapi::types::ParseFromJSON for ComponentMetadata {
             ComponentMetadataInnerData::parse_from_json(value).map_err(|err| err.propagate())?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::default(),
         })
     }
 }
@@ -266,7 +276,6 @@ impl poem_openapi::types::ParseFromXML for ComponentMetadata {
             ComponentMetadataInnerData::parse_from_xml(value).map_err(|err| err.propagate())?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::default(),
         })
     }
 }
@@ -283,7 +292,6 @@ impl poem_openapi::types::ParseFromYAML for ComponentMetadata {
             ComponentMetadataInnerData::parse_from_yaml(value).map_err(|err| err.propagate())?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::default(),
         })
     }
 }
@@ -291,297 +299,6 @@ impl poem_openapi::types::ParseFromYAML for ComponentMetadata {
 impl poem_openapi::types::ToYAML for ComponentMetadata {
     fn to_yaml(&self) -> Option<serde_json::Value> {
         self.data.to_yaml()
-    }
-}
-
-impl ComponentMetadataInnerData {
-    pub fn load_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
-        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
-            ParsedFunctionSite::PackagedInterface {
-                namespace: "golem".to_string(),
-                package: "api".to_string(),
-                interface: "load-snapshot".to_string(),
-                version: None,
-            },
-            ParsedFunctionReference::Function {
-                function: "load".to_string(),
-            },
-        ))
-    }
-
-    pub fn save_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
-        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
-            ParsedFunctionSite::PackagedInterface {
-                namespace: "golem".to_string(),
-                package: "api".to_string(),
-                interface: "save-snapshot".to_string(),
-                version: None,
-            },
-            ParsedFunctionReference::Function {
-                function: "save".to_string(),
-            },
-        ))
-    }
-
-    pub fn agent_initialize(&self) -> Result<Option<InvokableFunction>, String> {
-        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
-            ParsedFunctionSite::PackagedInterface {
-                namespace: "golem".to_string(),
-                package: "agent".to_string(),
-                interface: "guest".to_string(),
-                version: None,
-            },
-            ParsedFunctionReference::Function {
-                function: "initialize".to_string(),
-            },
-        ))
-    }
-
-    pub fn agent_invoke(&self) -> Result<Option<InvokableFunction>, String> {
-        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
-            ParsedFunctionSite::PackagedInterface {
-                namespace: "golem".to_string(),
-                package: "agent".to_string(),
-                interface: "guest".to_string(),
-                version: None,
-            },
-            ParsedFunctionReference::Function {
-                function: "invoke".to_string(),
-            },
-        ))
-    }
-
-    pub fn oplog_processor(&self) -> Result<Option<InvokableFunction>, String> {
-        self.find_parsed_function_ignoring_version(&ParsedFunctionName::new(
-            ParsedFunctionSite::PackagedInterface {
-                namespace: "golem".to_string(),
-                package: "api".to_string(),
-                interface: "oplog-processor".to_string(),
-                version: None,
-            },
-            ParsedFunctionReference::Function {
-                function: "process".to_string(),
-            },
-        ))
-    }
-
-    pub fn find_function(&self, name: &str) -> Result<Option<InvokableFunction>, String> {
-        let parsed = ParsedFunctionName::parse(name)?;
-        self.find_parsed_function(&parsed)
-    }
-
-    pub fn find_parsed_function(
-        &self,
-        parsed: &ParsedFunctionName,
-    ) -> Result<Option<InvokableFunction>, String> {
-        Ok(self
-            .find_analysed_function(parsed)
-            .map(|analysed_export| InvokableFunction {
-                name: parsed.clone(),
-                analysed_export,
-            }))
-    }
-
-    pub fn find_agent_type_by_name(&self, agent_type: &AgentTypeName) -> Option<AgentType> {
-        self.agent_types
-            .iter()
-            .find(|t| &t.type_name == agent_type)
-            .cloned()
-    }
-
-    /// Finds a function ignoring the function site's version. Returns None if it was not found.
-    fn find_parsed_function_ignoring_version(
-        &self,
-        name: &ParsedFunctionName,
-    ) -> Result<Option<InvokableFunction>, String> {
-        Ok(self
-            .exports
-            .iter()
-            .find_map(|export| {
-                if let AnalysedExport::Instance(instance) = export {
-                    if let Ok(site) = ParsedFunctionSite::parse(&instance.name) {
-                        if &site.unversioned() == name.site() {
-                            Self::find_function_in_instance(name, instance)
-                                .map(|func| (func, name.with_site(site)))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .map(|(analysed_export, name)| InvokableFunction {
-                name,
-                analysed_export,
-            }))
-    }
-
-    fn find_analysed_function(&self, parsed: &ParsedFunctionName) -> Option<AnalysedFunction> {
-        match &parsed.site().interface_name() {
-            None => self.exports.iter().find_map(|f| match f {
-                AnalysedExport::Function(f) if f.name == parsed.function().function_name() => {
-                    Some(f.clone())
-                }
-                _ => None,
-            }),
-            Some(interface_name) => self
-                .exports
-                .iter()
-                .find_map(|instance| match instance {
-                    AnalysedExport::Instance(inst) if inst.name == *interface_name => Some(inst),
-                    _ => None,
-                })
-                .and_then(|instance| Self::find_function_in_instance(parsed, instance)),
-        }
-    }
-
-    fn find_function_in_instance(
-        parsed: &ParsedFunctionName,
-        instance: &AnalysedInstance,
-    ) -> Option<AnalysedFunction> {
-        match instance
-            .functions
-            .iter()
-            .find(|f| f.name == parsed.function().function_name())
-            .cloned()
-        {
-            Some(function) => Some(function),
-            None => match parsed.method_as_static() {
-                Some(parsed_static) => instance
-                    .functions
-                    .iter()
-                    .find(|f| f.name == parsed_static.function().function_name())
-                    .cloned(),
-                None => None,
-            },
-        }
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct ComponentMetadataInnerCache {
-    load_snapshot: Option<Result<Option<InvokableFunction>, String>>,
-    save_snapshot: Option<Result<Option<InvokableFunction>, String>>,
-    agent_initialize: Option<Result<Option<InvokableFunction>, String>>,
-    agent_invoke: Option<Result<Option<InvokableFunction>, String>>,
-    oplog_processor: Option<Result<Option<InvokableFunction>, String>>,
-    functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
-    functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
-    agent_types_by_type_name: HashMap<AgentTypeName, Option<AgentType>>,
-}
-
-impl ComponentMetadataInnerCache {
-    pub fn load_snapshot(
-        &mut self,
-        data: &ComponentMetadataInnerData,
-    ) -> Result<Option<InvokableFunction>, String> {
-        if let Some(snapshot) = &self.load_snapshot {
-            snapshot.clone()
-        } else {
-            let result = data.load_snapshot();
-            self.load_snapshot = Some(result.clone());
-            result
-        }
-    }
-
-    pub fn save_snapshot(
-        &mut self,
-        data: &ComponentMetadataInnerData,
-    ) -> Result<Option<InvokableFunction>, String> {
-        if let Some(snapshot) = &self.save_snapshot {
-            snapshot.clone()
-        } else {
-            let result = data.save_snapshot();
-            self.save_snapshot = Some(result.clone());
-            result
-        }
-    }
-
-    pub fn agent_initialize(
-        &mut self,
-        data: &ComponentMetadataInnerData,
-    ) -> Result<Option<InvokableFunction>, String> {
-        if let Some(cached) = &self.agent_initialize {
-            cached.clone()
-        } else {
-            let result = data.agent_initialize();
-            self.agent_initialize = Some(result.clone());
-            result
-        }
-    }
-
-    pub fn agent_invoke(
-        &mut self,
-        data: &ComponentMetadataInnerData,
-    ) -> Result<Option<InvokableFunction>, String> {
-        if let Some(cached) = &self.agent_invoke {
-            cached.clone()
-        } else {
-            let result = data.agent_invoke();
-            self.agent_invoke = Some(result.clone());
-            result
-        }
-    }
-
-    pub fn oplog_processor(
-        &mut self,
-        data: &ComponentMetadataInnerData,
-    ) -> Result<Option<InvokableFunction>, String> {
-        if let Some(cached) = &self.oplog_processor {
-            cached.clone()
-        } else {
-            let result = data.oplog_processor();
-            self.oplog_processor = Some(result.clone());
-            result
-        }
-    }
-
-    pub fn find_function(
-        &mut self,
-        data: &ComponentMetadataInnerData,
-        name: &str,
-    ) -> Result<Option<InvokableFunction>, String> {
-        if let Some(cached) = self.functions_unparsed.get(name) {
-            cached.clone()
-        } else {
-            let parsed = ParsedFunctionName::parse(name)?;
-            let result = data.find_parsed_function(&parsed);
-            self.functions_unparsed
-                .insert(name.to_string(), result.clone());
-            result
-        }
-    }
-
-    pub fn find_parsed_function(
-        &mut self,
-        data: &ComponentMetadataInnerData,
-        parsed: &ParsedFunctionName,
-    ) -> Result<Option<InvokableFunction>, String> {
-        if let Some(cached) = self.functions_parsed.get(parsed) {
-            cached.clone()
-        } else {
-            let result = data.find_parsed_function(parsed);
-            self.functions_parsed.insert(parsed.clone(), result.clone());
-            result
-        }
-    }
-
-    pub fn find_agent_type_by_name(
-        &mut self,
-        data: &ComponentMetadataInnerData,
-        agent_type: &AgentTypeName,
-    ) -> Option<AgentType> {
-        if let Some(cached) = self.agent_types_by_type_name.get(agent_type) {
-            cached.clone()
-        } else {
-            let result = data.find_agent_type_by_name(agent_type);
-            self.agent_types_by_type_name
-                .insert(agent_type.clone(), result.clone());
-            result
-        }
     }
 }
 
@@ -597,12 +314,67 @@ impl From<wasmparser::MemoryType> for LinearMemory {
 /// Metadata of Component in terms of golem_wasm_ast types
 #[derive(Default)]
 pub struct RawComponentMetadata {
-    pub exports: Vec<AnalysedExport>,
+    pub known_exports: KnownExports,
     pub producers: Vec<WasmAstProducers>,
     pub memories: Vec<LinearMemory>,
-    pub binary_wit: Vec<u8>,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
+}
+
+/// Interface name prefixes used to identify known Golem capabilities.
+const AGENT_GUEST_PREFIX: &str = "golem:agent/guest";
+const SAVE_SNAPSHOT_PREFIX: &str = "golem:api/save-snapshot";
+const LOAD_SNAPSHOT_PREFIX: &str = "golem:api/load-snapshot";
+const OPLOG_PROCESSOR_PREFIX: &str = "golem:api/oplog-processor";
+
+fn record_known_export(
+    slot: &mut Option<String>,
+    capability_name: &str,
+    export_name: &str,
+) -> AnalysisResult<()> {
+    match slot {
+        Some(previous) => Err(AnalysisFailure::failed(format!(
+            "Duplicate {capability_name} export: found both {previous} and {export_name}"
+        ))),
+        None => {
+            *slot = Some(export_name.to_string());
+            Ok(())
+        }
+    }
+}
+
+/// Extract a `KnownExports` index from the full analysed export tree.
+/// Only instance exports are considered; each supported interface prefix
+/// is matched at most once (the exact versioned name is stored).
+pub fn extract_known_exports(exports: &[AnalysedExport]) -> AnalysisResult<KnownExports> {
+    let mut known = KnownExports::default();
+
+    for export in exports {
+        if let AnalysedExport::Instance(instance) = export {
+            let name = &instance.name;
+            if name == AGENT_GUEST_PREFIX || name.starts_with(&format!("{AGENT_GUEST_PREFIX}@")) {
+                record_known_export(&mut known.agent_guest_interface, "agent guest", name)?;
+            } else if name == SAVE_SNAPSHOT_PREFIX
+                || name.starts_with(&format!("{SAVE_SNAPSHOT_PREFIX}@"))
+            {
+                record_known_export(&mut known.save_snapshot_interface, "save snapshot", name)?;
+            } else if name == LOAD_SNAPSHOT_PREFIX
+                || name.starts_with(&format!("{LOAD_SNAPSHOT_PREFIX}@"))
+            {
+                record_known_export(&mut known.load_snapshot_interface, "load snapshot", name)?;
+            } else if name == OPLOG_PROCESSOR_PREFIX
+                || name.starts_with(&format!("{OPLOG_PROCESSOR_PREFIX}@"))
+            {
+                record_known_export(
+                    &mut known.oplog_processor_interface,
+                    "oplog processor",
+                    name,
+                )?;
+            }
+        }
+    }
+
+    Ok(known)
 }
 
 impl RawComponentMetadata {
@@ -612,11 +384,8 @@ impl RawComponentMetadata {
         let wit_analysis =
             WitAnalysisContext::new(data).map_err(ComponentProcessingError::Analysis)?;
 
-        let mut exports = wit_analysis
+        let exports = wit_analysis
             .get_top_level_exports()
-            .map_err(ComponentProcessingError::Analysis)?;
-        let binary_wit = wit_analysis
-            .serialized_interface_only()
             .map_err(ComponentProcessingError::Analysis)?;
         let root_package = wit_analysis.root_package_name();
 
@@ -624,7 +393,8 @@ impl RawComponentMetadata {
             tracing::warn!("Wit analysis warning: {}", warning);
         }
 
-        add_resource_drops(&mut exports);
+        let known_exports =
+            extract_known_exports(&exports).map_err(ComponentProcessingError::Analysis)?;
 
         let memories = wit_analysis
             .linear_memories()
@@ -636,10 +406,9 @@ impl RawComponentMetadata {
         let producers = wit_analysis.producers().to_vec();
 
         Ok(RawComponentMetadata {
-            exports,
+            known_exports,
             producers,
             memories,
-            binary_wit,
             root_package_name: root_package
                 .as_ref()
                 .map(|pkg| format!("{}:{}", pkg.namespace, pkg.name)),
@@ -658,15 +427,12 @@ impl RawComponentMetadata {
             .map(|producers| producers.into())
             .collect::<Vec<_>>();
 
-        let exports = self.exports.into_iter().collect::<Vec<_>>();
-
         let memories = self.memories.into_iter().collect();
 
         ComponentMetadataInnerData {
-            exports,
+            known_exports: self.known_exports,
             producers,
             memories,
-            binary_wit: Base64(self.binary_wit),
             root_package_name: self.root_package_name,
             root_package_version: self.root_package_version,
             agent_types,
@@ -758,118 +524,9 @@ impl Display for ComponentProcessingError {
     }
 }
 
-fn collect_resource_types(
-    resource_types: &mut HashMap<AnalysedResourceId, AnalysedFunction>,
-    fun: &AnalysedFunction,
-) {
-    if fun.is_constructor() {
-        if let AnalysedType::Handle(TypeHandle {
-            mode: AnalysedResourceMode::Owned,
-            resource_id,
-            ..
-        }) = &fun.result.as_ref().unwrap().typ
-        {
-            resource_types.insert(*resource_id, fun.clone());
-        }
-    } else if fun.is_method()
-        && let AnalysedType::Handle(TypeHandle {
-            mode: AnalysedResourceMode::Borrowed,
-            resource_id,
-            ..
-        }) = &fun.parameters[0].typ
-    {
-        resource_types.insert(*resource_id, fun.clone());
-    }
-}
-
-fn add_resource_drops(exports: &mut Vec<AnalysedExport>) {
-    // Components are not exporting explicit drop functions for exported resources, but
-    // worker executor does. So we keep golem-wasm-ast as a universal library and extend
-    // its result with the explicit drops here, for each resource, identified by an exported
-    // constructor.
-
-    let mut top_level_resource_types = HashMap::new();
-    for export in exports.iter_mut() {
-        match export {
-            AnalysedExport::Function(fun) => {
-                collect_resource_types(&mut top_level_resource_types, fun);
-            }
-            AnalysedExport::Instance(instance) => {
-                let mut instance_resource_types = HashMap::new();
-                for fun in &instance.functions {
-                    collect_resource_types(&mut instance_resource_types, fun);
-                }
-
-                for fun in instance_resource_types.values() {
-                    instance
-                        .functions
-                        .push(drop_from_constructor_or_method(fun));
-                }
-            }
-        }
-    }
-
-    for fun in top_level_resource_types.values() {
-        exports.push(AnalysedExport::Function(drop_from_constructor_or_method(
-            fun,
-        )));
-    }
-}
-
-fn drop_from_constructor_or_method(fun: &AnalysedFunction) -> AnalysedFunction {
-    if fun.is_constructor() {
-        let drop_name = fun.name.replace("[constructor]", "[drop]");
-        AnalysedFunction {
-            name: drop_name,
-            parameters: fun
-                .result
-                .iter()
-                .map(|result| AnalysedFunctionParameter {
-                    name: "self".to_string(),
-                    typ: result.typ.clone(),
-                })
-                .collect(),
-            result: None,
-        }
-    } else {
-        let name = fun.name.replace("[method]", "[drop]");
-        let (drop_name, _) = name.split_once('.').unwrap();
-        AnalysedFunction {
-            name: drop_name.to_string(),
-            parameters: fun
-                .parameters
-                .first()
-                .map(|param| AnalysedFunctionParameter {
-                    name: "self".to_string(),
-                    typ: {
-                        let AnalysedType::Handle(TypeHandle {
-                            mode: _,
-                            resource_id,
-                            name,
-                            owner,
-                        }) = &param.typ
-                        else {
-                            panic!("Expected handle type for resource drop")
-                        };
-                        AnalysedType::Handle(TypeHandle {
-                            mode: AnalysedResourceMode::Owned,
-                            resource_id: *resource_id,
-                            name: name.clone(),
-                            owner: owner.clone(),
-                        })
-                    },
-                })
-                .into_iter()
-                .collect(),
-            result: None,
-        }
-    }
-}
-
 mod protobuf {
-    use crate::base_model::component_metadata::AgentTypeProvisionConfig;
+    use crate::base_model::component_metadata::{AgentTypeProvisionConfig, KnownExports};
     use crate::model::agent::AgentTypeName;
-    use crate::model::base64::Base64;
     use crate::model::component_metadata::{
         ComponentMetadata, ComponentMetadataInnerData, LinearMemory, ProducerField, Producers,
         VersionedName,
@@ -955,7 +612,6 @@ mod protobuf {
             let inner_data = ComponentMetadataInnerData::try_from(value)?;
             Ok(Self {
                 data: Arc::new(inner_data),
-                cache: Arc::default(),
             })
         }
     }
@@ -968,12 +624,12 @@ mod protobuf {
         fn try_from(
             value: golem_api_grpc::proto::golem::component::ComponentMetadata,
         ) -> Result<Self, Self::Error> {
+            let known_exports = value
+                .known_exports
+                .map(KnownExports::from)
+                .unwrap_or_default();
             Ok(Self {
-                exports: value
-                    .exports
-                    .into_iter()
-                    .map(|export| export.try_into())
-                    .collect::<Result<_, _>>()?,
+                known_exports,
                 producers: value
                     .producers
                     .into_iter()
@@ -984,7 +640,6 @@ mod protobuf {
                     .into_iter()
                     .map(|memory| memory.into())
                     .collect(),
-                binary_wit: Base64(value.binary_wit),
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,
                 agent_types: value
@@ -1004,6 +659,28 @@ mod protobuf {
         }
     }
 
+    impl From<golem_api_grpc::proto::golem::component::KnownExports> for KnownExports {
+        fn from(value: golem_api_grpc::proto::golem::component::KnownExports) -> Self {
+            Self {
+                agent_guest_interface: value.agent_guest_interface,
+                save_snapshot_interface: value.save_snapshot_interface,
+                load_snapshot_interface: value.load_snapshot_interface,
+                oplog_processor_interface: value.oplog_processor_interface,
+            }
+        }
+    }
+
+    impl From<KnownExports> for golem_api_grpc::proto::golem::component::KnownExports {
+        fn from(value: KnownExports) -> Self {
+            Self {
+                agent_guest_interface: value.agent_guest_interface,
+                save_snapshot_interface: value.save_snapshot_interface,
+                load_snapshot_interface: value.load_snapshot_interface,
+                oplog_processor_interface: value.oplog_processor_interface,
+            }
+        }
+    }
+
     impl From<ComponentMetadata> for golem_api_grpc::proto::golem::component::ComponentMetadata {
         fn from(value: ComponentMetadata) -> Self {
             value.data.as_ref().clone().into()
@@ -1015,11 +692,7 @@ mod protobuf {
     {
         fn from(value: ComponentMetadataInnerData) -> Self {
             Self {
-                exports: value
-                    .exports
-                    .into_iter()
-                    .map(|export| export.into())
-                    .collect(),
+                known_exports: Some(value.known_exports.into()),
                 producers: value
                     .producers
                     .into_iter()
@@ -1030,7 +703,6 @@ mod protobuf {
                     .into_iter()
                     .map(|memory| memory.into())
                     .collect(),
-                binary_wit: value.binary_wit.0,
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,
                 agent_types: value.agent_types.into_iter().map(|at| at.into()).collect(),
@@ -1119,5 +791,94 @@ mod protobuf {
                     .collect(),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_wasm::analysis::{AnalysedExport, AnalysedInstance};
+    use test_r::test;
+
+    fn instance_export(name: &str) -> AnalysedExport {
+        AnalysedExport::Instance(AnalysedInstance {
+            name: name.to_string(),
+            functions: vec![],
+        })
+    }
+
+    #[test]
+    fn extract_known_exports_collects_supported_interfaces() {
+        let exports = vec![
+            instance_export("example:ignored/foo@1.0.0"),
+            instance_export("golem:agent/guest@1.5.0"),
+            instance_export("golem:api/save-snapshot@1.5.0"),
+            instance_export("golem:api/load-snapshot@1.5.0"),
+            instance_export("golem:api/oplog-processor@1.5.0"),
+        ];
+
+        let known = extract_known_exports(&exports).unwrap();
+
+        assert_eq!(
+            known,
+            KnownExports {
+                agent_guest_interface: Some("golem:agent/guest@1.5.0".to_string()),
+                save_snapshot_interface: Some("golem:api/save-snapshot@1.5.0".to_string()),
+                load_snapshot_interface: Some("golem:api/load-snapshot@1.5.0".to_string()),
+                oplog_processor_interface: Some("golem:api/oplog-processor@1.5.0".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn extract_known_exports_rejects_duplicate_capabilities() {
+        let exports = vec![
+            instance_export("golem:api/save-snapshot@1.5.0"),
+            instance_export("golem:api/save-snapshot@1.6.0"),
+        ];
+
+        let error = extract_known_exports(&exports).unwrap_err();
+
+        assert!(error.reason.contains("Duplicate save snapshot export"));
+        assert!(error.reason.contains("golem:api/save-snapshot@1.5.0"));
+        assert!(error.reason.contains("golem:api/save-snapshot@1.6.0"));
+    }
+
+    #[test]
+    fn component_metadata_helpers_use_exact_known_export_names() {
+        let metadata = ComponentMetadata::from_parts(
+            KnownExports {
+                agent_guest_interface: Some("golem:agent/guest@1.5.0".to_string()),
+                save_snapshot_interface: Some("golem:api/save-snapshot@1.5.0".to_string()),
+                load_snapshot_interface: Some("golem:api/load-snapshot@1.5.0".to_string()),
+                oplog_processor_interface: Some("golem:api/oplog-processor@1.5.0".to_string()),
+            },
+            vec![],
+            None,
+            None,
+            vec![],
+            BTreeMap::new(),
+        );
+
+        assert_eq!(
+            metadata.agent_initialize_function_name(),
+            Some("golem:agent/guest@1.5.0.{initialize}".to_string())
+        );
+        assert_eq!(
+            metadata.agent_invoke_function_name(),
+            Some("golem:agent/guest@1.5.0.{invoke}".to_string())
+        );
+        assert_eq!(
+            metadata.save_snapshot_function_name(),
+            Some("golem:api/save-snapshot@1.5.0.{save}".to_string())
+        );
+        assert_eq!(
+            metadata.load_snapshot_function_name(),
+            Some("golem:api/load-snapshot@1.5.0.{load}".to_string())
+        );
+        assert_eq!(
+            metadata.oplog_processor_function_name(),
+            Some("golem:api/oplog-processor@1.5.0.{process}".to_string())
+        );
     }
 }

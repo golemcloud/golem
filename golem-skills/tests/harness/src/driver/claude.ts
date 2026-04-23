@@ -16,8 +16,8 @@ export class ClaudeAgentDriver extends BaseAgentDriver {
   private sessionId: string | null = null;
   private activatedSkillNames: Set<string> = new Set();
 
-  async setup(workspace: string, bootstrapSkillSourceDir: string): Promise<void> {
-    await super.setup(workspace, bootstrapSkillSourceDir);
+  async setup(workspace: string, bootstrapSkillSourceDirs: string[]): Promise<void> {
+    await super.setup(workspace, bootstrapSkillSourceDirs);
     const agentsDir = path.join(workspace, ".agents");
     const claudeLink = path.join(workspace, ".claude");
     try {

@@ -144,6 +144,20 @@ test "generate_client_code - counter agent with no-arg methods" {
       #|}
       #|
       #|///|
+      #|pub fn CounterClient::schedule_cancelable_increment(
+      #|  self : CounterClient,
+      #|  scheduled_at : @wallClock.Datetime,
+      #|) -> @agentHost.CancellationToken {
+      #|  self
+      #|    .client
+      #|    .schedule_cancelable_invocation(
+      #|      scheduled_at,
+      #|      "increment",
+      #|      @rpcTypes.DataValue::Tuple([]),
+      #|    )
+      #|}
+      #|
+      #|///|
       #|pub fn CounterClient::get_value(self : CounterClient) -> UInt64 raise @common.AgentError {
       #|  let result = 
       #|    self.client.invoke_and_await("get_value", @rpcTypes.DataValue::Tuple([]))
@@ -164,6 +178,20 @@ test "generate_client_code - counter agent with no-arg methods" {
       #|  self
       #|    .client
       #|    .schedule_invocation(
+      #|      scheduled_at,
+      #|      "get_value",
+      #|      @rpcTypes.DataValue::Tuple([]),
+      #|    )
+      #|}
+      #|
+      #|///|
+      #|pub fn CounterClient::schedule_cancelable_get_value(
+      #|  self : CounterClient,
+      #|  scheduled_at : @wallClock.Datetime,
+      #|) -> @agentHost.CancellationToken {
+      #|  self
+      #|    .client
+      #|    .schedule_cancelable_invocation(
       #|      scheduled_at,
       #|      "get_value",
       #|      @rpcTypes.DataValue::Tuple([]),
@@ -453,6 +481,21 @@ test "generate_client_code - agent with params" {
       #|  self
       #|    .client
       #|    .schedule_invocation(
+      #|      scheduled_at,
+      #|      "add_task",
+      #|      @rpcTypes.DataValue::Tuple([@schema.to_element_value_as(task)]),
+      #|    )
+      #|}
+      #|
+      #|///|
+      #|pub fn TaskManagerClient::schedule_cancelable_add_task(
+      #|  self : TaskManagerClient,
+      #|  scheduled_at : @wallClock.Datetime,
+      #|  task : TaskInfo,
+      #|) -> @agentHost.CancellationToken raise @common.AgentError {
+      #|  self
+      #|    .client
+      #|    .schedule_cancelable_invocation(
       #|      scheduled_at,
       #|      "add_task",
       #|      @rpcTypes.DataValue::Tuple([@schema.to_element_value_as(task)]),
