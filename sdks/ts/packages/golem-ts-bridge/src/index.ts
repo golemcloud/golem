@@ -142,7 +142,7 @@ export interface AgentInvocationResult {
   result?: DataValue;
 }
 
-export interface WorkerAgentConfigEntry {
+export interface AgentConfigEntry {
   path: string[];
   value: unknown;
 }
@@ -153,7 +153,7 @@ export interface CreateAgentRequest {
   agentTypeName: AgentTypeName;
   parameters: DataValue;
   phantomId?: PhantomId;
-  config?: WorkerAgentConfigEntry[];
+  config?: AgentConfigEntry[];
 }
 
 export interface AgentId {

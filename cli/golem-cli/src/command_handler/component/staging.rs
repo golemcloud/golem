@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command_handler::component::ifs::{ComponentFilesArchive, IfsFileManager};
+use crate::command_handler::component::ifs::{
+    ComponentFilesArchive, IfsFileManager, resolve_archive_paths_for_sources,
+};
 use crate::context::Context;
 use crate::log::LogColorize;
 use crate::model::app::{
@@ -113,6 +115,7 @@ impl ComponentDiff {
 pub struct ChangedComponentFiles {
     pub new_or_updated_content: Option<ComponentFilesArchive>,
     pub removed_per_agent: BTreeMap<AgentTypeName, Vec<AgentFilePath>>,
+    pub archive_paths_by_source: BTreeMap<String, ArchiveFilePath>,
     /// Files whose only change is permissions — no content re-upload needed.
     pub file_permission_updates_per_agent:
         BTreeMap<AgentTypeName, BTreeMap<AgentFilePath, AgentFilePermissions>>,
@@ -187,7 +190,7 @@ impl<'a> ComponentStager<'a> {
                     .iter()
                     .map(|file| resolve_ifs_entry(file, &c.files_source))
             })
-            .collect()
+            .collect::<anyhow::Result<Vec<_>>>()
     }
 
     fn changed_manifest_files(&self) -> anyhow::Result<Vec<InitialComponentFile>> {
@@ -211,7 +214,7 @@ impl<'a> ComponentStager<'a> {
                         }
                     })
                     .map(|(file, source)| resolve_ifs_entry(file, source))
-                    .collect()
+                    .collect::<anyhow::Result<Vec<_>>>()
             }
         }
     }
@@ -252,11 +255,17 @@ impl<'a> ComponentStager<'a> {
             return Ok(ChangedComponentFiles {
                 new_or_updated_content: None,
                 removed_per_agent: BTreeMap::new(),
+                archive_paths_by_source: BTreeMap::new(),
                 file_permission_updates_per_agent: BTreeMap::new(),
             });
         }
 
         let files_to_archive = self.changed_manifest_files()?;
+        let archive_paths_by_source = resolve_archive_paths_for_sources(
+            files_to_archive
+                .iter()
+                .map(|file| file.source.as_url().clone()),
+        )?;
         let new_or_updated_content = if files_to_archive.is_empty() {
             None
         } else {
@@ -335,6 +344,7 @@ impl<'a> ComponentStager<'a> {
         Ok(ChangedComponentFiles {
             new_or_updated_content,
             removed_per_agent,
+            archive_paths_by_source,
             file_permission_updates_per_agent,
         })
     }
@@ -386,6 +396,38 @@ impl<'a> ComponentStager<'a> {
                 })
             })
             .collect()
+    }
+
+    fn resolve_archive_files_for_agent(
+        &self,
+        manifest_config: &AgentTypeManifestProvisionConfig,
+        archive_paths_by_source: &BTreeMap<String, ArchiveFilePath>,
+    ) -> anyhow::Result<BTreeMap<ArchiveFilePath, AgentFileOptions>> {
+        let mut archive_files = BTreeMap::new();
+
+        for file in &manifest_config.files {
+            let resolved = resolve_ifs_entry(file, &manifest_config.files_source)?;
+            let source = resolved.source.as_url().as_str().to_string();
+            let Some(archive_path) = archive_paths_by_source.get(&source) else {
+                continue;
+            };
+
+            let options = AgentFileOptions {
+                target_path: AgentFilePath(resolved.target.path.clone()),
+                permissions: resolved.target.permissions,
+            };
+
+            if let Some(existing) = archive_files.insert(archive_path.clone(), options.clone())
+                && existing != options
+            {
+                return Err(anyhow!(
+                    "Found conflicting archive mapping for source {} in agent manifest",
+                    archive_path
+                ));
+            }
+        }
+
+        Ok(archive_files)
     }
 
     fn files_to_add_or_update_for_agent(
@@ -441,12 +483,17 @@ impl<'a> ComponentStager<'a> {
     pub fn agent_type_provision_configs(
         &self,
     ) -> anyhow::Result<BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>> {
+        let all_files = self.all_manifest_files()?;
+        let archive_paths_by_source =
+            resolve_archive_paths_for_sources(all_files.iter().map(|f| f.source.as_url().clone()))?;
         self.component_deploy_properties
             .agent_type_configs
             .iter()
             .map(|(agent_type_name, manifest_config)| {
                 let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
-                let creation = manifest_config.to_provision_config_creation(resolved_plugins);
+                let mut creation = manifest_config.to_provision_config_creation(resolved_plugins);
+                creation.files = self
+                    .resolve_archive_files_for_agent(manifest_config, &archive_paths_by_source)?;
                 Ok((agent_type_name.clone(), creation))
             })
             .collect()
@@ -465,8 +512,12 @@ impl<'a> ComponentStager<'a> {
                         .iter()
                         .map(|(name, manifest_config)| {
                             let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
-                            let creation =
+                            let mut creation =
                                 manifest_config.to_provision_config_creation(resolved_plugins);
+                            creation.files = self.resolve_archive_files_for_agent(
+                                manifest_config,
+                                &changed_files.archive_paths_by_source,
+                            )?;
                             let files_to_remove = changed_files
                                 .removed_per_agent
                                 .get(name)
@@ -495,7 +546,7 @@ impl<'a> ComponentStager<'a> {
                                 },
                             ))
                         })
-                        .collect::<anyhow::Result<_>>()?,
+                        .collect::<anyhow::Result<BTreeMap<_, _>>>()?,
                 ));
             }
             Some(changed) if changed.is_empty() => return Ok(None),
@@ -510,7 +561,12 @@ impl<'a> ComponentStager<'a> {
                 .filter(|(name, _)| changed.contains(name.0.as_str()))
                 .map(|(name, manifest_config)| {
                     let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
-                    let creation = manifest_config.to_provision_config_creation(resolved_plugins);
+                    let mut creation =
+                        manifest_config.to_provision_config_creation(resolved_plugins);
+                    creation.files = self.resolve_archive_files_for_agent(
+                        manifest_config,
+                        &changed_files.archive_paths_by_source,
+                    )?;
 
                     let plugin_updates: Vec<PluginInstallationAction> = match &self.diff {
                         ComponentDiff::All => creation
@@ -602,7 +658,7 @@ impl<'a> ComponentStager<'a> {
                         },
                     ))
                 })
-                .collect::<anyhow::Result<_>>()?,
+                .collect::<anyhow::Result<BTreeMap<_, _>>>()?,
         ))
     }
 }

@@ -808,7 +808,7 @@ impl TypeScriptBridgeGenerator {
         writer: &mut TsFunctionWriter<'_>,
         local_configs: &[&AgentConfigDeclaration],
     ) {
-        writer.write_line("const agentConfig: base.AgentConfigEntryDto[] = [];");
+        writer.write_line("const agentConfig: base.AgentConfigEntry[] = [];");
         for config in local_configs {
             let param_name = format!(
                 "config{}",
@@ -1967,7 +1967,7 @@ impl TypeScriptBridgeGenerator {
                 AnalysedType::Bool(_) => value.to_string(),
                 AnalysedType::Option(inner) => {
                     let inner_encode = self.encode_wit_value("item", &inner.inner);
-                    format!("base.encodeOption({value}, (item) => {})", inner_encode)
+                    format!("base.encodeOption({value}, (item) => ({}))", inner_encode)
                 }
                 AnalysedType::List(inner) => {
                     let inner_encode = self.encode_wit_value("item", &inner.inner);
@@ -1975,7 +1975,7 @@ impl TypeScriptBridgeGenerator {
                     if inner_encode == "item" {
                         value.to_string()
                     } else {
-                        format!("{}.map((item: any) => {})", value, inner_encode)
+                        format!("{}.map((item: any) => ({}))", value, inner_encode)
                     }
                 }
                 AnalysedType::Enum(_) => {
