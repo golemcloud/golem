@@ -125,45 +125,80 @@ function generateOverviewSection(summary: Summary | MergedSummary): string {
     </div>`;
 }
 
+function passRateClass(passed: number, total: number): string {
+  if (total === 0) return "rate-none";
+  const pct = (passed / total) * 100;
+  if (pct >= 75) return "rate-good";
+  if (pct >= 40) return "rate-mid";
+  return "rate-low";
+}
+
+function renderCard(entry: MergedSummary["heatMap"][number]): string {
+  const pct = entry.total > 0 ? Math.round((entry.passed / entry.total) * 100) : 0;
+  const rateClass = passRateClass(entry.passed, entry.total);
+  const agent = escapeHtml(driverLabel(entry.agent, entry.model));
+
+  const usageHtml = (() => {
+    const u = entry.usage;
+    if (!u) return "";
+    const parts: string[] = [];
+    if (u.inputTokens || u.outputTokens) {
+      parts.push(
+        `<span class="mu-item">🔤 ${(u.inputTokens ?? 0).toLocaleString()} / ${(u.outputTokens ?? 0).toLocaleString()}</span>`,
+      );
+    }
+    if (u.costUsd) parts.push(`<span class="mu-item">💰 $${u.costUsd.toFixed(2)}</span>`);
+    if (u.numTurns) parts.push(`<span class="mu-item">🔄 ${u.numTurns} turns</span>`);
+    return parts.length > 0 ? `<div class="mu-row">${parts.join("")}</div>` : "";
+  })();
+
+  return `<div class="mx-card ${rateClass}">
+    <div class="mx-header"><span class="mx-agent">${agent}</span></div>
+    <div class="mx-bar-wrap"><div class="mx-bar" style="width:${pct}%"></div></div>
+    <div class="mx-counts">
+      <span class="mx-passed">✓ ${entry.passed}</span>
+      <span class="mx-failed">✗ ${entry.failed}</span>
+      <span class="mx-pct">${pct}%</span>
+    </div>
+    ${usageHtml}
+  </div>`;
+}
+
 function generateMatrixTable(summary: MergedSummary): string {
   if (summary.heatMap.length === 0) return "";
 
-  const anyUsage = summary.heatMap.some((e) => e.usage);
-  const rows = summary.heatMap
-    .map((entry) => {
-      const statusClass = entry.failed > 0 ? "fail" : "pass";
-      const agentCell = escapeHtml(driverLabel(entry.agent, entry.model));
-      const usageCells = anyUsage
-        ? (() => {
-            const u = entry.usage;
-            const tokens =
-              u?.inputTokens || u?.outputTokens
-                ? `${(u?.inputTokens ?? 0).toLocaleString()} / ${(u?.outputTokens ?? 0).toLocaleString()}`
-                : "-";
-            const cost = u?.costUsd ? `$${u.costUsd.toFixed(4)}` : "-";
-            return `<td>${tokens}</td><td>${cost}</td>`;
-          })()
-        : "";
-      return `<tr class="${statusClass}">
-      <td>${agentCell}</td>
-      <td>${escapeHtml(entry.language)}</td>
-      <td>${escapeHtml(entry.os)}</td>
-      <td>${entry.total}</td>
-      <td>${entry.passed}</td>
-      <td>${entry.failed}</td>
-      ${usageCells}
-    </tr>`;
+  const languages = [...new Set(summary.heatMap.map((e) => e.language))].sort();
+  const drivers = [
+    ...new Set(summary.heatMap.map((e) => driverLabel(e.agent, e.model))),
+  ].sort();
+
+  const colHeaders = languages
+    .map((l) => `<div class="mx-col-header">${escapeHtml(l)}</div>`)
+    .join("\n");
+
+  const rows = drivers
+    .map((driver) => {
+      const cells = languages
+        .map((lang) => {
+          const entry = summary.heatMap.find(
+            (e) => driverLabel(e.agent, e.model) === driver && e.language === lang,
+          );
+          return entry ? renderCard(entry) : `<div class="mx-card mx-empty"></div>`;
+        })
+        .join("\n");
+      return cells;
     })
     .join("\n");
 
-  const usageHeaders = anyUsage ? "<th>Tokens (in/out)</th><th>Cost</th>" : "";
+  const colCount = languages.length;
+
   return `
     <div class="matrix-table">
       <h2>Matrix Results</h2>
-      <table>
-        <thead><tr><th>Agent</th><th>Language</th><th>OS</th><th>Total</th><th>Passed</th><th>Failed</th>${usageHeaders}</tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+      <div class="mx-grid" style="grid-template-columns: repeat(${colCount}, 1fr);">
+        ${colHeaders}
+        ${rows}
+      </div>
     </div>`;
 }
 
@@ -179,14 +214,16 @@ function generateScenarioMatrix(reports: ScenarioReport[]): string {
   const driverHeaders = drivers.map((d) => `<th class="driver-col">${escapeHtml(d)}</th>`).join("");
 
   const rows = scenarios
-    .map((scenario) => {
-      const cells = drivers
-        .map((driver) => {
-          return `<td class="matrix-cell" data-scenario="${escapeHtml(scenario)}" data-driver="${escapeHtml(driver)}"></td>`;
-        })
-        .join("");
-      return `<tr><td class="scenario-name">${escapeHtml(scenario)}</td>${cells}</tr>`;
-    })
+    .flatMap((scenario) =>
+      languages.map((language) => {
+        const cells = drivers
+          .map((driver) => {
+            return `<td class="matrix-cell" data-scenario="${escapeHtml(scenario)}" data-driver="${escapeHtml(driver)}" data-language="${escapeHtml(language)}"></td>`;
+          })
+          .join("");
+        return `<tr><td class="scenario-name">${escapeHtml(scenario)}</td><td class="lang-name">${escapeHtml(language)}</td>${cells}</tr>`;
+      }),
+    )
     .join("\n");
 
   const languageOptions = languages
@@ -205,11 +242,10 @@ function generateScenarioMatrix(reports: ScenarioReport[]): string {
       </div>
       <div class="matrix-table-wrap">
         <table class="interactive-matrix" id="scenario-matrix-table">
-          <thead><tr><th class="scenario-col">Scenario</th>${driverHeaders}</tr></thead>
+          <thead><tr><th class="scenario-col">Scenario</th><th class="lang-col">Language</th>${driverHeaders}</tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
-      <div id="detail-panel"></div>
     </div>`;
 }
 
@@ -270,10 +306,10 @@ function generateFailureSummary(
     .join("\n");
 
   return `
-    <div class="failure-summary">
-      <h2>Failures</h2>
+    <details class="failure-summary">
+      <summary><h2>Failures (${failures.length})</h2></summary>
       ${items}
-    </div>`;
+    </details>`;
 }
 
 const CSS = `
@@ -297,8 +333,32 @@ const CSS = `
   table { width: 100%; border-collapse: collapse; }
   th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #dee2e6; }
   th { background: #e9ecef; font-size: 0.85rem; text-transform: uppercase; }
-  tr.pass td:first-child { border-left: 3px solid #198754; }
-  tr.fail td:first-child { border-left: 3px solid #dc3545; }
+
+  /* Matrix result cards */
+  .mx-grid { display: grid; gap: 12px; }
+  .mx-col-header { font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #495057; text-align: center; padding-bottom: 4px; border-bottom: 2px solid #dee2e6; }
+  .mx-card { border-radius: 8px; padding: 12px 14px; border: 1px solid #dee2e6; }
+  .mx-card.rate-good { background: linear-gradient(135deg, #d1e7dd 0%, #f0faf4 100%); border-color: #a3cfbb; }
+  .mx-card.rate-mid  { background: linear-gradient(135deg, #fff3cd 0%, #fffcf0 100%); border-color: #ffe69c; }
+  .mx-card.rate-low  { background: linear-gradient(135deg, #f8d7da 0%, #fff5f5 100%); border-color: #f1aeb5; }
+  .mx-card.rate-none { background: #e9ecef; }
+  .mx-card.mx-empty { border: 1px dashed #dee2e6; background: transparent; }
+  .mx-header { margin-bottom: 8px; }
+  .mx-agent { font-weight: 600; font-size: 0.95rem; display: block; word-break: break-word; }
+  .mx-bar-wrap { height: 6px; background: rgba(0,0,0,0.08); border-radius: 3px; overflow: hidden; margin-bottom: 6px; }
+  .mx-bar { height: 100%; border-radius: 3px; transition: width 0.3s; }
+  .rate-good .mx-bar { background: #198754; }
+  .rate-mid  .mx-bar { background: #fd7e14; }
+  .rate-low  .mx-bar { background: #dc3545; }
+  .mx-counts { display: flex; gap: 12px; align-items: baseline; font-size: 0.85rem; }
+  .mx-passed { color: #198754; font-weight: 600; }
+  .mx-failed { color: #dc3545; font-weight: 600; }
+  .mx-pct { margin-left: auto; font-weight: 700; font-size: 1.1rem; }
+  .rate-good .mx-pct { color: #198754; }
+  .rate-mid  .mx-pct { color: #b86e00; }
+  .rate-low  .mx-pct { color: #dc3545; }
+  .mu-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; font-size: 0.78rem; color: #6c757d; }
+  .mu-item { white-space: nowrap; }
 
   /* Scenario matrix */
   .matrix-controls { margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
@@ -306,6 +366,8 @@ const CSS = `
   .matrix-controls select { padding: 4px 8px; border-radius: 4px; border: 1px solid #ced4da; font-size: 0.85rem; }
   .matrix-table-wrap { overflow-x: auto; }
   .interactive-matrix th.scenario-col { min-width: 200px; }
+  .interactive-matrix th.lang-col { min-width: 70px; }
+  .interactive-matrix .lang-name { font-size: 0.85rem; color: #6c757d; }
   .interactive-matrix th.driver-col { text-align: center; min-width: 90px; font-size: 0.75rem; }
   .matrix-cell { text-align: center; cursor: pointer; font-weight: bold; font-size: 1rem; transition: opacity 0.15s; user-select: none; }
   .matrix-cell:hover { opacity: 0.75; }
@@ -314,10 +376,9 @@ const CSS = `
   .matrix-cell.cell-none { background: #e9ecef; color: #6c757d; }
   .matrix-cell.cell-active { outline: 2px solid #0d6efd; outline-offset: -2px; }
 
-  /* Detail panel */
-  #detail-panel { margin-top: 16px; }
-  #detail-panel:empty { display: none; }
-  .detail-box { border: 1px solid #dee2e6; border-radius: 8px; padding: 16px; background: #fff; }
+  /* Inline detail row */
+  .detail-row td { padding: 0; border-bottom: 1px solid #dee2e6; }
+  .detail-box { border: 1px solid #dee2e6; border-radius: 8px; padding: 16px; margin: 8px; background: #f8f9fa; }
   .detail-box h3 { font-size: 1rem; margin-bottom: 8px; }
   .detail-box .detail-meta { font-size: 0.85rem; color: #6c757d; margin-bottom: 12px; display: flex; gap: 16px; flex-wrap: wrap; }
   .step { padding: 6px 8px; margin: 4px 0; border-radius: 4px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -338,6 +399,10 @@ const CSS = `
   pre.error { width: 100%; background: #2b2d42; color: #edf2f4; padding: 8px; border-radius: 4px; font-size: 0.8rem; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
 
   /* Failures section */
+  .failure-summary > summary { cursor: pointer; list-style: none; }
+  .failure-summary > summary::-webkit-details-marker { display: none; }
+  .failure-summary > summary h2::before { content: '▶ '; font-size: 0.8rem; }
+  .failure-summary[open] > summary h2::before { content: '▼ '; }
   .failure-item { padding: 12px 0; border-bottom: 1px solid #dee2e6; }
   .failure-item:last-child { border-bottom: none; }
   .failure-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
@@ -350,10 +415,10 @@ const JS = `
   var data = window.__REPORT_DATA__;
   var filter = document.getElementById('language-filter');
   var table = document.getElementById('scenario-matrix-table');
-  var detailPanel = document.getElementById('detail-panel');
   if (!table) return;
 
   var activeCell = null;
+  var detailRow = null;
 
   function escHtml(s) {
     var d = document.createElement('div');
@@ -365,48 +430,35 @@ const JS = `
     return r.matrix.model ? r.matrix.agent + '/' + r.matrix.model : r.matrix.agent;
   }
 
-  function findReport(scenario, driver, lang) {
+  function cellStatus(scenario, driver, lang) {
     for (var i = 0; i < data.length; i++) {
       var r = data[i];
-      if (r.scenario === scenario && driverKey(r) === driver && (lang === '__all__' || r.matrix.language === lang)) {
-        return r;
+      if (r.scenario === scenario && driverKey(r) === driver && r.matrix.language === lang) {
+        return r.status === 'fail' ? 'fail' : 'pass';
       }
     }
-    return null;
+    return 'none';
   }
 
-  function aggregateStatus(scenario, driver, lang) {
-    var found = false;
-    var anyFail = false;
-    for (var i = 0; i < data.length; i++) {
-      var r = data[i];
-      if (r.scenario === scenario && driverKey(r) === driver) {
-        if (lang === '__all__' || r.matrix.language === lang) {
-          found = true;
-          if (r.status === 'fail') anyFail = true;
-        }
-      }
-    }
-    if (!found) return 'none';
-    return anyFail ? 'fail' : 'pass';
+  function removeDetail() {
+    if (detailRow) { detailRow.remove(); detailRow = null; }
+    if (activeCell) { activeCell.classList.remove('cell-active'); activeCell = null; }
   }
 
   function updateCells() {
-    var lang = filter ? filter.value : '__all__';
     var cells = table.querySelectorAll('.matrix-cell');
     for (var i = 0; i < cells.length; i++) {
       var cell = cells[i];
       var scenario = cell.getAttribute('data-scenario');
       var driver = cell.getAttribute('data-driver');
-      var status = aggregateStatus(scenario, driver, lang);
+      var lang = cell.getAttribute('data-language');
+      var status = cellStatus(scenario, driver, lang);
       cell.className = 'matrix-cell cell-' + status;
       if (status === 'pass') cell.innerHTML = '\\u2713';
       else if (status === 'fail') cell.innerHTML = '\\u2717';
       else cell.innerHTML = '\\u2014';
     }
-    // Clear detail panel and active state on filter change
-    if (detailPanel) detailPanel.innerHTML = '';
-    activeCell = null;
+    removeDetail();
   }
 
   function renderStepName(step) {
@@ -419,68 +471,58 @@ const JS = `
     return 'step';
   }
 
-  function showDetail(scenario, driver) {
-    var lang = filter ? filter.value : '__all__';
-    var matches = [];
+  function renderDetailHtml(scenario, driver, lang) {
+    var report = null;
     for (var i = 0; i < data.length; i++) {
       var r = data[i];
-      if (r.scenario === scenario && driverKey(r) === driver) {
-        if (lang === '__all__' || r.matrix.language === lang) {
-          matches.push(r);
-        }
+      if (r.scenario === scenario && driverKey(r) === driver && r.matrix.language === lang) {
+        report = r;
+        break;
       }
     }
-    if (matches.length === 0) { detailPanel.innerHTML = ''; return; }
+    if (!report) return '';
 
-    var html = '';
-    for (var m = 0; m < matches.length; m++) {
-      var report = matches[m];
-      html += '<div class="detail-box">';
-      html += '<h3>' + escHtml(report.scenario) + '</h3>';
-      html += '<div class="detail-meta">';
-      html += '<span>Driver: <strong>' + escHtml(driverKey(report)) + '</strong></span>';
-      html += '<span>Language: <strong>' + escHtml(report.matrix.language) + '</strong></span>';
-      html += '<span>Status: <strong>' + report.status + '</strong></span>';
-      html += '<span>Duration: <strong>' + report.durationSeconds.toFixed(1) + 's</strong></span>';
-      if (report.usage) {
-        var u = report.usage;
-        if (u.inputTokens || u.outputTokens) html += '<span>Tokens: <strong>' + (u.inputTokens||0).toLocaleString() + ' in / ' + (u.outputTokens||0).toLocaleString() + ' out</strong></span>';
-        if (u.costUsd) html += '<span>Cost: <strong>$' + u.costUsd.toFixed(4) + '</strong></span>';
-        if (u.numTurns) html += '<span>Turns: <strong>' + u.numTurns + '</strong></span>';
-      }
-      html += '</div>';
+    var html = '<div class="detail-box">';
+    html += '<h3>' + escHtml(report.scenario) + '</h3>';
+    html += '<div class="detail-meta">';
+    html += '<span>Driver: <strong>' + escHtml(driverKey(report)) + '</strong></span>';
+    html += '<span>Language: <strong>' + escHtml(report.matrix.language) + '</strong></span>';
+    html += '<span>Status: <strong>' + report.status + '</strong></span>';
+    html += '<span>Duration: <strong>' + report.durationSeconds.toFixed(1) + 's</strong></span>';
+    if (report.usage) {
+      var u = report.usage;
+      if (u.inputTokens || u.outputTokens) html += '<span>Tokens: <strong>' + (u.inputTokens||0).toLocaleString() + ' in / ' + (u.outputTokens||0).toLocaleString() + ' out</strong></span>';
+      if (u.costUsd) html += '<span>Cost: <strong>$' + u.costUsd.toFixed(4) + '</strong></span>';
+      if (u.numTurns) html += '<span>Turns: <strong>' + u.numTurns + '</strong></span>';
+    }
+    html += '</div>';
 
-      for (var j = 0; j < report.results.length; j++) {
-        var r = report.results[j];
-        var sClass = r.success ? 'pass' : 'fail';
-        html += '<div class="step ' + sClass + '">';
-        html += '<span class="step-name">' + renderStepName(r.step) + '</span>';
-        html += '<span class="step-duration">' + r.durationSeconds.toFixed(1) + 's</span>';
-        if (r.attempts && r.attempts.length > 0) {
-          html += '<div class="attempts">Attempts: ';
-          var parts = [];
-          for (var a = 0; a < r.attempts.length; a++) {
-            var at = r.attempts[a];
-            parts.push('#' + at.attemptNumber + ' ' + (at.success ? 'pass' : 'fail') + ' (' + at.durationSeconds.toFixed(1) + 's)');
-          }
-          html += escHtml(parts.join(', '));
-          html += '</div>';
+    for (var j = 0; j < report.results.length; j++) {
+      var r = report.results[j];
+      var sClass = r.success ? 'pass' : 'fail';
+      html += '<div class="step ' + sClass + '">';
+      html += '<span class="step-name">' + renderStepName(r.step) + '</span>';
+      html += '<span class="step-duration">' + r.durationSeconds.toFixed(1) + 's</span>';
+      if (r.attempts && r.attempts.length > 0) {
+        html += '<div class="attempts">Attempts: ';
+        var parts = [];
+        for (var a = 0; a < r.attempts.length; a++) {
+          var at = r.attempts[a];
+          parts.push('#' + at.attemptNumber + ' ' + (at.success ? 'pass' : 'fail') + ' (' + at.durationSeconds.toFixed(1) + 's)');
         }
-        if (r.error) {
-          html += '<pre class="error">' + escHtml(r.error) + '</pre>';
-        }
-        if (r.classification) {
-          html += '<div class="classification"><span class="badge ' + escHtml(r.classification.category) + '">' + escHtml(r.classification.category) + '</span> ' + escHtml(r.classification.guidance) + '</div>';
-        }
+        html += escHtml(parts.join(', '));
         html += '</div>';
       }
+      if (r.error) {
+        html += '<pre class="error">' + escHtml(r.error) + '</pre>';
+      }
+      if (r.classification) {
+        html += '<div class="classification"><span class="badge ' + escHtml(r.classification.category) + '">' + escHtml(r.classification.category) + '</span> ' + escHtml(r.classification.guidance) + '</div>';
+      }
       html += '</div>';
     }
-    detailPanel.innerHTML = html;
-  }
-
-  if (filter) {
-    filter.addEventListener('change', updateCells);
+    html += '</div>';
+    return html;
   }
 
   table.addEventListener('click', function(e) {
@@ -492,18 +534,47 @@ const JS = `
     if (!cell) return;
     var scenario = cell.getAttribute('data-scenario');
     var driver = cell.getAttribute('data-driver');
+    var lang = cell.getAttribute('data-language');
 
     if (activeCell === cell) {
-      cell.classList.remove('cell-active');
-      detailPanel.innerHTML = '';
-      activeCell = null;
+      removeDetail();
       return;
     }
-    if (activeCell) activeCell.classList.remove('cell-active');
+    removeDetail();
+
+    var html = renderDetailHtml(scenario, driver, lang);
+    if (!html) return;
+
     cell.classList.add('cell-active');
     activeCell = cell;
-    showDetail(scenario, driver);
+
+    var row = cell.closest('tr');
+    var colCount = row.children.length;
+    detailRow = document.createElement('tr');
+    detailRow.className = 'detail-row';
+    var td = document.createElement('td');
+    td.setAttribute('colspan', colCount);
+    td.innerHTML = html;
+    detailRow.appendChild(td);
+    row.parentNode.insertBefore(detailRow, row.nextSibling);
   });
+
+  function filterRows() {
+    var lang = filter ? filter.value : '__all__';
+    removeDetail();
+    var rows = table.tBodies[0].rows;
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var cell = row.querySelector('.matrix-cell');
+      if (!cell) continue;
+      var rowLang = cell.getAttribute('data-language');
+      row.style.display = (lang === '__all__' || rowLang === lang) ? '' : 'none';
+    }
+  }
+
+  if (filter) {
+    filter.addEventListener('change', filterRows);
+  }
 
   // Initial render
   updateCells();

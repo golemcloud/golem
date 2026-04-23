@@ -93,39 +93,28 @@ jobs:
             sdks/ts/packages/golem-ts-repl/dist
           key: golem-ts-sdk-skill-harness-${{ github.run_id }}
 
-  skill-harness-integration-test:
-    name: skills ${{ matrix.agent }}/${{ matrix.language }}${{ matrix.model && format(' [{0}]', matrix.model) || '' }}
+  # Provider-grouped jobs: jobs within each group run sequentially (max-parallel: 1)
+  # to avoid rate limiting, while different provider groups run in parallel.
+
+  skill-harness-anthropic:
+    name: skills/anthropic ${{ matrix.agent }}/${{ matrix.language }}${{ matrix.model && format(' [{0}]', matrix.model) || '' }}
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs:
       - build-and-store-release
       - build-golem-ts
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
-        agent: [claude-code, codex]
-        language: [ts, rust, scala, moonbit]
-        model: ['']
         include:
-          - agent: gemini
+          - agent: claude-code
             language: ts
-          - agent: gemini
+          - agent: claude-code
             language: rust
-          - agent: gemini
+          - agent: claude-code
             language: scala
-          - agent: gemini
+          - agent: claude-code
             language: moonbit
-          - agent: opencode
-            language: ts
-            model: openai/gpt-5.4
-          - agent: opencode
-            language: rust
-            model: openai/gpt-5.4
-          - agent: opencode
-            language: scala
-            model: openai/gpt-5.4
-          - agent: opencode
-            language: moonbit
-            model: openai/gpt-5.4
           - agent: opencode
             language: ts
             model: anthropic/claude-opus-4-6
@@ -142,175 +131,110 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
-
-      - uses: ./.github/actions/setup-rust
+      - uses: ./.github/actions/run-skill-harness
         with:
-          use-cache: 'false'
-          rust-targets: 'wasm32-wasip1 wasm32-wasip2'
-          install-cargo-binstall: 'true'
-
-      - uses: ./.github/actions/setup-js-wasm-tools
-        with:
+          agent: ${{ matrix.agent }}
+          language: ${{ matrix.language }}
+          model: ${{ matrix.model || '' }}
           wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
           wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Restore release binaries
-        uses: actions/cache/restore@v5
+  skill-harness-openai:
+    name: skills/openai ${{ matrix.agent }}/${{ matrix.language }}${{ matrix.model && format(' [{0}]', matrix.model) || '' }}
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs:
+      - build-and-store-release
+      - build-golem-ts
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - agent: codex
+            language: ts
+          - agent: codex
+            language: rust
+          - agent: codex
+            language: scala
+          - agent: codex
+            language: moonbit
+          - agent: opencode
+            language: ts
+            model: openai/gpt-5.4
+          - agent: opencode
+            language: rust
+            model: openai/gpt-5.4
+          - agent: opencode
+            language: scala
+            model: openai/gpt-5.4
+          - agent: opencode
+            language: moonbit
+            model: openai/gpt-5.4
+    steps:
+      - uses: actions/checkout@v5
         with:
-          path: tmp/golem-release-binaries
-          key: golem-release-binaries-${{ github.run_id }}
-          fail-on-cache-miss: true
-
-      - name: Install release binaries
-        run: |
-          mkdir -pv target/release
-          cp tmp/golem-release-binaries/* target/release/
-          chmod +x target/release/*
-
-      - name: Install Filesystem Watcher
-        run: sudo apt-get update && sudo apt-get install -y inotify-tools
-
-      - name: Install Claude Code
-        if: matrix.agent == 'claude-code'
-        run: npm install -g @anthropic-ai/claude-code
-
-      - name: Install OpenCode
-        if: matrix.agent == 'opencode'
-        run: npm install -g opencode-ai
-
-      - name: Install Gemini CLI
-        if: matrix.agent == 'gemini'
-        run: npm install -g @google/gemini-cli
-
-      - name: Install Codex CLI
-        if: matrix.agent == 'codex'
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          npm install -g @openai/codex
-          printenv OPENAI_API_KEY | codex login --with-api-key
-
-      - name: Restore built TS SDK
-        if: matrix.language == 'ts' || matrix.language == 'scala'
-        uses: actions/cache/restore@v5
+          fetch-depth: 1
+      - uses: ./.github/actions/run-skill-harness
         with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-typegen/dist
-            sdks/ts/packages/golem-ts-types-core/dist
-            sdks/ts/packages/golem-ts-bridge/dist
-            sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-skill-harness-${{ github.run_id }}
-          fail-on-cache-miss: true
+          agent: ${{ matrix.agent }}
+          language: ${{ matrix.language }}
+          model: ${{ matrix.model || '' }}
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install TS SDK dependencies
-        if: matrix.language == 'ts' || matrix.language == 'scala'
-        working-directory: sdks/ts
-        run: pnpm install --frozen-lockfile
-
-      - name: Setup Java
-        if: matrix.language == 'scala'
-        uses: actions/setup-java@v5
+  skill-harness-google:
+    name: skills/google ${{ matrix.agent }}/${{ matrix.language }}
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs:
+      - build-and-store-release
+      - build-golem-ts
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - agent: gemini
+            language: ts
+          - agent: gemini
+            language: rust
+          - agent: gemini
+            language: scala
+          - agent: gemini
+            language: moonbit
+    steps:
+      - uses: actions/checkout@v5
         with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Setup SBT
-        if: matrix.language == 'scala'
-        uses: sbt/setup-sbt@v1
-
-      - name: Cache scala dependencies
-        if: matrix.language == 'scala'
-        uses: coursier/cache-action@v8
-
-      - name: Sync WIT dependencies
-        if: matrix.language == 'scala'
-        run: cargo make wit
-
-      - name: Build agent_guest.wasm
-        if: matrix.language == 'scala'
-        working-directory: sdks/scala
-        run: ./scripts/generate-agent-guest-wasm.sh
-
-      - name: Publish Scala SDK locally
-        if: matrix.language == 'scala'
-        working-directory: sdks/scala
-        run: |
-          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
-
-      - name: Setup MoonBit
-        if: matrix.language == 'moonbit'
-        uses: hustcer/setup-moonbit@v1
-
-      - name: Install wasm-tools
-        if: matrix.language == 'moonbit'
-        run: cargo binstall --force --locked wasm-tools@1.227.1
-
-      - name: Install Harness Dependencies
-        working-directory: golem-skills/tests/harness
-        run: |
-          npm install
-          npm run build
-          npm install -g tsx
-
-      - name: Setup isolated test directory
-        run: |
-          mkdir -p /tmp/harness-run
-          cp -r golem-skills/tests/harness/dist /tmp/harness-run/dist
-          cp -r golem-skills/tests/harness/node_modules /tmp/harness-run/node_modules
-          cp -r golem-skills/tests/harness/src /tmp/harness-run/src
-          cp -r golem-skills/tests/harness/scenarios /tmp/harness-run/scenarios
-          cp -r golem-skills/tests/harness/docker /tmp/harness-run/docker
-          cp golem-skills/tests/harness/package.json /tmp/harness-run/
-          cp golem-skills/tests/harness/tsconfig.json /tmp/harness-run/
-          cd /tmp/harness-run && git init -b main && git config user.email "ci@golem.cloud" && git config user.name "CI" && git add -A && git commit -m "init"
-
-      - name: Compute report suffix
-        id: report-suffix
-        run: |
-          suffix="${{ matrix.agent }}-${{ matrix.language }}"
-          if [ -n "${{ matrix.model }}" ]; then
-            suffix="${suffix}-$(printf '%s' '${{ matrix.model }}' | tr '/' '-')"
-          fi
-          echo "suffix=$suffix" >> "$GITHUB_OUTPUT"
-
-      - name: Run Skill Tests
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GOLEM_PATH: ${{ github.workspace }}
-        run: |
-          cd /tmp/harness-run
-          MODEL_ARG=""
-          if [ -n "${{ matrix.model }}" ]; then
-            MODEL_ARG="--model ${{ matrix.model }}"
-          fi
-          tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} $MODEL_ARG --scenarios scenarios --ctrf "${{ github.workspace }}/target/ctrf-skills-${{ steps.report-suffix.outputs.suffix }}.json"
-
-      - name: Upload results
-        if: always()
-        uses: actions/upload-artifact@v6
+          fetch-depth: 1
+      - uses: ./.github/actions/run-skill-harness
         with:
-          name: skill-results-${{ steps.report-suffix.outputs.suffix }}
-          path: /tmp/harness-run/results/
-          retention-days: 7
-
-      - uses: ./.github/actions/publish-test-report
-        if: always()
-        with:
-          artifact-name: skill-test-report-${{ steps.report-suffix.outputs.suffix }}
+          agent: ${{ matrix.agent }}
+          language: ${{ matrix.language }}
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
   merge-skill-reports:
     name: Merge Skill Reports
     runs-on: ubuntu-latest
     if: always()
-    needs: skill-harness-integration-test
+    needs:
+      - skill-harness-anthropic
+      - skill-harness-openai
+      - skill-harness-google
     steps:
       - uses: actions/checkout@v5
         with:
@@ -348,6 +272,7 @@ jobs:
           path: |
             tmp/merged-report/report.html
             tmp/merged-report/merged-summary.json
+            tmp/merged-report/scenario-reports.json
           retention-days: 30
 
       - name: Checkout benchmark-results repository
@@ -362,6 +287,7 @@ jobs:
           mkdir -p benchmark-results/public/skills
           cp tmp/merged-report/report.html benchmark-results/public/skills/index.html
           cp tmp/merged-report/merged-summary.json benchmark-results/public/skills/merged-summary.json
+          cp tmp/merged-report/scenario-reports.json benchmark-results/public/skills/scenario-reports.json
           cd benchmark-results
           git config user.name  'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'

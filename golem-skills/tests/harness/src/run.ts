@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { ReportBuilder, TestBuilder, stringify } from "ctrf";
 import {
   ScenarioLoader,
@@ -170,7 +171,62 @@ async function mergeReports(reportsDir: string, outputDir: string): Promise<void
   await fs.writeFile(mergedPath, JSON.stringify(merged, null, 2));
   log.success(`Merged summary written to ${mergedPath}`);
 
+  const scenarioReportsPath = path.join(outputDir, "scenario-reports.json");
+  await fs.writeFile(scenarioReportsPath, JSON.stringify(scenarioReports, null, 2));
+  log.success(`Scenario reports written to ${scenarioReportsPath}`);
+
   const htmlContent = generateHtmlReport(merged, scenarioReports as HtmlScenarioReport[]);
+  const htmlPath = path.join(outputDir, "report.html");
+  await fs.writeFile(htmlPath, htmlContent);
+  log.success(`HTML report written to ${htmlPath}`);
+}
+
+const DEFAULT_REPORT_URL = "https://golemcloud.github.io/benchmark-results/skills";
+
+async function regenerateReport(baseUrl: string, outputDir: string): Promise<void> {
+  await fs.mkdir(outputDir, { recursive: true });
+
+  const summaryUrl = `${baseUrl.replace(/\/$/, "")}/merged-summary.json`;
+  const scenarioUrl = `${baseUrl.replace(/\/$/, "")}/scenario-reports.json`;
+
+  log.info(`Fetching merged summary from ${summaryUrl}`);
+  const summaryResp = await fetch(summaryUrl);
+  if (!summaryResp.ok) {
+    log.error(`Failed to fetch merged summary: ${summaryResp.status} ${summaryResp.statusText}`);
+    process.exit(1);
+  }
+  const merged = (await summaryResp.json()) as MergedSummary;
+
+  log.info(`Fetching scenario reports from ${scenarioUrl}`);
+  let scenarioReports: HtmlScenarioReport[];
+  const scenarioResp = await fetch(scenarioUrl);
+  if (scenarioResp.ok) {
+    scenarioReports = (await scenarioResp.json()) as HtmlScenarioReport[];
+  } else {
+    // Fallback: extract __REPORT_DATA__ from the published HTML
+    const htmlUrl = `${baseUrl.replace(/\/$/, "")}/`;
+    log.info(
+      `scenario-reports.json not available (${scenarioResp.status}), extracting from HTML at ${htmlUrl}`,
+    );
+    const htmlResp = await fetch(htmlUrl);
+    if (!htmlResp.ok) {
+      log.error(`Failed to fetch HTML report: ${htmlResp.status} ${htmlResp.statusText}`);
+      process.exit(1);
+    }
+    const html = await htmlResp.text();
+    const match = html.match(/window\.__REPORT_DATA__\s*=\s*(\[.*\]);/);
+    if (!match) {
+      log.error("Could not extract __REPORT_DATA__ from the published HTML report.");
+      process.exit(1);
+    }
+    scenarioReports = JSON.parse(match[1]) as HtmlScenarioReport[];
+  }
+
+  log.success(
+    `Downloaded ${scenarioReports.length} scenario reports (${merged.overallTotal} total, ${merged.overallPassed} passed, ${merged.overallFailed} failed)`,
+  );
+
+  const htmlContent = generateHtmlReport(merged, scenarioReports);
   const htmlPath = path.join(outputDir, "report.html");
   await fs.writeFile(htmlPath, htmlContent);
   log.success(`HTML report written to ${htmlPath}`);
@@ -191,6 +247,7 @@ async function main() {
       "resume-from": { type: "string" },
       workspace: { type: "string" },
       "merge-reports": { type: "string" },
+      "regenerate-report": { type: "string" },
       "idle-timeout": { type: "string" },
       retries: { type: "string" },
       ctrf: { type: "string" },
@@ -224,6 +281,15 @@ async function main() {
   if (mergeReportsDir) {
     const outputDir = path.resolve(process.cwd(), output!);
     await mergeReports(path.resolve(process.cwd(), mergeReportsDir), outputDir);
+    return;
+  }
+
+  // Regenerate-report mode — download data from a published URL and regenerate HTML locally
+  const regenerateUrl = values["regenerate-report"];
+  if (regenerateUrl) {
+    const baseUrl = regenerateUrl === "latest" ? DEFAULT_REPORT_URL : regenerateUrl;
+    const outputDir = path.resolve(process.cwd(), output!);
+    await regenerateReport(baseUrl, outputDir);
     return;
   }
 
@@ -272,6 +338,8 @@ Options:
   --resume-from <id>    Resume execution from the given step ID
   --workspace <path>    Override workspace directory
   --merge-reports <dir> Merge summary.json files from <dir> into aggregated report
+  --regenerate-report <url>  Download data from a published report URL and regenerate HTML locally
+                             (default URL: ${DEFAULT_REPORT_URL})
   --ctrf <path>         Write a CTRF JSON report to the given file path
   -h, --help            Show this help message
 `.trim();
@@ -437,6 +505,7 @@ Options:
   // Set up graceful Ctrl+C handling
   const abortController = new AbortController();
   let interrupted = false;
+  let abortedForCreditInsufficient = false;
 
   const stopServerAndExit = (code: number) => {
     golemServer.stop().finally(() => {
@@ -592,10 +661,64 @@ Options:
 
             scenarioResult = await executor.execute(spec);
 
-            // Don't retry on success, abort, credit exhaustion, or non-idle-timeout failures
+            // Don't retry on success, abort, or non-idle-timeout failures
             if (scenarioResult.status === "pass") break;
             if (interrupted) break;
-            if (scenarioResult.creditInsufficient) break;
+
+            // Credit exhaustion: retry with exponential backoff before giving up
+            if (scenarioResult.creditInsufficient) {
+              const creditBackoffs = [5, 30, 120]; // seconds
+              let creditResolved = false;
+              for (let ci = 0; ci < creditBackoffs.length; ci++) {
+                const delaySec = creditBackoffs[ci];
+                log.warn(
+                  `Credit insufficient — waiting ${delaySec}s before retry ${ci + 1}/${creditBackoffs.length}...`,
+                );
+                try {
+                  await delay(delaySec * 1000, undefined, { signal: abortController.signal });
+                } catch {
+                  break; // aborted during backoff
+                }
+                if (abortController.signal.aborted) break;
+
+                log.dim("Restarting Golem server for credit retry...");
+                await golemServer.restart();
+                log.success("Golem server restarted.");
+
+                const retrySuffix =
+                  attempt > 1
+                    ? `/attempt-${attempt}/credit-retry-${ci + 1}`
+                    : `/credit-retry-${ci + 1}`;
+                const retryWorkspace = path.join(
+                  workspacesRoot,
+                  scenarioDir,
+                  currentLanguage + retrySuffix,
+                );
+                const retryWatcher = new SkillWatcher(retryWorkspace);
+                const retryExecutor = new ScenarioExecutor(
+                  driver,
+                  retryWatcher,
+                  retryWorkspace,
+                  bootstrapSkillSourceDirs,
+                  {
+                    globalTimeoutSeconds,
+                    idleTimeoutSeconds,
+                    agent: currentAgent,
+                    language: currentLanguage,
+                    abortSignal: abortController.signal,
+                    resumeFromStepId: resumeFrom,
+                  },
+                );
+                scenarioResult = await retryExecutor.execute(spec);
+                if (!scenarioResult.creditInsufficient) {
+                  creditResolved = true;
+                  break;
+                }
+              }
+              if (!creditResolved) break;
+              // Credit resolved — fall through to normal result handling
+              if (scenarioResult.status === "pass") break;
+            }
 
             if (!canRetry || attempt >= totalAttempts) break;
 
@@ -660,6 +783,7 @@ Options:
 
           if (scenarioResult!.creditInsufficient) {
             log.error("Credit balance too low — marking all remaining scenarios as failed.");
+            abortedForCreditInsufficient = true;
             abortController.abort();
             break;
           }
@@ -670,7 +794,7 @@ Options:
     }
 
     // When aborted due to credit exhaustion, mark all remaining scenarios as failed
-    if (abortController.signal.aborted) {
+    if (abortedForCreditInsufficient) {
       const reportedKeys = new Set(
         scenarioReports.map((r) => `${r.matrix.agent}|${r.matrix.language}|${r.scenario}`),
       );
@@ -693,7 +817,17 @@ Options:
               run_id: runId,
               status: "fail",
               durationSeconds: 0,
-              results: [],
+              results: [
+                {
+                  step: { tag: "prompt" as const, prompt: "skipped" },
+                  success: false,
+                  durationSeconds: 0,
+                  expectedSkills: [],
+                  activatedSkills: [],
+                  error:
+                    "Skipped: API credit balance exhausted. A previous scenario triggered credit exhaustion and retries did not resolve it.",
+                },
+              ],
               artifactPaths: [],
             };
             const reportPath = path.join(resultsDir, `${agent}-${lang}-${spec.name}.json`);
