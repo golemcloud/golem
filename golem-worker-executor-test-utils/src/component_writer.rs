@@ -232,11 +232,11 @@ impl FileSystemComponentWriter {
                 );
 
                 let (raw_component_metadata, memories, known_exports) =
-                    Self::analyze_memories_and_known_exports(&source_path)
+                    Self::analyze_memories_and_known_exports(source_path)
                         .await
                         .map_err(|err| format!("Failed to analyze component: {err:#}"))?;
 
-                let agent_types = extract_agent_types(&source_path, false, true)
+                let agent_types = extract_agent_types(source_path, false, true)
                     .await
                     .map_err(|err| format!("Failed analyzing component: {err}"))?;
 
