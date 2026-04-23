@@ -1057,7 +1057,7 @@ impl WorkerCommandHandler {
                         worker_component
                             .metadata
                             .agent_type_provision_configs()
-                            .get(&agent_type_name)
+                            .get(agent_type_name)
                             .cloned()
                     })
                     .unwrap_or_default();

@@ -102,7 +102,7 @@ fn format_untyped_config(config: &[AgentConfigEntryDto]) -> String {
             format!(
                 "{}={}",
                 entry.path.join(".").log_color_highlight(),
-                entry.value.0.to_string()
+                entry.value.0
             )
         })
         .join("\n")
