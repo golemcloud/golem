@@ -15,6 +15,7 @@
 use super::model::application::{ApplicationExtRevisionRecord, ApplicationRepoError};
 use crate::repo::model::BindFields;
 use crate::repo::model::application::{ApplicationRecord, ApplicationRevisionRecord};
+use crate::repo::registry_change::{DbRegistryChangeRepo, NewRegistryChangeEvent};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -24,7 +25,7 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::{RepoError, ResultExt};
 use indoc::indoc;
-use sqlx::Database;
+use sqlx::{Database, Row};
 use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
@@ -376,6 +377,63 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                 )
                 .await?
                 .ok_or(ApplicationRepoError::ConcurrentModification)?;
+
+                // When an application is soft-deleted, its child environments become
+                // unreachable through the public API (which joins on the application's
+                // deleted_at filter). However, worker-service keeps an in-memory
+                // AgentResolutionCache keyed on (app_name, env_name, agent_type, ...)
+                // that is not automatically invalidated on application deletion. Once
+                // a user recreates an application with the same name (required
+                // because cloud accounts have a hard limit on applications), the
+                // cache continues to serve the old environment's resolution,
+                // pointing at an orphaned component_id and causing invocations to
+                // fail with "Component not found".
+                //
+                // Emit a DeploymentChanged invalidation event for each environment
+                // under the deleted application so worker-service marks any cached
+                // resolution stale on next access. We bump the deployment revisions
+                // by 1 so that AgentResolutionCache::advance_latest_revision
+                // observes a strictly larger value than any currently cached entry.
+                let env_rows = tx
+                    .fetch_all(
+                        sqlx::query(indoc! { r#"
+                            SELECT
+                                e.environment_id,
+                                COALESCE(cdr.revision_id, 0) AS current_deployment_revision,
+                                COALESCE(cdr.deployment_revision_id, 0) AS deployment_revision
+                            FROM environments e
+                            LEFT JOIN current_deployments cd
+                                ON cd.environment_id = e.environment_id
+                            LEFT JOIN current_deployment_revisions cdr
+                                ON cdr.environment_id = cd.environment_id
+                                AND cdr.revision_id = cd.current_revision_id
+                            WHERE e.application_id = $1
+                              AND e.deleted_at IS NULL
+                        "#})
+                        .bind(revision.application_id),
+                    )
+                    .await?;
+
+                for row in env_rows {
+                    let env_id: Uuid = row.try_get("environment_id").map_err(RepoError::from)?;
+                    let current_deployment_revision: i64 = row
+                        .try_get("current_deployment_revision")
+                        .map_err(RepoError::from)?;
+                    let deployment_revision: i64 = row
+                        .try_get("deployment_revision")
+                        .map_err(RepoError::from)?;
+
+                    let change_event = NewRegistryChangeEvent::deployment_changed(
+                        env_id,
+                        deployment_revision + 1,
+                        current_deployment_revision + 1,
+                    );
+                    DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
+                        tx,
+                        &change_event,
+                    )
+                    .await?;
+                }
 
                 Ok(ApplicationExtRevisionRecord {
                     account_id: application_record.account_id,
