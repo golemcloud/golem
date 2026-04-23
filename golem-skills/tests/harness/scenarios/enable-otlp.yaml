@@ -159,12 +159,13 @@ steps:
       attempts: 6
       delay: 5
     http:
-      url: "http://localhost:9090/api/v1/query?query=golem_invocation_count"
+      url: "http://localhost:9090/api/v1/query?query=golem_invocation_count_total"
       method: "GET"
     expect:
       status: 200
-      body_contains: "golem_invocation_count"
+      body_contains: "golem_invocation_count_total"
 
+finally:
   - id: "stop-otlp-stack"
     shell:
       command: "sh"

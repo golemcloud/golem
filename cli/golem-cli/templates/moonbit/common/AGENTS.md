@@ -112,7 +112,7 @@ golem-temp/                       # Build artifacts (gitignored)
 
 ## Name Mapping
 
-All MoonBit identifiers are used **as-is** (matching the source code) when used externally in CLI commands, Rib scripts, REPL, and agent IDs:
+All MoonBit identifiers are used **as-is** (matching the source code) when used externally in CLI commands, REPL, and agent IDs:
 
 - **Agent type names**: `CounterAgent` → `CounterAgent`, `TaskManager` → `TaskManager` (PascalCase)
 - **Method names**: `get_value` → `get_value`, `add_task` → `add_task` (snake_case)

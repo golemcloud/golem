@@ -559,7 +559,7 @@ object OplogApi {
 
   private def parseDateTime(raw: JsDatetime): ContextApi.DateTime = {
     val secs  = BigInt(raw.seconds.toString)
-    val nanos = raw.nanoseconds.toLong
+    val nanos = raw.nanoseconds.toInt
     ContextApi.DateTime(secs, nanos)
   }
 

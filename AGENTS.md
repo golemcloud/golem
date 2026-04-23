@@ -6,7 +6,7 @@ Golem is a distributed computing platform built in Rust. It uses `cargo-make` fo
 
 ## Prerequisites
 
-- **Rust**: Latest stable toolchain via rustup, with `wasm32-wasip1` target
+- **Rust**: Latest stable toolchain via rustup, with `wasm32-wasip2` target
 - **cargo-make**: Latest version (`cargo install --force cargo-make`)
 - **cargo-test-r**: Latest version (`cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r`)
 - **redis**: Required for tests

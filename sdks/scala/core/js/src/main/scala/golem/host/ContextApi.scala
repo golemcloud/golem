@@ -61,7 +61,7 @@ object ContextApi {
 
   // --- WIT: datetime record (shared timestamp type) ---
 
-  final case class DateTime(seconds: BigInt, nanoseconds: Long)
+  final case class DateTime(seconds: BigInt, nanoseconds: Int)
 
   // --- WIT: span resource ---
 
@@ -70,8 +70,7 @@ object ContextApi {
     def startedAt(): DateTime = {
       val raw   = underlying.startedAt()
       val secs  = BigInt(raw.seconds.toString)
-      val nanos = raw.nanoseconds.toLong
-      DateTime(secs, nanos)
+      DateTime(secs, raw.nanoseconds)
     }
 
     def setAttribute(name: String, value: AttributeValue): Unit =
