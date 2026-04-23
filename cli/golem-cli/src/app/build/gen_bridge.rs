@@ -4,7 +4,9 @@ use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
 use crate::bridge_gen::rust::RustBridgeGenerator;
 use crate::bridge_gen::typescript::TypeScriptBridgeGenerator;
-use crate::bridge_gen::{BridgeGenerator, bridge_client_directory_name};
+use crate::bridge_gen::{
+    BridgeGenerator, BridgeGeneratorConfig, DeriveRule, bridge_client_directory_name,
+};
 use crate::command::GolemCliCommand;
 use crate::error::NonSuccessfulExit;
 use crate::fs;
@@ -103,6 +105,19 @@ async fn collect_manifest_targets(ctx: &BuildContext<'_>) -> anyhow::Result<Vec<
                     agent_type,
                     target_language,
                     output_dir,
+                    derive_rules: sdks_targets
+                        .additional_derives
+                        .as_ref()
+                        .map(|rules| {
+                            rules
+                                .iter()
+                                .map(|r| DeriveRule {
+                                    pattern: r.pattern.clone(),
+                                    derives: r.derives.clone(),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 });
             }
         }
@@ -173,6 +188,7 @@ async fn collect_custom_targets(
                 agent_type,
                 target_language,
                 output_dir,
+                derive_rules: custom_target.derive_rules.clone(),
             });
         }
     }
@@ -222,17 +238,24 @@ async fn gen_bridge_sdk_target(
                 );
                 let _indent = LogIndent::new();
 
+                let config = BridgeGeneratorConfig {
+                    derive_rules: target.derive_rules,
+                };
                 let mut generator: Box<dyn BridgeGenerator> = match target.target_language {
                     GuestLanguage::Rust => Box::new(RustBridgeGenerator::new(
                         target.agent_type,
                         &output_dir,
                         false,
+                        config,
                     )?),
-                    GuestLanguage::TypeScript => Box::new(TypeScriptBridgeGenerator::new(
-                        target.agent_type,
-                        &output_dir,
-                        false,
-                    )?),
+                    GuestLanguage::TypeScript => {
+                        Box::new(<TypeScriptBridgeGenerator as BridgeGenerator>::new(
+                            target.agent_type,
+                            &output_dir,
+                            false,
+                            config,
+                        )?)
+                    }
                     GuestLanguage::Scala => {
                         bail!("Bridge generation is not yet supported for Scala")
                     }

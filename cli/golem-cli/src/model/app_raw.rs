@@ -889,6 +889,28 @@ impl BridgeSdks {
     }
 }
 
+/// A rule for adding derive macros to generated types matching a regex pattern.
+///
+/// # YAML examples
+///
+/// Add `PartialEq` to all types:
+/// ```yaml
+/// { pattern: ".*", derives: ["PartialEq"] }
+/// ```
+///
+/// Add `Eq` and `Hash` only to `Uuid`:
+/// ```yaml
+/// { pattern: "^Uuid$", derives: ["Eq", "Hash"] }
+/// ```
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeriveRuleRaw {
+    /// Regex pattern matched against the generated type name.
+    pub pattern: String,
+    /// Derive macros to add when the pattern matches.
+    pub derives: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BridgeSdkLanguageTargets {
@@ -896,6 +918,10 @@ pub struct BridgeSdkLanguageTargets {
     pub agents: LenientTokenList,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_dir: Option<String>,
+    /// Rules for adding derive macros to generated types. Each rule pairs a regex
+    /// pattern (matched against type names) with a list of derives to add.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additional_derives: Option<Vec<DeriveRuleRaw>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
