@@ -295,13 +295,11 @@ impl TryFrom<golem::worker::AgentFilter> for AgentFilter {
                     filter.comparator.try_into()?,
                     filter.value,
                 )),
-                golem::worker::agent_filter::Filter::WasiConfig(filter) => {
-                    Ok(AgentFilter::new_wasi_config(
-                        filter.name,
-                        filter.comparator.try_into()?,
-                        filter.value,
-                    ))
-                }
+                golem::worker::agent_filter::Filter::Config(filter) => Ok(AgentFilter::new_config(
+                    filter.name,
+                    filter.comparator.try_into()?,
+                    filter.value,
+                )),
                 golem::worker::agent_filter::Filter::Not(filter) => {
                     let filter = *filter.filter.ok_or_else(|| "Missing filter".to_string())?;
                     Ok(AgentFilter::new_not(filter.try_into()?))
@@ -358,17 +356,17 @@ impl From<AgentFilter> for golem::worker::AgentFilter {
                 comparator: comparator.into(),
                 value,
             }),
-            AgentFilter::WasiConfig(AgentConfigVarsFilter {
+            AgentFilter::Config(AgentConfigVarsFilter {
                 name,
                 comparator,
                 value,
-            }) => golem::worker::agent_filter::Filter::WasiConfig(
-                golem::worker::AgentConfigVarsFilter {
+            }) => {
+                golem::worker::agent_filter::Filter::Config(golem::worker::AgentConfigVarsFilter {
                     name,
                     comparator: comparator.into(),
                     value,
-                },
-            ),
+                })
+            }
             AgentFilter::Status(AgentStatusFilter { comparator, value }) => {
                 golem::worker::agent_filter::Filter::Status(golem::worker::AgentStatusFilter {
                     comparator: comparator.into(),

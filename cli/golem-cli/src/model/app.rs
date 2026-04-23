@@ -541,8 +541,6 @@ impl Application {
                         config: template_layer_props.config.value().clone(),
                         env_merge_mode: None,
                         env: Some(template_layer_props.env.value().clone()),
-                        wasi_config_merge_mode: None,
-                        wasi_config: Some(template_layer_props.wasi_config.value().clone()),
                         plugins_merge_mode: None,
                         plugins: Some(template_layer_props.plugins.value().clone()),
                         files_merge_mode: None,
@@ -1234,15 +1232,6 @@ impl Layer for ComponentLayer {
                 ),
             );
 
-            value.wasi_config.apply_layer(
-                id,
-                selection,
-                (
-                    properties.wasi_config_merge_mode.unwrap_or_default(),
-                    properties.wasi_config.value().clone(),
-                ),
-            );
-
             value.plugins.apply_layer(
                 id,
                 selection,
@@ -1311,10 +1300,6 @@ impl<'a> Agent<'a> {
 
     pub fn env(&self) -> &BTreeMap<String, String> {
         &self.resolved.properties.env
-    }
-
-    pub fn wasi_config(&self) -> &BTreeMap<String, String> {
-        &self.resolved.properties.wasi_config
     }
 
     pub fn plugins(&self) -> &[app_raw::PluginInstallation] {
@@ -1452,10 +1437,6 @@ impl<'a> Component<'a> {
         &self.properties().env
     }
 
-    pub fn wasi_config(&self) -> &BTreeMap<String, String> {
-        &self.properties().wasi_config
-    }
-
     pub fn config(&self) -> &Option<JsonValue> {
         &self.properties().config
     }
@@ -1485,8 +1466,6 @@ impl<'a> Component<'a> {
             config: self.layer_properties().config.value().clone(),
             env_merge_mode: None,
             env: Some(self.layer_properties().env.value().clone()),
-            wasi_config_merge_mode: None,
-            wasi_config: Some(self.layer_properties().wasi_config.value().clone()),
             plugins_merge_mode: None,
             plugins: Some(self.layer_properties().plugins.value().clone()),
             files_merge_mode: None,
@@ -1516,9 +1495,6 @@ pub struct ComponentLayerProperties {
     pub env_merge_mode: Option<MapMergeMode>,
     pub env: MapProperty<ComponentLayer, String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wasi_config_merge_mode: Option<MapMergeMode>,
-    pub wasi_config: MapProperty<ComponentLayer, String, String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub plugins_merge_mode: Option<VecMergeMode>,
     pub plugins: VecProperty<ComponentLayer, app_raw::PluginInstallation>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1539,12 +1515,6 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             config: value.agent_properties.config.into(),
             env_merge_mode: value.agent_properties.env_merge_mode,
             env: value.agent_properties.env.unwrap_or_default().into(),
-            wasi_config_merge_mode: value.agent_properties.wasi_config_merge_mode,
-            wasi_config: value
-                .agent_properties
-                .wasi_config
-                .unwrap_or_default()
-                .into(),
             plugins_merge_mode: value.agent_properties.plugins_merge_mode,
             plugins: value.agent_properties.plugins.unwrap_or_default().into(),
             files_merge_mode: value.agent_properties.files_merge_mode,
@@ -1562,7 +1532,6 @@ impl ComponentLayerProperties {
         self.clean.compact_trace();
         self.config.compact_trace();
         self.env.compact_trace();
-        self.wasi_config.compact_trace();
         self.plugins.compact_trace();
         self.files.compact_trace();
     }
@@ -1736,14 +1705,6 @@ impl Layer for AgentLayer {
                     properties.env.clone().unwrap_or_default(),
                 ),
             );
-            value.wasi_config.apply_layer(
-                id,
-                selection,
-                (
-                    properties.wasi_config_merge_mode.unwrap_or_default(),
-                    properties.wasi_config.clone().unwrap_or_default(),
-                ),
-            );
             value.plugins.apply_layer(
                 id,
                 selection,
@@ -1775,7 +1736,6 @@ pub struct AgentLayerProperties {
     pub applied_layers: Vec<(AgentLayerId, Option<String>)>,
     config: JsonProperty<AgentLayer>,
     env: MapProperty<AgentLayer, String, String>,
-    wasi_config: MapProperty<AgentLayer, String, String>,
     plugins: VecProperty<AgentLayer, app_raw::PluginInstallation>,
     files: VecProperty<AgentLayer, app_raw::InitialComponentFile>,
 }
@@ -1794,7 +1754,6 @@ impl AgentLayerProperties {
     pub fn compact_traces(&mut self) {
         self.config.compact_trace();
         self.env.compact_trace();
-        self.wasi_config.compact_trace();
         self.plugins.compact_trace();
         self.files.compact_trace();
     }
@@ -1829,7 +1788,6 @@ impl AgentLayerProperties {
 pub struct AgentProperties {
     pub config: Option<JsonValue>,
     pub env: BTreeMap<String, String>,
-    pub wasi_config: BTreeMap<String, String>,
     pub plugins: Vec<app_raw::PluginInstallation>,
     pub files: Vec<app_raw::InitialComponentFile>,
 }
@@ -1840,12 +1798,6 @@ impl AgentProperties {
             config: layer_properties.config.value().clone(),
             env: layer_properties
                 .env
-                .value()
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            wasi_config: layer_properties
-                .wasi_config
                 .value()
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
@@ -1868,7 +1820,6 @@ pub struct ComponentProperties {
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
-    pub wasi_config: BTreeMap<String, String>,
     pub config: Option<JsonValue>,
 }
 
@@ -1901,12 +1852,6 @@ impl ComponentProperties {
             files,
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value().iter()),
-            wasi_config: merged
-                .wasi_config
-                .value()
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
             config: merged.config.value().clone(),
         };
 
@@ -3453,8 +3398,6 @@ mod test {
                 env:
                   KEY: fallback
                   ONLY_FALLBACK: fb
-                wasiConfig:
-                  key: fallback
 
             agents:
               test-agent:
@@ -3476,8 +3419,6 @@ mod test {
                           keep: "custom"
                           plus: "custom"
                       replacedByScalar: "scalar"
-                    wasiConfig:
-                      key: custom
                 config:
                   common: "common"
                   nested:
@@ -3486,8 +3427,6 @@ mod test {
                       keep: "common"
                 env:
                   KEY: common
-                wasiConfig:
-                  key: common
         "# };
 
         let (app, _app_tmp_dir) = load_app_for_env(source, "local", &["custom"]);
@@ -3517,11 +3456,6 @@ mod test {
             assert_eq!(
                 agent.env().get("ONLY_FALLBACK").cloned(),
                 Some("fb".to_string())
-            );
-
-            assert_eq!(
-                agent.wasi_config().get("key").cloned(),
-                Some("custom".to_string())
             );
 
             assert_eq!(agent.applied_layers().len(), 4);

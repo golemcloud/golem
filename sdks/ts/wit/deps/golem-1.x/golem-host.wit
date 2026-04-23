@@ -115,7 +115,7 @@ interface host {
         version(agent-version-filter),
         created-at(agent-created-at-filter),
         env(agent-env-filter),
-        wasi-config-vars(agent-config-vars-filter)
+        config(agent-config-vars-filter)
     }
 
     /// Combines multiple filter conditions with an `AND` relationship for enumerating agents
@@ -137,7 +137,7 @@ interface host {
         /// Environment variables seen by the agent
         env: list<tuple<string, string>>,
         /// Configuration variables seen by the agent
-        config-vars: list<tuple<string, string>>,
+        config: list<tuple<string, string>>,
         /// The current agent status
         status: agent-status,
         /// The component version the agent is running with

@@ -156,7 +156,6 @@ impl WorkerService for DefaultWorkerService {
                     component_size,
                     initial_total_linear_memory_size,
                     initial_active_plugins,
-                    config_vars: wasi_config,
                     local_agent_config,
                     original_phantom_id,
                 },
@@ -183,7 +182,6 @@ impl WorkerService for DefaultWorkerService {
                 let initial_worker_metadata = AgentMetadata {
                     agent_id,
                     env,
-                    wasi_config,
                     config,
                     environment_id,
                     created_by,

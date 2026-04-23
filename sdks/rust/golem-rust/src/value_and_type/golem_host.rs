@@ -497,7 +497,7 @@ impl IntoValue for AgentPropertyFilter {
                 let builder = builder.variant(4u32);
                 inner.add_to_builder(builder).finish()
             }
-            AgentPropertyFilter::WasiConfigVars(inner) => {
+            AgentPropertyFilter::Config(inner) => {
                 let builder = builder.variant(5u32);
                 inner.add_to_builder(builder).finish()
             }
@@ -514,7 +514,7 @@ impl IntoValue for AgentPropertyFilter {
         builder = <AgentVersionFilter>::add_to_type_builder(builder.case("version"));
         builder = <AgentCreatedAtFilter>::add_to_type_builder(builder.case("CreatedAt"));
         builder = <AgentEnvFilter>::add_to_type_builder(builder.case("env"));
-        builder = <AgentConfigVarsFilter>::add_to_type_builder(builder.case("WasiConfigVars"));
+        builder = <AgentConfigVarsFilter>::add_to_type_builder(builder.case("config"));
         builder.finish()
     }
 }
@@ -560,10 +560,10 @@ impl FromValueAndType for AgentPropertyFilter {
                 Ok(AgentPropertyFilter::Env(value))
             }
             5 => {
-                let value = <AgentConfigVarsFilter>::from_extractor(&inner.ok_or_else(|| {
-                    "Missing AgentPropertyFilter::WasiConfigVars body".to_string()
-                })?)?;
-                Ok(AgentPropertyFilter::WasiConfigVars(value))
+                let value = <AgentConfigVarsFilter>::from_extractor(
+                    &inner.ok_or_else(|| "Missing AgentPropertyFilter::Config body".to_string())?,
+                )?;
+                Ok(AgentPropertyFilter::Config(value))
             }
             _ => Err(format!(
                 "Invalid AgentPropertyFilter variant index: {}",
@@ -675,7 +675,7 @@ impl IntoValue for AgentMetadata {
         let builder = self.agent_id.add_to_builder(builder.item());
         let builder = self.args.add_to_builder(builder.item());
         let builder = self.env.add_to_builder(builder.item());
-        let builder = self.config_vars.add_to_builder(builder.item());
+        let builder = self.config.add_to_builder(builder.item());
         let builder = self.status.add_to_builder(builder.item());
         let builder = self.component_revision.add_to_builder(builder.item());
         let builder = self.retry_count.add_to_builder(builder.item());
@@ -688,7 +688,7 @@ impl IntoValue for AgentMetadata {
         let builder = <AgentId>::add_to_type_builder(builder.field("agent_id"));
         let builder = <Vec<String>>::add_to_type_builder(builder.field("args"));
         let builder = <Vec<(String, String)>>::add_to_type_builder(builder.field("env"));
-        let builder = <Vec<(String, String)>>::add_to_type_builder(builder.field("config_vars"));
+        let builder = <Vec<(String, String)>>::add_to_type_builder(builder.field("config"));
         let builder = <AgentStatus>::add_to_type_builder(builder.field("status"));
         let builder = <u64>::add_to_type_builder(builder.field("component_revision"));
         let builder = <u64>::add_to_type_builder(builder.field("retry_count"));
@@ -716,10 +716,10 @@ impl FromValueAndType for AgentMetadata {
                 .field(2usize)
                 .ok_or_else(|| "Missing env field".to_string())?,
         )?;
-        let config_vars = <Vec<(String, String)>>::from_extractor(
+        let config = <Vec<(String, String)>>::from_extractor(
             &extractor
                 .field(3usize)
-                .ok_or_else(|| "Missing config-vars field".to_string())?,
+                .ok_or_else(|| "Missing config field".to_string())?,
         )?;
         let status = <AgentStatus>::from_extractor(
             &extractor
@@ -745,7 +745,7 @@ impl FromValueAndType for AgentMetadata {
             agent_id,
             args,
             env,
-            config_vars,
+            config,
             status,
             component_revision,
             retry_count,

@@ -532,7 +532,6 @@ impl<'a> ComponentStager<'a> {
                                 name.clone(),
                                 AgentTypeProvisionConfigUpdate {
                                     env: Some(creation.env),
-                                    wasi_config: Some(creation.wasi_config),
                                     config: Some(creation.config),
                                     files_to_add_or_update: self
                                         .files_to_add_or_update_for_agent(name, creation.files),
@@ -648,7 +647,6 @@ impl<'a> ComponentStager<'a> {
                         name.clone(),
                         AgentTypeProvisionConfigUpdate {
                             env: Some(creation.env),
-                            wasi_config: Some(creation.wasi_config),
                             config: Some(creation.config),
                             files_to_add_or_update: self
                                 .files_to_add_or_update_for_agent(name, creation.files),

@@ -8208,11 +8208,6 @@ components:
           default: {}
           additionalProperties:
             type: string
-        wasiConfig:
-          type: object
-          default: {}
-          additionalProperties:
-            type: string
         config:
           type: array
           default: []
@@ -8233,11 +8228,6 @@ components:
       title: AgentTypeProvisionConfigCreation
       properties:
         env:
-          type: object
-          default: {}
-          additionalProperties:
-            type: string
-        wasiConfig:
           type: object
           default: {}
           additionalProperties:
@@ -8263,10 +8253,6 @@ components:
       title: AgentTypeProvisionConfigUpdate
       properties:
         env:
-          type: object
-          additionalProperties:
-            type: string
-        wasiConfig:
           type: object
           additionalProperties:
             type: string
@@ -9402,7 +9388,7 @@ components:
         agentTypeProvisionConfigs:
           type: object
           description: |-
-            Per-agent-type provisioning configuration: env, wasi_config, config, plugins, files.
+            Per-agent-type provisioning configuration: env, config, plugins, files.
             Kept separate from agent type declarations so AgentType stays a pure declaration type.
           default: {}
           additionalProperties:

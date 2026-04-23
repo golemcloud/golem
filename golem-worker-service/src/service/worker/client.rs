@@ -51,7 +51,6 @@ use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
-use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 use tonic::Code;
@@ -64,7 +63,6 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
-        wasi_config: BTreeMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         account_id: AccountId,
@@ -418,7 +416,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         environment_variables: HashMap<String, String>,
-        wasi_config: BTreeMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
         ignore_already_existing: bool,
         account_id: AccountId,
@@ -438,7 +435,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     worker_executor_client.create_worker(CreateWorkerRequest {
                         agent_id: Some(agent_id.into()),
                         env: environment_variables.clone(),
-                        wasi_config: wasi_config.clone().into_iter().collect(),
                         config: config
                             .clone()
                             .into_iter()

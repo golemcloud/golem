@@ -59,7 +59,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
-use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
+use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto, TypedAgentConfigEntry};
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput,
     AgentInvocationResult, AgentMetadata, AgentStatus, IdempotencyKey, InvocationStatus,
@@ -74,7 +74,7 @@ use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::cmp::min;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -259,7 +259,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     fn is_same_worker_creation_request(
         existing: &AgentMetadata,
         request_env: &[(String, String)],
-        request_wasi_config: &BTreeMap<String, String>,
         request_config: &[AgentConfigEntryDto],
     ) -> bool {
         // env — both sides hold only per-worker overrides; compare order-independently
@@ -273,11 +272,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         if existing_env != request_env_map {
-            return false;
-        }
-
-        // wasi_config — both are BTreeMap of overrides, direct comparison
-        if existing.wasi_config != *request_wasi_config {
             return false;
         }
 
@@ -317,8 +311,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        let wasi_config: BTreeMap<String, String> = request.wasi_config.into_iter().collect();
-
         let config = request
             .config
             .into_iter()
@@ -338,7 +330,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             && !Self::is_same_worker_creation_request(
                 &existing.initial_worker_metadata,
                 &env,
-                &wasi_config,
                 &config,
             )
         {
@@ -353,7 +344,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             Some(env),
-            Some(wasi_config),
             config,
             None,
             None,
@@ -443,7 +433,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker = Worker::get_or_create_suspended(
             self,
             &owned_agent_id,
-            None,
             None,
             Vec::new(),
             None,
@@ -557,7 +546,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self,
                     &owned_agent_id,
                     None,
-                    None,
                     Vec::new(),
                     None,
                     None,
@@ -608,7 +596,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let worker = Worker::get_or_create_suspended(
                 self,
                 &owned_agent_id,
-                None,
                 None,
                 Vec::new(),
                 None,
@@ -664,7 +651,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         self,
                         &owned_agent_id,
                         None,
-                        None,
                         Vec::new(),
                         None,
                         None,
@@ -687,7 +673,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         self,
                         &owned_agent_id,
                         None,
-                        None,
                         Vec::new(),
                         None,
                         None,
@@ -708,7 +693,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let worker = Worker::get_or_create_suspended(
                         self,
                         &owned_agent_id,
-                        None,
                         None,
                         Vec::new(),
                         None,
@@ -768,7 +752,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &self.services,
                     &owned_agent_id,
                     None,
-                    None,
                     Vec::new(),
                     None,
                     None,
@@ -786,7 +769,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let _ = Worker::get_or_create_running(
                     &self.services,
                     &owned_agent_id,
-                    None,
                     None,
                     Vec::new(),
                     None,
@@ -839,7 +821,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             request.env(),
-            request.wasi_config()?,
             request.config(),
             None,
             request.parent(),
@@ -875,7 +856,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             self,
             &owned_agent_id,
             request.env(),
-            request.wasi_config()?,
             request.config(),
             None,
             request.parent(),
@@ -1127,7 +1107,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             self,
                             &owned_agent_id,
                             None,
-                            None,
                             Vec::new(),
                             Some(metadata.last_known_status.component_revision),
                             None,
@@ -1153,7 +1132,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         let worker = Worker::get_or_create_suspended(
                             self,
                             &owned_agent_id,
-                            None,
                             None,
                             Vec::new(),
                             None,
@@ -1190,7 +1168,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let worker = Worker::get_or_create_suspended(
                     self,
                     &owned_agent_id,
-                    None,
                     None,
                     Vec::new(),
                     None,
@@ -1236,7 +1213,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let event_service = Worker::get_or_create_suspended(
                 self,
                 &owned_agent_id,
-                None,
                 None,
                 Vec::new(),
                 None,
@@ -1614,7 +1590,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 self,
                                 &owned_agent_id,
                                 None,
-                                None,
                                 Vec::new(),
                                 None,
                                 None,
@@ -1686,7 +1661,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let worker = Worker::get_or_create_suspended(
                         self,
                         &owned_agent_id,
-                        None,
                         None,
                         Vec::new(),
                         None,
@@ -1877,7 +1851,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_id: metadata_dto.agent_id,
             args: vec![],
             env: metadata_dto.env.into_iter().collect(),
-            wasi_config: metadata_dto.wasi_config,
+            config: TypedAgentConfigEntry::to_flat_map(&metadata_dto.config),
             status: metadata_dto.status,
             component_revision: metadata_dto.component_revision,
             retry_count: metadata_dto.retry_count as u64,
@@ -1896,7 +1870,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker = Worker::get_or_create_running(
             self,
             &owned_agent_id,
-            None,
             None,
             Vec::new(),
             Some(component_revision),
@@ -1987,7 +1960,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             agent_id: Some(metadata.agent_id.into()),
             environment_id: Some(metadata.environment_id.into()),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
-            wasi_config: metadata.wasi_config.into_iter().collect(),
             config: metadata.config.into_iter().map(Into::into).collect(),
             created_by: Some(metadata.created_by.into()),
             component_revision: latest_status.component_revision.into(),

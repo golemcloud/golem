@@ -118,6 +118,12 @@ fn push_agent_config_path_segment(keys: &mut Vec<String>, buf: &mut String) -> a
         return Err(anyhow!("empty path segment"));
     }
 
+    if segment.contains('.') {
+        return Err(anyhow!(
+            "path segments must not contain '.'; use separate segments instead"
+        ));
+    }
+
     keys.push(segment.to_string());
     buf.clear();
 
@@ -183,11 +189,9 @@ mod parse_agent_config_tests {
     }
 
     #[test]
-    fn quoted_path_segment() {
-        let e = parse(r#""foo.bar".baz=1"#);
-
-        assert_eq!(e.path, vec!["foo.bar", "baz"]);
-        assert_eq!(e.value, json!(1).into());
+    fn quoted_path_segment_with_dot_fails() {
+        let err = parse_agent_config(r#""foo.bar".baz=1"#).unwrap_err();
+        assert!(err.to_string().contains("must not contain '.'"));
     }
 
     #[test]
@@ -199,11 +203,9 @@ mod parse_agent_config_tests {
     }
 
     #[test]
-    fn escaped_dot_in_segment() {
-        let e = parse(r#"foo\.bar.baz=1"#);
-
-        assert_eq!(e.path, vec!["foo.bar", "baz"]);
-        assert_eq!(e.value, json!(1).into());
+    fn escaped_dot_in_segment_fails() {
+        let err = parse_agent_config(r#"foo\.bar.baz=1"#).unwrap_err();
+        assert!(err.to_string().contains("must not contain '.'"));
     }
 
     #[test]
@@ -231,11 +233,9 @@ mod parse_agent_config_tests {
     }
 
     #[test]
-    fn complex_case() {
-        let e = parse(r#""foo.bar=baz"."x.y"={"hello":"world"}"#);
-
-        assert_eq!(e.path, vec!["foo.bar=baz", "x.y"]);
-        assert_eq!(e.value, json!({"hello":"world"}).into());
+    fn complex_case_with_dots_fails() {
+        let err = parse_agent_config(r#""foo.bar=baz"."x.y"={"hello":"world"}"#).unwrap_err();
+        assert!(err.to_string().contains("must not contain '.'"));
     }
 
     #[test]

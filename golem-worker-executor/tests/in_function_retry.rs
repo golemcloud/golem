@@ -645,13 +645,7 @@ async fn http_zone1_inline_retry_on_transient_connection_failure(
 
     let agent_id = agent_id!("HttpClient");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let result = executor
@@ -715,13 +709,7 @@ async fn http_zone1_falls_back_to_trap_when_delay_exceeds_threshold(
 
     let agent_id = agent_id!("HttpClient");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     // Call should eventually succeed via trap+replay (not inline retry)
@@ -1022,13 +1010,7 @@ async fn http_output_stream_inline_retry_on_body_write_failure(
 
     let agent_id = agent_id!("HttpClient4");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     // post_large_body writes 256KB in 4 chunks. The first 2 connections will fail
@@ -1103,13 +1085,7 @@ async fn http_post_fails_permanently_when_idempotence_disabled(
 
     let agent_id = agent_id!("HttpClient4");
     let _worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     // post_non_idempotent sets assume_idempotence=false and uses POST.
@@ -1172,13 +1148,7 @@ async fn http_get_retried_inline_even_when_idempotence_disabled(
 
     let agent_id = agent_id!("HttpClient4");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     // get_idempotent sets assume_idempotence=false and uses GET.
@@ -1549,13 +1519,7 @@ async fn http_resuming_response_body_inline_retry_on_body_read_failure(
 
     let agent_id = agent_id!("HttpClient4");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     // get_and_read_body_chunked reads in 256-byte chunks, triggering
@@ -1642,13 +1606,7 @@ async fn http_resuming_response_body_inline_retry_accepts_matching_non_partial_s
 
     let agent_id = agent_id!("HttpClient4");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let result = executor
@@ -1728,13 +1686,7 @@ async fn http_write_zeroes_body_reconstruction(
 
     let agent_id = agent_id!("HttpClient4");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let result = executor
@@ -1811,13 +1763,7 @@ async fn http_no_output_stream_retry_when_subscribe_used(
 
     let agent_id = agent_id!("HttpClient4");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     // post_with_subscribe calls subscribe() on the output stream before writing,
@@ -1890,13 +1836,7 @@ async fn http_no_retry_when_trailers_present(
 
     let agent_id = agent_id!("HttpClient4");
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     // post_with_trailers finishes the outgoing body with trailers,
@@ -1972,13 +1912,7 @@ async fn http_no_resuming_response_body_retry_when_body_skip_used(
 
     let agent_id = agent_id!("HttpClient4");
     let _worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     // get_with_body_skip reads 256 bytes, skips 256, then reads remaining.

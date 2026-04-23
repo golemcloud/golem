@@ -468,7 +468,6 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
                 .get_or_create_running(
                     &owned_agent_id,
                     None,
-                    None,
                     Vec::new(),
                     None,
                     None,

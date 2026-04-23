@@ -1144,13 +1144,7 @@ async fn component_env_and_worker_env_priority(
     let worker_env = HashMap::from_iter(vec![("FOO".to_string(), "baz".to_string())]);
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            worker_env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), worker_env, Vec::new())
         .await?;
 
     let AgentMetadataDto { mut env, .. } = executor.get_worker_metadata(&worker_id).await?;
@@ -1867,13 +1861,7 @@ async fn long_running_poll_loop_works_as_expected(
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -1974,13 +1962,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -2095,13 +2077,7 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -2170,13 +2146,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -2313,13 +2283,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2403,13 +2367,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2514,13 +2472,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2681,13 +2633,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
@@ -2870,13 +2816,7 @@ async fn invocation_queue_is_persistent(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_agent_with(
-            &component.id,
-            agent_id.clone(),
-            env,
-            HashMap::new(),
-            Vec::new(),
-        )
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
     executor.log_output(&worker_id).await?;
@@ -3654,7 +3594,6 @@ async fn worker_created_by_reflects_component_owner_not_caller(
             component_owner_account_id: Some(component_owner_account_id.into()),
             environment_id: Some(component.environment_id.into()),
             env: Default::default(),
-            wasi_config: Default::default(),
             config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),
@@ -3747,7 +3686,6 @@ async fn worker_environment_reflects_component_not_caller(
             component_owner_account_id: Some(caller_account_id.into()),
             environment_id: Some(caller_environment_id.into()),
             env: Default::default(),
-            wasi_config: Default::default(),
             config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),
@@ -3884,7 +3822,6 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
             component_owner_account_id: Some(component_owner_account_id.into()),
             environment_id: Some(component.environment_id.into()),
             env: Default::default(),
-            wasi_config: Default::default(),
             config: Vec::new(),
             ignore_already_existing: false,
             auth_ctx: Some(caller_auth_ctx),

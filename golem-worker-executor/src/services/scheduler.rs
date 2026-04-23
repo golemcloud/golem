@@ -78,7 +78,6 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
             .get_or_create_suspended(
                 owned_agent_id,
                 None,
-                None,
                 Vec::new(),
                 None,
                 None,
@@ -97,7 +96,6 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         let worker = self
             .get_or_create_suspended(
                 owned_agent_id,
-                None,
                 None,
                 Vec::new(),
                 None,
