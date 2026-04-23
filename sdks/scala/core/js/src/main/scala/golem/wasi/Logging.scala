@@ -30,20 +30,20 @@ import scala.scalajs.js.annotation.JSImport
  */
 object Logging {
 
-  sealed abstract class Level(val value: Int)
+  sealed abstract class Level(val value: String)
   object Level {
-    case object Trace    extends Level(0)
-    case object Debug    extends Level(1)
-    case object Info     extends Level(2)
-    case object Warn     extends Level(3)
-    case object Error    extends Level(4)
-    case object Critical extends Level(5)
+    case object Trace    extends Level("trace")
+    case object Debug    extends Level("debug")
+    case object Info     extends Level("info")
+    case object Warn     extends Level("warn")
+    case object Error    extends Level("error")
+    case object Critical extends Level("critical")
   }
 
   @js.native
   @JSImport("wasi:logging/logging", JSImport.Namespace)
   private object LoggingModule extends js.Object {
-    def log(level: Int, context: String, message: String): Unit = js.native
+    def log(level: String, context: String, message: String): Unit = js.native
   }
 
   def log(level: Level, context: String, message: String): Unit =
