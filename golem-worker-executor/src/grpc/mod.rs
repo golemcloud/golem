@@ -72,6 +72,7 @@ use golem_service_base::grpc::{
 };
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::cmp::min;
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
@@ -248,55 +249,48 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
-    /// Checks whether a create-worker request carries the same parameters that
-    /// an already-persisted worker was created with.  When this returns `true`
-    /// the request is treated as an idempotent duplicate and succeeds without
-    /// error.
+    /// Checks whether a create-worker request carries the same per-worker override
+    /// parameters that an already-persisted worker was created with. When this returns
+    /// `true` the request is treated as an idempotent duplicate and execution falls
+    /// through to `get_or_create_suspended` which handles the already-existing worker.
     ///
-    /// The stored `env` includes component-level default environment variables
-    /// that were merged in during the original creation.  The request only
-    /// carries per-worker overrides.  We therefore check that every request env
-    /// var is present in the stored env with the same value — extra entries in
-    /// the stored env are component-level defaults and are expected.
-    ///
-    /// For the `config` entries we compare only the *paths*, because the stored
-    /// representation (`TypedAgentConfigEntry`) uses a different value encoding
-    /// than the request (`AgentConfigEntryDto`).  Path equality is adequate
-    /// because for the same component the same path + JSON value will always be
-    /// parsed into the same typed value.
+    /// All three fields store only per-worker overrides — agent-type defaults are
+    /// applied at runtime and not stored. Direct equality is therefore used for all three.
     fn is_same_worker_creation_request(
         existing: &AgentMetadata,
         request_env: &[(String, String)],
         request_wasi_config: &BTreeMap<String, String>,
         request_config: &[AgentConfigEntryDto],
     ) -> bool {
-        // env — the stored env is request env merged with component defaults.
-        // Verify that every request env var exists in the stored env with the
-        // same value; additional entries are component-level defaults.
+        // env — both sides hold only per-worker overrides; compare order-independently
         let existing_env: HashMap<&str, &str> = existing
             .env
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        for (k, v) in request_env {
-            match existing_env.get(k.as_str()) {
-                Some(existing_v) if *existing_v == v.as_str() => {}
-                _ => return false,
-            }
+        let request_env_map: HashMap<&str, &str> = request_env
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        if existing_env != request_env_map {
+            return false;
         }
 
-        // wasi_config — both are BTreeMap, direct comparison
+        // wasi_config — both are BTreeMap of overrides, direct comparison
         if existing.wasi_config != *request_wasi_config {
             return false;
         }
 
-        // config — compare paths (same path + same JSON value always yields
-        // the same TypedAgentConfigEntry for a given component revision)
+        // config — both sides hold only per-worker overrides; compare path and value
         if existing.config.len() != request_config.len() {
             return false;
         }
         for (existing_entry, request_entry) in existing.config.iter().zip(request_config.iter()) {
             if existing_entry.path != request_entry.path {
+                return false;
+            }
+            let existing_json = existing_entry.value.to_json_value().ok();
+            if existing_json.as_ref() != Some(&request_entry.value.0) {
                 return false;
             }
         }
@@ -900,6 +894,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
 
         self.shard_service().revoke_shards(&shard_ids)?;
+        let current_assignment = self.shard_service().try_get_current_assignment();
+        info!(
+            revoked_shards = ?shard_ids,
+            current_assignment = ?current_assignment,
+            "Investigation: shard revoke applied"
+        );
 
         for (agent_id, worker_details) in self.active_workers().snapshot().await {
             if self.shard_service().check_worker(&agent_id).is_err()
@@ -923,6 +923,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
 
         self.shard_service().assign_shards(&shard_ids)?;
+        let current_assignment = self.shard_service().try_get_current_assignment();
+        info!(
+            assigned_shards = ?shard_ids,
+            current_assignment = ?current_assignment,
+            "Investigation: shard assign applied"
+        );
         Ctx::on_shard_assignment_changed(self).await?;
 
         Ok(())

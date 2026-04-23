@@ -29,10 +29,23 @@ steps:
 
   # 3. Add a new method (backward-compatible change), deploy as revision 1
   - id: "add-get-double"
-    prompt: >
-      In the test-app project, add a new read-only method called `get-double` to the
-      CounterAgent that returns the current counter value multiplied by 2. Do not change
-      any existing methods. Build and deploy, but do not update existing running agents.
+    prompt:
+      rust: >
+        In the test-app project, add a new read-only method called `get_double` to the
+        CounterAgent that returns the current counter value multiplied by 2. Do not change
+        any existing methods. Build and deploy, but do not update existing running agents.
+      ts: >
+        In the test-app project, add a new read-only method called `getDouble` to the
+        CounterAgent that returns the current counter value multiplied by 2. Do not change
+        any existing methods. Build and deploy, but do not update existing running agents.
+      scala: >
+        In the test-app project, add a new read-only method called `getDouble` to the
+        CounterAgent that returns the current counter value multiplied by 2. Do not change
+        any existing methods. Build and deploy, but do not update existing running agents.
+      moonbit: >
+        In the test-app project, add a new read-only method called `get_double` to the
+        CounterAgent that returns the current counter value multiplied by 2. Do not change
+        any existing methods. Build and deploy, but do not update existing running agents.
     verify:
       deploy: true
 

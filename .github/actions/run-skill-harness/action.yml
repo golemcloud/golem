@@ -1,0 +1,218 @@
+name: 'Run Skill Harness Test'
+description: 'Runs a single skill harness scenario for a given agent/language/model combination'
+inputs:
+  agent:
+    description: 'Agent driver to use (claude-code, codex, gemini, opencode)'
+    required: true
+  language:
+    description: 'Language for skill templates (ts, rust, scala, moonbit)'
+    required: true
+  model:
+    description: 'Model identifier (optional)'
+    required: false
+    default: ''
+  wasi-sdk-version:
+    description: 'WASI SDK version'
+    required: true
+  wasi-sdk-path:
+    description: 'WASI SDK install path'
+    required: true
+  wasm-rquickjs-version:
+    description: 'wasm-rquickjs version'
+    required: true
+  anthropic-api-key:
+    description: 'Anthropic API key'
+    required: false
+    default: ''
+  gemini-api-key:
+    description: 'Gemini API key'
+    required: false
+    default: ''
+  openai-api-key:
+    description: 'OpenAI API key'
+    required: false
+    default: ''
+  github-token:
+    description: 'GitHub token for publishing reports'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: ./.github/actions/setup-rust
+      with:
+        use-cache: 'false'
+        rust-targets: 'wasm32-wasip1 wasm32-wasip2'
+        install-cargo-binstall: 'true'
+
+    - uses: ./.github/actions/setup-js-wasm-tools
+      with:
+        wasi-sdk-version: ${{ inputs.wasi-sdk-version }}
+        wasi-sdk-path: ${{ inputs.wasi-sdk-path }}
+        wasm-rquickjs-version: ${{ inputs.wasm-rquickjs-version }}
+
+    - name: Restore release binaries
+      uses: actions/cache/restore@v5
+      with:
+        path: tmp/golem-release-binaries
+        key: golem-release-binaries-${{ github.run_id }}
+        fail-on-cache-miss: true
+
+    - name: Install release binaries
+      shell: bash
+      run: |
+        mkdir -pv target/release
+        cp tmp/golem-release-binaries/* target/release/
+        chmod +x target/release/*
+
+    - name: Install Filesystem Watcher
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y inotify-tools
+
+    - name: Install Claude Code
+      if: inputs.agent == 'claude-code'
+      shell: bash
+      run: npm install -g @anthropic-ai/claude-code
+
+    - name: Install OpenCode
+      if: inputs.agent == 'opencode'
+      shell: bash
+      run: npm install -g opencode-ai
+
+    - name: Install Gemini CLI
+      if: inputs.agent == 'gemini'
+      shell: bash
+      run: npm install -g @google/gemini-cli
+
+    - name: Install Codex CLI
+      if: inputs.agent == 'codex'
+      shell: bash
+      env:
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+      run: |
+        npm install -g @openai/codex
+        printenv OPENAI_API_KEY | codex login --with-api-key
+
+    - name: Restore built TS SDK
+      if: inputs.language == 'ts' || inputs.language == 'scala'
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          sdks/ts/packages/golem-ts-sdk/dist
+          sdks/ts/packages/golem-ts-sdk/types
+          sdks/ts/packages/golem-ts-sdk/wasm
+          sdks/ts/packages/golem-ts-typegen/dist
+          sdks/ts/packages/golem-ts-types-core/dist
+          sdks/ts/packages/golem-ts-bridge/dist
+          sdks/ts/packages/golem-ts-repl/dist
+        key: golem-ts-sdk-skill-harness-${{ github.run_id }}
+        fail-on-cache-miss: true
+
+    - name: Install TS SDK dependencies
+      if: inputs.language == 'ts' || inputs.language == 'scala'
+      shell: bash
+      working-directory: sdks/ts
+      run: pnpm install --frozen-lockfile
+
+    - name: Setup Java
+      if: inputs.language == 'scala'
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: 17
+
+    - name: Setup SBT
+      if: inputs.language == 'scala'
+      uses: sbt/setup-sbt@v1
+
+    - name: Cache scala dependencies
+      if: inputs.language == 'scala'
+      uses: coursier/cache-action@v8
+
+    - name: Sync WIT dependencies
+      if: inputs.language == 'scala'
+      shell: bash
+      run: cargo make wit
+
+    - name: Build agent_guest.wasm
+      if: inputs.language == 'scala'
+      shell: bash
+      working-directory: sdks/scala
+      run: ./scripts/generate-agent-guest-wasm.sh
+
+    - name: Publish Scala SDK locally
+      if: inputs.language == 'scala'
+      shell: bash
+      working-directory: sdks/scala
+      run: |
+        sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
+
+    - name: Setup MoonBit
+      if: inputs.language == 'moonbit'
+      uses: hustcer/setup-moonbit@v1
+
+    - name: Install wasm-tools
+      if: inputs.language == 'moonbit'
+      shell: bash
+      run: cargo binstall --force --locked wasm-tools@1.227.1
+
+    - name: Install Harness Dependencies
+      shell: bash
+      working-directory: golem-skills/tests/harness
+      run: |
+        npm install
+        npm run build
+        npm install -g tsx
+
+    - name: Setup isolated test directory
+      shell: bash
+      run: |
+        mkdir -p /tmp/harness-run
+        cp -r golem-skills/tests/harness/dist /tmp/harness-run/dist
+        cp -r golem-skills/tests/harness/node_modules /tmp/harness-run/node_modules
+        cp -r golem-skills/tests/harness/src /tmp/harness-run/src
+        cp -r golem-skills/tests/harness/scenarios /tmp/harness-run/scenarios
+        cp -r golem-skills/tests/harness/docker /tmp/harness-run/docker
+        cp golem-skills/tests/harness/package.json /tmp/harness-run/
+        cp golem-skills/tests/harness/tsconfig.json /tmp/harness-run/
+        cd /tmp/harness-run && git init -b main && git config user.email "ci@golem.cloud" && git config user.name "CI" && git add -A && git commit -m "init"
+
+    - name: Compute report suffix
+      id: report-suffix
+      shell: bash
+      run: |
+        suffix="${{ inputs.agent }}-${{ inputs.language }}"
+        if [ -n "${{ inputs.model }}" ]; then
+          suffix="${suffix}-$(printf '%s' '${{ inputs.model }}' | tr '/' '-')"
+        fi
+        echo "suffix=$suffix" >> "$GITHUB_OUTPUT"
+
+    - name: Run Skill Tests
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
+        GOOGLE_GENERATIVE_AI_API_KEY: ${{ inputs.gemini-api-key }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        GOLEM_PATH: ${{ github.workspace }}
+      run: |
+        cd /tmp/harness-run
+        MODEL_ARG=""
+        if [ -n "${{ inputs.model }}" ]; then
+          MODEL_ARG="--model ${{ inputs.model }}"
+        fi
+        tsx src/run.ts --agent ${{ inputs.agent }} --language ${{ inputs.language }} $MODEL_ARG --scenarios scenarios --ctrf "${{ github.workspace }}/target/ctrf-skills-${{ steps.report-suffix.outputs.suffix }}.json"
+
+    - name: Upload results
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: skill-results-${{ steps.report-suffix.outputs.suffix }}
+        path: /tmp/harness-run/results/
+        retention-days: 7
+
+    - uses: ./.github/actions/publish-test-report
+      if: always()
+      with:
+        artifact-name: skill-test-report-${{ steps.report-suffix.outputs.suffix }}
+        github-token: ${{ inputs.github-token }}

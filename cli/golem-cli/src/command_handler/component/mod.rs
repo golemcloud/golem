@@ -719,21 +719,16 @@ impl ComponentCommandHandler {
                         .ctx
                         .worker_handler()
                         .worker_metadata(component.id.0, &component.component_name, agent_name)
-                        .await
-                        .ok()
+                        .await?
                         .map(|worker_metadata| worker_metadata.component_revision),
                     ComponentRevisionSelection::ByExplicitRevision(revision) => Some(revision),
                 };
 
                 match revision {
                     Some(revision) => {
-                        let clients = self.ctx.golem_clients().await?;
-
-                        let component = clients
-                            .component
-                            .get_component_revision(&component.id.0, revision.into())
-                            .await
-                            .map_service_error()?;
+                        let component = self
+                            .get_component_revision_by_id(&component.id, revision)
+                            .await?;
 
                         Ok(Some(component))
                     }
@@ -850,7 +845,7 @@ impl ComponentCommandHandler {
             .iter()
             .map(|agent_type| (agent_type.type_name.clone(), component_name.clone()))
             .collect::<BTreeMap<_, _>>();
-        let resolved_agents = app_ctx.application().resolve_agents(&mapping);
+        let resolved_agents = app_ctx.application().resolve_agents(&mapping)?;
 
         let mut agent_type_configs =
             BTreeMap::<AgentTypeName, AgentTypeManifestProvisionConfig>::new();

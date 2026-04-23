@@ -12,33 +12,23 @@ import * as log from "../log.js";
 
 const STARTUP_STALL_TIMEOUT_SECONDS = 120;
 
-export class OpenCodeAgentDriver extends BaseAgentDriver {
-  protected readonly driverName = "opencode";
+export class GeminiAgentDriver extends BaseAgentDriver {
+  protected readonly driverName = "gemini";
   protected readonly skillDirs = [".agents/skills"];
+  // Gemini CLI has long silent gaps due to retry backoff (up to 300s on 429)
+  // and extra LLM calls (next-speaker check, context compression).
+  protected readonly defaultIdleTimeoutOverride = 600;
   private lastSessionId: string | null = null;
   private activatedSkillNames: Set<string> = new Set();
   private accumulatedUsage: UsageStats = {};
 
-  private buildArgs(prompt: string, isFollowup: boolean): string[] {
-    const args = ["run", "--format", "json", "--dangerously-skip-permissions"];
-    const model = process.env.OPENCODE_MODEL;
-    if (model) {
-      args.push("-m", model);
-    }
-    if (isFollowup && this.lastSessionId) {
-      args.push("--continue", "--session", this.lastSessionId);
-    }
-    args.push(prompt);
-    return args;
-  }
-
   async sendPrompt(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
     this.lastSessionId = null;
-    return this.executeOpencode(prompt, false, opts);
+    return this.executeGemini(prompt, false, opts);
   }
 
   async sendFollowup(prompt: string, opts: DriverTimeoutOptions): Promise<AgentResult> {
-    return this.executeOpencode(prompt, true, opts);
+    return this.executeGemini(prompt, true, opts);
   }
 
   async teardown(): Promise<void> {
@@ -54,7 +44,15 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
     this.activatedSkillNames.clear();
   }
 
-  private async executeOpencode(
+  private buildArgs(prompt: string, isFollowup: boolean): string[] {
+    const args = ["--prompt", prompt, "--output-format", "stream-json", "--yolo"];
+    if (isFollowup && this.lastSessionId) {
+      args.push("--resume", this.lastSessionId);
+    }
+    return args;
+  }
+
+  private async executeGemini(
     prompt: string,
     isFollowup: boolean,
     opts: DriverTimeoutOptions,
@@ -66,7 +64,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
 
     return new Promise((resolve) => {
       const args = this.buildArgs(prompt, isFollowup);
-      const child = spawn("opencode", args, {
+      const child = spawn("gemini", args, {
         cwd: this.workspace,
         detached: true,
         env: { ...process.env },
@@ -81,30 +79,18 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
       let receivedFirstOutput = false;
       let startupStalled = false;
       let creditInsufficient = false;
-      let encounteredError = false;
 
-      const model = process.env.OPENCODE_MODEL;
       log.driver(
         prefix,
-        `spawn: cmd=opencode args=[${args.join(", ")}] cwd=${this.workspace} pid=${child.pid ?? "?"} ` +
+        `spawn: cmd=gemini args=[${args.join(", ")}] cwd=${this.workspace} pid=${child.pid ?? "?"} ` +
           `followup=${isFollowup} lastSession=${this.lastSessionId ?? "none"} ` +
-          `model=${model ?? "default"} ` +
-          `ANTHROPIC_API_KEY=${process.env.ANTHROPIC_API_KEY ? "present" : "absent"} ` +
-          `OPENAI_API_KEY=${process.env.OPENAI_API_KEY ? "present" : "absent"} ` +
-          `OPENCODE_MODEL=${model ? "present" : "absent"}`,
+          `GEMINI_API_KEY=${process.env.GEMINI_API_KEY ? "present" : "absent"}`,
       );
 
-      // OpenCode in --format json mode writes nothing to stdout until the
-      // entire run completes. Its BubbleTea spinner may or may not produce
-      // stderr bytes depending on TTY detection. Disable idle timeout since
-      // it's unreliable here — the step timeout provides the safety net.
-      const monitor = new ActivityMonitor(prefix, { ...opts, idleTimeoutSeconds: 0 }, (_kind) => {
+      const monitor = new ActivityMonitor(prefix, opts, (_kind) => {
         killProcessTree(child);
       });
 
-      // Startup stall timer — fires if neither stdout nor stderr produces
-      // any output within the timeout. Uses a generous timeout since Gemini
-      // models can take a long time before the first response chunk.
       const startupTimer = setTimeout(() => {
         if (!receivedFirstOutput) {
           startupStalled = true;
@@ -131,15 +117,11 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         const lines = stdoutBuf.split("\n");
         stdoutBuf = lines.pop()!;
         for (const line of lines) {
-          const signal = this.processJsonLine(prefix, line, textParts);
-          if (signal === "credit") {
+          if (this.processJsonLine(prefix, line, textParts)) {
             creditInsufficient = true;
             log.driverFatal(prefix, "✗ credit balance too low — aborting run");
             killProcessTree(child);
             return;
-          }
-          if (signal === "error") {
-            encounteredError = true;
           }
         }
       });
@@ -167,11 +149,8 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
         clearTimeout(startupTimer);
         monitor.finish();
         if (stdoutBuf) {
-          const signal = this.processJsonLine(prefix, stdoutBuf, textParts);
-          if (signal === "credit") {
+          if (this.processJsonLine(prefix, stdoutBuf, textParts)) {
             creditInsufficient = true;
-          } else if (signal === "error") {
-            encounteredError = true;
           }
         }
         if (stderrBuf) log.driverErr(prefix, stderrBuf);
@@ -198,7 +177,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           );
           resolve({
             success: false,
-            output: `OpenCode startup stall — no output for ${STARTUP_STALL_TIMEOUT_SECONDS}s. ${rawOutput}`,
+            output: `Gemini startup stall — no output for ${STARTUP_STALL_TIMEOUT_SECONDS}s. ${rawOutput}`,
             durationSeconds,
             exitCode: null,
             timedOut: true,
@@ -212,7 +191,7 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           log.driver(prefix, `timeout exit: stdoutBytes=${stdoutBytes} stderrBytes=${stderrBytes}`);
           resolve({
             success: false,
-            output: `${monitor.formatTimeoutMessage("OpenCode")}. ${rawOutput}`,
+            output: `${monitor.formatTimeoutMessage("Gemini")}. ${rawOutput}`,
             durationSeconds,
             exitCode: null,
             timedOut: true,
@@ -222,13 +201,13 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
           return;
         }
 
-        const success = exitCode === 0 && !encounteredError;
+        const success = exitCode === 0;
         const output = textParts.join("\n") || rawOutput;
 
         if (!success) {
           const msg = rawOutput || "Unknown error";
           if (/command not found|ENOENT/i.test(msg)) {
-            log.driverFatal(prefix, "opencode CLI not installed");
+            log.driverFatal(prefix, "gemini CLI not installed");
           } else if (/\bauthentication\s+failed\b|invalid.*api.key|unauthorized/i.test(msg)) {
             log.driverAuthFailed(prefix);
           } else {
@@ -264,108 +243,123 @@ export class OpenCodeAgentDriver extends BaseAgentDriver {
   }
 
   /**
-   * Parse a single JSONL line from opencode's `--format json` output and emit
-   * structured log output. Returns `"credit"` if a credit-insufficient error
-   * was detected, `"error"` for other error events, or `null` otherwise.
+   * Parse a single JSONL line from gemini's `--output-format stream-json`
+   * output and emit structured log output. Returns `true` if a
+   * credit-insufficient error was detected and the caller should abort.
+   *
+   * Gemini stream-json events:
+   *   init        — session start (session_id, model)
+   *   message     — user/assistant text (role, content, delta)
+   *   tool_use    — tool call request (tool_name, parameters)
+   *   tool_result — tool execution result (tool_id, status, output)
+   *   error       — non-fatal error (severity, message)
+   *   result      — session end (status, stats)
    */
-  private processJsonLine(
-    prefix: string,
-    line: string,
-    textParts: string[],
-  ): "credit" | "error" | null {
+  private processJsonLine(prefix: string, line: string, textParts: string[]): boolean {
     const trimmed = line.trim();
-    if (!trimmed) return null;
+    if (!trimmed) return false;
 
     let event: Record<string, unknown>;
     try {
       event = JSON.parse(trimmed) as Record<string, unknown>;
     } catch {
-      // Not JSON — log as plain text
       log.driver(prefix, trimmed);
-      return null;
-    }
-
-    const sessionId = event.sessionID as string | undefined;
-    if (sessionId && !this.lastSessionId) {
-      this.lastSessionId = sessionId;
-      log.driverSession(prefix, sessionId);
+      return false;
     }
 
     const type = event.type as string | undefined;
-    const part = event.part as Record<string, unknown> | undefined;
 
     switch (type) {
-      case "step_start": {
-        // Logged session above; nothing else needed
+      case "init": {
+        const sessionId = event.session_id as string | undefined;
+        if (sessionId) {
+          this.lastSessionId = sessionId;
+          log.driverSession(prefix, sessionId);
+        }
+        const model = event.model as string | undefined;
+        if (model) {
+          log.driver(prefix, `model=${model}`);
+        }
+        break;
+      }
+
+      case "message": {
+        const role = event.role as string | undefined;
+        const content = event.content as string | undefined;
+        if (role === "assistant" && content) {
+          textParts.push(content);
+          for (const l of content.split("\n")) {
+            log.driver(prefix, l);
+          }
+          if (CREDIT_INSUFFICIENT_PATTERN.test(content)) return true;
+        }
         break;
       }
 
       case "tool_use": {
-        if (part) {
-          const toolName = (part.tool as string) || "unknown";
-          const state = part.state as Record<string, unknown> | undefined;
-          const input = state?.input as Record<string, unknown> | undefined;
-          log.driverToolUse(prefix, toolName, input);
-          if (toolName === "skill") {
-            const skillName = typeof input?.name === "string" ? input.name : undefined;
-            if (skillName) {
-              this.activatedSkillNames.add(skillName);
-            }
+        const toolName = (event.tool_name as string) || "unknown";
+        const parameters = event.parameters as Record<string, unknown> | undefined;
+        log.driverToolUse(prefix, toolName, parameters);
+        if (toolName === "activate_skill") {
+          const skillName = typeof parameters?.name === "string" ? parameters.name : undefined;
+          if (skillName) {
+            this.activatedSkillNames.add(skillName);
           }
         }
         break;
       }
 
-      case "text": {
-        if (part) {
-          const text = part.text as string | undefined;
-          if (text) {
-            textParts.push(text);
-            for (const l of text.split("\n")) {
-              log.driver(prefix, l);
-            }
-            if (CREDIT_INSUFFICIENT_PATTERN.test(text)) return "credit";
-          }
-        }
-        break;
-      }
-
-      case "step_finish": {
-        if (part) {
-          const tokens = part.tokens as Record<string, unknown> | undefined;
-          const cost = part.cost as number | undefined;
-          if (tokens || cost !== undefined) {
-            const input = (tokens?.input as number) ?? 0;
-            const output = (tokens?.output as number) ?? 0;
-            this.accumulatedUsage.inputTokens = (this.accumulatedUsage.inputTokens ?? 0) + input;
-            this.accumulatedUsage.outputTokens = (this.accumulatedUsage.outputTokens ?? 0) + output;
-            if (cost !== undefined) {
-              this.accumulatedUsage.costUsd = (this.accumulatedUsage.costUsd ?? 0) + cost;
-            }
-            const extra = `tokens=${input}+${output}` + (cost ? ` cost=$${cost.toFixed(4)}` : "");
-            log.driver(prefix, extra);
-          }
-          this.accumulatedUsage.numTurns = (this.accumulatedUsage.numTurns ?? 0) + 1;
+      case "tool_result": {
+        const status = event.status as string | undefined;
+        const error = event.error as Record<string, unknown> | undefined;
+        if (status === "error" && error) {
+          const errMsg = (error.message as string) || "tool error";
+          log.driverError(prefix, errMsg);
+          if (CREDIT_INSUFFICIENT_PATTERN.test(errMsg)) return true;
         }
         break;
       }
 
       case "error": {
-        const error = event.error as Record<string, unknown> | undefined;
-        const errData = error?.data as Record<string, unknown> | undefined;
-        const errMsg = (errData?.message as string) || (error?.name as string) || "unknown error";
-        log.driverError(prefix, errMsg);
-        if (CREDIT_INSUFFICIENT_PATTERN.test(errMsg)) return "credit";
-        return "error";
+        const message = (event.message as string) || "unknown error";
+        const severity = event.severity as string | undefined;
+        if (severity === "warning") {
+          log.driverErr(prefix, `warning: ${message}`);
+        } else {
+          log.driverError(prefix, message);
+        }
+        if (CREDIT_INSUFFICIENT_PATTERN.test(message)) return true;
+        break;
+      }
+
+      case "result": {
+        const status = event.status as string | undefined;
+        const stats = event.stats as Record<string, unknown> | undefined;
+        if (stats) {
+          const inputTokens = (stats.input_tokens as number) ?? 0;
+          const outputTokens = (stats.output_tokens as number) ?? 0;
+          const toolCalls = stats.tool_calls as number | undefined;
+          this.accumulatedUsage.inputTokens = inputTokens;
+          this.accumulatedUsage.outputTokens = outputTokens;
+          let extra = `tokens=${inputTokens}+${outputTokens}`;
+          if (toolCalls != null) extra += ` tools=${toolCalls}`;
+          log.driver(prefix, extra);
+        }
+        if (status === "error") {
+          const error = event.error as Record<string, unknown> | undefined;
+          const errMsg = (error?.message as string) || "session error";
+          log.driverError(prefix, errMsg);
+          if (CREDIT_INSUFFICIENT_PATTERN.test(errMsg)) return true;
+        }
+        break;
       }
 
       default: {
-        // Unknown event type — log raw for debugging
         log.driver(prefix, trimmed);
         break;
       }
     }
 
-    return null;
+    return false;
   }
 }

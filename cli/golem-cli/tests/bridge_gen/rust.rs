@@ -26,7 +26,7 @@ use golem_common::model::agent::{
     AgentTypeName, ComponentModelElementSchema, DataSchema, ElementSchema, NamedElementSchema,
     NamedElementSchemas, Snapshotting,
 };
-use golem_wasm::analysis::analysed_type::{f64, str};
+use golem_wasm::analysis::analysed_type::{f64, field, list, option, record, s32, str};
 use tempfile::TempDir;
 use test_r::{test, test_dep};
 
@@ -136,6 +136,16 @@ fn rust_counter_agent() -> GeneratedPackage {
     GeneratedPackage::new(agent_type)
 }
 
+#[test_dep(tagged_as = "rust_local_config_primitive_agent")]
+fn rust_local_config_primitive_agent() -> GeneratedPackage {
+    GeneratedPackage::new(durable_local_config_primitive_agent())
+}
+
+#[test_dep(tagged_as = "rust_local_config_complex_agent")]
+fn rust_local_config_complex_agent() -> GeneratedPackage {
+    GeneratedPackage::new(durable_local_config_complex_agent())
+}
+
 #[test]
 fn bridge_rust_compiles_single_agent_wrapper(
     #[tagged_as("single_agent_wrapper_types_1")] _pkg: &GeneratedPackage,
@@ -159,6 +169,20 @@ fn bridge_rust_compiles_multi_agent_2(
 
 #[test]
 fn bridge_rust_compiles_counter_agent(#[tagged_as("counter_agent")] _pkg: &GeneratedPackage) {
+    // The test_dep ensures it was compiled successfully in generate_and_compile
+}
+
+#[test]
+fn bridge_rust_compiles_local_config_primitive_agent(
+    #[tagged_as("rust_local_config_primitive_agent")] _pkg: &GeneratedPackage,
+) {
+    // The test_dep ensures it was compiled successfully in generate_and_compile
+}
+
+#[test]
+fn bridge_rust_compiles_local_config_complex_agent(
+    #[tagged_as("rust_local_config_complex_agent")] _pkg: &GeneratedPackage,
+) {
     // The test_dep ensures it was compiled successfully in generate_and_compile
 }
 
@@ -253,6 +277,91 @@ fn ephemeral_config_agent() -> AgentType {
             path: vec!["timeout".to_string()],
             value_type: str(),
         }],
+    }
+}
+
+fn durable_local_config_primitive_agent() -> AgentType {
+    AgentType {
+        type_name: AgentTypeName("DurableLocalConfigPrimitiveAgent".to_string()),
+        description: "Constructs a durable local config primitive agent".to_string(),
+        source_language: "rust".to_string(),
+        constructor: AgentConstructor {
+            name: Some("DurableLocalConfigPrimitiveAgent".to_string()),
+            description: "Constructs a durable local config primitive agent".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+        },
+        methods: vec![AgentMethod {
+            name: "ping".to_string(),
+            description: "Returns the name".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "return_value".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: str(),
+                    }),
+                }],
+            }),
+            http_endpoint: vec![],
+        }],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+        http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
+        config: vec![AgentConfigDeclaration {
+            source: AgentConfigSource::Local,
+            path: vec!["timeout".to_string()],
+            value_type: str(),
+        }],
+    }
+}
+
+fn durable_local_config_complex_agent() -> AgentType {
+    let nested = record(vec![field("x", s32()), field("y", str())]);
+
+    AgentType {
+        type_name: AgentTypeName("DurableLocalConfigComplexAgent".to_string()),
+        description: "Constructs a durable local config complex agent".to_string(),
+        source_language: "rust".to_string(),
+        constructor: AgentConstructor {
+            name: Some("DurableLocalConfigComplexAgent".to_string()),
+            description: "Constructs a durable local config complex agent".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+        },
+        methods: vec![AgentMethod {
+            name: "ping".to_string(),
+            description: "Returns the name".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "return_value".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: str(),
+                    }),
+                }],
+            }),
+            http_endpoint: vec![],
+        }],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+        http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
+        config: vec![
+            AgentConfigDeclaration {
+                source: AgentConfigSource::Local,
+                path: vec!["xyz".to_string()],
+                value_type: option(nested.clone()),
+            },
+            AgentConfigDeclaration {
+                source: AgentConfigSource::Local,
+                path: vec!["xyzList".to_string()],
+                value_type: list(nested),
+            },
+        ],
     }
 }
 
