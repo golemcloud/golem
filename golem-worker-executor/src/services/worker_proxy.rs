@@ -42,7 +42,7 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::GrpcClient;
 use golem_service_base::model::auth::AuthCtx;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use tonic::codec::CompressionEncoding;
@@ -57,7 +57,6 @@ pub trait WorkerProxy: Send + Sync {
         owned_agent_id: &OwnedAgentId,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
-        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         config: Vec<AgentConfigEntryDto>,
@@ -74,7 +73,6 @@ pub trait WorkerProxy: Send + Sync {
         idempotency_key: Option<IdempotencyKey>,
         caller_agent_id: AgentId,
         caller_env: HashMap<String, String>,
-        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
@@ -269,7 +267,6 @@ impl WorkerProxy for RemoteWorkerProxy {
         owned_agent_id: &OwnedAgentId,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
-        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         config: Vec<AgentConfigEntryDto>,
@@ -283,19 +280,16 @@ impl WorkerProxy for RemoteWorkerProxy {
             .worker_service_client
             .call("launch_new_worker", move |client| {
                 let caller_env = caller_env.clone();
-                let caller_config_vars = caller_config_vars.clone();
                 Box::pin(client.launch_new_worker(LaunchNewWorkerRequest {
                     component_id: Some(owned_agent_id.component_id().into()),
                     name: owned_agent_id.agent_name(),
                     env: caller_env.clone(),
-                    wasi_config: caller_config_vars.clone().into_iter().collect(),
                     config: config.clone().into_iter().map(Into::into).collect(),
                     ignore_already_existing: true,
                     auth_ctx: Some(auth_ctx.clone().into()),
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_agent_id.clone().into()),
                         env: caller_env,
-                        wasi_config: caller_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     principal: Some(principal.clone().into()),
@@ -326,7 +320,6 @@ impl WorkerProxy for RemoteWorkerProxy {
         idempotency_key: Option<IdempotencyKey>,
         caller_agent_id: AgentId,
         caller_env: HashMap<String, String>,
-        caller_config_vars: BTreeMap<String, String>,
         caller_stack: InvocationContextStack,
         caller_account_id: AccountId,
         principal: Principal,
@@ -360,7 +353,6 @@ impl WorkerProxy for RemoteWorkerProxy {
                     context: Some(golem_api_grpc::proto::golem::worker::InvocationContext {
                         parent: Some(caller_agent_id.clone().into()),
                         env: caller_env.clone(),
-                        wasi_config: caller_config_vars.clone().into_iter().collect(),
                         tracing: Some(caller_stack.clone().into()),
                     }),
                     auth_ctx: Some(auth_ctx.clone().into()),

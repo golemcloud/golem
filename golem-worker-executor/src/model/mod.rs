@@ -32,7 +32,7 @@ use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use nonempty_collections::NEVec;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::future::{Future, pending};
 use std::pin::Pin;
@@ -69,7 +69,6 @@ pub struct AgentConfig {
     pub current_filesystem_storage_usage: u64,
     pub component_revision_for_replay: ComponentRevision,
     pub created_by: AccountId,
-    pub initial_wasi_config: BTreeMap<String, String>,
     pub initial_agent_config: Vec<TypedAgentConfigEntry>,
     pub last_snapshot_index: Option<OplogIndex>,
 }
@@ -81,7 +80,6 @@ impl AgentConfig {
         current_filesystem_storage_usage: u64,
         component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
-        initial_wasi_config: BTreeMap<String, String>,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         last_snapshot_index: Option<OplogIndex>,
     ) -> AgentConfig {
@@ -91,7 +89,6 @@ impl AgentConfig {
             current_filesystem_storage_usage,
             component_revision_for_replay,
             created_by,
-            initial_wasi_config,
             initial_agent_config,
             last_snapshot_index,
         }

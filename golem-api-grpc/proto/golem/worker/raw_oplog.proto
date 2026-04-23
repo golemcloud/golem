@@ -137,9 +137,8 @@ message RawCreateParameters {
   uint64 component_size = 7;
   uint64 initial_total_linear_memory_size = 8;
   repeated golem.component.EnvironmentPluginGrantId initial_active_plugins = 9;
-  map<string, string> config_vars = 10;
-  repeated bytes local_agent_config = 11;
-  optional golem.common.UUID original_phantom_id = 12;
+  repeated bytes local_agent_config = 10;
+  optional golem.common.UUID original_phantom_id = 11;
 }
 
 message RawHostCallParameters {

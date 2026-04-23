@@ -35,7 +35,9 @@ use golem_common::model::plugin_registration::{
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_wasm::analysis::analysed_type::{option, str};
 use golem_wasm::analysis::{AnalysedType, TypeStr, TypeU32};
+use golem_wasm::{Value, ValueAndType};
 use pretty_assertions::{assert_eq, assert_matches, assert_ne};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -128,9 +130,12 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
 
     let component = user
         .component(&env.id, "it_agent_update_v1_release")
-        .with_config_vars(
+        .with_agent_config(
             "CounterAgent",
-            vec![("var1".to_string(), "value1".to_string())],
+            vec![AgentConfigEntryDto {
+                path: vec!["var1".to_string()],
+                value: serde_json::Value::String("value1".to_string()).into(),
+            }],
         )
         .store()
         .await?;
@@ -138,10 +143,12 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
     assert_eq!(
         component
             .metadata
-            .agent_type_wasi_config(&AgentTypeName("CounterAgent".to_string()))
-            .cloned()
+            .agent_type_config(&AgentTypeName("CounterAgent".to_string()))
             .unwrap_or_default(),
-        BTreeMap::from_iter(vec![("var1".to_string(), "value1".to_string())])
+        &[golem_common::model::worker::TypedAgentConfigEntry {
+            path: vec!["var1".to_string()],
+            value: ValueAndType::new(Value::String("value1".to_string()), str())
+        }]
     );
 
     let updated_component = user
@@ -152,10 +159,16 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             Some(BTreeMap::from([(
                 AgentTypeName("CounterAgent".to_string()),
                 AgentTypeProvisionConfigUpdate {
-                    wasi_config: Some(BTreeMap::from_iter(vec![
-                        ("var1".to_string(), "value11".to_string()),
-                        ("var2".to_string(), "value2".to_string()),
-                    ])),
+                    config: Some(vec![
+                        AgentConfigEntryDto {
+                            path: vec!["var1".to_string()],
+                            value: serde_json::Value::String("value11".to_string()).into(),
+                        },
+                        AgentConfigEntryDto {
+                            path: vec!["var2".to_string()],
+                            value: serde_json::Value::String("value2".to_string()).into(),
+                        },
+                    ]),
                     ..Default::default()
                 },
             )])),
@@ -166,13 +179,21 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
     assert_eq!(
         updated_component
             .metadata
-            .agent_type_wasi_config(&AgentTypeName("CounterAgent".to_string()))
-            .cloned()
+            .agent_type_config(&AgentTypeName("CounterAgent".to_string()))
             .unwrap_or_default(),
-        BTreeMap::from_iter(vec![
-            ("var1".to_string(), "value11".to_string()),
-            ("var2".to_string(), "value2".to_string())
-        ])
+        &[
+            golem_common::model::worker::TypedAgentConfigEntry {
+                path: vec!["var1".to_string()],
+                value: ValueAndType::new(Value::String("value11".to_string()), str())
+            },
+            golem_common::model::worker::TypedAgentConfigEntry {
+                path: vec!["var2".to_string()],
+                value: ValueAndType::new(
+                    Value::Option(Some(Box::new(Value::String("value2".to_string())))),
+                    option(str())
+                )
+            }
+        ]
     );
 
     Ok(())

@@ -261,7 +261,6 @@ pub trait TestDsl {
             component_id,
             id,
             HashMap::new(),
-            HashMap::new(),
             Vec::<AgentConfigEntryDto>::new(),
         )
         .await
@@ -272,7 +271,6 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: ParsedAgentId,
         env: HashMap<String, String>,
-        wasi_config: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<Result<AgentId, Self::WorkerError>>;
 
@@ -285,7 +283,6 @@ pub trait TestDsl {
             component_id,
             id,
             HashMap::new(),
-            HashMap::new(),
             Vec::<AgentConfigEntryDto>::new(),
         )
         .await
@@ -296,11 +293,10 @@ pub trait TestDsl {
         component_id: &ComponentId,
         id: ParsedAgentId,
         env: HashMap<String, String>,
-        wasi_config: HashMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<AgentId> {
         let result = self
-            .try_start_agent_with(component_id, id, env, wasi_config, config)
+            .try_start_agent_with(component_id, id, env, config)
             .await?;
         Ok(result?)
     }
@@ -874,16 +870,6 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
     pub fn with_env(mut self, agent_type: &str, env: Vec<(String, String)>) -> Self {
         let entry = self.provision_config_entry_mut(agent_type);
         entry.env = env.into_iter().collect();
-        self
-    }
-
-    pub fn with_config_vars(
-        mut self,
-        agent_type: &str,
-        wasi_config: Vec<(String, String)>,
-    ) -> Self {
-        let entry = self.provision_config_entry_mut(agent_type);
-        entry.wasi_config = wasi_config.into_iter().collect();
         self
     }
 

@@ -78,7 +78,7 @@ use crossterm::queue;
 use crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use inquire::Confirm;
 use itertools::Itertools;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Stdout, Write};
 use std::path::Path;
@@ -108,9 +108,8 @@ impl WorkerCommandHandler {
                 AgentSubcommand::New {
                     agent_id: agent_name,
                     env,
-                    wasi_config,
                     config,
-                } => self.cmd_new(agent_name, env, wasi_config, config).await,
+                } => self.cmd_new(agent_name, env, config).await,
                 AgentSubcommand::Invoke {
                     agent_id: agent_name,
                     function_name,
@@ -258,7 +257,6 @@ impl WorkerCommandHandler {
         &self,
         agent_name: AgentIdArgs,
         env: Vec<(String, String)>,
-        wasi_config: Vec<(String, String)>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
@@ -298,7 +296,6 @@ impl WorkerCommandHandler {
             component.id.0,
             agent_name.0.clone(),
             env.into_iter().collect(),
-            BTreeMap::from_iter(wasi_config),
             config,
         )
         .await?;
@@ -1591,7 +1588,6 @@ impl WorkerCommandHandler {
         component_id: Uuid,
         agent_name: String,
         env: HashMap<String, String>,
-        wasi_config: BTreeMap<String, String>,
         config: Vec<AgentConfigEntryDto>,
     ) -> anyhow::Result<()> {
         let clients = self.ctx.golem_clients().await?;
@@ -1603,7 +1599,6 @@ impl WorkerCommandHandler {
                 &golem_client::model::AgentCreationRequest {
                     name: agent_name,
                     env,
-                    wasi_config,
                     config,
                 },
             )
@@ -1988,7 +1983,6 @@ impl WorkerCommandHandler {
             worker_metadata.agent_id.component_id.0,
             worker_metadata.agent_id.agent_id,
             worker_metadata.env,
-            worker_metadata.wasi_config,
             worker_metadata.config,
         )
         .await?;

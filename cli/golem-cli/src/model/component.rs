@@ -129,7 +129,6 @@ impl ComponentView {
 #[derive(Clone, Debug, Default)]
 pub struct AgentTypeManifestProvisionConfig {
     pub env: BTreeMap<String, String>,
-    pub wasi_config: BTreeMap<String, String>,
     pub config: Vec<AgentConfigEntryDto>,
     pub files_source: PathBuf,
     pub files: Vec<app_raw::InitialComponentFile>,
@@ -155,7 +154,6 @@ impl AgentTypeManifestProvisionConfig {
             .collect();
         AgentTypeProvisionConfigCreation {
             env: self.env.clone(),
-            wasi_config: self.wasi_config.clone(),
             config: self.config.clone(),
             files,
             plugin_installations: resolved_plugins,

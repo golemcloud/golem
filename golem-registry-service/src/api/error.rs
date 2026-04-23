@@ -376,6 +376,13 @@ impl From<ComponentError> for ApiError {
                     cause: None,
                 }))
             }
+            ComponentError::AgentConfigPathSegmentContainsDot { .. } => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    code: api::error_code::AGENT_CONFIG_NOT_DECLARED.to_string(),
+                    cause: None,
+                }))
+            }
             ComponentError::AgentConfigTypeMismatch { .. } => Self::BadRequest(Json(ErrorsBody {
                 errors: vec![error],
                 code: api::error_code::AGENT_CONFIG_TYPE_MISMATCH.to_string(),
