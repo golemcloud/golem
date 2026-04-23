@@ -21,9 +21,9 @@ use crate::model::api_definition::{
 };
 use golem_common::model::Empty;
 use golem_common::model::agent::{
-    AgentMethod, AgentType, AgentTypeName, DataSchema, ElementSchema, HttpEndpointDetails,
-    HttpMethod, HttpMountDetails, NamedElementSchemas, RegisteredAgentTypeImplementer,
-    SystemVariable,
+    AgentMethod, AgentMode, AgentType, AgentTypeName, DataSchema, ElementSchema,
+    HttpEndpointDetails, HttpMethod, HttpMountDetails, NamedElementSchemas,
+    RegisteredAgentTypeImplementer, SystemVariable,
 };
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::Environment;
@@ -32,8 +32,9 @@ use golem_common::model::http_api_deployment::{
 };
 use golem_service_base::custom_api::{
     CallAgentBehaviour, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
-    CorsPreflightMethodPolicy, MethodParameter, OpenApiSpecBehaviour, OriginPattern, PathSegment,
-    RequestBodySchema, RouteBehaviour, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    CorsPreflightMethodPolicy, MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat,
+    OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, SessionFromHeaderRouteSecurity,
+    WebhookCallbackBehaviour,
 };
 use heck::ToKebabCase;
 use itertools::Itertools;
@@ -140,7 +141,7 @@ pub fn add_agent_method_http_routes(
                     component_revision: implementer.component_revision,
                     agent_type: agent.type_name.clone(),
                     method_name: agent_method.name.clone(),
-                    phantom: http_mount.phantom_agent,
+                    phantom: http_mount.phantom_agent || agent.mode == AgentMode::Ephemeral,
                     constructor_parameters: constructor_parameters.clone(),
                     method_parameters,
                     expected_agent_response: agent_method.output_schema.clone(),
@@ -311,25 +312,31 @@ pub fn add_webhook_callback_routes(
 }
 
 pub fn add_openapi_spec_routes(
-    domain: &Domain,
+    deployment: &HttpApiDeployment,
     current_route_id: &mut i32,
     compiled_routes: &mut Vec<UnboundCompiledRoute>,
 ) {
-    for openapi_path in ["openapi.json", "openapi.yaml"] {
+    let openapi_prefix = parse_literal_only_path_segments(&deployment.openapi_endpoint_prefix);
+
+    for (format, openapi_path) in [
+        (OpenApiSpecFormat::Json, "openapi.json"),
+        (OpenApiSpecFormat::Yaml, "openapi.yaml"),
+    ] {
         let route_id = *current_route_id;
         *current_route_id = current_route_id.checked_add(1).unwrap();
 
+        let mut path = openapi_prefix.clone();
+        path.push(PathSegment::Literal {
+            value: openapi_path.to_string(),
+        });
+
         compiled_routes.push(UnboundCompiledRoute {
             route_id,
-            domain: domain.clone(),
+            domain: deployment.domain.clone(),
             method: HttpMethod::Get(Empty {}),
-            // Note: This is currently a fixed path,
-            // but it can be part of the http api deployment configuration
-            path: vec![PathSegment::Literal {
-                value: openapi_path.to_string(),
-            }],
+            path,
             body: RequestBodySchema::Unused,
-            behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {}),
+            behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format }),
             security: UnboundRouteSecurity::None,
             cors: CorsOptions {
                 allowed_patterns: Vec::new(),
@@ -374,7 +381,7 @@ pub fn build_agent_http_api_deployment_details(
     };
 
     let agent_webhook_prefix: Vec<PathSegment> =
-        parse_literal_only_path_segments(&agent_http_api_deployment.webhooks_url);
+        parse_literal_only_path_segments(&agent_http_api_deployment.webhooks_prefix);
 
     let mut agent_webhook_suffix: Vec<PathSegment> = agent_http_mount
         .webhook_suffix
@@ -400,23 +407,6 @@ pub fn build_agent_http_api_deployment_details(
             ),
         })
         .collect::<Result<Vec<_>, _>>()?;
-
-    // check final webhook url forms a valid url.
-    {
-        let mut url_to_validate = format!("http://{}/", domain.0);
-
-        for segment in &agent_webhook {
-            url_to_validate.push_str(segment);
-            url_to_validate.push('/');
-        }
-
-        Url::parse(&url_to_validate).map_err(|_| {
-            DeployValidationError::HttpApiDeploymentInvalidWebhookUrl {
-                agent_type: agent_type_name.clone(),
-                url: url_to_validate,
-            }
-        })?;
-    }
 
     Ok(Some((domain.clone(), agent_webhook)))
 }
@@ -623,18 +613,190 @@ fn resolve_route_security(
     }
 }
 
+pub fn validate_path_segments(
+    segments: &[PathSegment],
+    domain: &Domain,
+) -> Result<(), &'static str> {
+    let rendered_path = segments
+        .iter()
+        .map(|p| match p {
+            PathSegment::Literal { value } => value.clone(),
+            PathSegment::Variable { .. } | PathSegment::CatchAll { .. } => "_".to_string(),
+        })
+        .join("/");
+
+    let url_to_validate = format!("http://{}/{}", domain.0, rendered_path);
+
+    let Ok(url) = Url::parse(&url_to_validate) else {
+        return Err("Does not form a valid url");
+    };
+
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err("may not contain query or fragment");
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::api_definition::UnboundRouteSecurity;
     use chrono::Utc;
     use golem_common::model::Empty;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::{
+        AgentConstructor, AgentMethod, AgentMode, AgentType, CorsOptions as AgentCorsOptions,
+        HttpMountDetails, LiteralSegment, Snapshotting,
+    };
+    use golem_common::model::application::ApplicationId;
+    use golem_common::model::auth::EnvironmentRole;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::diff::Hash;
     use golem_common::model::domain_registration::Domain;
-    use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::http_api_deployment::{HttpApiDeployment, HttpApiDeploymentId};
-    use std::collections::BTreeMap;
+    use golem_common::model::environment::{
+        Environment, EnvironmentId, EnvironmentName, EnvironmentRevision,
+    };
+    use golem_common::model::http_api_deployment::{
+        HttpApiDeployment, HttpApiDeploymentAgentOptions, HttpApiDeploymentId,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
+    use uuid::Uuid;
+
+    fn test_environment(environment_id: EnvironmentId) -> Environment {
+        Environment {
+            id: environment_id,
+            revision: EnvironmentRevision::INITIAL,
+            application_id: ApplicationId(Uuid::new_v4()),
+            name: EnvironmentName::try_from("prod").unwrap(),
+            diff_model_version: 0,
+            compatibility_check: false,
+            version_check: false,
+            security_overrides: false,
+            owner_account_id: AccountId(Uuid::new_v4()),
+            roles_from_active_shares: BTreeSet::<EnvironmentRole>::new(),
+            current_deployment: None,
+        }
+    }
+
+    fn test_agent(mode: AgentMode, phantom_agent: bool) -> AgentType {
+        AgentType {
+            type_name: AgentTypeName("note-agent".to_string()),
+            description: String::new(),
+            source_language: String::new(),
+            constructor: AgentConstructor {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+            },
+            methods: vec![AgentMethod {
+                name: "fetch".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                output_schema: DataSchema::Tuple(NamedElementSchemas::empty()),
+                http_endpoint: vec![HttpEndpointDetails {
+                    http_method: HttpMethod::Get(Empty {}),
+                    path_suffix: vec![],
+                    header_vars: vec![],
+                    query_vars: vec![],
+                    auth_details: None,
+                    cors_options: AgentCorsOptions {
+                        allowed_patterns: vec![],
+                    },
+                }],
+            }],
+            dependencies: vec![],
+            mode,
+            http_mount: Some(HttpMountDetails {
+                path_prefix: vec![golem_common::model::agent::PathSegment::Literal(
+                    LiteralSegment {
+                        value: "notes".to_string(),
+                    },
+                )],
+                auth_details: None,
+                phantom_agent,
+                cors_options: AgentCorsOptions {
+                    allowed_patterns: vec![],
+                },
+                webhook_suffix: vec![],
+            }),
+            snapshotting: Snapshotting::Disabled(Empty {}),
+            config: vec![],
+        }
+    }
+
+    fn test_deployment(environment_id: EnvironmentId) -> HttpApiDeployment {
+        HttpApiDeployment {
+            id: HttpApiDeploymentId::new(),
+            revision:
+                golem_common::model::http_api_deployment::HttpApiDeploymentRevision::try_from(0u64)
+                    .unwrap(),
+            environment_id,
+            domain: Domain("example.com".to_string()),
+            hash: Hash::empty(),
+            agents: BTreeMap::new(),
+            webhooks_prefix: "/webhooks".to_string(),
+            openapi_endpoint_prefix: "/".to_string(),
+            created_at: Utc::now(),
+        }
+    }
+
+    fn compiled_phantom_flag(mode: AgentMode, phantom_agent: bool) -> bool {
+        let environment_id = EnvironmentId(Uuid::new_v4());
+        let environment = test_environment(environment_id);
+        let deployment = test_deployment(environment_id);
+        let agent = test_agent(mode, phantom_agent);
+        let http_mount = agent.http_mount.clone().unwrap();
+        let implementer = RegisteredAgentTypeImplementer {
+            component_id: ComponentId(Uuid::new_v4()),
+            component_revision: ComponentRevision::INITIAL,
+        };
+        let mut current_route_id = 0;
+        let mut compiled_routes = Vec::new();
+        let mut errors = Vec::new();
+
+        add_agent_method_http_routes(
+            &environment,
+            &deployment,
+            &agent,
+            &implementer,
+            &http_mount,
+            &agent.methods,
+            vec![],
+            &HttpApiDeploymentAgentOptions::default(),
+            &mut current_route_id,
+            &mut compiled_routes,
+            &mut errors,
+        );
+
+        assert!(errors.is_empty());
+
+        let compiled_route = compiled_routes.into_iter().next().unwrap();
+        let RouteBehaviour::CallAgent(call_agent) = compiled_route.behaviour else {
+            panic!("expected call-agent route");
+        };
+
+        call_agent.phantom
+    }
+
+    fn test_deployment_with_openapi(openapi_endpoint: &str) -> HttpApiDeployment {
+        HttpApiDeployment {
+            id: HttpApiDeploymentId::new(),
+            revision:
+                golem_common::model::http_api_deployment::HttpApiDeploymentRevision::try_from(0u64)
+                    .unwrap(),
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            domain: Domain("example.com".to_string()),
+            hash: Hash::empty(),
+            agents: BTreeMap::new(),
+            webhooks_prefix: "/webhooks".to_string(),
+            openapi_endpoint_prefix: openapi_endpoint.to_string(),
+            created_at: Utc::now(),
+        }
+    }
 
     #[test]
     fn parses_mixed_segments_as_literals() {
@@ -690,6 +852,53 @@ mod tests {
         ];
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn add_openapi_spec_routes_uses_custom_prefix_and_formats() {
+        let deployment = test_deployment_with_openapi("/docs");
+        let mut route_id = 1;
+        let mut compiled_routes = Vec::new();
+
+        add_openapi_spec_routes(&deployment, &mut route_id, &mut compiled_routes);
+
+        assert_eq!(compiled_routes.len(), 2);
+
+        assert_eq!(
+            compiled_routes[0].path,
+            vec![
+                PathSegment::Literal {
+                    value: "docs".to_string(),
+                },
+                PathSegment::Literal {
+                    value: "openapi.json".to_string(),
+                }
+            ]
+        );
+        assert!(matches!(
+            &compiled_routes[0].behaviour,
+            RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
+                format: OpenApiSpecFormat::Json
+            })
+        ));
+
+        assert_eq!(
+            compiled_routes[1].path,
+            vec![
+                PathSegment::Literal {
+                    value: "docs".to_string(),
+                },
+                PathSegment::Literal {
+                    value: "openapi.yaml".to_string(),
+                }
+            ]
+        );
+        assert!(matches!(
+            &compiled_routes[1].behaviour,
+            RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
+                format: OpenApiSpecFormat::Yaml
+            })
+        ));
     }
 
     #[test]
@@ -754,18 +963,8 @@ mod tests {
             },
         ];
 
-        let deployment = HttpApiDeployment {
-            id: HttpApiDeploymentId::new(),
-            revision:
-                golem_common::model::http_api_deployment::HttpApiDeploymentRevision::try_from(0u64)
-                    .unwrap(),
-            environment_id: EnvironmentId(uuid::Uuid::nil()),
-            domain: Domain("example.com".to_string()),
-            hash: Hash::empty(),
-            agents: BTreeMap::new(),
-            webhooks_url: "/webhooks".to_string(),
-            created_at: Utc::now(),
-        };
+        let environment_id = EnvironmentId(Uuid::new_v4());
+        let deployment = test_deployment(environment_id);
 
         let mut route_id = 3;
         add_cors_preflight_http_routes(&deployment, &mut route_id, &mut compiled_routes);
@@ -808,5 +1007,15 @@ mod tests {
             post_policy.allowed_headers,
             BTreeSet::from(["content-type".to_string(), "x-session".to_string(),])
         );
+    }
+
+    #[test]
+    fn ephemeral_agents_force_http_routes_to_be_phantom() {
+        assert!(compiled_phantom_flag(AgentMode::Ephemeral, false));
+    }
+
+    #[test]
+    fn durable_agents_keep_explicit_http_phantom_flag() {
+        assert!(compiled_phantom_flag(AgentMode::Durable, true));
     }
 }

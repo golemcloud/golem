@@ -297,10 +297,6 @@ describe('Http Agent class', () => {
       { name: 'putMethod', tag: 'put' },
       { name: 'deleteMethod', tag: 'delete' },
       { name: 'patchMethod', tag: 'patch' },
-      { name: 'headMethod', tag: 'head' },
-      { name: 'optionsMethod', tag: 'options' },
-      { name: 'connectMethod', tag: 'connect' },
-      { name: 'traceMethod', tag: 'trace' },
     ];
 
     for (const { name, tag } of expectedMethods) {
@@ -312,11 +308,11 @@ describe('Http Agent class', () => {
 
       expect(method.httpEndpoint).toBeDefined();
       expect(method.httpEndpoint).toHaveLength(1);
-      expect(method.httpEndpoint[0].httpMethod).toEqual({ tag });
-      expect(method.httpEndpoint[0].authDetails).toBeUndefined();
-      expect(method.httpEndpoint[0].queryVars).toEqual([]);
-      expect(method.httpEndpoint[0].corsOptions).toEqual({ allowedPatterns: [] });
-      expect(method.httpEndpoint[0].headerVars).toEqual([]);
+      expect(method.httpEndpoint![0].httpMethod).toEqual({ tag });
+      expect(method.httpEndpoint![0].authDetails).toBeUndefined();
+      expect(method.httpEndpoint![0].queryVars).toEqual([]);
+      expect(method.httpEndpoint![0].corsOptions).toEqual({ allowedPatterns: [] });
+      expect(method.httpEndpoint![0].headerVars).toEqual([]);
     }
   });
 });

@@ -569,7 +569,7 @@ impl Application {
                     id: common_id.clone(),
                     parents: vec![custom_id],
                     properties: AgentLayerPropertiesKind::Common(Box::new(
-                        agent.agent_properties.clone(),
+                        agent.agent_layer_properties(),
                     )),
                 });
 
@@ -787,13 +787,13 @@ impl PartitionedAgentPresets {
         for (preset_name, preset) in presets {
             match preset_name.strip_prefix(APP_ENV_PRESET_PREFIX) {
                 Some(env_name) => {
-                    env_presets.insert(env_name.to_string(), preset.agent_properties);
+                    env_presets.insert(env_name.to_string(), preset.into_agent_layer_properties());
                 }
                 None => {
                     if preset.default == Some(app_raw::Marker) || default_custom_preset.is_none() {
                         default_custom_preset = Some(preset_name.clone());
                     }
-                    custom_presets.insert(preset_name, preset.agent_properties);
+                    custom_presets.insert(preset_name, preset.into_agent_layer_properties());
                 }
             }
         }
@@ -815,13 +815,17 @@ impl PartitionedComponentPresets {
         for (preset_name, preset) in presets {
             match preset_name.strip_prefix(APP_ENV_PRESET_PREFIX) {
                 Some(env_name) => {
-                    env_presets.insert(env_name.to_string(), preset.component_properties.into());
+                    env_presets.insert(
+                        env_name.to_string(),
+                        preset.into_component_layer_properties().into(),
+                    );
                 }
                 None => {
                     if preset.default == Some(app_raw::Marker) || default_custom_preset.is_none() {
                         default_custom_preset = Some(preset_name.clone());
                     }
-                    custom_presets.insert(preset_name, preset.component_properties.into());
+                    custom_presets
+                        .insert(preset_name, preset.into_component_layer_properties().into());
                 }
             }
         }
@@ -1312,6 +1316,7 @@ impl<'a> Component<'a> {
                     "ts" => Some(GuestLanguage::TypeScript),
                     "rust" => Some(GuestLanguage::Rust),
                     "scala" => Some(GuestLanguage::Scala),
+                    "moonbit" => Some(GuestLanguage::MoonBit),
                     _ => None,
                 })
         })
@@ -2442,7 +2447,12 @@ mod app_builder {
                                 deployments.entry(api_deployment.domain).or_insert(WithSource::new(
                                     app.source.to_path_buf(),
                                     HttpApiDeploymentDeployProperties {
-                                        webhooks_url: api_deployment.webhook_url.unwrap_or_else(HttpApiDeploymentCreation::default_webhooks_url),
+                                        webhooks_prefix: HttpApiDeploymentCreation::normalize_webhooks_prefix(
+                                            api_deployment
+                                                .webhook_url
+                                                .unwrap_or_else(HttpApiDeploymentCreation::default_webhooks_prefix),
+                                        ),
+                                        openapi_prefix: HttpApiDeploymentCreation::normalize_openapi_endpoint_prefix(api_deployment.openapi_endpoint.unwrap_or(HttpApiDeploymentCreation::default_openapi_endpoint_prefix())),
                                         agents,
                                     },
                                 ));
@@ -2642,10 +2652,10 @@ mod app_builder {
                         .add_layer(ComponentLayer {
                             id: ComponentLayerId::TemplateCommon(template_name.clone()),
                             parents: ComponentLayerId::parent_ids_from_raw_template_references(
-                                template.templates,
+                                template.templates.clone(),
                             ),
                             properties: ComponentLayerPropertiesKind::Common(Box::new(
-                                template.component_properties.into(),
+                                template.component_layer_properties().into(),
                             )),
                         })
                         .err()
@@ -2717,10 +2727,10 @@ mod app_builder {
                         .add_layer(ComponentLayer {
                             id: ComponentLayerId::ComponentCommon(component_name.clone()),
                             parents: ComponentLayerId::parent_ids_from_raw_template_references(
-                                component.templates,
+                                component.templates.clone(),
                             ),
                             properties: ComponentLayerPropertiesKind::Common(Box::new(
-                                component.component_properties.into(),
+                                component.component_layer_properties().into(),
                             )),
                         })
                         .err()

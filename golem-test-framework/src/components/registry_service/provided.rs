@@ -28,6 +28,7 @@ pub struct ProvidedRegistryService {
     admin_account_id: AccountId,
     admin_account_email: AccountEmail,
     admin_account_token: TokenSecret,
+    builtin_plugin_owner_account_id: AccountId,
     default_plan_id: PlanId,
     low_fuel_plan_id: PlanId,
     low_disk_space_plan_id: PlanId,
@@ -44,6 +45,7 @@ impl ProvidedRegistryService {
         admin_account_id: AccountId,
         admin_account_email: AccountEmail,
         admin_account_token: TokenSecret,
+        builtin_plugin_owner_account_id: AccountId,
         default_plan_id: PlanId,
         low_fuel_plan_id: PlanId,
         low_disk_space_plan_id: PlanId,
@@ -60,6 +62,7 @@ impl ProvidedRegistryService {
             admin_account_id,
             admin_account_email,
             admin_account_token,
+            builtin_plugin_owner_account_id,
             default_plan_id,
             low_fuel_plan_id,
             low_disk_space_plan_id,
@@ -94,6 +97,10 @@ impl RegistryService for ProvidedRegistryService {
     }
     fn admin_account_token(&self) -> TokenSecret {
         self.admin_account_token.clone()
+    }
+
+    fn builtin_plugin_owner_account_id(&self) -> AccountId {
+        self.builtin_plugin_owner_account_id
     }
 
     fn default_plan(&self) -> PlanId {

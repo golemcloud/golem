@@ -1,0 +1,650 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/api/oplog"
+
+import {
+  "golemcloud/golem_sdk/interface/golem/api/context",
+  "golemcloud/golem_sdk/interface/golem/api/host",
+  "golemcloud/golem_sdk/interface/golem/api/retry",
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/wasi/clocks/wallClock",
+}
+
+// Values
+pub fn enrich_oplog_entries(@host.EnvironmentId, @types.AgentId, Array[(UInt64, OplogEntry)], UInt64) -> Result[Array[PublicOplogEntry], String]
+
+// Errors
+pub(all) suberror WorkerError {
+  Unknown(String)
+  InvalidRequest(String)
+  StackOverflow
+  OutOfMemory
+  ExceededMemoryLimit
+  InternalError(String)
+  DeterministicTrap(String)
+  TransientError(String)
+  PermanentError(String)
+  ExceededTableLimit
+  ExceededHttpCallLimit
+  ExceededRpcCallLimit
+  NodeOutOfFilesystemStorage
+  AgentExceededFilesystemStorageLimit
+  AgentTerminatedByQuota(AgentTerminatedByQuotaError)
+} derive(Eq, Show)
+
+// Types and methods
+pub(all) struct ActivatePluginParameters {
+  timestamp : @wallClock.Datetime
+  plugin : PluginInstallationDescription
+} derive(Eq, Show)
+
+pub(all) struct AgentInitializationParameters {
+  idempotency_key : String
+  constructor_parameters : TypedDataValue
+  trace_id : String
+  trace_states : Array[String]
+  invocation_context : Array[Array[SpanData]]
+} derive(Eq, Show)
+
+pub(all) enum AgentInvocation {
+  AgentInitialization(AgentInitializationParameters)
+  AgentMethodInvocation(AgentMethodInvocationParameters)
+  SaveSnapshot
+  LoadSnapshot(LoadSnapshotParameters)
+  ProcessOplogEntries(ProcessOplogEntriesParameters)
+  ManualUpdate(ManualUpdateParameters)
+} derive(Eq, Show)
+
+pub(all) struct AgentInvocationFinishedParameters {
+  timestamp : @wallClock.Datetime
+  result : AgentInvocationResult
+  consumed_fuel : Int64
+  component_revision : UInt64
+} derive(Eq, Show)
+
+pub(all) struct AgentInvocationOutputParameters {
+  output : TypedDataValue
+} derive(Eq, Show)
+
+pub(all) enum AgentInvocationResult {
+  AgentInitialization(AgentInvocationOutputParameters)
+  AgentMethod(AgentInvocationOutputParameters)
+  ManualUpdate
+  LoadSnapshot(FallibleResultParameters)
+  SaveSnapshot(SaveSnapshotResultParameters)
+  ProcessOplogEntries(FallibleResultParameters)
+} derive(Eq, Show)
+
+pub(all) struct AgentInvocationStartedParameters {
+  timestamp : @wallClock.Datetime
+  invocation : AgentInvocation
+} derive(Eq, Show)
+
+pub(all) struct AgentMethodInvocationParameters {
+  idempotency_key : String
+  method_name : String
+  function_input : TypedDataValue
+  trace_id : String
+  trace_states : Array[String]
+  invocation_context : Array[Array[SpanData]]
+} derive(Eq, Show)
+
+pub(all) struct AgentTerminatedByQuotaError {
+  environment_id : @host.EnvironmentId
+  resource_name : String
+} derive(Eq, Show)
+
+pub(all) struct AndThenState {
+  left : Int
+  right : Int
+  on_right : Bool
+} derive(Eq, Show)
+
+pub(all) struct BeginRemoteTransactionParameters {
+  timestamp : @wallClock.Datetime
+  transaction_id : String
+} derive(Eq, Show)
+
+pub(all) struct CancelPendingInvocationParameters {
+  timestamp : @wallClock.Datetime
+  idempotency_key : String
+} derive(Eq, Show)
+
+pub(all) struct ChangePersistenceLevelParameters {
+  timestamp : @wallClock.Datetime
+  persistence_level : @host.PersistenceLevel
+} derive(Eq, Show)
+
+pub(all) struct CountBoxState {
+  attempts : UInt
+  inner : Int
+} derive(Eq, Show)
+
+pub(all) struct CreateParameters {
+  timestamp : @wallClock.Datetime
+  agent_id : @types.AgentId
+  component_revision : UInt64
+  env : Array[(String, String)]
+  created_by : @types.AccountId
+  environment_id : @host.EnvironmentId
+  parent : @types.AgentId?
+  component_size : UInt64
+  initial_total_linear_memory_size : UInt64
+  initial_active_plugins : Array[PluginInstallationDescription]
+  config_vars : Array[(String, String)]
+  local_agent_config : Array[LocalAgentConfigEntry]
+  original_phantom_id : @types.Uuid?
+} derive(Eq, Show)
+
+pub(all) struct CreateResourceParameters {
+  timestamp : @wallClock.Datetime
+  id : UInt64
+  name : String
+  owner : String
+} derive(Eq, Show)
+
+pub(all) struct DeactivatePluginParameters {
+  timestamp : @wallClock.Datetime
+  plugin : PluginInstallationDescription
+} derive(Eq, Show)
+
+pub(all) struct DropResourceParameters {
+  timestamp : @wallClock.Datetime
+  id : UInt64
+  name : String
+  owner : String
+} derive(Eq, Show)
+
+pub(all) struct EndAtomicRegionParameters {
+  timestamp : @wallClock.Datetime
+  begin_index : UInt64
+} derive(Eq, Show)
+
+pub(all) struct EndRemoteWriteParameters {
+  timestamp : @wallClock.Datetime
+  begin_index : UInt64
+} derive(Eq, Show)
+
+pub(all) struct EnvironmentPluginGrantId {
+  uuid : @types.Uuid
+} derive(Eq, Show)
+
+pub(all) struct ErrorParameters {
+  timestamp : @wallClock.Datetime
+  error : String
+  retry_from : UInt64
+  inside_atomic_region : Bool
+  retry_policy_state : RetryPolicyState?
+} derive(Eq, Show)
+
+pub(all) struct ExternalSpanData {
+  span_id : String
+} derive(Eq, Show)
+
+pub(all) struct FailedUpdateParameters {
+  timestamp : @wallClock.Datetime
+  target_revision : UInt64
+  details : String?
+} derive(Eq, Show)
+
+pub(all) struct FallibleResultParameters {
+  error : String?
+} derive(Eq, Show)
+
+pub(all) struct FilesystemStorageUsageUpdateParameters {
+  timestamp : @wallClock.Datetime
+  delta : Int64
+} derive(Eq, Show)
+
+pub(all) struct FinishSpanParameters {
+  timestamp : @wallClock.Datetime
+  span_id : String
+} derive(Eq, Show)
+
+pub(all) struct GetOplog(Int) derive(Eq, Show)
+pub fn GetOplog::drop(Self) -> Unit
+pub fn GetOplog::get_next(Self) -> Array[PublicOplogEntry]?
+pub fn GetOplog::get_oplog(@types.AgentId, UInt64) -> Self
+#deprecated
+pub fn GetOplog::inner(Self) -> Int
+
+pub(all) struct GrowMemoryParameters {
+  timestamp : @wallClock.Datetime
+  delta : UInt64
+} derive(Eq, Show)
+
+pub(all) struct HostCallParameters {
+  timestamp : @wallClock.Datetime
+  function_name : String
+  request : @types.ValueAndType
+  response : @types.ValueAndType
+  durable_function_type : WrappedFunctionType
+} derive(Eq, Show)
+
+pub(all) struct JumpParameters {
+  timestamp : @wallClock.Datetime
+  jump : OplogRegion
+} derive(Eq, Show)
+
+pub(all) struct LoadSnapshotParameters {
+  snapshot : SnapshotData
+} derive(Eq, Show)
+
+pub(all) struct LocalAgentConfigEntry {
+  path : Array[String]
+  value : @types.ValueAndType
+} derive(Eq, Show)
+
+pub(all) struct LocalSpanData {
+  span_id : String
+  start : @wallClock.Datetime
+  parent : String?
+  linked_context : UInt64?
+  attributes : Array[@context.Attribute]
+  inherited : Bool
+} derive(Eq, Show)
+
+pub(all) enum LogLevel {
+  STDOUT
+  STDERR
+  TRACE
+  DEBUG
+  INFO
+  WARN
+  ERROR
+  CRITICAL
+} derive(Eq, Show)
+pub fn LogLevel::from(Int) -> Self
+pub fn LogLevel::ordinal(Self) -> Int
+
+pub(all) struct LogParameters {
+  timestamp : @wallClock.Datetime
+  level : LogLevel
+  context : String
+  message : String
+} derive(Eq, Show)
+
+pub(all) struct ManualUpdateParameters {
+  target_revision : UInt64
+} derive(Eq, Show)
+
+pub(all) enum OplogEntry {
+  Create(RawCreateParameters)
+  HostCall(RawHostCallParameters)
+  AgentInvocationStarted(RawAgentInvocationStartedParameters)
+  AgentInvocationFinished(RawAgentInvocationFinishedParameters)
+  Suspend(Timestamp)
+  Error(RawErrorParameters)
+  NoOp(Timestamp)
+  Jump(JumpParameters)
+  Interrupted(Timestamp)
+  Exited(Timestamp)
+  BeginAtomicRegion(Timestamp)
+  EndAtomicRegion(EndAtomicRegionParameters)
+  BeginRemoteWrite(Timestamp)
+  EndRemoteWrite(EndRemoteWriteParameters)
+  PendingAgentInvocation(RawPendingAgentInvocationParameters)
+  PendingUpdate(RawPendingUpdateParameters)
+  SuccessfulUpdate(RawSuccessfulUpdateParameters)
+  FailedUpdate(FailedUpdateParameters)
+  GrowMemory(GrowMemoryParameters)
+  FilesystemStorageUsageUpdate(FilesystemStorageUsageUpdateParameters)
+  CreateResource(RawCreateResourceParameters)
+  DropResource(RawDropResourceParameters)
+  Log(LogParameters)
+  Restart(Timestamp)
+  ActivatePlugin(RawActivatePluginParameters)
+  DeactivatePlugin(RawDeactivatePluginParameters)
+  Revert(RevertParameters)
+  CancelPendingInvocation(CancelPendingInvocationParameters)
+  StartSpan(StartSpanParameters)
+  FinishSpan(FinishSpanParameters)
+  SetSpanAttribute(SetSpanAttributeParameters)
+  ChangePersistenceLevel(ChangePersistenceLevelParameters)
+  BeginRemoteTransaction(RawBeginRemoteTransactionParameters)
+  PreCommitRemoteTransaction(RemoteTransactionParameters)
+  PreRollbackRemoteTransaction(RemoteTransactionParameters)
+  CommittedRemoteTransaction(RemoteTransactionParameters)
+  RolledBackRemoteTransaction(RemoteTransactionParameters)
+  Snapshot(RawSnapshotParameters)
+  OplogProcessorCheckpoint(RawOplogProcessorCheckpointParameters)
+  SetRetryPolicy(SetRetryPolicyParameters)
+  RemoveRetryPolicy(RemoveRetryPolicyParameters)
+} derive(Eq, Show)
+
+pub(all) struct OplogExternalPayload {
+  payload_id : @types.Uuid
+  md5_hash : FixedArray[Byte]
+} derive(Eq, Show)
+
+pub(all) enum OplogPayload {
+  Inline(FixedArray[Byte])
+  External(OplogExternalPayload)
+} derive(Eq, Show)
+
+pub(all) struct OplogProcessorCheckpointParameters {
+  timestamp : @wallClock.Datetime
+  plugin : PluginInstallationDescription
+  target_agent_id : @types.AgentId
+  confirmed_up_to : UInt64
+  sending_up_to : UInt64
+  last_batch_start : UInt64
+} derive(Eq, Show)
+
+pub(all) struct OplogRegion {
+  start : UInt64
+  end : UInt64
+} derive(Eq, Show)
+
+pub(all) struct PairState {
+  left : Int
+  right : Int
+} derive(Eq, Show)
+
+pub(all) struct PendingAgentInvocationParameters {
+  timestamp : @wallClock.Datetime
+  invocation : AgentInvocation
+} derive(Eq, Show)
+
+pub(all) struct PendingUpdateParameters {
+  timestamp : @wallClock.Datetime
+  target_revision : UInt64
+  description : UpdateDescription
+} derive(Eq, Show)
+
+pub(all) struct PluginInstallationDescription {
+  environment_plugin_grant_id : EnvironmentPluginGrantId
+  plugin_priority : Int
+  plugin_name : String
+  plugin_version : String
+  parameters : Array[(String, String)]
+} derive(Eq, Show)
+
+pub(all) struct ProcessOplogEntriesParameters {
+  idempotency_key : String
+} derive(Eq, Show)
+
+pub(all) enum PublicOplogEntry {
+  Create(CreateParameters)
+  HostCall(HostCallParameters)
+  AgentInvocationStarted(AgentInvocationStartedParameters)
+  AgentInvocationFinished(AgentInvocationFinishedParameters)
+  Suspend(Timestamp)
+  Error(ErrorParameters)
+  NoOp(Timestamp)
+  Jump(JumpParameters)
+  Interrupted(Timestamp)
+  Exited(Timestamp)
+  BeginAtomicRegion(Timestamp)
+  EndAtomicRegion(EndAtomicRegionParameters)
+  BeginRemoteWrite(Timestamp)
+  EndRemoteWrite(EndRemoteWriteParameters)
+  PendingAgentInvocation(PendingAgentInvocationParameters)
+  PendingUpdate(PendingUpdateParameters)
+  SuccessfulUpdate(SuccessfulUpdateParameters)
+  FailedUpdate(FailedUpdateParameters)
+  GrowMemory(GrowMemoryParameters)
+  FilesystemStorageUsageUpdate(FilesystemStorageUsageUpdateParameters)
+  CreateResource(CreateResourceParameters)
+  DropResource(DropResourceParameters)
+  Log(LogParameters)
+  Restart(Timestamp)
+  ActivatePlugin(ActivatePluginParameters)
+  DeactivatePlugin(DeactivatePluginParameters)
+  Revert(RevertParameters)
+  CancelPendingInvocation(CancelPendingInvocationParameters)
+  StartSpan(StartSpanParameters)
+  FinishSpan(FinishSpanParameters)
+  SetSpanAttribute(SetSpanAttributeParameters)
+  ChangePersistenceLevel(ChangePersistenceLevelParameters)
+  BeginRemoteTransaction(BeginRemoteTransactionParameters)
+  PreCommitRemoteTransaction(RemoteTransactionParameters)
+  PreRollbackRemoteTransaction(RemoteTransactionParameters)
+  CommittedRemoteTransaction(RemoteTransactionParameters)
+  RolledBackRemoteTransaction(RemoteTransactionParameters)
+  Snapshot(SnapshotParameters)
+  OplogProcessorCheckpoint(OplogProcessorCheckpointParameters)
+  SetRetryPolicy(SetRetryPolicyParameters)
+  RemoveRetryPolicy(RemoveRetryPolicyParameters)
+} derive(Eq, Show)
+
+pub(all) struct RawActivatePluginParameters {
+  timestamp : @wallClock.Datetime
+  plugin_grant_id : EnvironmentPluginGrantId
+} derive(Eq, Show)
+
+pub(all) struct RawAgentInvocationFinishedParameters {
+  timestamp : @wallClock.Datetime
+  result : OplogPayload
+  consumed_fuel : Int64
+  component_revision : UInt64
+} derive(Eq, Show)
+
+pub(all) struct RawAgentInvocationStartedParameters {
+  timestamp : @wallClock.Datetime
+  idempotency_key : String
+  payload : OplogPayload
+  trace_id : String
+  trace_states : Array[String]
+  invocation_context : Array[SpanData]
+} derive(Eq, Show)
+
+pub(all) struct RawBeginRemoteTransactionParameters {
+  timestamp : @wallClock.Datetime
+  transaction_id : String
+  original_begin_index : UInt64?
+} derive(Eq, Show)
+
+pub(all) struct RawCreateParameters {
+  timestamp : @wallClock.Datetime
+  agent_id : @types.AgentId
+  component_revision : UInt64
+  env : Array[(String, String)]
+  environment_id : @host.EnvironmentId
+  created_by : @types.AccountId
+  parent : @types.AgentId?
+  component_size : UInt64
+  initial_total_linear_memory_size : UInt64
+  initial_active_plugins : Array[EnvironmentPluginGrantId]
+  config_vars : Array[(String, String)]
+  local_agent_config : Array[RawLocalAgentConfigEntry]
+  original_phantom_id : @types.Uuid?
+} derive(Eq, Show)
+
+pub(all) struct RawCreateResourceParameters {
+  timestamp : @wallClock.Datetime
+  id : UInt64
+  resource_type_id : ResourceTypeId
+} derive(Eq, Show)
+
+pub(all) struct RawDeactivatePluginParameters {
+  timestamp : @wallClock.Datetime
+  plugin_grant_id : EnvironmentPluginGrantId
+} derive(Eq, Show)
+
+pub(all) struct RawDropResourceParameters {
+  timestamp : @wallClock.Datetime
+  id : UInt64
+  resource_type_id : ResourceTypeId
+} derive(Eq, Show)
+
+pub(all) struct RawErrorParameters {
+  timestamp : @wallClock.Datetime
+  error : WorkerError
+  retry_from : UInt64
+  inside_atomic_region : Bool
+  retry_policy_state : RetryPolicyState?
+} derive(Eq, Show)
+
+pub(all) struct RawHostCallParameters {
+  timestamp : @wallClock.Datetime
+  function_name : String
+  request : OplogPayload
+  response : OplogPayload
+  durable_function_type : WrappedFunctionType
+} derive(Eq, Show)
+
+pub(all) struct RawLocalAgentConfigEntry {
+  path : Array[String]
+  value : @types.WitValue
+} derive(Eq, Show)
+
+pub(all) struct RawOplogProcessorCheckpointParameters {
+  timestamp : @wallClock.Datetime
+  plugin_grant_id : EnvironmentPluginGrantId
+  target_agent_id : @types.AgentId
+  confirmed_up_to : UInt64
+  sending_up_to : UInt64
+  last_batch_start : UInt64
+} derive(Eq, Show)
+
+pub(all) struct RawPendingAgentInvocationParameters {
+  timestamp : @wallClock.Datetime
+  idempotency_key : String
+  payload : OplogPayload
+  trace_id : String
+  trace_states : Array[String]
+  invocation_context : Array[SpanData]
+} derive(Eq, Show)
+
+pub(all) struct RawPendingUpdateParameters {
+  timestamp : @wallClock.Datetime
+  description : RawUpdateDescription
+} derive(Eq, Show)
+
+pub(all) struct RawSnapshotBasedUpdate {
+  target_revision : UInt64
+  payload : OplogPayload
+  mime_type : String
+} derive(Eq, Show)
+
+pub(all) struct RawSnapshotParameters {
+  timestamp : @wallClock.Datetime
+  data : OplogPayload
+  mime_type : String
+} derive(Eq, Show)
+
+pub(all) struct RawSuccessfulUpdateParameters {
+  timestamp : @wallClock.Datetime
+  target_revision : UInt64
+  new_component_size : UInt64
+  new_active_plugins : Array[EnvironmentPluginGrantId]
+} derive(Eq, Show)
+
+pub(all) enum RawUpdateDescription {
+  Automatic(UInt64)
+  SnapshotBased(RawSnapshotBasedUpdate)
+} derive(Eq, Show)
+
+pub(all) struct RemoteTransactionParameters {
+  timestamp : @wallClock.Datetime
+  begin_index : UInt64
+} derive(Eq, Show)
+
+pub(all) struct RemoveRetryPolicyParameters {
+  timestamp : @wallClock.Datetime
+  name : String
+} derive(Eq, Show)
+
+pub(all) struct ResourceTypeId {
+  name : String
+  owner : String
+} derive(Eq, Show)
+
+pub(all) struct RetryPolicyState {
+  nodes : Array[StateNode]
+} derive(Eq, Show)
+
+pub(all) struct RevertParameters {
+  timestamp : @wallClock.Datetime
+  dropped_region : OplogRegion
+} derive(Eq, Show)
+
+pub(all) struct SaveSnapshotResultParameters {
+  snapshot : SnapshotData
+} derive(Eq, Show)
+
+pub(all) struct SearchOplog(Int) derive(Eq, Show)
+pub fn SearchOplog::drop(Self) -> Unit
+pub fn SearchOplog::get_next(Self) -> Array[(UInt64, PublicOplogEntry)]?
+#deprecated
+pub fn SearchOplog::inner(Self) -> Int
+pub fn SearchOplog::search_oplog(@types.AgentId, String) -> Self
+
+pub(all) struct SetRetryPolicyParameters {
+  timestamp : @wallClock.Datetime
+  policy : @retry.NamedRetryPolicy
+} derive(Eq, Show)
+
+pub(all) struct SetSpanAttributeParameters {
+  timestamp : @wallClock.Datetime
+  span_id : String
+  key : String
+  value : @context.AttributeValue
+} derive(Eq, Show)
+
+pub(all) struct SnapshotData {
+  data : FixedArray[Byte]
+  mime_type : String
+} derive(Eq, Show)
+
+pub(all) struct SnapshotParameters {
+  timestamp : @wallClock.Datetime
+  data : SnapshotData
+} derive(Eq, Show)
+
+pub(all) enum SpanData {
+  LocalSpan(LocalSpanData)
+  ExternalSpan(ExternalSpanData)
+} derive(Eq, Show)
+
+pub(all) struct StartSpanParameters {
+  timestamp : @wallClock.Datetime
+  span_id : String
+  parent : String?
+  linked_context_id : String?
+  attributes : Array[@context.Attribute]
+} derive(Eq, Show)
+
+pub(all) enum StateNode {
+  Counter(UInt)
+  Terminal
+  Wrapper(Int)
+  CountBox(CountBoxState)
+  AndThen(AndThenState)
+  Pair(PairState)
+} derive(Eq, Show)
+
+pub(all) struct SuccessfulUpdateParameters {
+  timestamp : @wallClock.Datetime
+  target_revision : UInt64
+  new_component_size : UInt64
+  new_active_plugins : Array[PluginInstallationDescription]
+} derive(Eq, Show)
+
+pub(all) struct Timestamp {
+  timestamp : @wallClock.Datetime
+} derive(Eq, Show)
+
+pub(all) struct TypedDataValue {
+  value : @types.DataValue
+  schema : @types.DataSchema
+} derive(Eq, Show)
+
+pub(all) enum UpdateDescription {
+  AutoUpdate
+  SnapshotBased(@host.Snapshot)
+} derive(Eq, Show)
+
+pub(all) enum WrappedFunctionType {
+  ReadLocal
+  WriteLocal
+  ReadRemote
+  WriteRemote
+  WriteRemoteBatched(UInt64?)
+  WriteRemoteTransaction(UInt64?)
+} derive(Eq, Show)
+
+// Type aliases
+
+// Traits
+

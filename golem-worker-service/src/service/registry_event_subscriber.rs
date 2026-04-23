@@ -16,7 +16,6 @@ use crate::custom_api::route_resolver::RouteResolver;
 use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::AuthService;
 use golem_common::model::agent::RegistryInvalidationEvent;
-use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::domain_registration::Domain;
 use golem_service_base::clients::registry::{RegistryInvalidationHandler, RegistryService};
 use std::sync::Arc;
@@ -69,20 +68,18 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
             } => {
                 debug!(
                     environment_id = %environment_id,
-                    deployment_revision = deployment_revision,
-                    current_deployment_revision = current_deployment_revision,
+                    deployment_revision = %deployment_revision,
+                    current_deployment_revision = %current_deployment_revision,
                     "Received deployment changed event"
                 );
-                if let (Ok(rev), Ok(current_rev)) = (
-                    DeploymentRevision::new(*deployment_revision),
-                    CurrentDeploymentRevision::new(*current_deployment_revision),
-                ) {
-                    self.agent_resolution_cache.update_latest_revision(
-                        *environment_id,
-                        rev,
-                        current_rev,
-                    );
-                }
+                self.agent_resolution_cache.update_latest_revision(
+                    *environment_id,
+                    *deployment_revision,
+                    *current_deployment_revision,
+                );
+                self.route_resolver
+                    .invalidate_domains_for_environment(*environment_id)
+                    .await;
             }
             RegistryInvalidationEvent::DomainRegistrationChanged {
                 environment_id,

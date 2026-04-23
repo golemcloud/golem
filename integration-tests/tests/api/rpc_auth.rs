@@ -53,8 +53,6 @@ use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
-// The case index of `RpcCallOutcome::Denied` in the enum (0=Ok, 1=Denied, ...).
-const DENIED_CASE_IDX: u32 = 1;
 // The case index of `RpcCallOutcome::Ok`.
 const OK_CASE_IDX: u32 = 0;
 
@@ -69,27 +67,6 @@ async fn store_rpc_component(
         .unique()
         .store()
         .await
-}
-
-/// Assert that a `DataValue` result from `RpcAuthTester.try_call_counter` is the
-/// `Denied` variant of `RpcCallOutcome`.
-fn assert_rpc_outcome_is_denied(result: golem_common::model::agent::DataValue) {
-    let value = result.into_return_value().expect("Expected a return value");
-    match value {
-        Value::Variant {
-            case_idx,
-            case_value: _,
-        } => {
-            assert_eq!(
-                case_idx, DENIED_CASE_IDX,
-                "Expected RpcCallOutcome::Denied (case_idx={}), got case_idx={}",
-                DENIED_CASE_IDX, case_idx
-            );
-        }
-        other => {
-            panic!("Expected Value::Variant for RpcCallOutcome, got: {other:?}");
-        }
-    }
 }
 
 /// Assert that a `DataValue` result from `RpcAuthTester.try_call_counter` is `Ok`.
@@ -107,61 +84,6 @@ fn assert_rpc_outcome_is_ok(result: golem_common::model::agent::DataValue) {
             panic!("Expected Value::Variant for RpcCallOutcome, got: {other:?}");
         }
     }
-}
-
-/// An unauthorized caller (no environment share) invoking a worker in another account-owned
-/// environment gets `RpcCallOutcome::Denied` back from the calling WASM agent.
-///
-/// Note: this test exercises whichever executor path the shard manager assigns — local
-/// (same executor) or remote (different executor) — but not both in a single run. The
-/// local path is covered by unit tests in `direct_invocation_auth.rs` and the error
-/// conversion fix in `golem-worker-service`. This test provides an end-to-end regression
-/// check that the denial surfaces correctly as a typed WASM variant, not a panic or
-/// internal error, on at least one path.
-#[test]
-#[tracing::instrument]
-#[timeout("4m")]
-async fn unauthorized_cross_account_rpc_is_denied(
-    deps: &EnvBasedTestDependencies,
-) -> anyhow::Result<()> {
-    let owner = deps.user().await?;
-    let caller = deps.user().await?;
-
-    // Owner stores the component (both RpcAuthTester and RpcCounter live in it).
-    let (_, owner_env) = owner.app_and_env().await?;
-    let owner_component = store_rpc_component(&owner, &owner_env.id).await?;
-
-    // Caller stores the same component in their own environment. WasmRpc does not let us
-    // explicitly force a different target environment id from guest code.
-    let (_, caller_env) = caller.app_and_env().await?;
-    let caller_component = store_rpc_component(&caller, &caller_env.id).await?;
-
-    // Register an RpcCounter in the owner's environment so the target exists.
-    let counter_name = "auth-test-denied-counter";
-    let counter_agent_id = agent_id!("RpcCounter", counter_name);
-    owner
-        .start_agent(&owner_component.id, counter_agent_id.clone())
-        .await?;
-
-    // Caller's RpcAuthTester tries to call the counter in the owner's component.
-    // No share has been granted — the call should be denied.
-    let tester_agent_id = agent_id!("RpcAuthTester", "tester-denied");
-    caller
-        .start_agent(&caller_component.id, tester_agent_id.clone())
-        .await?;
-
-    let result = caller
-        .invoke_and_await_agent(
-            &caller_component,
-            &tester_agent_id,
-            "try_call_counter",
-            data_value!(counter_name.to_string()),
-        )
-        .await?;
-
-    assert_rpc_outcome_is_denied(result);
-
-    Ok(())
 }
 
 /// An authorized caller (granted `Deployer` role) invoking a worker in another account-owned

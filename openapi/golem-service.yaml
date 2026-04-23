@@ -9992,11 +9992,15 @@ components:
       title: AgentInvocationResult
       type: object
       properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
         result:
           $ref: '#/components/schemas/UntypedJsonDataValue'
         componentRevision:
           type: integer
           format: uint64
+      required:
+      - agentId
     AgentMetadataDto:
       title: AgentMetadataDto
       type: object
@@ -14694,87 +14698,6 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/AgentFilePermissions'
-    AnalysedExport:
-      discriminator:
-        propertyName: type
-        mapping:
-          Function: '#/components/schemas/AnalysedExport_AnalysedFunction'
-          Instance: '#/components/schemas/AnalysedExport_AnalysedInstance'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/AnalysedExport_AnalysedFunction'
-      - $ref: '#/components/schemas/AnalysedExport_AnalysedInstance'
-    AnalysedExport_AnalysedFunction:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Function
-            type: string
-            enum:
-            - Function
-        required:
-        - type
-      - $ref: '#/components/schemas/AnalysedFunction'
-    AnalysedExport_AnalysedInstance:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: Instance
-            type: string
-            enum:
-            - Instance
-        required:
-        - type
-      - $ref: '#/components/schemas/AnalysedInstance'
-    AnalysedFunction:
-      title: AnalysedFunction
-      type: object
-      properties:
-        name:
-          type: string
-        parameters:
-          type: array
-          items:
-            $ref: '#/components/schemas/AnalysedFunctionParameter'
-        result:
-          $ref: '#/components/schemas/AnalysedFunctionResult'
-      required:
-      - name
-      - parameters
-    AnalysedFunctionParameter:
-      title: AnalysedFunctionParameter
-      type: object
-      properties:
-        name:
-          type: string
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - name
-      - typ
-    AnalysedFunctionResult:
-      title: AnalysedFunctionResult
-      type: object
-      properties:
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-      required:
-      - typ
-    AnalysedInstance:
-      title: AnalysedInstance
-      type: object
-      properties:
-        name:
-          type: string
-        functions:
-          type: array
-          items:
-            $ref: '#/components/schemas/AnalysedFunction'
-      required:
-      - name
-      - functions
     Application:
       title: Application
       type: object
@@ -14895,10 +14818,8 @@ components:
       title: ComponentMetadata
       type: object
       properties:
-        exports:
-          type: array
-          items:
-            $ref: '#/components/schemas/AnalysedExport'
+        knownExports:
+          $ref: '#/components/schemas/KnownExports'
         producers:
           type: array
           items:
@@ -14907,10 +14828,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
-        binaryWit:
-          default: ''
-          type: string
-          format: bytes
         rootPackageName:
           type: string
         rootPackageVersion:
@@ -14929,7 +14846,7 @@ components:
           additionalProperties:
             $ref: '#/components/schemas/AgentTypeProvisionConfig'
       required:
-      - exports
+      - knownExports
       - producers
       - memories
     ComponentModelElementSchema:
@@ -15654,7 +15571,9 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
-        webhooksUrl:
+        webhooksPrefix:
+          type: string
+        openapiEndpointPrefix:
           type: string
         createdAt:
           type: string
@@ -15666,7 +15585,8 @@ components:
       - domain
       - hash
       - agents
-      - webhooksUrl
+      - webhooksPrefix
+      - openapiEndpointPrefix
       - createdAt
     HttpApiDeploymentAgentOptions:
       title: HttpApiDeploymentAgentOptions
@@ -15721,7 +15641,9 @@ components:
       properties:
         domain:
           type: string
-        webhooksUrl:
+        webhooksPrefix:
+          type: string
+        openapiEndpointPrefix:
           type: string
         agents:
           type: object
@@ -15729,7 +15651,8 @@ components:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
       required:
       - domain
-      - webhooksUrl
+      - webhooksPrefix
+      - openapiEndpointPrefix
       - agents
     HttpApiDeploymentUpdate:
       title: HttpApiDeploymentUpdate
@@ -15738,7 +15661,9 @@ components:
         currentRevision:
           type: integer
           format: uint64
-        webhookUrl:
+        webhookPrefix:
+          type: string
+        openapiEndpointPrefix:
           type: string
         agents:
           type: object
@@ -15904,6 +15829,26 @@ components:
       - pluginRegistrationId
       - pluginName
       - pluginVersion
+    KnownExports:
+      title: KnownExports
+      description: |-
+        Compact index of known exported interfaces in a component.
+        Instead of persisting the full `AnalysedExport` tree, we store only
+        the exact versioned interface name for each supported capability.
+      type: object
+      properties:
+        agentGuestInterface:
+          description: Exact exported interface name for `golem:agent/guest`, e.g. `golem:agent/guest@1.5.0`
+          type: string
+        saveSnapshotInterface:
+          description: Exact exported interface name for `golem:api/save-snapshot`
+          type: string
+        loadSnapshotInterface:
+          description: Exact exported interface name for `golem:api/load-snapshot`
+          type: string
+        oplogProcessorInterface:
+          description: Exact exported interface name for `golem:api/oplog-processor`
+          type: string
     LinearMemory:
       title: LinearMemory
       type: object
@@ -16841,15 +16786,15 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
       required:
       - name
       - priority
-      - predicateJson
-      - policyJson
+      - predicate
+      - policy
     RetryPolicyDto:
       title: RetryPolicyDto
       type: object
@@ -16868,18 +16813,18 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
       required:
       - id
       - environmentId
       - name
       - revision
       - priority
-      - predicateJson
-      - policyJson
+      - predicate
+      - policy
     RetryPolicyUpdate:
       title: RetryPolicyUpdate
       type: object
@@ -16890,10 +16835,10 @@ components:
         priority:
           type: integer
           format: uint32
-        predicateJson:
-          type: string
-        policyJson:
-          type: string
+        predicate:
+          $ref: '#/components/schemas/UntypedJsonBody'
+        policy:
+          $ref: '#/components/schemas/UntypedJsonBody'
       required:
       - currentRevision
     SecuritySchemeAgentSecurity:
@@ -17176,6 +17121,9 @@ components:
       - accountId
       - createdAt
       - expiresAt
+    UntypedJsonBody:
+      description: A json body without a static schema
+      type: object
     VersionedName:
       title: VersionedName
       type: object

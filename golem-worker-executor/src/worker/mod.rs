@@ -3035,31 +3035,7 @@ fn resolve_snapshot_policy(
 fn is_snapshot_capable_oplog_processor(
     metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> bool {
-    let has_oplog_processor = match metadata.oplog_processor() {
-        Ok(Some(_)) => true,
-        Ok(None) => false,
-        Err(err) => {
-            warn!("Failed to check oplog processor export: {err}");
-            false
-        }
-    };
-    let has_save = match metadata.save_snapshot() {
-        Ok(Some(_)) => true,
-        Ok(None) => false,
-        Err(err) => {
-            warn!("Failed to check save-snapshot export: {err}");
-            false
-        }
-    };
-    let has_load = match metadata.load_snapshot() {
-        Ok(Some(_)) => true,
-        Ok(None) => false,
-        Err(err) => {
-            warn!("Failed to check load-snapshot export: {err}");
-            false
-        }
-    };
-    has_oplog_processor && has_save && has_load
+    metadata.has_oplog_processor() && metadata.has_save_snapshot() && metadata.has_load_snapshot()
 }
 
 #[derive(Debug)]

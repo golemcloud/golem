@@ -107,27 +107,21 @@ impl RetryPolicyService {
             EnvironmentAction::CreateRetryPolicy,
         )?;
 
-        serde_json::from_str::<golem_common::model::retry_policy::Predicate>(&data.predicate_json)
-            .map_err(|e| RetryPolicyError::InvalidPredicateJson(e.to_string()))?;
-
-        serde_json::from_str::<golem_common::model::retry_policy::RetryPolicy>(&data.policy_json)
-            .map_err(|e| RetryPolicyError::InvalidPolicyJson(e.to_string()))?;
-
         let id = RetryPolicyId::new();
         let name = data.name.clone();
+        let predicate_json = predicate_json(data.predicate.0)?;
+        let policy_json = policy_json(data.policy.0)?;
+        let create_record = RetryPolicyCreationRecord::new(
+            id,
+            environment_id,
+            data.name,
+            data.priority,
+            predicate_json,
+            policy_json,
+            auth.account_id(),
+        );
 
-        let result = self
-            .retry_policy_repo
-            .create(RetryPolicyCreationRecord::new(
-                id,
-                environment_id,
-                data.name,
-                data.priority,
-                data.predicate_json,
-                data.policy_json,
-                auth.account_id(),
-            ))
-            .await;
+        let result = self.retry_policy_repo.create(create_record).await;
 
         match result {
             Ok(record) => Ok(record
@@ -165,18 +159,12 @@ impl RetryPolicyService {
             retry_policy.priority = new_priority;
         }
 
-        if let Some(ref new_predicate_json) = update.predicate_json {
-            serde_json::from_str::<golem_common::model::retry_policy::Predicate>(
-                new_predicate_json,
-            )
-            .map_err(|e| RetryPolicyError::InvalidPredicateJson(e.to_string()))?;
-            retry_policy.predicate_json = new_predicate_json.clone();
+        if let Some(new_predicate) = update.predicate {
+            retry_policy.predicate_json = predicate_json(new_predicate.0)?;
         }
 
-        if let Some(ref new_policy_json) = update.policy_json {
-            serde_json::from_str::<golem_common::model::retry_policy::RetryPolicy>(new_policy_json)
-                .map_err(|e| RetryPolicyError::InvalidPolicyJson(e.to_string()))?;
-            retry_policy.policy_json = new_policy_json.clone();
+        if let Some(new_policy) = update.policy {
+            retry_policy.policy_json = policy_json(new_policy.0)?;
         }
 
         let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
@@ -327,4 +315,16 @@ impl RetryPolicyService {
 
         Ok((retry_policy, environment))
     }
+}
+
+fn predicate_json(value: serde_json::Value) -> Result<String, RetryPolicyError> {
+    let predicate = serde_json::from_value::<golem_common::model::retry_policy::Predicate>(value)
+        .map_err(|e| RetryPolicyError::InvalidPredicateJson(e.to_string()))?;
+    serde_json::to_string(&predicate).map_err(|e| RetryPolicyError::InternalError(e.into()))
+}
+
+fn policy_json(value: serde_json::Value) -> Result<String, RetryPolicyError> {
+    let policy = serde_json::from_value::<golem_common::model::retry_policy::RetryPolicy>(value)
+        .map_err(|e| RetryPolicyError::InvalidPolicyJson(e.to_string()))?;
+    serde_json::to_string(&policy).map_err(|e| RetryPolicyError::InternalError(e.into()))
 }

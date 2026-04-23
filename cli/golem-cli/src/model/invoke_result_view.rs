@@ -49,6 +49,7 @@ impl InvokeResultView {
             SourceLanguage::Rust => "Rust syntax",
             SourceLanguage::TypeScript => "TypeScript syntax",
             SourceLanguage::Scala => "Scala syntax",
+            SourceLanguage::MoonBit => "MoonBit syntax",
             SourceLanguage::Other(_) => "WAVE",
         }
         .to_string();

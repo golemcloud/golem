@@ -519,6 +519,25 @@ export function httpFailure(label: string, message: string): void {
   stepLine(label, `${chalk.red("✗ http")} ${chalk.red(message)}`);
 }
 
+export function mcpResponse(label: string, method: string, status: number, body: string): void {
+  stepLine(
+    label,
+    `${chalk.green("✓ mcp")} ${chalk.cyan(method)} ${chalk.gray(`status=${status}`)}`,
+  );
+  if (!body.trim()) {
+    stepLine(label, `${chalk.gray("│")} ${chalk.gray("<empty body>")}`);
+    return;
+  }
+
+  for (const line of body.split(/\r?\n/)) {
+    stepLine(label, `${chalk.gray("│")} ${chalk.white(line)}`);
+  }
+}
+
+export function mcpFailure(label: string, message: string): void {
+  stepLine(label, `${chalk.red("✗ mcp")} ${chalk.red(message)}`);
+}
+
 export function assertionPassed(label: string, assertion: string, message: string): void {
   stepLine(label, `${chalk.green("✓ assertion")} ${chalk.white(assertion)} ${chalk.gray(message)}`);
 }

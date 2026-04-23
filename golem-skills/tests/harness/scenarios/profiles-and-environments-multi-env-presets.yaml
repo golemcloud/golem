@@ -1,0 +1,80 @@
+name: "profiles-and-environments-multi-env-presets"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "setup-multi-env"
+    prompt: >
+      In the test-app project, I need to set up multi-environment deployment with
+      per-environment configuration. Do the following:
+
+      1. Add a new durable agent type called `EnvReporter` identified by a single
+         constructor parameter for the instance name.
+
+      2. EnvReporter must expose a method called `get-env-info` that takes no arguments,
+         reads the `DEPLOY_TARGET` environment variable from the process environment,
+         and returns its value as a string. If the variable is not set, return `unknown`.
+
+      3. In `golem.yaml`, set the following environment variable on the agent
+         (in the top-level `agents` section under `EnvReporter`):
+         - `DEPLOY_TARGET` set to `base`
+
+      4. Add presets to the `EnvReporter` agent entry:
+         - A preset called `local` (marked as `default: true`) that overrides
+           `DEPLOY_TARGET` to `local-dev`
+         - A preset called `cloud` that overrides `DEPLOY_TARGET` to `production`
+
+      5. Set up two environments in `golem.yaml`:
+         - `local` (marked as default) with `server: local` and `componentPresets: local`
+         - `prod` with `server: cloud` and `componentPresets: cloud`
+
+      Make sure the project builds and deploys successfully.
+    expectedSkills:
+      - "golem-profiles-and-environments"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-environments-exist"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*environments:[\\s\\S]*local:[\\s\\S]*server:\\s*local[\\s\\S]*"
+
+  - id: "verify-prod-environment"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*environments:[\\s\\S]*prod:[\\s\\S]*server:\\s*cloud[\\s\\S]*"
+
+  - id: "verify-component-presets-local"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*local:[\\s\\S]*componentPresets:\\s*local[\\s\\S]*"
+
+  - id: "verify-component-presets-cloud"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*prod:[\\s\\S]*componentPresets:\\s*cloud[\\s\\S]*"
+
+  - id: "verify-agent-presets"
+    check_file:
+      path: "golem.yaml"
+    expect:
+      stdout_matches: "[\\s\\S]*EnvReporter:[\\s\\S]*presets:[\\s\\S]*local:[\\s\\S]*DEPLOY_TARGET:[\\s\\S]*local-dev[\\s\\S]*"
+
+  - id: "invoke-get-env-info"
+    invoke:
+      agent: 'EnvReporter("test")'
+      method:
+        rust: "get_env_info"
+        ts: "getEnvInfo"
+        scala: "getEnvInfo"
+        moonbit: "get_env_info"
+    expect:
+      stdout_contains: "local-dev"

@@ -1,0 +1,68 @@
+name: Publish MoonBit SDK
+
+on:
+  push:
+    tags:
+      - "golem-moonbit-v*.*.*"
+
+jobs:
+  publish:
+    if: startsWith(github.ref, 'refs/tags/golem-moonbit-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup MoonBit
+        uses: hustcer/setup-moonbit@v1
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#golem-moonbit-v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set version in golem_sdk
+        working-directory: sdks/moonbit/golem_sdk
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" moon.mod.json
+
+      - name: Set version in golem_sdk_tools
+        working-directory: sdks/moonbit/golem_sdk_tools
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" moon.mod.json
+
+      - name: Check SDK
+        run: moon check --target wasm
+        working-directory: sdks/moonbit/golem_sdk
+
+      - name: Test SDK
+        run: moon test
+        working-directory: sdks/moonbit/golem_sdk
+
+      - name: Check tools
+        run: moon check
+        working-directory: sdks/moonbit/golem_sdk_tools
+
+      - name: Test tools
+        run: moon test
+        working-directory: sdks/moonbit/golem_sdk_tools
+
+      - name: Setup mooncakes credentials
+        env:
+          MOONCAKES_TOKEN: ${{ secrets.MOONCAKES_TOKEN }}
+        run: |
+          mkdir -p ~/.moon
+          echo "{\"username\":\"golemcloud\",\"token\":\"$MOONCAKES_TOKEN\"}" > ~/.moon/credentials.json
+
+      - name: Publish golem_sdk
+        working-directory: sdks/moonbit/golem_sdk
+        run: moon publish
+
+      - name: Publish golem_sdk_tools
+        working-directory: sdks/moonbit/golem_sdk_tools
+        run: moon publish

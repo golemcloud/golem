@@ -304,7 +304,7 @@ impl Services {
             environment_service.clone(),
             registry_change_notifier.clone(),
             config.domain_registration.clone(),
-        ));
+        )?);
 
         let security_scheme_service = Arc::new(SecuritySchemeService::new(
             repos.security_scheme_repo.clone(),

@@ -19,7 +19,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "v0.2.1"
+  WASM_RQUICKJS_VERSION: "0.2.2"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 
@@ -178,6 +178,14 @@ jobs:
             description: "IT #8"
           - name: integration-tests-group9
             description: "IT #9"
+          - name: integration-tests-group10
+            description: "IT #10"
+          - name: integration-tests-group11
+            description: "IT #11"
+          - name: integration-tests-group12
+            description: "IT #12"
+          - name: integration-tests-group13
+            description: "IT #13"
           - name: cli-integration-tests-group1
             description: "CLI tests #1"
           - name: cli-integration-tests-group2
@@ -238,6 +246,15 @@ jobs:
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         uses: sbt/setup-sbt@v1
 
+      - name: Setup MoonBit
+        if: matrix.group.name == 'cli-integration-tests-group2'
+        uses: hustcer/setup-moonbit@v1
+
+      - name: Install MoonBit SDK tools dependencies
+        if: matrix.group.name == 'cli-integration-tests-group2'
+        working-directory: sdks/moonbit/golem_sdk_tools
+        run: moon update && moon install
+
       - name: Sync WIT dependencies
         if: matrix.group.name == 'cli-integration-tests-group2'
         run: cargo make wit
@@ -284,6 +301,7 @@ jobs:
       - name: ${{ matrix.group.description }}
         env:
           QUIET: true
+          GOLEM_PRESET: quick
         run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 30
       - uses: ./.github/actions/publish-test-report
@@ -455,6 +473,30 @@ jobs:
         working-directory: sdks/scala
         run: sbt "++2.12.21!; sbtPlugin/compile"
 
+  build-golem-moonbit:
+    runs-on: blacksmith
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup MoonBit
+        uses: hustcer/setup-moonbit@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check SDK
+        run: moon check --target wasm
+        working-directory: sdks/moonbit/golem_sdk
+      - name: Test SDK
+        run: moon test --target wasm
+        working-directory: sdks/moonbit/golem_sdk
+      - name: Install tools dependencies
+        run: moon update && moon install
+        working-directory: sdks/moonbit/golem_sdk_tools
+      - name: Check tools
+        run: moon check
+        working-directory: sdks/moonbit/golem_sdk_tools
+      - name: Test tools
+        run: moon test
+        working-directory: sdks/moonbit/golem_sdk_tools
+
   build-golem-rust:
     runs-on: blacksmith
     steps:
@@ -488,6 +530,7 @@ jobs:
           use-cache: 'false'
           rust-targets: 'wasm32-wasip2'
           install-cargo-make: 'false'
+          install-cargo-binstall: 'true'
 
       - uses: ./.github/actions/setup-js-wasm-tools
         with:
@@ -627,6 +670,8 @@ jobs:
 
       - name: Build test components
         working-directory: test-components
+        env:
+          GOLEM_TS_PRESET: quick
         run: ./build-components.sh ${{ matrix.chunk.name }}
 
       - name: Collect built WASMs
@@ -711,208 +756,6 @@ jobs:
       - name: Run Unit Tests
         working-directory: golem-skills/tests/harness
         run: npm test
-
-  skill-harness-integration-test:
-    name: skills ${{ matrix.agent }}/${{ matrix.language }}${{ matrix.model && format(' [{0}]', matrix.model) || '' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2204
-    needs:
-      - detect-skill-changes
-      - build-and-store
-      - build-golem-ts
-      - build-golem-scala
-    if: needs.detect-skill-changes.outputs.skills_changed == 'true'
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: golem_test
-        ports:
-          - "5432:5432"
-        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: golem
-          MYSQL_DATABASE: golem_test
-        ports:
-          - "3306:3306"
-        options: --health-cmd "mysqladmin ping" --health-interval 10s --health-timeout 5s --health-retries 5
-    strategy:
-      fail-fast: false
-      matrix:
-        agent: [claude-code, codex]
-        language: [ts, rust, scala]
-        model: ['']
-        include:
-          - agent: opencode
-            language: ts
-            model: google/gemini-3-pro-preview
-          - agent: opencode
-            language: rust
-            model: google/gemini-3-pro-preview
-          - agent: opencode
-            language: scala
-            model: google/gemini-3-pro-preview
-          - agent: opencode
-            language: ts
-            model: openai/gpt-5.4
-          - agent: opencode
-            language: rust
-            model: openai/gpt-5.4
-          - agent: opencode
-            language: scala
-            model: openai/gpt-5.4
-          - agent: opencode
-            language: ts
-            model: anthropic/claude-opus-4-6
-          - agent: opencode
-            language: rust
-            model: anthropic/claude-opus-4-6
-          - agent: opencode
-            language: scala
-            model: anthropic/claude-opus-4-6
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
-
-      - uses: ./.github/actions/setup-rust
-        with:
-          use-cache: 'false'
-          rust-targets: 'wasm32-wasip1 wasm32-wasip2'
-          install-cargo-binstall: 'true'
-
-      - uses: ./.github/actions/setup-js-wasm-tools
-        with:
-          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
-          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
-          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
-
-      - uses: ./.github/actions/restore-binaries
-        with:
-          run-id: ${{ github.run_id }}
-          copy-to-target: 'true'
-
-      - name: Install Filesystem Watcher
-        run: sudo apt-get update && sudo apt-get install -y inotify-tools
-
-      - name: Install Claude Code
-        if: matrix.agent == 'claude-code'
-        run: npm install -g @anthropic-ai/claude-code
-
-      - name: Install OpenCode
-        if: matrix.agent == 'opencode'
-        run: npm install -g opencode-ai
-
-      - name: Install Codex CLI
-        if: matrix.agent == 'codex'
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          npm install -g @openai/codex
-          printenv OPENAI_API_KEY | codex login --with-api-key
-
-      - name: Restore built TS SDK
-        if: matrix.language == 'ts' || matrix.language == 'scala'
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-typegen/dist
-            sdks/ts/packages/golem-ts-types-core/dist
-            sdks/ts/packages/golem-ts-bridge/dist
-            sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
-          fail-on-cache-miss: true
-
-      - name: Install TS SDK dependencies
-        if: matrix.language == 'ts' || matrix.language == 'scala'
-        working-directory: sdks/ts
-        run: pnpm install --frozen-lockfile
-
-      - name: Setup Java
-        if: matrix.language == 'scala'
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Setup SBT
-        if: matrix.language == 'scala'
-        uses: sbt/setup-sbt@v1
-
-      - name: Cache scala dependencies
-        if: matrix.language == 'scala'
-        uses: coursier/cache-action@v8
-
-      - name: Sync WIT dependencies
-        if: matrix.language == 'scala'
-        run: cargo make wit
-
-      - name: Build agent_guest.wasm
-        if: matrix.language == 'scala'
-        working-directory: sdks/scala
-        run: ./scripts/generate-agent-guest-wasm.sh
-
-      - name: Publish Scala SDK locally
-        if: matrix.language == 'scala'
-        working-directory: sdks/scala
-        run: |
-          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
-
-      - name: Install Harness Dependencies
-        working-directory: golem-skills/tests/harness
-        run: |
-          npm install
-          npm run build
-          npm install -g tsx
-
-      - name: Setup isolated test directory
-        run: |
-          mkdir -p /tmp/harness-run
-          cp -r golem-skills/tests/harness/dist /tmp/harness-run/dist
-          cp -r golem-skills/tests/harness/node_modules /tmp/harness-run/node_modules
-          cp -r golem-skills/tests/harness/src /tmp/harness-run/src
-          cp -r golem-skills/tests/harness/scenarios /tmp/harness-run/scenarios
-          cp golem-skills/tests/harness/package.json /tmp/harness-run/
-          cp golem-skills/tests/harness/tsconfig.json /tmp/harness-run/
-          cd /tmp/harness-run && git init -b main && git config user.email "ci@golem.cloud" && git config user.name "CI" && git add -A && git commit -m "init"
-
-      - name: Compute report suffix
-        id: report-suffix
-        run: |
-          suffix="${{ matrix.agent }}-${{ matrix.language }}"
-          if [ -n "${{ matrix.model }}" ]; then
-            suffix="${suffix}-$(printf '%s' '${{ matrix.model }}' | tr '/' '-')"
-          fi
-          echo "suffix=$suffix" >> "$GITHUB_OUTPUT"
-
-      - name: Run Skill Tests
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/golem_test
-          MYSQL_URL: mysql://root:golem@localhost:3306/golem_test
-          GOLEM_PATH: ${{ github.workspace }}
-        run: |
-          cd /tmp/harness-run
-          MODEL_ARG=""
-          if [ -n "${{ matrix.model }}" ]; then
-            MODEL_ARG="--model ${{ matrix.model }}"
-          fi
-          tsx src/run.ts --agent ${{ matrix.agent }} --language ${{ matrix.language }} $MODEL_ARG --scenarios scenarios --ctrf "${{ github.workspace }}/target/ctrf-skills-${{ steps.report-suffix.outputs.suffix }}.json"
-
-      - uses: ./.github/actions/publish-test-report
-        if: always()
-        with:
-          artifact-name: skill-test-report-${{ steps.report-suffix.outputs.suffix }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
   docker-targets-build:
     env:
@@ -1145,6 +988,24 @@ jobs:
           # Save keychain path for cleanup
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
 
+      - name: Create entitlements
+        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+        run: |
+          ENTITLEMENTS_PATH=$RUNNER_TEMP/entitlements.plist
+
+          cat > $ENTITLEMENTS_PATH << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN">
+          <plist version="1.0">
+            <dict>
+              <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+              <true/>
+            </dict>
+          </plist>
+          EOF
+
+          echo "ENTITLEMENTS_PATH=$ENTITLEMENTS_PATH" >> $GITHUB_ENV
+
       - name: Code Sign Binary
         if: contains(matrix.cfg.rust-target, 'apple-darwin')
         env:
@@ -1156,12 +1017,13 @@ jobs:
           codesign --force \
             --options runtime \
             --timestamp \
+            --entitlements "$ENTITLEMENTS_PATH" \
             --sign "$APPLE_SIGNING_IDENTITY" \
             "$BINARY_PATH"
 
           # Verify signature
           codesign --verify --verbose "$BINARY_PATH"
-          codesign --display --verbose=4 "$BINARY_PATH"
+          codesign --display --verbose=4 --entitlements - "$BINARY_PATH"
 
       - name: Create Notarization Archive
         if: contains(matrix.cfg.rust-target, 'apple-darwin')

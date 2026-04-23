@@ -37,8 +37,9 @@ use golem_common::model::agent::{
 };
 use golem_common::model::component::ComponentName;
 use golem_common::model::oplog::{
-    PluginInstallationDescription, PublicAgentInvocation, PublicAttributeValue, PublicOplogEntry,
-    PublicSnapshotData, PublicUpdateDescription, StringAttributeValue,
+    MultipartPartData, PluginInstallationDescription, PublicAgentInvocation,
+    PublicAgentInvocationResult, PublicAttributeValue, PublicOplogEntry, PublicSnapshotData,
+    PublicUpdateDescription, StringAttributeValue,
 };
 use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
 use golem_wasm::{ValueAndType, print_value_and_type};
@@ -515,7 +516,19 @@ impl TextView for PublicOplogEntry {
                 }
             },
             PublicOplogEntry::AgentInvocationFinished(params) => {
-                logln(format_message_highlight("INVOKE COMPLETED"));
+                let variant_label = match &params.result {
+                    PublicAgentInvocationResult::AgentInitialization(_) => "initialization",
+                    PublicAgentInvocationResult::AgentMethod(_) => "method",
+                    PublicAgentInvocationResult::ManualUpdate(_) => "manual update",
+                    PublicAgentInvocationResult::LoadSnapshot(_) => "load snapshot",
+                    PublicAgentInvocationResult::SaveSnapshot(_) => "save snapshot",
+                    PublicAgentInvocationResult::ProcessOplogEntries(_) => "process oplog entries",
+                };
+                logln(format!(
+                    "{} ({})",
+                    format_message_highlight("INVOKE COMPLETED"),
+                    variant_label
+                ));
                 logln(format!(
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
@@ -524,7 +537,23 @@ impl TextView for PublicOplogEntry {
                     "{pad}consumed fuel:     {}",
                     format_id(&params.consumed_fuel),
                 ));
-                logln(format!("{pad}result:            {:?}", params.result));
+                match &params.result {
+                    PublicAgentInvocationResult::AgentInitialization(output)
+                    | PublicAgentInvocationResult::AgentMethod(output) => {
+                        logln(format!("{pad}output:"));
+                        log_data_value(pad, &output.output, &SourceLanguage::default());
+                    }
+                    PublicAgentInvocationResult::ManualUpdate(_) => {}
+                    PublicAgentInvocationResult::LoadSnapshot(fallible) => {
+                        log_optional_error(pad, &fallible.error);
+                    }
+                    PublicAgentInvocationResult::ProcessOplogEntries(result) => {
+                        log_optional_error(pad, &result.error);
+                    }
+                    PublicAgentInvocationResult::SaveSnapshot(snapshot_result) => {
+                        log_snapshot_data(pad, &snapshot_result.snapshot);
+                    }
+                }
             }
             PublicOplogEntry::Suspend(params) => {
                 logln(format_message_highlight("SUSPEND"));
@@ -976,48 +1005,7 @@ impl TextView for PublicOplogEntry {
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
                 ));
-                match &params.data {
-                    PublicSnapshotData::Raw(raw) => {
-                        logln(format!(
-                            "{pad}mime type:         {}",
-                            format_id(&raw.mime_type)
-                        ));
-                        logln(format!(
-                            "{pad}data:              ({} bytes)",
-                            raw.data.len()
-                        ));
-                    }
-                    PublicSnapshotData::Json(json) => {
-                        logln(format!(
-                            "{pad}data:              {}",
-                            serde_json::to_string_pretty(&json.data)
-                                .unwrap_or_else(|_| format!("{:?}", json.data))
-                        ));
-                    }
-                    PublicSnapshotData::Multipart(multipart) => {
-                        use golem_common::model::oplog::MultipartPartData;
-
-                        logln(format!(
-                            "{pad}mime type:         {}",
-                            format_id(&multipart.mime_type)
-                        ));
-                        for part in &multipart.parts {
-                            let data_summary = match &part.data {
-                                MultipartPartData::Json(json) => {
-                                    serde_json::to_string_pretty(&json.data)
-                                        .unwrap_or_else(|_| format!("{:?}", json.data))
-                                }
-                                MultipartPartData::Raw(raw) => {
-                                    format!("({} bytes)", raw.data.len())
-                                }
-                            };
-                            logln(format!(
-                                "{pad}part:              {} [{}]: {}",
-                                part.name, part.content_type, data_summary
-                            ));
-                        }
-                    }
-                }
+                log_snapshot_data(pad, &params.data);
             }
             PublicOplogEntry::OplogProcessorCheckpoint(params) => {
                 logln(format_message_highlight("OPLOG PROCESSOR CHECKPOINT"));
@@ -1157,6 +1145,58 @@ fn log_element_value(pad: &str, value: &ElementValue) {
                         format_id(&inline.binary_type.mime_type)
                     ));
                 }
+            }
+        }
+    }
+}
+
+fn log_optional_error(pad: &str, error: &Option<String>) {
+    match error {
+        None => {
+            logln(format!("{pad}result:            ok"));
+        }
+        Some(err) => {
+            logln(format!("{pad}error:             {}", format_error(err)));
+        }
+    }
+}
+
+fn log_snapshot_data(pad: &str, snapshot: &PublicSnapshotData) {
+    match snapshot {
+        PublicSnapshotData::Raw(raw) => {
+            logln(format!(
+                "{pad}mime type:         {}",
+                format_id(&raw.mime_type)
+            ));
+            logln(format!(
+                "{pad}data:              ({} bytes)",
+                raw.data.len()
+            ));
+        }
+        PublicSnapshotData::Json(json) => {
+            logln(format!(
+                "{pad}data:              {}",
+                serde_json::to_string_pretty(&json.data)
+                    .unwrap_or_else(|_| format!("{:?}", json.data))
+            ));
+        }
+        PublicSnapshotData::Multipart(multipart) => {
+            logln(format!(
+                "{pad}mime type:         {}",
+                format_id(&multipart.mime_type)
+            ));
+            for part in &multipart.parts {
+                let data_summary = match &part.data {
+                    MultipartPartData::Json(json) => serde_json::to_string_pretty(&json.data)
+                        .unwrap_or_else(|_| format!("{:?}", json.data)),
+                    MultipartPartData::Raw(raw) => {
+                        format!("({} bytes)", raw.data.len())
+                    }
+                };
+                logln(format!(
+                    "{pad}part:              {} [{}]: {}",
+                    part.name, part.content_type, data_summary
+                ));
             }
         }
     }

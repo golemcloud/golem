@@ -199,7 +199,15 @@ message RouteBehaviour {
     golem.component.ComponentId component_id = 1;
   }
 
-  message OpenApiSpec { }
+  message OpenApiSpec {
+    enum Format {
+      FORMAT_UNSPECIFIED = 0;
+      JSON = 1;
+      YAML = 2;
+    }
+
+    Format format = 1;
+  }
 }
 
 message RouteSecurity {

@@ -23,7 +23,7 @@ use std::process::Command;
 static SKIP_ENV_VAR_NAME: &str = "GOLEM_BUILD_SKIP_SHADOW";
 const GENERATED_TEMPLATES_DIR_NAME: &str = "templates";
 const SKILL_DESTINATION: &str = ".agents/skills";
-const SUPPORTED_LANGUAGES: &[&str] = &["ts", "rust", "scala"];
+const SUPPORTED_LANGUAGES: &[&str] = &["ts", "rust", "scala", "moonbit"];
 
 fn main() {
     generate_embedded_templates().unwrap();

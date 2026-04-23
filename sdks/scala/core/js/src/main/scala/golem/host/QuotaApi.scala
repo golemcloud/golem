@@ -47,9 +47,14 @@ object QuotaApi {
 
   // --- WIT: failed-reservation record ---
 
-  /** Returned when a reservation cannot be granted (enforcement policy = `reject`). */
+  /**
+   * Returned when a reservation cannot be granted (enforcement policy =
+   * `reject`).
+   */
   final case class FailedReservation(
-    /** Estimated wait time in nanoseconds; only set for rate-limited resources. */
+    /**
+     * Estimated wait time in nanoseconds; only set for rate-limited resources.
+     */
     estimatedWaitNanos: Option[BigInt]
   )
 
@@ -64,8 +69,9 @@ object QuotaApi {
 
     /**
      * Commit actual usage.
-     *  - `used` < reserved → unused capacity is returned to the pool.
-     *  - `used` > reserved → excess is deducted as "debt" from the token's allocation.
+     *   - `used` < reserved → unused capacity is returned to the pool.
+     *   - `used` > reserved → excess is deducted as "debt" from the token's
+     *     allocation.
      */
     def commit(used: BigInt): Unit =
       underlying.commit(js.BigInt(used.toString))
@@ -95,10 +101,10 @@ object QuotaApi {
     /**
      * Reserve `amount` units from the local allocation.
      *
-     * Blocks internally until capacity is available or the resource's enforcement
-     * action fires. Returns `Right(reservation)` on success, or
-     * `Left(FailedReservation)` when the enforcement policy is `reject`.
-     * For `throttle` / `terminate` policies the call suspends or terminates the
+     * Blocks internally until capacity is available or the resource's
+     * enforcement action fires. Returns `Right(reservation)` on success, or
+     * `Left(FailedReservation)` when the enforcement policy is `reject`. For
+     * `throttle` / `terminate` policies the call suspends or terminates the
      * agent before returning.
      */
     def reserve(amount: BigInt): Either[FailedReservation, Reservation] =
@@ -107,7 +113,7 @@ object QuotaApi {
         Right(new Reservation(raw))
       } catch {
         case e: js.JavaScriptException =>
-          val raw = e.exception.asInstanceOf[JsFailedReservation]
+          val raw           = e.exception.asInstanceOf[JsFailedReservation]
           val estimatedWait = raw.estimatedWaitNanos.toOption.map(bi => BigInt(bi.toString))
           Left(FailedReservation(estimatedWait))
       }
@@ -115,9 +121,9 @@ object QuotaApi {
     /**
      * Split off a child token with `childExpectedUse` units of expected-use.
      *
-     *  - The parent's expected-use is reduced by `childExpectedUse`.
-     *  - Credits are divided proportionally between parent and child.
-     *  - Both tokens share the same underlying lease.
+     *   - The parent's expected-use is reduced by `childExpectedUse`.
+     *   - Credits are divided proportionally between parent and child.
+     *   - Both tokens share the same underlying lease.
      *
      * Traps if `childExpectedUse` exceeds the parent's current expected-use.
      */
@@ -136,27 +142,27 @@ object QuotaApi {
       underlying.merge(other.underlying)
 
     private[golem] def toRecord(): QuotaTokenRecord = {
-      val raw   = underlying.toRecord()
-      val ts    = raw.lastCreditAt
+      val raw = underlying.toRecord()
+      val ts  = raw.lastCreditAt
       QuotaTokenRecord(
-        environmentId        = environmentIdFromJs(raw.environmentId.asInstanceOf[JsEnvironmentId]),
-        resourceName         = raw.resourceName,
-        expectedUse          = BigInt(raw.expectedUse.toString),
-        lastCredit           = BigInt(raw.lastCredit.toString),
-        lastCreditAtSeconds  = BigInt(ts.seconds.toString),
-        lastCreditAtNanos    = ts.nanoseconds,
+        environmentId = environmentIdFromJs(raw.environmentId.asInstanceOf[JsEnvironmentId]),
+        resourceName = raw.resourceName,
+        expectedUse = BigInt(raw.expectedUse.toString),
+        lastCredit = BigInt(raw.lastCredit.toString),
+        lastCreditAtSeconds = BigInt(ts.seconds.toString),
+        lastCreditAtNanos = ts.nanoseconds
       )
     }
   }
 
   /** A serializable snapshot of a [[QuotaToken]], suitable for RPC transfer. */
   final case class QuotaTokenRecord(
-    environmentId:       EnvironmentId,
-    resourceName:        String,
-    expectedUse:         BigInt,
-    lastCredit:          BigInt,
+    environmentId: EnvironmentId,
+    resourceName: String,
+    expectedUse: BigInt,
+    lastCredit: BigInt,
     lastCreditAtSeconds: BigInt,
-    lastCreditAtNanos:   Int,
+    lastCreditAtNanos: Int
   )
 
   object QuotaTokenRecord {
@@ -166,25 +172,29 @@ object QuotaApi {
   object QuotaToken {
 
     private[golem] def fromRecord(record: QuotaTokenRecord): QuotaToken = {
-      val jsRecord = js.Dynamic.literal(
-        environmentId = environmentIdToJs(record.environmentId),
-        resourceName  = record.resourceName,
-        expectedUse   = js.BigInt(record.expectedUse.toString),
-        lastCredit    = js.BigInt(record.lastCredit.toString),
-        lastCreditAt  = JsDatetime(
-          js.BigInt(record.lastCreditAtSeconds.toString),
-          record.lastCreditAtNanos,
-        ),
-      ).asInstanceOf[JsQuotaTokenRecord]
+      val jsRecord = js.Dynamic
+        .literal(
+          environmentId = environmentIdToJs(record.environmentId),
+          resourceName = record.resourceName,
+          expectedUse = js.BigInt(record.expectedUse.toString),
+          lastCredit = js.BigInt(record.lastCredit.toString),
+          lastCreditAt = JsDatetime(
+            js.BigInt(record.lastCreditAtSeconds.toString),
+            record.lastCreditAtNanos
+          )
+        )
+        .asInstanceOf[JsQuotaTokenRecord]
       new QuotaToken(JsQuotaTokenStaticClass.fromRecord(jsRecord).asInstanceOf[JsQuotaToken])
     }
 
     /**
      * Request a quota capability for the named resource.
      *
-     * @param resourceName  The resource name as declared in the manifest.
-     * @param expectedUse   Expected units per reservation; used to derive the
-     *                       credit rate and max-credit for fair scheduling.
+     * @param resourceName
+     *   The resource name as declared in the manifest.
+     * @param expectedUse
+     *   Expected units per reservation; used to derive the credit rate and
+     *   max-credit for fair scheduling.
      */
     def apply(resourceName: String, expectedUse: BigInt): QuotaToken =
       new QuotaToken(
@@ -201,11 +211,11 @@ object QuotaApi {
     implicit val golemSchema: GolemSchema[QuotaToken] = {
       val recordSchema = GolemSchema.fromBlocksSchema[QuotaTokenRecord]
       new GolemSchema[QuotaToken] {
-        override def schema             = recordSchema.schema
-        override def elementSchema      = recordSchema.elementSchema
-        override def encode(value: QuotaToken)          = recordSchema.encode(value.toRecord())
-        override def decode(value: golem.data.StructuredValue)   = recordSchema.decode(value).map(fromRecord)
-        override def encodeElement(value: QuotaToken)   = recordSchema.encodeElement(value.toRecord())
+        override def schema                                        = recordSchema.schema
+        override def elementSchema                                 = recordSchema.elementSchema
+        override def encode(value: QuotaToken)                     = recordSchema.encode(value.toRecord())
+        override def decode(value: golem.data.StructuredValue)     = recordSchema.decode(value).map(fromRecord)
+        override def encodeElement(value: QuotaToken)              = recordSchema.encodeElement(value.toRecord())
         override def decodeElement(value: golem.data.ElementValue) = recordSchema.decodeElement(value).map(fromRecord)
       }
     }
@@ -226,21 +236,19 @@ object QuotaApi {
     def fromRecord(serialized: JsQuotaTokenRecord): js.Object = js.native
   }
 
-  private def environmentIdToJs(environmentId: EnvironmentId): JsEnvironmentId = {
+  private def environmentIdToJs(environmentId: EnvironmentId): JsEnvironmentId =
     JsEnvironmentId(
       uuid = JsUuid(
         highBits = js.BigInt(environmentId.uuid.highBits.toString),
         lowBits = js.BigInt(environmentId.uuid.lowBits.toString)
       )
     )
-  }
 
-  private def environmentIdFromJs(raw: JsEnvironmentId): EnvironmentId = {
+  private def environmentIdFromJs(raw: JsEnvironmentId): EnvironmentId =
     EnvironmentId(
       uuid = Uuid(
         highBits = BigInt(raw.uuid.highBits.toString),
         lowBits = BigInt(raw.uuid.lowBits.toString)
       )
     )
-  }
 }

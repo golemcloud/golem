@@ -1079,8 +1079,8 @@ fn proto_registry_event_to_model(
                 golem_common::model::agent::RegistryInvalidationEvent::DeploymentChanged {
                     event_id,
                     environment_id,
-                    deployment_revision: dc.deployment_revision,
-                    current_deployment_revision: dc.current_deployment_revision,
+                    deployment_revision: dc.deployment_revision.try_into()?,
+                    current_deployment_revision: dc.current_deployment_revision.try_into()?,
                 },
             )
         }

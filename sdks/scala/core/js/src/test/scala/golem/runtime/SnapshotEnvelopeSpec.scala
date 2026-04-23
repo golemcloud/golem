@@ -128,6 +128,33 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
         val parsed   = Json.parse(envelope)
         val version  = parsed.flatMap(_.get("version").one)
         assertTrue(version.isRight)
+      },
+      test("Agent principal JSON matches Rust format") {
+        val componentId = Uuid.fromStandardString("550e8400-e29b-41d4-a716-446655440000").toOption.get
+        val principal   = Principal.Agent(componentId, "MyAgent(\"x\")")
+        val jsonStr     = new String(PrincipalConverter.toJson(principal), "UTF-8")
+        assertTrue(
+          jsonStr == """{"tag":"agent","val":{"componentId":"550e8400-e29b-41d4-a716-446655440000","agentId":"MyAgent(\"x\")"}}"""
+        )
+      },
+      test("Anonymous principal JSON matches Rust format") {
+        val jsonStr = new String(PrincipalConverter.toJson(Principal.Anonymous), "UTF-8")
+        assertTrue(jsonStr == """{"tag":"anonymous"}""")
+      },
+      test("GolemUser principal JSON matches Rust format") {
+        val accountId = Uuid.fromStandardString("550e8400-e29b-41d4-a716-446655440000").toOption.get
+        val principal = Principal.GolemUser(accountId)
+        val jsonStr   = new String(PrincipalConverter.toJson(principal), "UTF-8")
+        assertTrue(
+          jsonStr == """{"tag":"golem-user","val":{"accountId":"550e8400-e29b-41d4-a716-446655440000"}}"""
+        )
+      },
+      test("Oidc principal JSON matches Rust format") {
+        val principal = Principal.Oidc(sub = "user-1", issuer = "https://auth.example.com", claims = "{}")
+        val jsonStr   = new String(PrincipalConverter.toJson(principal), "UTF-8")
+        assertTrue(
+          jsonStr == """{"tag":"oidc","val":{"sub":"user-1","issuer":"https://auth.example.com","email":null,"name":null,"emailVerified":null,"givenName":null,"familyName":null,"picture":null,"preferredUsername":null,"claims":"{}"}}"""
+        )
       }
     ),
     suite("Binary envelope v2")(

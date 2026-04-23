@@ -182,8 +182,8 @@ object Rdbms {
             case "bigint"             => BigInt(scala.BigInt(v.asInstanceOf[js.BigInt].toString).toLong)
             case "tinyint-unsigned"   => TinyIntUnsigned(v.asInstanceOf[Double].toShort)
             case "smallint-unsigned"  => SmallIntUnsigned(v.asInstanceOf[Double].toInt)
-            case "mediumint-unsigned" => MediumIntUnsigned(v.asInstanceOf[Double].toLong)
-            case "int-unsigned"       => IntUnsigned(v.asInstanceOf[Double].toLong)
+            case "mediumint-unsigned" => MediumIntUnsigned(jsAnyToLong(v))
+            case "int-unsigned"       => IntUnsigned(jsAnyToLong(v))
             case "bigint-unsigned"    => BigIntUnsigned(scala.BigInt(v.asInstanceOf[js.BigInt].toString))
             case "float"              => FloatVal(v.asInstanceOf[Double].toFloat)
             case "double"             => DoubleVal(v.asInstanceOf[Double])
@@ -575,7 +575,7 @@ object Rdbms {
               val r = v.asInstanceOf[JsDateRange]
               DateRangeVal(DateRange(parseDateBound(r.start), parseDateBound(r.end)))
             case "money"       => Money(scala.BigInt(v.asInstanceOf[js.BigInt].toString).toLong)
-            case "oid"         => Oid(v.asInstanceOf[Double].toLong)
+            case "oid"         => Oid(jsAnyToLong(v))
             case "enumeration" => Enumeration(parsePgEnumeration(v.asInstanceOf[JsPgEnumeration]))
             case "composite"   => Composite(parsePgComposite(v.asInstanceOf[JsPgComposite]))
             case "domain"      => Domain(parsePgDomain(v.asInstanceOf[JsPgDomain]))
@@ -664,6 +664,13 @@ object Rdbms {
     }
     arr
   }
+
+  private[golem] def jsAnyToLong(value: js.Any): Long =
+    js.typeOf(value) match {
+      case "bigint" => scala.BigInt(value.toString).toLong
+      case "number" => value.asInstanceOf[Double].toLong
+      case other    => throw new IllegalArgumentException(s"Expected number or bigint, got: $other")
+    }
 
   // ===========================================================================
   // Typed row types
@@ -779,7 +786,7 @@ object Rdbms {
       try {
         val jsParams = js.Array[js.Any]()
         params.foreach(p => jsParams.push(PostgresDbValue.toJs(p).asInstanceOf[js.Any]))
-        Right(underlying.execute(statement, jsParams).asInstanceOf[Double].toLong)
+        Right(jsAnyToLong(underlying.execute(statement, jsParams).asInstanceOf[js.Any]))
       } catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
 
     def beginTransaction(): Either[DbError, PostgresTransaction] =
@@ -800,7 +807,7 @@ object Rdbms {
       try {
         val jsParams = js.Array[js.Any]()
         params.foreach(p => jsParams.push(PostgresDbValue.toJs(p).asInstanceOf[js.Any]))
-        Right(underlying.execute(statement, jsParams).asInstanceOf[Double].toLong)
+        Right(jsAnyToLong(underlying.execute(statement, jsParams).asInstanceOf[js.Any]))
       } catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
 
     def commit(): Either[DbError, Unit] =
@@ -830,7 +837,7 @@ object Rdbms {
       try {
         val jsParams = js.Array[js.Any]()
         params.foreach(p => jsParams.push(MysqlDbValue.toJs(p).asInstanceOf[js.Any]))
-        Right(underlying.execute(statement, jsParams).asInstanceOf[Double].toLong)
+        Right(jsAnyToLong(underlying.execute(statement, jsParams).asInstanceOf[js.Any]))
       } catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
 
     def beginTransaction(): Either[DbError, MysqlTransaction] =
@@ -851,7 +858,7 @@ object Rdbms {
       try {
         val jsParams = js.Array[js.Any]()
         params.foreach(p => jsParams.push(MysqlDbValue.toJs(p).asInstanceOf[js.Any]))
-        Right(underlying.execute(statement, jsParams).asInstanceOf[Double].toLong)
+        Right(jsAnyToLong(underlying.execute(statement, jsParams).asInstanceOf[js.Any]))
       } catch { case t: Throwable => Left(DbError.fromThrowable(t)) }
 
     def commit(): Either[DbError, Unit] =
@@ -867,16 +874,16 @@ object Rdbms {
   // Result parsing
   // ===========================================================================
 
-  private def parseColumns(raw: JsDbResult): List[DbColumn] =
+  private[golem] def parseColumns(raw: JsDbResult): List[DbColumn] =
     raw.columns.toList.map { c =>
       DbColumn(
-        ordinal = c.ordinal.toLong,
+        ordinal = jsAnyToLong(c.ordinal),
         name = c.name,
         dbTypeName = c.dbTypeName
       )
     }
 
-  private def parsePostgresResult(raw: JsDbResult): PostgresDbResult = {
+  private[golem] def parsePostgresResult(raw: JsDbResult): PostgresDbResult = {
     val cols = parseColumns(raw)
     val rows = raw.rows.toList.map { r =>
       PostgresDbRow(r.values.toList.map(v => PostgresDbValue.fromJs(v.asInstanceOf[JsPostgresDbValue])))
@@ -884,7 +891,7 @@ object Rdbms {
     PostgresDbResult(cols, rows)
   }
 
-  private def parseMysqlResult(raw: JsDbResult): MysqlDbResult = {
+  private[golem] def parseMysqlResult(raw: JsDbResult): MysqlDbResult = {
     val cols = parseColumns(raw)
     val rows = raw.rows.toList.map { r =>
       MysqlDbRow(r.values.toList.map(v => MysqlDbValue.fromJs(v.asInstanceOf[JsMysqlDbValue])))

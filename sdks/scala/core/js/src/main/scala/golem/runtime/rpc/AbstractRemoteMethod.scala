@@ -45,4 +45,7 @@ abstract class AbstractRemoteMethod[Trait, In, Out] protected (
 
   protected final def scheduleWith(input: In, when: Datetime): Future[Unit] =
     resolved.schedule(method, when, input)
+
+  protected final def scheduleCancelableWith(input: In, when: Datetime): Future[CancellationToken] =
+    resolved.scheduleCancelable(method, when, input)
 }

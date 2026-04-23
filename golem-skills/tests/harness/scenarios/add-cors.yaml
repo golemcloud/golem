@@ -32,6 +32,8 @@ steps:
         - "golem-add-http-endpoint-ts"
       scala:
         - "golem-add-http-endpoint-scala"
+      moonbit:
+        - "golem-add-http-endpoint-moonbit"
     verify:
       build: true
       deploy: true
@@ -53,6 +55,8 @@ steps:
         - "golem-add-cors-ts"
       scala:
         - "golem-add-cors-scala"
+      moonbit:
+        - "golem-add-cors-moonbit"
     verify:
       build: true
       deploy: true

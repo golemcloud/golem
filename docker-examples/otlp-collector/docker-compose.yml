@@ -1,0 +1,72 @@
+# Local observability stack for the Golem OTLP exporter plugin.
+#
+# Captures all three OTLP signals:
+#   - Traces  → Jaeger     (http://localhost:16686)
+#   - Metrics → Prometheus  (http://localhost:9090)
+#   - Logs    → Loki        (explore in Grafana)
+#
+# Grafana dashboard: http://localhost:3000  (admin / admin)
+#
+# The OTel Collector listens on port 4318 (OTLP/HTTP).
+# Configure the Golem OTLP exporter plugin with:
+#   endpoint: http://localhost:4318
+#   signals:  traces,logs,metrics
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4318:4318"     # OTLP HTTP receiver
+    depends_on:
+      - jaeger
+      - loki
+    networks:
+      - observability
+
+  jaeger:
+    image: jaegertracing/jaeger:2.6.0
+    ports:
+      - "16686:16686"   # Jaeger UI
+    networks:
+      - observability
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"     # Prometheus UI
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver
+    networks:
+      - observability
+
+  loki:
+    image: grafana/loki:3.5.0
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - observability
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"     # Grafana UI
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+      - jaeger
+      - loki
+    networks:
+      - observability
+
+networks:
+  observability:
+    driver: bridge

@@ -528,7 +528,7 @@ export type TextOrImage =
   | { tag: 'un-binary'; val: UnstructuredBinary<['application/json']> };
 
 @agent({ mode: 'ephemeral' })
-class EphemeralAgent extends BaseAgent {
+export class EphemeralAgent extends BaseAgent {
   constructor(readonly input: string) {
     super();
     this.input = input;
@@ -637,26 +637,6 @@ class AllHttpMethodsAgent extends BaseAgent {
   @endpoint({ patch: '/patch' })
   async patchMethod(): Promise<string> {
     return Promise.resolve('PATCH');
-  }
-
-  @endpoint({ head: '/head' })
-  async headMethod(): Promise<string> {
-    return Promise.resolve('HEAD');
-  }
-
-  @endpoint({ options: '/options' })
-  async optionsMethod(): Promise<string> {
-    return Promise.resolve('OPTIONS');
-  }
-
-  @endpoint({ connect: '/connect' })
-  async connectMethod(): Promise<string> {
-    return Promise.resolve('CONNECT');
-  }
-
-  @endpoint({ trace: '/trace' })
-  async traceMethod(): Promise<string> {
-    return Promise.resolve('TRACE');
   }
 }
 

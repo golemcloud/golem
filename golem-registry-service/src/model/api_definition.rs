@@ -85,21 +85,3 @@ pub struct MaybeDisabledCompiledRoute {
     pub security_scheme: Option<SecuritySchemeId>,
     pub cors: CorsOptions,
 }
-
-// impl golem_service_base::custom_api::openapi::HttpApiRoute for MaybeDisabledCompiledRoute {
-//     fn security_scheme_missing(&self) -> bool {
-//         self.security_scheme_missing
-//     }
-//     fn security_scheme(&self) -> Option<SecuritySchemeId> {
-//         self.security_scheme
-//     }
-//     fn method(&self) -> &RouteMethod {
-//         &self.method
-//     }
-//     fn path(&self) -> &AllPathPatterns {
-//         &self.path
-//     }
-//     fn binding(&self) -> &RouteBehaviour {
-//         &self.binding
-//     }
-// }

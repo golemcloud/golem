@@ -1081,7 +1081,7 @@ pub mod worker {
             agent_id: AgentIdArgs,
             /// Agent function name to invoke
             function_name: WorkerFunctionName,
-            /// Agent function arguments in WAVE format
+            /// Agent function arguments specified using the agent's language's syntax
             arguments: Vec<WorkerFunctionArgument>,
             /// Only trigger invocation and do not wait for it
             #[clap(long, short)]
@@ -1245,6 +1245,36 @@ pub mod worker {
             /// Local path (including filename) to save the file contents. Optional.
             #[arg(long)]
             output: Option<String>,
+        },
+        /// Activate a plugin for a specific agent instance.
+        ///
+        /// The plugin must be one of the installed plugins for the agent's current component version.
+        /// Use `golem component plugin get` to list installed plugins with their names and priorities.
+        ActivatePlugin {
+            #[command(flatten)]
+            agent_id: AgentIdArgs,
+            /// Name of the plugin to activate
+            #[arg(long)]
+            plugin_name: String,
+            /// Priority of the plugin installation to activate.
+            /// Only required when multiple installations of the same plugin exist.
+            #[arg(long)]
+            plugin_priority: Option<i32>,
+        },
+        /// Deactivate a plugin for a specific agent instance.
+        ///
+        /// The plugin must be one of the installed plugins for the agent's current component version.
+        /// Use `golem component plugin get` to list installed plugins with their names and priorities.
+        DeactivatePlugin {
+            #[command(flatten)]
+            agent_id: AgentIdArgs,
+            /// Name of the plugin to deactivate
+            #[arg(long)]
+            plugin_name: String,
+            /// Priority of the plugin installation to deactivate.
+            /// Only required when multiple installations of the same plugin exist.
+            #[arg(long)]
+            plugin_priority: Option<i32>,
         },
     }
 }
@@ -1439,12 +1469,12 @@ pub mod api {
                 /// Priority (higher = checked first)
                 #[arg(long)]
                 priority: u32,
-                /// Predicate as JSON string
+                /// Predicate as JSON or YAML
                 #[arg(long)]
-                predicate_json: String,
-                /// Policy as JSON string
+                predicate: String,
+                /// Policy as JSON or YAML
                 #[arg(long)]
-                policy_json: String,
+                policy: String,
             },
 
             /// List retry policies in the environment
@@ -1471,12 +1501,12 @@ pub mod api {
                 /// New priority (optional)
                 #[arg(long)]
                 priority: Option<u32>,
-                /// New predicate as JSON string (optional)
+                /// New predicate as JSON or YAML (optional)
                 #[arg(long)]
-                predicate_json: Option<String>,
-                /// New policy as JSON string (optional)
+                predicate: Option<String>,
+                /// New policy as JSON or YAML (optional)
                 #[arg(long)]
-                policy_json: Option<String>,
+                policy: Option<String>,
             },
 
             /// Delete a retry policy

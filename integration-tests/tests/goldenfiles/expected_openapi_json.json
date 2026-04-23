@@ -47,6 +47,14 @@
           "204": {
             "description": "Response 204",
             "headers": {
+              "Access-Control-Allow-Credentials": {
+                "description": "Response header: Access-Control-Allow-Credentials",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "style": "simple"
+              },
               "Access-Control-Allow-Headers": {
                 "description": "Response header: Access-Control-Allow-Headers",
                 "required": true,
@@ -85,6 +93,14 @@
           "204": {
             "description": "Response 204",
             "headers": {
+              "Access-Control-Allow-Credentials": {
+                "description": "Response header: Access-Control-Allow-Credentials",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "style": "simple"
+              },
               "Access-Control-Allow-Headers": {
                 "description": "Response header: Access-Control-Allow-Headers",
                 "required": true,
@@ -220,6 +236,14 @@
           "204": {
             "description": "Response 204",
             "headers": {
+              "Access-Control-Allow-Credentials": {
+                "description": "Response header: Access-Control-Allow-Credentials",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "style": "simple"
+              },
               "Access-Control-Allow-Headers": {
                 "description": "Response header: Access-Control-Allow-Headers",
                 "required": true,
@@ -248,6 +272,40 @@
                 "style": "simple"
               }
             }
+          }
+        }
+      }
+    },
+    "/docs/openapi.json": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      }
+    },
+    "/docs/openapi.yaml": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/yaml": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
           }
         }
       }
@@ -515,6 +573,151 @@
         }
       }
     },
+    "/http-agents/{agent-name}/resource/{id}": {
+      "patch": {
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: id",
+            "explode": false,
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "update": {
+                    "properties": {
+                      "description": {
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "enabled": {
+                        "nullable": true,
+                        "type": "boolean"
+                      },
+                      "name": {
+                        "nullable": true,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "update"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "description": "JSON body",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "method": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "updated",
+                    "method"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      }
+    },
+    "/http-agents/{agent-name}/resource/{id}/partial": {
+      "patch": {
+        "parameters": [
+          {
+            "description": "Path parameter: agent-name",
+            "explode": false,
+            "in": "path",
+            "name": "agent-name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          },
+          {
+            "description": "Path parameter: id",
+            "explode": false,
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "style": "simple"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "method": {
+                      "type": "string"
+                    },
+                    "updated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "updated",
+                    "method"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response 200"
+          }
+        }
+      }
+    },
     "/http-agents/{agent-name}/resp/binary": {
       "get": {
         "parameters": [
@@ -701,6 +904,21 @@
             "description": "Response 200"
           },
           "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Response 500"
           }
         }
@@ -770,7 +988,7 @@
           }
         ],
         "responses": {
-          "200": {
+          "204": {
             "content": {
               "*/*": {
                 "schema": {
@@ -779,9 +997,24 @@
                 }
               }
             },
-            "description": "Response 200"
+            "description": "Response 204"
           },
           "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Response 500"
           }
         }
@@ -982,40 +1215,6 @@
                 "schema": {
                   "format": "int64",
                   "type": "integer"
-                }
-              }
-            },
-            "description": "Response 200"
-          }
-        }
-      }
-    },
-    "/openapi.json": {
-      "get": {
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Response 200"
-          }
-        }
-      }
-    },
-    "/openapi.yaml": {
-      "get": {
-        "responses": {
-          "200": {
-            "content": {
-              "application/yaml": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object"
                 }
               }
             },

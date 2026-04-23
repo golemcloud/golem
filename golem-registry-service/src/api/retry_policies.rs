@@ -14,7 +14,7 @@
 
 use super::ApiResult;
 use crate::services::auth::AuthService;
-use crate::services::retry_policy::RetryPolicyService;
+use crate::services::retry_policy::{RetryPolicyError, RetryPolicyService};
 use golem_common::model::Page;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::{
@@ -90,7 +90,7 @@ impl RetryPoliciesApi {
             .create(environment_id, payload, &auth)
             .await?;
 
-        Ok(Json(result.into()))
+        Ok(Json(to_dto(result)?))
     }
 
     /// Get all retry policies of the environment
@@ -130,7 +130,10 @@ impl RetryPoliciesApi {
             .list_in_environment(environment_id, &auth)
             .await?;
 
-        let converted = result.into_iter().map(RetryPolicyDto::from).collect();
+        let converted = result
+            .into_iter()
+            .map(to_dto)
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Json(Page { values: converted }))
     }
@@ -170,7 +173,7 @@ impl RetryPoliciesApi {
             .retry_policy_service
             .get(retry_policy_id, &auth)
             .await?;
-        Ok(Json(result.into()))
+        Ok(Json(to_dto(result)?))
     }
 
     /// Update retry policy
@@ -210,7 +213,7 @@ impl RetryPoliciesApi {
             .retry_policy_service
             .update(retry_policy_id, data, &auth)
             .await?;
-        Ok(Json(result.into()))
+        Ok(Json(to_dto(result)?))
     }
 
     /// Delete retry policy
@@ -250,6 +253,14 @@ impl RetryPoliciesApi {
             .retry_policy_service
             .delete(retry_policy_id, current_revision, &auth)
             .await?;
-        Ok(Json(result.into()))
+        Ok(Json(to_dto(result)?))
     }
+}
+
+fn to_dto(
+    record: golem_service_base::model::retry_policy::StoredRetryPolicy,
+) -> Result<RetryPolicyDto, RetryPolicyError> {
+    record
+        .try_into()
+        .map_err(|e: String| RetryPolicyError::InternalError(anyhow::anyhow!(e)))
 }

@@ -24,9 +24,13 @@ use crate::model::text::retry_policy::{
 };
 use anyhow::bail;
 use golem_client::api::RetryPoliciesClient;
+use golem_common::model::UntypedJsonBody;
+use golem_common::model::retry_policy::RetryPolicyDto;
 use golem_common::model::retry_policy::{
-    RetryPolicyCreation, RetryPolicyDto, RetryPolicyId, RetryPolicyUpdate,
+    Predicate, RetryPolicy, RetryPolicyCreation, RetryPolicyId, RetryPolicyUpdate,
 };
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::sync::Arc;
 
 pub struct RetryPolicyCommandHandler {
@@ -43,24 +47,18 @@ impl RetryPolicyCommandHandler {
             RetryPolicySubcommand::Create {
                 name,
                 priority,
-                predicate_json,
-                policy_json,
-            } => {
-                self.cmd_create(name, priority, predicate_json, policy_json)
-                    .await
-            }
+                predicate,
+                policy,
+            } => self.cmd_create(name, priority, predicate, policy).await,
             RetryPolicySubcommand::List => self.cmd_list().await,
             RetryPolicySubcommand::Get { name, id } => self.cmd_get(name, id).await,
             RetryPolicySubcommand::Update {
                 name,
                 id,
                 priority,
-                predicate_json,
-                policy_json,
-            } => {
-                self.cmd_update(name, id, priority, predicate_json, policy_json)
-                    .await
-            }
+                predicate,
+                policy,
+            } => self.cmd_update(name, id, priority, predicate, policy).await,
             RetryPolicySubcommand::Delete { name, id } => self.cmd_delete(name, id).await,
         }
     }
@@ -69,8 +67,8 @@ impl RetryPolicyCommandHandler {
         &self,
         name: String,
         priority: u32,
-        predicate_json: String,
-        policy_json: String,
+        predicate: String,
+        policy: String,
     ) -> anyhow::Result<()> {
         let environment = self
             .ctx
@@ -87,8 +85,8 @@ impl RetryPolicyCommandHandler {
                 &RetryPolicyCreation {
                     name,
                     priority,
-                    predicate_json,
-                    policy_json,
+                    predicate: parse_and_validate_predicate(&predicate)?,
+                    policy: parse_and_validate_policy(&policy)?,
                 },
             )
             .await
@@ -178,8 +176,8 @@ impl RetryPolicyCommandHandler {
         name: Option<String>,
         id: Option<RetryPolicyId>,
         priority: Option<u32>,
-        predicate_json: Option<String>,
-        policy_json: Option<String>,
+        predicate: Option<String>,
+        policy: Option<String>,
     ) -> anyhow::Result<()> {
         let current = self.resolve_retry_policy(name, id).await?;
 
@@ -192,8 +190,14 @@ impl RetryPolicyCommandHandler {
                 &RetryPolicyUpdate {
                     current_revision: current.revision,
                     priority,
-                    predicate_json,
-                    policy_json,
+                    predicate: predicate
+                        .as_deref()
+                        .map(parse_and_validate_predicate)
+                        .transpose()?,
+                    policy: policy
+                        .as_deref()
+                        .map(parse_and_validate_policy)
+                        .transpose()?,
                 },
             )
             .await
@@ -227,4 +231,25 @@ impl RetryPolicyCommandHandler {
 
         Ok(())
     }
+}
+
+fn parse_and_validate_predicate(value: &str) -> anyhow::Result<UntypedJsonBody> {
+    parse_and_validate_yaml_or_json_as_untyped_json_body::<Predicate>("predicate", value)
+}
+
+fn parse_and_validate_policy(value: &str) -> anyhow::Result<UntypedJsonBody> {
+    parse_and_validate_yaml_or_json_as_untyped_json_body::<RetryPolicy>("policy", value)
+}
+
+fn parse_and_validate_yaml_or_json_as_untyped_json_body<T: Serialize + DeserializeOwned>(
+    kind: &'static str,
+    value: &str,
+) -> anyhow::Result<UntypedJsonBody> {
+    let raw = serde_yaml::from_str::<serde_json::Value>(value)
+        .map_err(|e| anyhow::anyhow!("Invalid {kind} YAML/JSON: {e}"))?;
+    let typed = serde_json::from_value::<T>(raw)
+        .map_err(|e| anyhow::anyhow!("Invalid {kind} value: {e}"))?;
+    serde_json::to_value(typed)
+        .map_err(|e| anyhow::anyhow!("Failed to encode {kind} as JSON: {e}"))
+        .map(UntypedJsonBody)
 }

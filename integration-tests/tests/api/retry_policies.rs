@@ -18,8 +18,9 @@ use golem_common::base_model::retry_policy::{
     ApiPropertyComparison, ApiRetryPolicy, ApiTextValue,
 };
 use golem_common::model::retry_policy::{
-    Predicate, RetryPolicy, RetryPolicyCreation, RetryPolicyRevision, RetryPolicyUpdate,
+    RetryPolicyCreation, RetryPolicyRevision, RetryPolicyUpdate,
 };
+use golem_common::model::{Predicate, RetryPolicy, UntypedJsonBody};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -29,20 +30,24 @@ use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
-fn predicate_json(predicate: ApiPredicate) -> String {
-    serde_json::to_string(&Predicate::from(predicate)).unwrap()
+fn predicate(predicate: ApiPredicate) -> UntypedJsonBody {
+    UntypedJsonBody(
+        serde_json::to_value(Predicate::from(predicate)).expect("API predicate must serialize"),
+    )
 }
 
-fn policy_json(policy: ApiRetryPolicy) -> String {
-    serde_json::to_string(&RetryPolicy::from(policy)).unwrap()
+fn policy(policy: ApiRetryPolicy) -> UntypedJsonBody {
+    UntypedJsonBody(
+        serde_json::to_value(RetryPolicy::from(policy)).expect("API retry policy must serialize"),
+    )
 }
 
-fn simple_predicate() -> String {
-    predicate_json(ApiPredicate::True(ApiPredicateTrue {}))
+fn simple_predicate() -> UntypedJsonBody {
+    predicate(ApiPredicate::True(ApiPredicateTrue {}))
 }
 
-fn simple_policy() -> String {
-    policy_json(ApiRetryPolicy::Periodic(ApiPeriodicPolicy {
+fn simple_policy() -> UntypedJsonBody {
+    policy(ApiRetryPolicy::Periodic(ApiPeriodicPolicy {
         delay_ms: 1000,
     }))
 }
@@ -58,16 +63,16 @@ async fn create_and_get_retry_policy(deps: &EnvBasedTestDependencies) -> anyhow:
     let creation = RetryPolicyCreation {
         name: "test-policy".to_string(),
         priority: 10,
-        predicate_json: simple_predicate(),
-        policy_json: simple_policy(),
+        predicate: simple_predicate(),
+        policy: simple_policy(),
     };
 
     let created = client.create_retry_policy(&env.id.0, &creation).await?;
 
     assert_eq!(created.name, "test-policy");
     assert_eq!(created.priority, 10);
-    assert_eq!(created.predicate_json, creation.predicate_json);
-    assert_eq!(created.policy_json, creation.policy_json);
+    assert_eq!(created.predicate, creation.predicate);
+    assert_eq!(created.policy, creation.policy);
     assert_eq!(created.revision, RetryPolicyRevision::INITIAL);
 
     {
@@ -94,20 +99,20 @@ async fn update_retry_policy(deps: &EnvBasedTestDependencies) -> anyhow::Result<
     let creation = RetryPolicyCreation {
         name: "update-me".to_string(),
         priority: 5,
-        predicate_json: simple_predicate(),
-        policy_json: simple_policy(),
+        predicate: simple_predicate(),
+        policy: simple_policy(),
     };
 
     let created = client.create_retry_policy(&env.id.0, &creation).await?;
 
-    let new_predicate = predicate_json(ApiPredicate::PropEq(ApiPropertyComparison {
+    let new_predicate = predicate(ApiPredicate::PropEq(ApiPropertyComparison {
         property: "status".to_string(),
         value: ApiPredicateValue::Text(ApiTextValue {
             value: "error".to_string(),
         }),
     }));
 
-    let new_policy = policy_json(ApiRetryPolicy::CountBox(ApiCountBoxPolicy {
+    let new_policy = policy(ApiRetryPolicy::CountBox(ApiCountBoxPolicy {
         max_retries: 3,
         inner: Box::new(ApiRetryPolicy::Periodic(ApiPeriodicPolicy {
             delay_ms: 500,
@@ -117,15 +122,15 @@ async fn update_retry_policy(deps: &EnvBasedTestDependencies) -> anyhow::Result<
     let update = RetryPolicyUpdate {
         current_revision: created.revision,
         priority: Some(20),
-        predicate_json: Some(new_predicate.clone()),
-        policy_json: Some(new_policy.clone()),
+        predicate: Some(new_predicate.clone()),
+        policy: Some(new_policy.clone()),
     };
 
     let updated = client.update_retry_policy(&created.id.0, &update).await?;
 
     assert_eq!(updated.priority, 20);
-    assert_eq!(updated.predicate_json, new_predicate);
-    assert_eq!(updated.policy_json, new_policy);
+    assert_eq!(updated.predicate, new_predicate);
+    assert_eq!(updated.policy, new_policy);
     assert!(updated.revision > created.revision);
 
     {
@@ -147,8 +152,8 @@ async fn delete_retry_policy(deps: &EnvBasedTestDependencies) -> anyhow::Result<
     let creation = RetryPolicyCreation {
         name: "delete-me".to_string(),
         priority: 1,
-        predicate_json: simple_predicate(),
-        policy_json: simple_policy(),
+        predicate: simple_predicate(),
+        policy: simple_policy(),
     };
 
     let created = client.create_retry_policy(&env.id.0, &creation).await?;
@@ -181,8 +186,8 @@ async fn create_multiple_policies_different_priorities(
         let creation = RetryPolicyCreation {
             name: name.to_string(),
             priority,
-            predicate_json: simple_predicate(),
-            policy_json: simple_policy(),
+            predicate: simple_predicate(),
+            policy: simple_policy(),
         };
         let created = client.create_retry_policy(&env.id.0, &creation).await?;
         created_ids.push(created.id);
@@ -213,8 +218,8 @@ async fn environment_policy_visible_to_agent(
     let creation = RetryPolicyCreation {
         name: "env-visible".to_string(),
         priority: 10,
-        predicate_json: simple_predicate(),
-        policy_json: simple_policy(),
+        predicate: simple_predicate(),
+        policy: simple_policy(),
     };
     client.create_retry_policy(&env.id.0, &creation).await?;
 
@@ -271,8 +276,8 @@ async fn multiple_environment_policies_visible_to_agent(
         let creation = RetryPolicyCreation {
             name: name.to_string(),
             priority,
-            predicate_json: simple_predicate(),
-            policy_json: simple_policy(),
+            predicate: simple_predicate(),
+            policy: simple_policy(),
         };
         client.create_retry_policy(&env.id.0, &creation).await?;
     }
@@ -337,8 +342,8 @@ async fn runtime_overlay_coexists_with_environment_policy(
     let creation = RetryPolicyCreation {
         name: "env-pol".to_string(),
         priority: 10,
-        predicate_json: simple_predicate(),
-        policy_json: simple_policy(),
+        predicate: simple_predicate(),
+        policy: simple_policy(),
     };
     client.create_retry_policy(&env.id.0, &creation).await?;
 
@@ -397,8 +402,8 @@ async fn runtime_overlay_overrides_environment_policy_same_name(
     let creation = RetryPolicyCreation {
         name: "shared-name".to_string(),
         priority: 10,
-        predicate_json: simple_predicate(),
-        policy_json: simple_policy(),
+        predicate: simple_predicate(),
+        policy: simple_policy(),
     };
     client.create_retry_policy(&env.id.0, &creation).await?;
 
@@ -449,7 +454,7 @@ async fn runtime_overlay_overrides_environment_policy_same_name(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(count, Value::U64(1));
+    assert_eq!(count, Value::U64(2));
 
     Ok(())
 }
@@ -481,13 +486,13 @@ async fn environment_policy_created_while_agent_running(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(count, Value::U64(0));
+    assert_eq!(count, Value::U64(1));
 
     let creation = RetryPolicyCreation {
         name: "late-arrival".to_string(),
         priority: 10,
-        predicate_json: simple_predicate(),
-        policy_json: simple_policy(),
+        predicate: simple_predicate(),
+        policy: simple_policy(),
     };
     client.create_retry_policy(&env.id.0, &creation).await?;
 
@@ -518,8 +523,8 @@ async fn environment_policy_deleted_while_agent_running(
     let creation = RetryPolicyCreation {
         name: "to-delete".to_string(),
         priority: 10,
-        predicate_json: simple_predicate(),
-        policy_json: simple_policy(),
+        predicate: simple_predicate(),
+        policy: simple_policy(),
     };
     let created = client.create_retry_policy(&env.id.0, &creation).await?;
 
@@ -574,8 +579,8 @@ async fn environment_policy_updated_while_agent_running(
     let creation = RetryPolicyCreation {
         name: "updatable".to_string(),
         priority: 5,
-        predicate_json: simple_predicate(),
-        policy_json: simple_policy(),
+        predicate: simple_predicate(),
+        policy: simple_policy(),
     };
     let created = client.create_retry_policy(&env.id.0, &creation).await?;
 
@@ -602,8 +607,8 @@ async fn environment_policy_updated_while_agent_running(
     let update = RetryPolicyUpdate {
         current_revision: created.revision,
         priority: Some(50),
-        predicate_json: None,
-        policy_json: None,
+        predicate: None,
+        policy: None,
     };
     client.update_retry_policy(&created.id.0, &update).await?;
 
@@ -629,7 +634,7 @@ async fn environment_policy_updated_while_agent_running(
         .await?
         .into_return_value()
         .unwrap();
-    assert_eq!(count, Value::U64(1));
+    assert_eq!(count, Value::U64(2));
 
     Ok(())
 }

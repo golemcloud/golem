@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use anyhow::{Context, anyhow};
-use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
+use golem_common::base_model::component_metadata::{AgentTypeProvisionConfig, KnownExports};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
@@ -28,7 +28,6 @@ use golem_common::model::component_metadata::{
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::model::component::Component;
-use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -41,7 +40,7 @@ const WASMS_DIRNAME: &str = "wasms";
 #[derive(Clone)]
 struct CachedAnalysis {
     memories: Vec<LinearMemory>,
-    exports: Vec<AnalysedExport>,
+    known_exports: KnownExports,
     agent_types: Vec<AgentType>,
     root_package_name: Option<String>,
     root_package_version: Option<String>,
@@ -125,14 +124,14 @@ impl FileSystemComponentWriter {
 
         let CachedAnalysis {
             memories,
-            exports,
+            known_exports,
             agent_types,
             root_package_name,
             root_package_version,
         } = if skip_analysis {
             CachedAnalysis {
                 memories: vec![],
-                exports: vec![],
+                known_exports: KnownExports::default(),
                 agent_types: vec![],
                 root_package_name: None,
                 root_package_version: None,
@@ -143,8 +142,8 @@ impl FileSystemComponentWriter {
                 .get_or_insert_simple(&analysis_cache_key, async || {
                     debug!("Analyzing component {component_id} (hash {blake3_hash})");
 
-                    let (raw_component_metadata, memories, exports) =
-                        Self::analyze_memories_and_exports(&target_path_clone)
+                    let (raw_component_metadata, memories, known_exports) =
+                        Self::analyze_memories_and_known_exports(&target_path_clone)
                             .await
                             .map_err(|err| format!("Failed to analyze component: {err:#}"))?;
 
@@ -154,7 +153,7 @@ impl FileSystemComponentWriter {
 
                     Ok(CachedAnalysis {
                         memories,
-                        exports,
+                        known_exports,
                         agent_types,
                         root_package_name: raw_component_metadata.root_package_name,
                         root_package_version: raw_component_metadata.root_package_version,
@@ -179,7 +178,7 @@ impl FileSystemComponentWriter {
             agent_type_provision_configs,
             size,
             memories,
-            exports,
+            known_exports,
             wasm_filename,
             agent_types,
             target_path,
@@ -217,16 +216,16 @@ impl FileSystemComponentWriter {
         Ok(metadata.into())
     }
 
-    async fn analyze_memories_and_exports(
+    async fn analyze_memories_and_known_exports(
         path: &Path,
-    ) -> anyhow::Result<(RawComponentMetadata, Vec<LinearMemory>, Vec<AnalysedExport>)> {
+    ) -> anyhow::Result<(RawComponentMetadata, Vec<LinearMemory>, KnownExports)> {
         let component_bytes = &tokio::fs::read(path).await?;
         let raw_component_metadata = RawComponentMetadata::analyse_component(component_bytes)?;
 
-        let exports = raw_component_metadata.exports.to_vec();
+        let known_exports = raw_component_metadata.known_exports.clone();
 
         let linear_memories: Vec<LinearMemory> = raw_component_metadata.memories.clone();
-        Ok((raw_component_metadata, linear_memories, exports))
+        Ok((raw_component_metadata, linear_memories, known_exports))
     }
 
     async fn load_metadata(
@@ -242,7 +241,6 @@ impl FileSystemComponentWriter {
         local_path: &Path,
         name: &str,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
-        unverified: bool,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
@@ -253,7 +251,6 @@ impl FileSystemComponentWriter {
             local_path,
             name,
             agent_type_provision_configs,
-            unverified,
             environment_id,
             application_id,
             account_id,
@@ -269,7 +266,6 @@ impl FileSystemComponentWriter {
         local_path: &Path,
         name: &str,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
-        unverified: bool,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
@@ -282,7 +278,7 @@ impl FileSystemComponentWriter {
             &ComponentId(Uuid::new_v4()),
             ComponentRevision::INITIAL,
             agent_type_provision_configs,
-            unverified,
+            false,
             environment_id,
             application_id,
             account_id,
@@ -381,8 +377,8 @@ impl FileSystemComponentWriter {
                     source_path.display()
                 );
 
-                let (raw_component_metadata, memories, exports) =
-                    Self::analyze_memories_and_exports(source_path)
+                let (raw_component_metadata, memories, known_exports) =
+                    Self::analyze_memories_and_known_exports(source_path)
                         .await
                         .map_err(|err| format!("Failed to analyze component: {err:#}"))?;
 
@@ -392,7 +388,7 @@ impl FileSystemComponentWriter {
 
                 Ok(CachedAnalysis {
                     memories,
-                    exports,
+                    known_exports,
                     agent_types,
                     root_package_name: raw_component_metadata.root_package_name,
                     root_package_version: raw_component_metadata.root_package_version,
@@ -517,7 +513,7 @@ pub(super) struct LocalFileSystemComponentMetadata {
     pub account_id: AccountId,
     pub size: u64,
     pub memories: Vec<LinearMemory>,
-    pub exports: Vec<AnalysedExport>,
+    pub known_exports: KnownExports,
     pub agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
     pub component_name: String,
     pub wasm_filename: String,
@@ -553,7 +549,7 @@ impl From<LocalFileSystemComponentMetadata> for Component {
             component_name: ComponentName(value.component_name),
             component_size: value.size,
             metadata: ComponentMetadata::from_parts(
-                value.exports,
+                value.known_exports,
                 value.memories,
                 value.root_package_name,
                 value.root_package_version,
