@@ -364,28 +364,36 @@ impl<'a> ComponentStager<'a> {
     fn resolve_plugins_for(
         &self,
         manifest_config: &AgentTypeManifestProvisionConfig,
-    ) -> Vec<PluginInstallation> {
+    ) -> anyhow::Result<Vec<PluginInstallation>> {
         manifest_config
             .plugins
             .iter()
             .enumerate()
-            .map(|(idx, p)| PluginInstallation {
-                environment_plugin_grant_id: self
+            .map(|(idx, p)| {
+                let grant = self
                     .plugin_grants
                     .get(&PluginNameAndVersion {
                         name: p.name.clone(),
                         version: p.version.clone(),
                     })
-                    .unwrap_or_else(|| {
-                        panic!("Plugin grant not found for {}/{}", p.name, p.version)
-                    })
-                    .id,
-                priority: PluginPriority(idx as i32),
-                parameters: p
-                    .parameters
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Plugin {}/{} is not available in this environment. \
+                             Use 'golem plugin list' to see available plugins, \
+                             or grant the plugin to this environment first.",
+                            p.name,
+                            p.version
+                        )
+                    })?;
+                Ok(PluginInstallation {
+                    environment_plugin_grant_id: grant.id,
+                    priority: PluginPriority(idx as i32),
+                    parameters: p
+                        .parameters
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                })
             })
             .collect()
     }
@@ -478,12 +486,11 @@ impl<'a> ComponentStager<'a> {
         let all_files = self.all_manifest_files()?;
         let archive_paths_by_source =
             resolve_archive_paths_for_sources(all_files.iter().map(|f| f.source.as_url().clone()))?;
-
         self.component_deploy_properties
             .agent_type_configs
             .iter()
             .map(|(agent_type_name, manifest_config)| {
-                let resolved_plugins = self.resolve_plugins_for(manifest_config);
+                let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
                 let mut creation = manifest_config.to_provision_config_creation(resolved_plugins);
                 creation.files = self
                     .resolve_archive_files_for_agent(manifest_config, &archive_paths_by_source)?;
@@ -504,7 +511,7 @@ impl<'a> ComponentStager<'a> {
                         .agent_type_configs
                         .iter()
                         .map(|(name, manifest_config)| {
-                            let resolved_plugins = self.resolve_plugins_for(manifest_config);
+                            let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
                             let mut creation =
                                 manifest_config.to_provision_config_creation(resolved_plugins);
                             creation.files = self.resolve_archive_files_for_agent(
@@ -553,7 +560,7 @@ impl<'a> ComponentStager<'a> {
                 .iter()
                 .filter(|(name, _)| changed.contains(name.0.as_str()))
                 .map(|(name, manifest_config)| {
-                    let resolved_plugins = self.resolve_plugins_for(manifest_config);
+                    let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
                     let mut creation =
                         manifest_config.to_provision_config_creation(resolved_plugins);
                     creation.files = self.resolve_archive_files_for_agent(

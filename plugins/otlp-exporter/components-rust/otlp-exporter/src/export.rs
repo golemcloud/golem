@@ -139,11 +139,17 @@ fn send_otlp_request(config: &ExporterConfig, path: &str, json: String) -> Resul
         let response = Client::new()
             .send(request)
             .await
-            .map_err(|e| format!("OTLP transport error: {e}"))?;
+            .map_err(|e| {
+                let err = format!("OTLP transport error: {e}");
+                eprintln!("{err}");
+                err
+            })?;
 
         let status = response.status();
         if !status.is_success() {
-            return Err(format!("OTLP export failed with HTTP status: {status}"));
+            let err = format!("OTLP export failed with HTTP status: {status}");
+            eprintln!("{err}");
+            return Err(err);
         }
 
         Ok(())

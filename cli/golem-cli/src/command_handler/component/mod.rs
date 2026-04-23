@@ -998,23 +998,37 @@ impl ComponentCommandHandler {
                 .plugins
                 .iter()
                 .enumerate()
-                .filter_map(|(idx, p)| {
-                    let grant = plugin_grants.get(&PluginNameAndVersion {
-                        name: p.name.clone(),
-                        version: p.version.clone(),
-                    })?;
-                    Some((
+                .map(|(idx, p)| {
+                    let grant = plugin_grants
+                        .get(&PluginNameAndVersion {
+                            name: p.name.clone(),
+                            version: p.version.clone(),
+                        })
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "Plugin {}/{} is not available in this environment. \
+                                 Use 'golem plugin list' to see available plugins, \
+                                 or grant the plugin to this environment first.",
+                                p.name,
+                                p.version
+                            )
+                        })?;
+                    Ok((
                         grant.id.0,
                         diff::PluginInstallation {
                             priority: idx as i32,
                             name: p.name.clone(),
                             version: p.version.clone(),
                             grant_id: grant.id.0,
-                            parameters: Default::default(),
+                            parameters: p
+                                .parameters
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect(),
                         },
                     ))
                 })
-                .collect();
+                .collect::<anyhow::Result<_>>()?;
 
             let config = manifest_config
                 .config
