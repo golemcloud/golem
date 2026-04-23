@@ -3011,18 +3011,17 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
             if should_restart_after_shard_assignment_change(&latest_worker_status) {
-                    let _ = Worker::get_or_create_running(
-                        this,
-                        &owned_agent_id,
-                        None,
-                        Vec::new(),
-                        None,
-                        None,
-                        &InvocationContextStack::fresh(),
-                        Principal::anonymous(),
-                    )
-                    .await?;
-
+                let _ = Worker::get_or_create_running(
+                    this,
+                    &owned_agent_id,
+                    None,
+                    Vec::new(),
+                    None,
+                    None,
+                    &InvocationContextStack::fresh(),
+                    Principal::anonymous(),
+                )
+                .await?;
             }
         }
 
