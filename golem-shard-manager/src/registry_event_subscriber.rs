@@ -78,14 +78,7 @@ impl RegistryInvalidationHandler for ShardManagerRegistryInvalidationHandler {
             | RegistryInvalidationEvent::RetryPolicyChanged { .. }
             | RegistryInvalidationEvent::AgentSecretChanged { .. }
             | RegistryInvalidationEvent::ApplicationDeleted { .. }
-            | RegistryInvalidationEvent::EnvironmentDeleted { .. } => {
-                // Shard-manager only caches resource definitions. Application /
-                // environment deletion does not directly invalidate that cache:
-                // stale entries are keyed by resource_definition_id (UUID) which
-                // cannot collide with a recreated environment's new
-                // resource_definition_ids, so they are harmless and will expire
-                // naturally via cursor-expired replay or TTL.
-            }
+            | RegistryInvalidationEvent::EnvironmentDeleted { .. } => {}
         }
     }
 }
