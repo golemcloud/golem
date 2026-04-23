@@ -428,8 +428,9 @@ impl Oplog for EphemeralOplog {
             let committed_end: u64 = state.last_committed_idx.into();
             if committed_end >= req_start {
                 let storage_end = min(req_end, committed_end);
-                let mut remaining = storage_end - req_start + 1
-                    - min(result.len() as u64, storage_end - req_start + 1);
+                // Buffered entries always start after the committed range, so they do not reduce
+                // how many committed entries we still need to load from the archive layers.
+                let mut remaining = storage_end - req_start + 1;
 
                 for layer in &self.lower {
                     if remaining == 0 {
