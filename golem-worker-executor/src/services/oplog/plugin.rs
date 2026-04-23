@@ -274,20 +274,6 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
         );
 
         let is_local = self.is_local(target_agent_id).await?;
-        let current_assignment = self.shard_service.try_get_current_assignment();
-
-        tracing::warn!(
-            source_worker = %worker_metadata.agent_id,
-            plugin = %plugin.environment_plugin_grant_id,
-            target_worker = %target_agent_id,
-            batch_start = initial_oplog_index.as_u64(),
-            batch_end = batch_last_index.as_u64(),
-            entry_count = entries.len(),
-            is_local,
-            current_assignment = ?current_assignment,
-            idempotency_key = %idempotency_key,
-            "Investigation: oplog processor send"
-        );
 
         if is_local {
             // Local path: activate and invoke directly
@@ -1186,21 +1172,6 @@ impl ForwardingOplogState {
             return;
         }
 
-        tracing::warn!(
-            source_worker = %metadata.agent_id,
-            plugin = %grant_id,
-            target_worker = %target_agent_id,
-            batch_start = batch_start.as_u64(),
-            batch_end = batch_end.as_u64(),
-            batch_count,
-            is_retry,
-            target_is_local,
-            confirmed_up_to = live.confirmed_up_to.as_u64(),
-            sending_up_to = live.sending_up_to.as_u64(),
-            last_batch_start = live.last_batch_start.as_u64(),
-            "Investigation: source worker flushing oplog processor batch"
-        );
-
         // If ALL entries are checkpoint entries, skip — nothing meaningful to deliver.
         // Advance the cursor past them so we don't re-read the same range forever.
         if entries
@@ -1536,15 +1507,6 @@ impl ForwardingOplogState {
                 Some(s) => (s.confirmed_up_to, s.last_batch_start),
                 None => continue,
             };
-
-            tracing::warn!(
-                source_worker = %self.initial_worker_metadata.agent_id,
-                plugin = %grant_id,
-                old_target = %old_target,
-                confirmed_up_to = confirmed.as_u64(),
-                last_batch_start = last_batch_start.as_u64(),
-                "Investigation: evaluating oplog processor locality recovery"
-            );
 
             // Recompute the idempotency key for the last confirmed batch
             if last_batch_start == confirmed {

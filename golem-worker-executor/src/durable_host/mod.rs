@@ -3029,16 +3029,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
             if should_restart_after_shard_assignment_change(&latest_worker_status) {
-                warn!(
-                    agent_id = %owned_agent_id,
-                    status = ?latest_worker_status.status,
-                    has_pending_work = latest_worker_status.has_pending_work(),
-                    pending_invocations = latest_worker_status.pending_invocations.len(),
-                    pending_updates = latest_worker_status.pending_updates.len(),
-                    oplog_processor_checkpoints = ?latest_worker_status.oplog_processor_checkpoints,
-                    current_assignment = ?current_assignment,
-                    "Investigation: restarting worker during shard assignment recovery"
-                );
                 let _ = Worker::get_or_create_running(
                     this,
                     &owned_agent_id,
@@ -3051,11 +3041,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     Principal::anonymous(),
                 )
                 .await?;
-                warn!(
-                    agent_id = %owned_agent_id,
-                    current_assignment = ?current_assignment,
-                    "Investigation: worker restart requested during shard assignment recovery"
-                );
             }
         }
 

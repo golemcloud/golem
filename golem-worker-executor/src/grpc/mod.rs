@@ -913,17 +913,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .set_interrupting(InterruptKind::Restart)
                     .await
             {
-                warn!(
-                    agent_id = %agent_id,
-                    current_assignment = ?current_assignment,
-                    "Investigation: interrupting worker on revoked executor"
-                );
                 await_interrupted.recv().await.unwrap();
-                warn!(
-                    agent_id = %agent_id,
-                    current_assignment = ?current_assignment,
-                    "Investigation: worker interrupt completed on revoked executor"
-                );
             }
         }
 
