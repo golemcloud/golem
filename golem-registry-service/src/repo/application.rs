@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use super::model::application::{ApplicationExtRevisionRecord, ApplicationRepoError};
+use super::registry_change::{
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
+};
 use crate::repo::model::BindFields;
 use crate::repo::model::application::{ApplicationRecord, ApplicationRevisionRecord};
-use crate::repo::registry_change::{DbRegistryChangeRepo, NewRegistryChangeEvent};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -62,7 +64,7 @@ pub trait ApplicationRepo: Send + Sync {
     async fn delete(
         &self,
         revision: ApplicationRevisionRecord,
-    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError>;
+    ) -> Result<RequiresNotificationSignal<ApplicationExtRevisionRecord>, ApplicationRepoError>;
 }
 
 pub struct LoggedApplicationRepo<Repo: ApplicationRepo> {
@@ -144,7 +146,8 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
     async fn delete(
         &self,
         revision: ApplicationRevisionRecord,
-    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
+    ) -> Result<RequiresNotificationSignal<ApplicationExtRevisionRecord>, ApplicationRepoError>
+    {
         let span = Self::span_app_id(revision.application_id);
         self.repo.delete(revision).instrument(span).await
     }
@@ -357,7 +360,8 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
     async fn delete(
         &self,
         revision: ApplicationRevisionRecord,
-    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
+    ) -> Result<RequiresNotificationSignal<ApplicationExtRevisionRecord>, ApplicationRepoError>
+    {
         self.with_tx_err("delete", |tx| {
             async move {
                 let revision = Self::insert_revision(tx, revision).await?;
@@ -444,6 +448,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
             .boxed()
         })
         .await
+        .map(RequiresSignalExt::requires_notification_signal)
     }
 }
 

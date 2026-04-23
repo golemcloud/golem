@@ -15,6 +15,7 @@
 use super::account::{AccountError, AccountService};
 use super::account_usage::AccountUsageService;
 use super::account_usage::error::{AccountUsageError, LimitExceededError};
+use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::application::ApplicationRepo;
 use crate::repo::model::application::{ApplicationRepoError, ApplicationRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
@@ -79,6 +80,7 @@ pub struct ApplicationService {
     application_repo: Arc<dyn ApplicationRepo>,
     account_service: Arc<AccountService>,
     account_usage_service: Arc<AccountUsageService>,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl ApplicationService {
@@ -86,11 +88,13 @@ impl ApplicationService {
         application_repo: Arc<dyn ApplicationRepo>,
         account_service: Arc<AccountService>,
         account_usage_service: Arc<AccountUsageService>,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             application_repo,
             account_service,
             account_usage_service,
+            registry_change_notifier,
         }
     }
 
@@ -208,7 +212,8 @@ impl ApplicationService {
                     ApplicationError::ConcurrentModification
                 }
                 other => other.into(),
-            })?;
+            })?
+            .signal_new_events_available(&self.registry_change_notifier);
 
         Ok(())
     }

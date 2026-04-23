@@ -20,7 +20,9 @@ pub use crate::repo::model::environment::{
     EnvironmentExtRecord, EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
 };
 use crate::repo::model::environment_plugin_grant::EnvironmentPluginGrantRecord;
-use crate::repo::registry_change::{DbRegistryChangeRepo, NewRegistryChangeEvent};
+use crate::repo::registry_change::{
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
@@ -82,7 +84,7 @@ pub trait EnvironmentRepo: Send + Sync {
     async fn delete(
         &self,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError>;
+    ) -> Result<RequiresNotificationSignal<EnvironmentExtRevisionRecord>, EnvironmentRepoError>;
 
     async fn list_visible_to_account(
         &self,
@@ -192,7 +194,8 @@ impl<Repo: EnvironmentRepo> EnvironmentRepo for LoggedEnvironmentRepo<Repo> {
     async fn delete(
         &self,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
+    ) -> Result<RequiresNotificationSignal<EnvironmentExtRevisionRecord>, EnvironmentRepoError>
+    {
         let span = Self::span_env(revision.environment_id);
         self.repo.delete(revision).instrument(span).await
     }
@@ -748,7 +751,8 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
     async fn delete(
         &self,
         revision: EnvironmentRevisionRecord,
-    ) -> Result<EnvironmentExtRevisionRecord, EnvironmentRepoError> {
+    ) -> Result<RequiresNotificationSignal<EnvironmentExtRevisionRecord>, EnvironmentRepoError>
+    {
         self.with_tx_err("delete", |tx| {
             async move {
                 let revision: EnvironmentRevisionRecord = Self::insert_revision(tx, revision).await?;
@@ -883,6 +887,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
             .boxed()
         })
         .await
+        .map(RequiresSignalExt::requires_notification_signal)
     }
 
     async fn list_visible_to_account(
