@@ -26,7 +26,9 @@ use golem_common::model::account::{AccountRevision, AccountSetPlan};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentId};
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::worker::{AgentFileSystemNode, AgentFileSystemNodeKind};
+use golem_common::model::worker::{
+    AgentConfigEntryDto, AgentFileSystemNode, AgentFileSystemNodeKind,
+};
 use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
     StringFilterComparator,
@@ -1670,6 +1672,13 @@ async fn agent_update_constructor_signature(
     let component = user
         .component(&env.id, "it_agent_update_v1_release")
         .name("it:agent-update")
+        .with_agent_config(
+            "CounterAgent",
+            vec![AgentConfigEntryDto {
+                path: vec!["var1".to_string()],
+                value: serde_json::Value::String("value1".to_string()).into(),
+            }],
+        )
         .store()
         .await?;
 
@@ -1793,6 +1802,13 @@ async fn deployment_invalidates_agent_resolution_cache(
     let component = user
         .component(&env.id, "it_agent_update_v1_release")
         .name("it:agent-update")
+        .with_agent_config(
+            "CounterAgent",
+            vec![AgentConfigEntryDto {
+                path: vec!["var1".to_string()],
+                value: serde_json::Value::String("value1".to_string()).into(),
+            }],
+        )
         .store()
         .await?;
 
