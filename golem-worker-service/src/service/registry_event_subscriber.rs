@@ -136,6 +136,36 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
             }
             RegistryInvalidationEvent::ResourceDefinitionChanged { .. } => {}
             RegistryInvalidationEvent::AgentSecretChanged { .. } => {}
+            RegistryInvalidationEvent::ApplicationDeleted {
+                application_id,
+                account_id,
+                ..
+            } => {
+                debug!(
+                    application_id = %application_id,
+                    account_id = %account_id,
+                    "Received application deleted event, flushing agent resolution and route caches"
+                );
+                // The AgentResolutionCache is keyed on (app_name, env_name, ...)
+                // strings and has no UUID in its key, so we cannot target entries
+                // for this specific application. Flush the whole cache to ensure a
+                // same-name recreation resolves through a fresh registry lookup.
+                self.agent_resolution_cache.clear().await;
+                self.route_resolver.clear_all().await;
+            }
+            RegistryInvalidationEvent::EnvironmentDeleted { environment_id, .. } => {
+                debug!(
+                    environment_id = %environment_id,
+                    "Received environment deleted event, flushing agent resolution and route caches for environment"
+                );
+                // As with ApplicationDeleted, the cache key does not contain the
+                // environment UUID, so we conservatively flush the whole cache
+                // rather than miss stale entries.
+                self.agent_resolution_cache.clear().await;
+                self.route_resolver
+                    .invalidate_domains_for_environment(*environment_id)
+                    .await;
+            }
         }
     }
 }

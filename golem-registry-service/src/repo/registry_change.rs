@@ -63,6 +63,8 @@ pub enum RegistryEventType {
     ResourceDefinitionChanged = 5,
     RetryPolicyChanged = 6,
     AgentSecretChanged = 7,
+    ApplicationDeleted = 8,
+    EnvironmentDeleted = 9,
 }
 
 impl TryFrom<i16> for RegistryEventType {
@@ -78,6 +80,8 @@ impl TryFrom<i16> for RegistryEventType {
             5 => Ok(RegistryEventType::ResourceDefinitionChanged),
             6 => Ok(RegistryEventType::RetryPolicyChanged),
             7 => Ok(RegistryEventType::AgentSecretChanged),
+            8 => Ok(RegistryEventType::ApplicationDeleted),
+            9 => Ok(RegistryEventType::EnvironmentDeleted),
             other => Err(RepoError::InternalError(anyhow::anyhow!(
                 "Unknown registry event type: {other}"
             ))),
@@ -132,6 +136,15 @@ pub enum RegistryChangeEvent {
         event_id: ChangeEventId,
         environment_id: Uuid,
     },
+    ApplicationDeleted {
+        event_id: ChangeEventId,
+        application_id: Uuid,
+        account_id: Uuid,
+    },
+    EnvironmentDeleted {
+        event_id: ChangeEventId,
+        environment_id: Uuid,
+    },
 }
 
 impl RegistryChangeEvent {
@@ -145,6 +158,8 @@ impl RegistryChangeEvent {
             Self::RetryPolicyChanged { event_id, .. } => *event_id,
             Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
             Self::AgentSecretChanged { event_id, .. } => *event_id,
+            Self::ApplicationDeleted { event_id, .. } => *event_id,
+            Self::EnvironmentDeleted { event_id, .. } => *event_id,
         }
     }
 }
@@ -161,6 +176,7 @@ struct RegistryChangeEventRow {
     domains: Vec<String>,
     resource_definition_id: Option<Uuid>,
     resource_name: Option<String>,
+    application_id: Option<Uuid>,
 }
 
 impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
@@ -288,6 +304,34 @@ impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
                     environment_id,
                 })
             }
+            RegistryEventType::ApplicationDeleted => {
+                let application_id = row.application_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "ApplicationDeleted event missing application_id"
+                    ))
+                })?;
+                let account_id = row.account_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "ApplicationDeleted event missing account_id"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::ApplicationDeleted {
+                    event_id: row.event_id,
+                    application_id,
+                    account_id,
+                })
+            }
+            RegistryEventType::EnvironmentDeleted => {
+                let environment_id = row.environment_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "EnvironmentDeleted event missing environment_id"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::EnvironmentDeleted {
+                    event_id: row.event_id,
+                    environment_id,
+                })
+            }
         }
     }
 }
@@ -327,6 +371,7 @@ pub struct NewRegistryChangeEvent {
     pub domains: Vec<String>,
     pub resource_definition_id: Option<Uuid>,
     pub resource_name: Option<String>,
+    pub application_id: Option<Uuid>,
 }
 
 impl NewRegistryChangeEvent {
@@ -345,6 +390,7 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
         }
     }
 
@@ -359,6 +405,7 @@ impl NewRegistryChangeEvent {
             domains,
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
         }
     }
 
@@ -373,6 +420,7 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
         }
     }
 
@@ -387,6 +435,7 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
         }
     }
 
@@ -401,6 +450,7 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
         }
     }
 
@@ -415,6 +465,7 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
         }
     }
 
@@ -433,6 +484,7 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: Some(resource_definition_id),
             resource_name: Some(resource_name),
+            application_id: None,
         }
     }
 
@@ -447,6 +499,37 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
+        }
+    }
+
+    pub fn application_deleted(application_id: Uuid, account_id: Uuid) -> Self {
+        Self {
+            event_type: RegistryEventType::ApplicationDeleted,
+            environment_id: None,
+            deployment_revision_id: None,
+            current_deployment_revision_id: None,
+            account_id: Some(account_id),
+            grantee_account_id: None,
+            domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
+            application_id: Some(application_id),
+        }
+    }
+
+    pub fn environment_deleted(environment_id: Uuid) -> Self {
+        Self {
+            event_type: RegistryEventType::EnvironmentDeleted,
+            environment_id: Some(environment_id),
+            deployment_revision_id: None,
+            current_deployment_revision_id: None,
+            account_id: None,
+            grantee_account_id: None,
+            domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
+            application_id: None,
         }
     }
 }
@@ -501,7 +584,8 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
                     SELECT event_id, event_type, environment_id,
                            deployment_revision_id, current_deployment_revision_id, account_id,
                            grantee_account_id, domains,
-                           resource_definition_id, resource_name
+                           resource_definition_id, resource_name,
+                           application_id
                     FROM registry_change_events
                     WHERE event_id > $1
                     ORDER BY event_id ASC
@@ -532,6 +616,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
                     .try_get("resource_definition_id")
                     .map_err(RepoError::from)?,
                 resource_name: row.try_get("resource_name").map_err(RepoError::from)?,
+                application_id: row.try_get("application_id").map_err(RepoError::from)?,
             };
 
             if let Some(event) = try_map_registry_change_event_row(parsed_row)? {
@@ -591,7 +676,8 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                     SELECT event_id, event_type, environment_id,
                            deployment_revision_id, current_deployment_revision_id, account_id,
                            grantee_account_id, domains,
-                           resource_definition_id, resource_name
+                           resource_definition_id, resource_name,
+                           application_id
                     FROM registry_change_events
                     WHERE event_id > $1
                     ORDER BY event_id ASC
@@ -628,6 +714,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                     .try_get("resource_definition_id")
                     .map_err(RepoError::from)?,
                 resource_name: row.try_get("resource_name").map_err(RepoError::from)?,
+                application_id: row.try_get("application_id").map_err(RepoError::from)?,
             };
 
             if let Some(event) = try_map_registry_change_event_row(parsed_row)? {
@@ -703,8 +790,9 @@ impl DbRegistryChangeRepo<PostgresPool> {
                     INSERT INTO registry_change_events
                         (event_type, environment_id, deployment_revision_id, current_deployment_revision_id,
                          account_id, grantee_account_id, domains,
-                         resource_definition_id, resource_name)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9)
+                         resource_definition_id, resource_name,
+                         application_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9, $10)
                     RETURNING event_id
                 "#})
                 .bind(event_type)
@@ -715,7 +803,8 @@ impl DbRegistryChangeRepo<PostgresPool> {
                 .bind(event.grantee_account_id)
                 .bind(domains)
                 .bind(event.resource_definition_id)
-                .bind(&event.resource_name),
+                .bind(&event.resource_name)
+                .bind(event.application_id),
             )
             .await?;
 
@@ -747,8 +836,9 @@ impl DbRegistryChangeRepo<SqlitePool> {
                     INSERT INTO registry_change_events
                         (event_type, environment_id, deployment_revision_id, current_deployment_revision_id,
                          account_id, grantee_account_id, domains,
-                         resource_definition_id, resource_name)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                         resource_definition_id, resource_name,
+                         application_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     RETURNING event_id
                 "#})
                 .bind(event_type)
@@ -759,7 +849,8 @@ impl DbRegistryChangeRepo<SqlitePool> {
                 .bind(event.grantee_account_id)
                 .bind(&domains_json)
                 .bind(event.resource_definition_id)
-                .bind(&event.resource_name),
+                .bind(&event.resource_name)
+                .bind(event.application_id),
             )
             .await?;
 
@@ -781,6 +872,7 @@ mod tests {
         let account_id = Uuid::new_v4();
         let grantee_account_id = Uuid::new_v4();
         let resource_definition_id = Uuid::new_v4();
+        let application_id = Uuid::new_v4();
 
         let cases = vec![
             RegistryChangeEventRow {
@@ -794,6 +886,7 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -806,6 +899,7 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -818,6 +912,7 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -830,6 +925,7 @@ mod tests {
                 domains: vec!["example.com".to_string()],
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -842,6 +938,7 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -854,6 +951,7 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -866,6 +964,7 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: Some(resource_definition_id),
                 resource_name: Some("res-name".to_string()),
+                application_id: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -878,6 +977,33 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
+            },
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::ApplicationDeleted,
+                environment_id: None,
+                deployment_revision_id: None,
+                current_deployment_revision_id: None,
+                account_id: Some(account_id),
+                grantee_account_id: None,
+                domains: Vec::new(),
+                resource_definition_id: None,
+                resource_name: None,
+                application_id: Some(application_id),
+            },
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::EnvironmentDeleted,
+                environment_id: Some(environment_id),
+                deployment_revision_id: None,
+                current_deployment_revision_id: None,
+                account_id: None,
+                grantee_account_id: None,
+                domains: Vec::new(),
+                resource_definition_id: None,
+                resource_name: None,
+                application_id: None,
             },
         ];
 
@@ -903,6 +1029,7 @@ mod tests {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
         };
 
         let valid_row = RegistryChangeEventRow {
@@ -916,6 +1043,7 @@ mod tests {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
         };
 
         let skipped = try_map_registry_change_event_row(legacy_row).expect("row mapping failed");
@@ -938,6 +1066,7 @@ mod tests {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
         };
 
         let result = try_map_registry_change_event_row(malformed_row);

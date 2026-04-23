@@ -1208,6 +1208,50 @@ fn proto_registry_event_to_model(
                 },
             )
         }
+        Some(Payload::ApplicationDeleted(ad)) => {
+            let application_id = ad
+                .application_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing application_id in ApplicationDeleted",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            let account_id = ad
+                .account_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing account_id in ApplicationDeleted",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::ApplicationDeleted {
+                    event_id,
+                    application_id,
+                    account_id,
+                },
+            )
+        }
+        Some(Payload::EnvironmentDeleted(ed)) => {
+            let environment_id = ed
+                .environment_id
+                .ok_or_else(|| {
+                    RegistryServiceError::internal_client_error(
+                        "Missing environment_id in EnvironmentDeleted",
+                    )
+                })?
+                .try_into()
+                .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            Ok(
+                golem_common::model::agent::RegistryInvalidationEvent::EnvironmentDeleted {
+                    event_id,
+                    environment_id,
+                },
+            )
+        }
         Some(Payload::AgentSecretChanged(rpc)) => {
             let environment_id = rpc
                 .environment_id

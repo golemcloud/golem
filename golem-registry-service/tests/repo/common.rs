@@ -235,7 +235,8 @@ pub async fn test_application_delete(deps: &Deps) {
         ..app.revision.clone()
     };
 
-    deps.application_repo
+    let _ = deps
+        .application_repo
         .delete(deleted_app.clone())
         .await
         .unwrap();

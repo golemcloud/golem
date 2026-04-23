@@ -844,27 +844,12 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 .await?
                 .ok_or(EnvironmentRepoError::ConcurrentModification)?;
 
-                // Emit a DeploymentChanged invalidation event so that worker-service
-                // caches keyed on (app_name, env_name, ...) are forced to re-resolve.
-                // Without this, recreating an application/environment with the same
-                // name would continue to serve stale cached resolutions pointing at
-                // the previous environment's (now-orphaned) component_id.
-                //
-                // We bump the current deployment revision by 1 (or start from 1 if
-                // the environment was never deployed) so that
-                // AgentResolutionCache::advance_latest_revision observes a strictly
-                // larger revision than any cached entry and marks those entries stale.
-                let bumped_current_deployment_revision =
-                    environment_record.current_deployment_revision.unwrap_or(0) + 1;
-                let bumped_deployment_revision = environment_record
-                    .current_deployment_deployment_revision
-                    .unwrap_or(0)
-                    + 1;
-                let change_event = NewRegistryChangeEvent::deployment_changed(
-                    revision.environment_id,
-                    bumped_deployment_revision,
-                    bumped_current_deployment_revision,
-                );
+                // Emit an EnvironmentDeleted invalidation event so worker-service
+                // flushes any cached agent resolution that would otherwise continue
+                // to point at this environment's (now-orphaned) component_id after a
+                // same-name recreation.
+                let change_event =
+                    NewRegistryChangeEvent::environment_deleted(revision.environment_id);
                 DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
                     tx,
                     &change_event,

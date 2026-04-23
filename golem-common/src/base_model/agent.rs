@@ -14,6 +14,7 @@
 
 use crate::base_model::AgentId;
 use crate::base_model::account::AccountId;
+use crate::base_model::application::ApplicationId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use crate::base_model::diff::Hash as DiffHash;
@@ -206,6 +207,22 @@ pub enum RegistryInvalidationEvent {
         event_id: u64,
         environment_id: EnvironmentId,
     },
+    /// An application was deleted. Subscribers should flush any cache entries
+    /// keyed on the application's name so that a subsequent same-name recreation
+    /// resolves through a fresh lookup rather than returning stale identifiers
+    /// for the now-orphaned environments/components.
+    ApplicationDeleted {
+        event_id: u64,
+        application_id: ApplicationId,
+        account_id: AccountId,
+    },
+    /// An environment was deleted. Subscribers should flush any cache entries
+    /// scoped to this environment so that a same-name recreation does not serve
+    /// stale resolutions pointing at the deleted environment's components.
+    EnvironmentDeleted {
+        event_id: u64,
+        environment_id: EnvironmentId,
+    },
 }
 
 impl RegistryInvalidationEvent {
@@ -220,6 +237,8 @@ impl RegistryInvalidationEvent {
             Self::RetryPolicyChanged { event_id, .. } => *event_id,
             Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
             Self::AgentSecretChanged { event_id, .. } => *event_id,
+            Self::ApplicationDeleted { event_id, .. } => *event_id,
+            Self::EnvironmentDeleted { event_id, .. } => *event_id,
         }
     }
 }

@@ -370,6 +370,8 @@ message RegistryInvalidationEvent {
     ResourceDefinitionChangedEvent resource_definition_changed = 8;
     RetryPolicyChangedEvent retry_policy_changed = 9;
     AgentSecretChangedEvent agent_secret_changed = 10;
+    ApplicationDeletedEvent application_deleted = 11;
+    EnvironmentDeletedEvent environment_deleted = 12;
   }
 }
 
@@ -420,5 +422,18 @@ message RetryPolicyChangedEvent {
 
 // Sent when an environment agent secret is created, updated, or deleted.
 message AgentSecretChangedEvent {
+  golem.common.EnvironmentId environment_id = 1;
+}
+
+// Sent when an application is soft-deleted so subscribers can flush any
+// caches keyed on the application's name.
+message ApplicationDeletedEvent {
+  golem.common.ApplicationId application_id = 1;
+  golem.common.AccountId account_id = 2;
+}
+
+// Sent when an environment is soft-deleted so subscribers can flush any
+// caches scoped to the environment.
+message EnvironmentDeletedEvent {
   golem.common.EnvironmentId environment_id = 1;
 }

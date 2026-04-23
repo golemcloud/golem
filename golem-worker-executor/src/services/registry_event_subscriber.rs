@@ -134,6 +134,39 @@ impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
                     .invalidate_environment(*environment_id)
                     .await;
             }
+            RegistryInvalidationEvent::ApplicationDeleted {
+                application_id,
+                account_id,
+                ..
+            } => {
+                debug!(
+                    application_id = %application_id,
+                    account_id = %account_id,
+                    "Received application deleted event, flushing all caches"
+                );
+                // Worker-executor caches are keyed per-environment/component/agent-type,
+                // none of which carry the application_id. Flush all to guarantee no
+                // cached entries for environments under the deleted application
+                // survive into a same-name recreation cycle.
+                self.component_service.invalidate_all().await;
+                self.environment_state_service.invalidate_all().await;
+                self.agent_types_service.invalidate_all().await;
+            }
+            RegistryInvalidationEvent::EnvironmentDeleted { environment_id, .. } => {
+                debug!(
+                    environment_id = %environment_id,
+                    "Received environment deleted event, invalidating environment caches"
+                );
+                self.component_service
+                    .invalidate_latest_deployed_metadata_for_environment(*environment_id)
+                    .await;
+                self.environment_state_service
+                    .invalidate_environment(*environment_id)
+                    .await;
+                self.agent_types_service
+                    .invalidate_environment(*environment_id)
+                    .await;
+            }
         }
     }
 }
