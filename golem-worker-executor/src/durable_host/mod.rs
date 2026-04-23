@@ -955,6 +955,42 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } = &entry
         {
+            // Oplog processor plugin logs are emitted into the server log because
+            // they cannot be easily watched with CLI tools.
+            if self.state.component_metadata.metadata.has_oplog_processor() {
+                let agent_id = &self.owned_agent_id;
+                match level {
+                    LogLevel::Stdout | LogLevel::Debug | LogLevel::Trace => {
+                        tracing::debug!(
+                            plugin_agent = %agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                    LogLevel::Stderr | LogLevel::Info => {
+                        tracing::info!(
+                            plugin_agent = %agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                    LogLevel::Warn => {
+                        tracing::warn!(
+                            plugin_agent = %agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                    LogLevel::Error | LogLevel::Critical => {
+                        tracing::error!(
+                            plugin_agent = %agent_id,
+                            context,
+                            "Plugin: {message}"
+                        );
+                    }
+                }
+            }
+
             match Ctx::LOG_EVENT_EMIT_BEHAVIOUR {
                 LogEventEmitBehaviour::LiveOnly => {
                     // Stdout and stderr writes are persistent and overwritten by sending the data to the event

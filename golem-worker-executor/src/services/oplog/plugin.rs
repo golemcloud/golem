@@ -1117,6 +1117,15 @@ impl ForwardingOplogState {
             None => return,
         };
 
+        tracing::info!(
+            plugin_name = plugin.plugin_name,
+            source_agent = %self.initial_worker_metadata.agent_id,
+            batch_start = %batch_start,
+            batch_end = %batch_end,
+            is_retry,
+            "Oplog processor: flushing batch to plugin"
+        );
+
         let target_agent_id = if let Some(id) = &live.target_agent_id {
             id.clone()
         } else {
@@ -1126,6 +1135,11 @@ impl ForwardingOplogState {
                 .await
             {
                 Ok(id) => {
+                    tracing::info!(
+                        plugin_name = plugin.plugin_name,
+                        target_agent = %id,
+                        "Oplog processor: resolved target plugin worker"
+                    );
                     self.write_checkpoint(
                         grant_id,
                         &id,
@@ -1227,14 +1241,13 @@ impl ForwardingOplogState {
             .await
         {
             Ok(()) => {
-                tracing::warn!(
-                    source_worker = %metadata.agent_id,
-                    plugin = %grant_id,
-                    target_worker = %target_agent_id,
-                    batch_start = batch_start.as_u64(),
-                    batch_end = batch_end.as_u64(),
-                    is_retry,
-                    "Investigation: source worker enqueued oplog processor batch"
+                tracing::info!(
+                    plugin_name = plugin.plugin_name,
+                    source_agent = %metadata.agent_id,
+                    target_agent = %target_agent_id,
+                    batch_start = %batch_start,
+                    batch_end = %batch_end,
+                    "Oplog processor: batch enqueued successfully"
                 );
                 // Enqueue succeeded — immediately confirm
                 self.write_checkpoint(

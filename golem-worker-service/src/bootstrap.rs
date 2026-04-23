@@ -22,7 +22,7 @@ use crate::custom_api::oidc::session_store::{RedisSessionStore, SessionStore, Sq
 use crate::custom_api::oidc::{DefaultIdentityProvider, IdentityProvider};
 use crate::custom_api::request_handler::RequestHandler;
 use crate::custom_api::route_resolver::RouteResolver;
-use crate::custom_api::webhoooks::WebhookCallbackHandler;
+use crate::custom_api::webhooks::WebhookCallbackHandler;
 use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::{AuthService, RemoteAuthService};
