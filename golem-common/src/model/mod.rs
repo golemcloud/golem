@@ -767,6 +767,12 @@ impl Default for AgentStatusRecord {
     }
 }
 
+impl AgentStatusRecord {
+    pub fn has_pending_work(&self) -> bool {
+        !self.pending_invocations.is_empty() || !self.pending_updates.is_empty()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub struct FailedUpdateRecord {
