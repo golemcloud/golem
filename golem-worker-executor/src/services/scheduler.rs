@@ -15,7 +15,7 @@
 use crate::metrics::oplog::record_scheduled_archive;
 use crate::metrics::promises::record_scheduled_promise_completed;
 use crate::services::HasOplog;
-use crate::services::oplog::{MultiLayerOplog, Oplog, OplogService};
+use crate::services::oplog::{EphemeralOplog, MultiLayerOplog, Oplog, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
@@ -289,7 +289,12 @@ impl SchedulerServiceDefault {
                             match self.worker_access.open_oplog(&owned_agent_id).await {
                                 Ok(oplog) => {
                                     let start = Instant::now();
-                                    if let Some(more) = MultiLayerOplog::try_archive(&oplog).await {
+                                    let archive_result =
+                                        match MultiLayerOplog::try_archive(&oplog).await {
+                                            Some(r) => Some(r),
+                                            None => EphemeralOplog::try_archive(&oplog).await,
+                                        };
+                                    if let Some(more) = archive_result {
                                         record_scheduled_archive(start.elapsed(), more);
                                         if more {
                                             self.schedule(
