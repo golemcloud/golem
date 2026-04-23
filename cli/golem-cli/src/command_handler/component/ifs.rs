@@ -69,7 +69,7 @@ fn source_key(source: &Url) -> String {
 fn archive_file_name_for_source(source: &Url) -> String {
     let file_name = source
         .path_segments()
-        .and_then(|segments| segments.filter(|segment| !segment.is_empty()).next_back())
+        .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
         .unwrap_or("file");
 
     let sanitized = file_name
