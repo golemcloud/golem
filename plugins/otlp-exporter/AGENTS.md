@@ -55,6 +55,8 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-file-io-rust` | Reading and writing files from agent code |
 | `golem-add-llm-rust` | Adding LLM and AI capabilities using golem-ai libraries |
 | `golem-make-http-request-rust` | Making outgoing HTTP requests from agent code using wstd |
+| `golem-logging-rust` | Adding logging to a Rust Golem agent using the `log` crate |
+| `golem-enable-otlp-rust` | Enabling the OpenTelemetry (OTLP) plugin for a Rust agent — exporting traces, logs, and metrics to an OTLP collector, adding custom spans with the invocation context API |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
 | `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
 | `golem-list-and-filter-agents` | Listing and querying agents with filters |
@@ -71,7 +73,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 
 ## Overview
 
-This is a **Golem Application** — a distributed computing project targeting WebAssembly (WASM). Components are compiled to `wasm32-wasip1` and executed on the Golem platform, which provides durable execution, persistent state, and agent-to-agent communication.
+This is a **Golem Application** — a distributed computing project targeting WebAssembly (WASM). Components are compiled to `wasm32-wasip2` and executed on the Golem platform, which provides durable execution, persistent state, and agent-to-agent communication.
 
 Key concepts:
 - **Component**: A WASM module compiled from Rust, defining one or more agent types
@@ -117,56 +119,8 @@ golem-temp/                       # Build artifacts (gitignored)
 
 ## Prerequisites
 
-- Rust with `wasm32-wasip1` target: `rustup target add wasm32-wasip1`
+- Rust with `wasm32-wasip2` target: `rustup target add wasm32-wasip2`
 - Golem CLI (`golem`): download from https://github.com/golemcloud/golem/releases
-
-## Building
-
-```shell
-golem build                      # Build all components
-golem component build my:comp    # Build a specific component
-golem build --build-profile release  # Build with release profile
-```
-
-The build compiles Rust to WASM, generates an agent wrapper, composes them, and links dependencies. Output goes to `golem-temp/`.
-
-Do NOT run `cargo build` directly — always use `golem build` which orchestrates the full pipeline including WIT generation and WASM component linking.
-
-## Deploying and Running
-
-```shell
-golem server run                 # Start local Golem server
-golem deploy                     # Deploy all components to the configured server
-golem deploy --try-update-agents # Deploy and update running agents
-golem deploy --reset             # Deploy and delete all previously created agents
-```
-
-**WARNING**: `golem server run --clean` deletes all existing state (agents, data, deployed components). Never run it without explicitly asking the user for confirmation first.
-
-After starting the server, components must be deployed with `golem deploy` before agents can be invoked. When iterating on code changes, use `golem deploy --reset` to delete all previously created agents — without this, existing agent instances continue running with the old component version. This is by design: Golem updates do not break existing running instances.
-
-To try out agents after deploying, load the `golem-invoke-agent-rust` skill for invoking agent methods from the CLI, or write a script and run it with `golem repl` for interactive testing. The Golem server must be running in a separate process before invoking or testing agents.
-
-## Testing Agents with the REPL
-
-```shell
-golem repl                       # Interactive scripting REPL
-```
-
-## Defining Agents
-
-Load the `golem-add-agent-rust` skill for defining agents and custom types. See also the skill table above for durability configuration, annotations, RPC, atomic blocks, and transactions.
-
-## Application Manifest (golem.yaml)
-
-- Root `golem.yaml`: app name, includes, witDeps, environments, and `components` entries
-- `golem-temp/common/rust/golem.yaml`: generated on-demand build templates (debug/release profiles) shared by all Rust components
-
-Key fields in each `components.<name>` entry:
-- `dir`: component directory (`"."` for single-component apps)
-- `templates`: references a template from common golem.yaml (e.g., `rust`)
-- `env`: environment variables passed to agents at runtime
-- `dependencies`: WASM dependencies (e.g., LLM providers from golem-ai)
 
 ## Available Libraries
 
@@ -179,13 +133,9 @@ From your component (or shared workspace) `Cargo.toml`:
 
 To enable AI features, add the relevant golem-ai provider crate as a dependency (e.g., `golem-ai-llm-openai`). 
 
-## Debugging
-
-Load the `golem-get-agent-metadata` skill for checking agent state. Load the `golem-view-agent-logs` skill for streaming agent stdout, stderr, and log channels. Load the `golem-debug-agent-history` skill for querying the operation log. Load the `golem-undo-agent-state` skill for reverting invocations. To invoke agent methods, load the `golem-invoke-agent-rust` skill.
-
 ## Key Constraints
 
-- Target is `wasm32-wasip1` — no native system calls, threads, or platform-specific code
+- Target is `wasm32-wasip2` — no native system calls, threads, or platform-specific code
 - Crate type must be `cdylib` for component crates
 - All agent method parameters passed by value (no references)
 - All custom types need `Schema` derive (plus `IntoValue` and `FromValueAndType`, which `Schema` implies)
@@ -196,7 +146,7 @@ Load the `golem-get-agent-metadata` skill for checking agent state. Load the `go
 
 ```shell
 cargo fmt                            # Format code
-cargo clippy --target wasm32-wasip1  # Lint (must target wasm32-wasip1)
+cargo clippy --target wasm32-wasip2  # Lint (must target wasm32-wasip2)
 ```
 
 ## Documentation
