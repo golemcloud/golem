@@ -7,34 +7,119 @@ steps:
       build: true
 
   - id: "add-config-agent"
-    prompt: >
-      In the test-app project, add a new durable agent type called `AppConfigAgent`
-      identified by a single constructor parameter for the instance name.
+    prompt:
+      rust: >
+        In the test-app project, add a new durable agent type called `AppConfigAgent`
+        identified by a single constructor parameter for the instance name.
 
-      AppConfigAgent must accept typed configuration with the following structure:
-      - `appName` (string)
-      - `maxRetries` (a 32-bit signed integer)
-      - `server` — a nested record/object with two fields:
-        - `host` (string)
-        - `port` (a 32-bit signed integer)
+        AppConfigAgent must accept typed configuration with the following structure:
+        - `appName` (string)
+        - `maxRetries` (a 32-bit signed integer)
+        - `server` — a nested record/object with two fields:
+          - `host` (string)
+          - `port` (a 32-bit signed integer)
 
-      Define configuration types/structs for both the top-level config and the
-      nested `server` record, and use the agent config mechanism (Config<T>) to
-      receive them in the constructor.
+        Define configuration types/structs for both the top-level config and the
+        nested `server` record, and use the agent config mechanism (Config<T>) to
+        receive them in the constructor.
 
-      Expose a method called `get-settings` that returns a record/object with four
-      fields: `app-name` (string), `max-retries` (s32/number/Int), `server-host`
-      (string), and `server-port` (s32/number/Int). The values must come from the
-      agent's typed configuration, reading through the nested `server` record.
+        Expose a method called `get_settings` that returns a record/object with four
+        fields: `app_name` (string), `max_retries` (s32/number/Int), `server_host`
+        (string), and `server_port` (s32/number/Int). The values must come from the
+        agent's typed configuration, reading through the nested `server` record.
 
-      In `golem.yaml`, set default configuration values under the `agents` section for
-      `AppConfigAgent`:
-      - `appName` set to `"MyApp"`
-      - `maxRetries` set to `3`
-      - `server.host` set to `"localhost"`
-      - `server.port` set to `8080`
+        In `golem.yaml`, set default configuration values under the `agents` section for
+        `AppConfigAgent`:
+        - `appName` set to `"MyApp"`
+        - `maxRetries` set to `3`
+        - `server.host` set to `"localhost"`
+        - `server.port` set to `8080`
 
-      Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully.
+      ts: >
+        In the test-app project, add a new durable agent type called `AppConfigAgent`
+        identified by a single constructor parameter for the instance name.
+
+        AppConfigAgent must accept typed configuration with the following structure:
+        - `appName` (string)
+        - `maxRetries` (a 32-bit signed integer)
+        - `server` — a nested record/object with two fields:
+          - `host` (string)
+          - `port` (a 32-bit signed integer)
+
+        Define configuration types/structs for both the top-level config and the
+        nested `server` record, and use the agent config mechanism (Config<T>) to
+        receive them in the constructor.
+
+        Expose a method called `getSettings` that returns a record/object with four
+        fields: `appName` (string), `maxRetries` (s32/number/Int), `serverHost`
+        (string), and `serverPort` (s32/number/Int). The values must come from the
+        agent's typed configuration, reading through the nested `server` record.
+
+        In `golem.yaml`, set default configuration values under the `agents` section for
+        `AppConfigAgent`:
+        - `appName` set to `"MyApp"`
+        - `maxRetries` set to `3`
+        - `server.host` set to `"localhost"`
+        - `server.port` set to `8080`
+
+        Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, add a new durable agent type called `AppConfigAgent`
+        identified by a single constructor parameter for the instance name.
+
+        AppConfigAgent must accept typed configuration with the following structure:
+        - `appName` (string)
+        - `maxRetries` (a 32-bit signed integer)
+        - `server` — a nested record/object with two fields:
+          - `host` (string)
+          - `port` (a 32-bit signed integer)
+
+        Define configuration types/structs for both the top-level config and the
+        nested `server` record, and use the agent config mechanism (Config<T>) to
+        receive them in the constructor.
+
+        Expose a method called `getSettings` that returns a record/object with four
+        fields: `appName` (string), `maxRetries` (s32/number/Int), `serverHost`
+        (string), and `serverPort` (s32/number/Int). The values must come from the
+        agent's typed configuration, reading through the nested `server` record.
+
+        In `golem.yaml`, set default configuration values under the `agents` section for
+        `AppConfigAgent`:
+        - `appName` set to `"MyApp"`
+        - `maxRetries` set to `3`
+        - `server.host` set to `"localhost"`
+        - `server.port` set to `8080`
+
+        Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, add a new durable agent type called `AppConfigAgent`
+        identified by a single constructor parameter for the instance name.
+
+        AppConfigAgent must accept typed configuration with the following structure:
+        - `appName` (string)
+        - `maxRetries` (a 32-bit signed integer)
+        - `server` — a nested record/object with two fields:
+          - `host` (string)
+          - `port` (a 32-bit signed integer)
+
+        Define configuration types/structs for both the top-level config and the
+        nested `server` record, and use the agent config mechanism (Config<T>) to
+        receive them in the constructor.
+
+        Expose a method called `get_settings` that returns a record/object with four
+        fields: `app_name` (string), `max_retries` (s32/number/Int), `server_host`
+        (string), and `server_port` (s32/number/Int). The values must come from the
+        agent's typed configuration, reading through the nested `server` record.
+
+        In `golem.yaml`, set default configuration values under the `agents` section for
+        `AppConfigAgent`:
+        - `appName` set to `"MyApp"`
+        - `maxRetries` set to `3`
+        - `server.host` set to `"localhost"`
+        - `server.port` set to `8080`
+
+        Make sure the project builds and deploys successfully.
     expectedSkills:
       rust:
         - "golem-add-config-rust"

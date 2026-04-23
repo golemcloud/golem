@@ -34,6 +34,9 @@ class StubDriver implements AgentDriver {
   getActivatedSkills(): string[] | undefined {
     return undefined;
   }
+  getDefaultIdleTimeoutSeconds(): number | undefined {
+    return undefined;
+  }
   resetActivatedSkills(): void {
     /* no-op */
   }

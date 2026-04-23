@@ -1,24 +1,77 @@
 ---
 name: golem-add-ignite-scala
-description: "Explaining the current Apache Ignite limitation in the Scala SDK. Use when the user asks to connect to Ignite from Scala agent code or use golem:rdbms/ignite2 from the Scala SDK."
+description: "Using Apache Ignite from a Scala Golem agent through golem.host.Rdbms.Ignite. Use when the user asks to connect to Apache Ignite 2, run SQL over Ignite, or use Ignite from Scala agent code."
 ---
 
-# Apache Ignite in the Scala SDK
+# Using Apache Ignite from a Scala Agent
 
-The Scala SDK does not currently expose `golem:rdbms/ignite2@1.5.0` in generated Scala applications.
+The Scala SDK already wraps `golem:rdbms/ignite2@1.5.0` in `golem.host.Rdbms`.
 
-## Current Limitation
+## Imports
 
-- `sdks/scala/wit/main.wit` imports PostgreSQL and MySQL, but not Ignite.
-- `golem.host.Rdbms` currently provides Scala wrappers only for Postgres and MySQL.
-- Because of that, a normal Scala Golem app cannot use Ignite today just by adding source code.
+```scala
+import golem.host.Rdbms
+import golem.host.Rdbms._
+```
 
-## If the User Needs Ignite Anyway
+## Open a Connection
 
-The SDK has to be extended first:
+Ignite uses thin-client URLs like `ignite://host:10800`.
 
-1. Add `import golem:rdbms/ignite2@1.5.0;` to `sdks/scala/wit/main.wit`.
-2. Regenerate the Scala guest runtime with `sdks/scala/scripts/generate-agent-guest-wasm.sh`.
-3. Add Scala.js facade types and `golem.host.Rdbms.Ignite` wrappers alongside the existing Postgres and MySQL wrappers.
+```scala
+Rdbms.Ignite.open("ignite://127.0.0.1:10800")
+```
 
-Until that SDK work is done, steer Scala users toward PostgreSQL or MySQL instead of attempting to generate broken Ignite code.
+`open`, `query`, `execute`, `commit`, and `rollback` all return `Either[DbError, T]` instead of throwing.
+
+If the user asks for a method that returns a plain `String`, keep the public method signature as
+`String` and handle host errors inside the method (e.g. with `.fold(e => throw new RuntimeException(e.toString), identity)`)
+rather than changing the signature to `Either[DbError, _]`.
+
+## Query Data
+
+Ignite placeholders use `?`.
+
+```scala
+val message =
+  for {
+    conn   <- Rdbms.Ignite.open("ignite://127.0.0.1:10800")
+    result <- conn.query("SELECT ?", List(IgniteDbValue.DbString("hello")))
+    row    <- result.rows.headOption.toRight(DbError.Other("query returned no rows"))
+    value  <- row.values.headOption.toRight(DbError.Other("query returned no columns"))
+    text   <- value match {
+                case IgniteDbValue.DbString(value) => Right(value)
+                case other                         => Left(DbError.Other(s"Unexpected Ignite value: $other"))
+              }
+  } yield text
+```
+
+## Execute Statements
+
+```scala
+conn.execute(
+  """CREATE TABLE IF NOT EXISTS notes (
+    |    id INT PRIMARY KEY,
+    |    body VARCHAR
+    |) WITH "CACHE_NAME=notes"""".stripMargin,
+  List.empty,
+)
+```
+
+When creating Ignite tables through SQL, include `WITH "CACHE_NAME=..."`.
+
+## Transactions
+
+```scala
+for {
+  conn <- Rdbms.Ignite.open(url)
+  tx   <- conn.beginTransaction()
+  _    <- tx.execute(
+            "INSERT INTO notes (id, body) VALUES (?, ?)",
+            List(IgniteDbValue.DbInt(1), IgniteDbValue.DbString("hello")),
+          )
+  _    <- tx.commit()
+} yield ()
+```
+
+If you need transactional tables, create them with `ATOMICITY=TRANSACTIONAL` in the table options.

@@ -7,27 +7,91 @@ steps:
       build: true
 
   - id: "add-agent-with-files"
-    prompt: >
-      In the test-app project, do the following:
+    prompt:
+      rust: >
+        In the test-app project, do the following:
 
-      1. Create a file at `test-app/data/greeting.txt` containing exactly:
-         Hello from Golem!
+        1. Create a file at `test-app/data/greeting.txt` containing exactly:
+           Hello from Golem!
 
-      2. Add a new durable agent type called `FileReaderAgent` identified by a single
-         constructor parameter for the instance name.
+        2. Add a new durable agent type called `FileReaderAgent` identified by a single
+           constructor parameter for the instance name.
 
-      3. FileReaderAgent must expose a method called `read-greeting` that takes no arguments,
-         reads the file at `/data/greeting.txt` from the filesystem, and returns its content
-         as a string (trimmed of any trailing whitespace/newline).
+        3. FileReaderAgent must expose a method called `read_greeting` that takes no arguments,
+           reads the file at `/data/greeting.txt` from the filesystem, and returns its content
+           as a string (trimmed of any trailing whitespace/newline).
 
-      4. In `golem.yaml`, configure the `files` section in the top-level `agents` map under
-         `FileReaderAgent` (note: `agents` is a top-level key in `golem.yaml`, not nested
-         under `components`) to provision the local file:
-         - sourcePath: data/greeting.txt
-         - targetPath: /data/greeting.txt
-         - permissions: read-only
+        4. In `golem.yaml`, configure the `files` section in the top-level `agents` map under
+           `FileReaderAgent` (note: `agents` is a top-level key in `golem.yaml`, not nested
+           under `components`) to provision the local file:
+           - sourcePath: data/greeting.txt
+           - targetPath: /data/greeting.txt
+           - permissions: read-only
 
-      Make sure the project builds and deploys successfully.
+        Make sure the project builds and deploys successfully.
+      ts: >
+        In the test-app project, do the following:
+
+        1. Create a file at `test-app/data/greeting.txt` containing exactly:
+           Hello from Golem!
+
+        2. Add a new durable agent type called `FileReaderAgent` identified by a single
+           constructor parameter for the instance name.
+
+        3. FileReaderAgent must expose a method called `readGreeting` that takes no arguments,
+           reads the file at `/data/greeting.txt` from the filesystem, and returns its content
+           as a string (trimmed of any trailing whitespace/newline).
+
+        4. In `golem.yaml`, configure the `files` section in the top-level `agents` map under
+           `FileReaderAgent` (note: `agents` is a top-level key in `golem.yaml`, not nested
+           under `components`) to provision the local file:
+           - sourcePath: data/greeting.txt
+           - targetPath: /data/greeting.txt
+           - permissions: read-only
+
+        Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, do the following:
+
+        1. Create a file at `test-app/data/greeting.txt` containing exactly:
+           Hello from Golem!
+
+        2. Add a new durable agent type called `FileReaderAgent` identified by a single
+           constructor parameter for the instance name.
+
+        3. FileReaderAgent must expose a method called `readGreeting` that takes no arguments,
+           reads the file at `/data/greeting.txt` from the filesystem, and returns its content
+           as a string (trimmed of any trailing whitespace/newline).
+
+        4. In `golem.yaml`, configure the `files` section in the top-level `agents` map under
+           `FileReaderAgent` (note: `agents` is a top-level key in `golem.yaml`, not nested
+           under `components`) to provision the local file:
+           - sourcePath: data/greeting.txt
+           - targetPath: /data/greeting.txt
+           - permissions: read-only
+
+        Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, do the following:
+
+        1. Create a file at `test-app/data/greeting.txt` containing exactly:
+           Hello from Golem!
+
+        2. Add a new durable agent type called `FileReaderAgent` identified by a single
+           constructor parameter for the instance name.
+
+        3. FileReaderAgent must expose a method called `read_greeting` that takes no arguments,
+           reads the file at `/data/greeting.txt` from the filesystem, and returns its content
+           as a string (trimmed of any trailing whitespace/newline).
+
+        4. In `golem.yaml`, configure the `files` section in the top-level `agents` map under
+           `FileReaderAgent` (note: `agents` is a top-level key in `golem.yaml`, not nested
+           under `components`) to provision the local file:
+           - sourcePath: data/greeting.txt
+           - targetPath: /data/greeting.txt
+           - permissions: read-only
+
+        Make sure the project builds and deploys successfully.
     expectedSkills:
       - "golem-add-initial-files"
     verify:
