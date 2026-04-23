@@ -25,6 +25,53 @@ pub struct PluginNameAndVersion {
     pub version: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum PluginSource {
+    Own,
+    Builtin,
+    Shared,
+}
+
+impl std::fmt::Display for PluginSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PluginSource::Own => write!(f, "own"),
+            PluginSource::Builtin => write!(f, "builtin"),
+            PluginSource::Shared => write!(f, "shared"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginListEntry {
+    pub plugin: PluginRegistrationDto,
+    pub source: PluginSource,
+}
+
+impl TextView for Vec<PluginListEntry> {
+    fn log(&self) {
+        let mut table = new_table(vec![
+            Column::new("Plugin name").fixed(),
+            Column::new("Plugin version").fixed(),
+            Column::new("Source").fixed(),
+            Column::new("Type").fixed(),
+            Column::new("Description"),
+            Column::new("Homepage"),
+        ]);
+        for entry in self {
+            table.add_row(vec![
+                entry.plugin.name.clone(),
+                entry.plugin.version.clone(),
+                entry.source.to_string(),
+                entry.plugin.typ_as_str().to_string(),
+                entry.plugin.description.clone(),
+                entry.plugin.homepage.clone(),
+            ]);
+        }
+        log_table(table);
+    }
+}
+
 impl TextView for Vec<PluginRegistrationDto> {
     fn log(&self) {
         let mut table = new_table(vec![

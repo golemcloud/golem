@@ -16,7 +16,6 @@ use crate::components::redis::Redis;
 use crate::config::TestDependencies;
 use crate::dsl::{
     EnvironmentOptions, TestDsl, TestDslExtended, WorkerLogEventStream, build_ifs_archive,
-    rename_component_if_needed,
 };
 use crate::model::IFSEntry;
 use anyhow::{Context, anyhow};
@@ -55,7 +54,6 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
-use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -207,7 +205,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         environment_id: EnvironmentId,
         name: &str,
         unique: bool,
-        unverified: bool,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
@@ -218,17 +215,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             ComponentName(format!("{name}---{uuid}"))
         } else {
             ComponentName(name.to_string())
-        };
-
-        let source_path = if !unverified {
-            rename_component_if_needed(
-                self.deps.borrow().temp_directory(),
-                &source_path,
-                &component_name.0,
-            )
-            .expect("Failed to verify and change component metadata")
-        } else {
-            source_path
         };
 
         let client = self.deps.registry_service().client(&self.token).await;
@@ -301,14 +287,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         let updated_wasm = if let Some(wasm_name) = wasm_name {
             let source_path: PathBuf = component_directory.join(format!("{wasm_name}.wasm"));
-
-            let component = client.get_component(&component_id.0).await?;
-
-            let source_path = rename_component_if_needed(
-                self.deps.borrow().temp_directory(),
-                &source_path,
-                &component.component_name.0,
-            )?;
 
             let agent_types = extract_agent_types(&source_path, false, true).await?;
 

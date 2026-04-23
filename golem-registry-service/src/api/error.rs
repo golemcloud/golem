@@ -345,11 +345,6 @@ impl From<ComponentError> for ApiError {
                 code: api::error_code::INVALID_FILE_PATH.to_string(),
                 cause: None,
             })),
-            ComponentError::InvalidComponentName { .. } => Self::BadRequest(Json(ErrorsBody {
-                errors: vec![error],
-                code: api::error_code::INVALID_COMPONENT_NAME.to_string(),
-                cause: None,
-            })),
             ComponentError::InvalidOplogProcessorPlugin => Self::BadRequest(Json(ErrorsBody {
                 errors: vec![error],
                 code: api::error_code::INVALID_OPLOG_PROCESSOR_PLUGIN.to_string(),

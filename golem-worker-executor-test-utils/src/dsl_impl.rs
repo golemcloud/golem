@@ -54,7 +54,7 @@ use golem_service_base::model::ComponentFileSystemNode;
 use golem_service_base::model::component::Component;
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
-use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream, rename_component_if_needed};
+use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::ValueAndType;
 use golem_wasm::json::ValueAndTypeJsonExtensions;
@@ -109,7 +109,6 @@ impl TestDsl for TestWorkerExecutor {
         environment_id: EnvironmentId,
         name: &str,
         unique: bool,
-        unverified: bool,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
@@ -133,29 +132,7 @@ impl TestDsl for TestWorkerExecutor {
             ComponentName(name.to_string())
         };
 
-        let source_path = if !unverified {
-            rename_component_if_needed(
-                self.deps.component_temp_directory.path(),
-                &source_path,
-                &component_name.0,
-            )
-            .expect("Failed to verify and change component metadata")
-        } else {
-            source_path
-        };
-
-        if unverified
-            && agent_type_provision_configs
-                .values()
-                .any(|c| !c.config.is_empty())
-        {
-            return Err(anyhow!(
-                "Agent config isn't supported in unverified worker executor tests"
-            ));
-        }
-
-        let mut file_map: std::collections::HashMap<ArchiveFilePath, (AgentFileContentHash, u64)> =
-            std::collections::HashMap::new();
+        let mut file_map: HashMap<ArchiveFilePath, (AgentFileContentHash, u64)> = HashMap::new();
         for ifs_entry in &files_for_archive {
             let full_source_path = component_directory.join(&ifs_entry.source_path);
             let data = tokio::fs::read(&full_source_path).await?;
@@ -175,116 +152,85 @@ impl TestDsl for TestWorkerExecutor {
             );
         }
 
+        let analyzed_component = self
+            .deps
+            .component_writer
+            .analyze_component_metadata(&source_path, Some(original_source_hash))
+            .await?;
+        let component_for_parsing = analyzed_component_to_component(
+            &analyzed_component,
+            component_name.clone(),
+            environment_id,
+            self.context.application_id,
+            self.context.account_id,
+        );
+
         let stored_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig> =
-            if unverified {
-                agent_type_provision_configs
-                    .into_iter()
-                    .map(|(agent_type_name, creation)| {
-                        let files: Vec<InitialAgentFile> = creation
-                            .files
-                            .iter()
-                            .filter_map(|(archive_path, options)| {
-                                file_map
-                                    .get(archive_path)
-                                    .map(|(hash, size)| InitialAgentFile {
-                                        content_hash: *hash,
-                                        path: options.target_path.clone(),
-                                        permissions: options.permissions,
-                                        size: *size,
-                                    })
-                            })
-                            .collect();
-                        (
-                            agent_type_name,
-                            AgentTypeProvisionConfig {
-                                env: creation.env,
-                                files,
-                                config: vec![],
-                                plugins: vec![],
-                            },
-                        )
-                    })
-                    .collect()
-            } else {
-                let analyzed_component = self
-                    .deps
+            agent_type_provision_configs
+                .into_iter()
+                .map(|(agent_type_name, creation)| -> anyhow::Result<_> {
+                    let files: Vec<InitialAgentFile> = creation
+                        .files
+                        .iter()
+                        .filter_map(|(archive_path, options)| {
+                            file_map
+                                .get(archive_path)
+                                .map(|(hash, size)| InitialAgentFile {
+                                    content_hash: *hash,
+                                    path: options.target_path.clone(),
+                                    permissions: options.permissions,
+                                    size: *size,
+                                })
+                        })
+                        .collect();
+                    let config = parse_provision_config(
+                        &component_for_parsing,
+                        &agent_type_name,
+                        creation.config,
+                    )?;
+                    Ok((
+                        agent_type_name,
+                        AgentTypeProvisionConfig {
+                            env: creation.env,
+                            files,
+                            config,
+                            plugins: vec![],
+                        },
+                    ))
+                })
+                .collect::<anyhow::Result<_>>()?;
+
+        let component = {
+            if unique {
+                self.deps
                     .component_writer
-                    .analyze_component_metadata(&source_path, Some(original_source_hash))
-                    .await?;
-                let component_for_parsing = analyzed_component_to_component(
-                    &analyzed_component,
-                    component_name.clone(),
-                    environment_id,
-                    self.context.application_id,
-                    self.context.account_id,
-                );
-
-                agent_type_provision_configs
-                    .into_iter()
-                    .map(|(agent_type_name, creation)| -> anyhow::Result<_> {
-                        let files: Vec<InitialAgentFile> = creation
-                            .files
-                            .iter()
-                            .filter_map(|(archive_path, options)| {
-                                file_map
-                                    .get(archive_path)
-                                    .map(|(hash, size)| InitialAgentFile {
-                                        content_hash: *hash,
-                                        path: options.target_path.clone(),
-                                        permissions: options.permissions,
-                                        size: *size,
-                                    })
-                            })
-                            .collect();
-                        let config = parse_provision_config(
-                            &component_for_parsing,
-                            &agent_type_name,
-                            creation.config,
-                        )?;
-                        Ok((
-                            agent_type_name,
-                            AgentTypeProvisionConfig {
-                                env: creation.env,
-                                files,
-                                config,
-                                plugins: vec![],
-                            },
-                        ))
-                    })
-                    .collect::<anyhow::Result<_>>()?
-            };
-
-        let component = if unique {
-            self.deps
-                .component_writer
-                .add_component(
-                    &source_path,
-                    &component_name.0,
-                    stored_provision_configs,
-                    unverified,
-                    environment_id,
-                    self.context.application_id,
-                    self.context.account_id,
-                    HashSet::new(),
-                    Some(original_source_hash),
-                )
-                .await
-                .expect("Failed to add component")
-        } else {
-            self.deps
-                .component_writer
-                .get_or_add_component(
-                    &source_path,
-                    &component_name.0,
-                    stored_provision_configs,
-                    unverified,
-                    environment_id,
-                    self.context.application_id,
-                    self.context.account_id,
-                    HashSet::new(),
-                    Some(original_source_hash),
-                )
-                .await
+                    .add_component(
+                        &source_path,
+                        &component_name.0,
+                        stored_provision_configs,
+                        environment_id,
+                        self.context.application_id,
+                        self.context.account_id,
+                        HashSet::new(),
+                        Some(original_source_hash),
+                    )
+                    .await
+                    .expect("Failed to add component")
+            } else {
+                self.deps
+                    .component_writer
+                    .get_or_add_component(
+                        &source_path,
+                        &component_name.0,
+                        stored_provision_configs,
+                        environment_id,
+                        self.context.application_id,
+                        self.context.account_id,
+                        HashSet::new(),
+                        Some(original_source_hash),
+                    )
+                    .await
+            }
         };
 
         Ok(component.into())
@@ -354,11 +300,6 @@ impl TestDsl for TestWorkerExecutor {
         let (source_path, original_source_hash) = if let Some(wasm_name) = wasm_name {
             let source_path = component_dir.join(format!("{wasm_name}.wasm"));
             let original_hash = blake3::hash(&std::fs::read(&source_path)?);
-            let source_path = rename_component_if_needed(
-                self.deps.component_temp_directory.path(),
-                &source_path,
-                &latest_revision.component_name.0,
-            )?;
             (Some(source_path), Some(original_hash))
         } else {
             (None, None)

@@ -29,6 +29,9 @@ type = "Enabled"
 
 [compiled_component_service.config]
 
+[engine]
+enable_fs_cache = false
+
 [grpc]
 port = 9091
 
@@ -140,6 +143,9 @@ without_time = false
 # type = "Disabled"
 # 
 # [compiled_component_service.config]
+# 
+# [engine]
+# enable_fs_cache = false
 # 
 # [grpc]
 # port = 9091

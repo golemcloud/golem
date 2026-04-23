@@ -354,28 +354,36 @@ impl<'a> ComponentStager<'a> {
     fn resolve_plugins_for(
         &self,
         manifest_config: &AgentTypeManifestProvisionConfig,
-    ) -> Vec<PluginInstallation> {
+    ) -> anyhow::Result<Vec<PluginInstallation>> {
         manifest_config
             .plugins
             .iter()
             .enumerate()
-            .map(|(idx, p)| PluginInstallation {
-                environment_plugin_grant_id: self
+            .map(|(idx, p)| {
+                let grant = self
                     .plugin_grants
                     .get(&PluginNameAndVersion {
                         name: p.name.clone(),
                         version: p.version.clone(),
                     })
-                    .unwrap_or_else(|| {
-                        panic!("Plugin grant not found for {}/{}", p.name, p.version)
-                    })
-                    .id,
-                priority: PluginPriority(idx as i32),
-                parameters: p
-                    .parameters
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Plugin {}/{} is not available in this environment. \
+                             Use 'golem plugin list' to see available plugins, \
+                             or grant the plugin to this environment first.",
+                            p.name,
+                            p.version
+                        )
+                    })?;
+                Ok(PluginInstallation {
+                    environment_plugin_grant_id: grant.id,
+                    priority: PluginPriority(idx as i32),
+                    parameters: p
+                        .parameters
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                })
             })
             .collect()
     }
@@ -432,14 +440,14 @@ impl<'a> ComponentStager<'a> {
 
     pub fn agent_type_provision_configs(
         &self,
-    ) -> BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation> {
+    ) -> anyhow::Result<BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>> {
         self.component_deploy_properties
             .agent_type_configs
             .iter()
             .map(|(agent_type_name, manifest_config)| {
-                let resolved_plugins = self.resolve_plugins_for(manifest_config);
+                let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
                 let creation = manifest_config.to_provision_config_creation(resolved_plugins);
-                (agent_type_name.clone(), creation)
+                Ok((agent_type_name.clone(), creation))
             })
             .collect()
     }
@@ -447,16 +455,16 @@ impl<'a> ComponentStager<'a> {
     pub fn agent_type_provision_config_updates(
         &self,
         changed_files: &ChangedComponentFiles,
-    ) -> Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>> {
+    ) -> anyhow::Result<Option<BTreeMap<AgentTypeName, AgentTypeProvisionConfigUpdate>>> {
         let changed = match self.diff.changed_agent_types() {
             None => {
                 // All changed — return updates for all agent types
-                return Some(
+                return Ok(Some(
                     self.component_deploy_properties
                         .agent_type_configs
                         .iter()
                         .map(|(name, manifest_config)| {
-                            let resolved_plugins = self.resolve_plugins_for(manifest_config);
+                            let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
                             let creation =
                                 manifest_config.to_provision_config_creation(resolved_plugins);
                             let files_to_remove = changed_files
@@ -469,7 +477,7 @@ impl<'a> ComponentStager<'a> {
                                 .get(name)
                                 .cloned()
                                 .unwrap_or_default();
-                            (
+                            Ok((
                                 name.clone(),
                                 AgentTypeProvisionConfigUpdate {
                                     env: Some(creation.env),
@@ -484,23 +492,23 @@ impl<'a> ComponentStager<'a> {
                                         .map(PluginInstallationAction::Install)
                                         .collect(),
                                 },
-                            )
+                            ))
                         })
-                        .collect(),
-                );
+                        .collect::<anyhow::Result<_>>()?,
+                ));
             }
-            Some(changed) if changed.is_empty() => return None,
+            Some(changed) if changed.is_empty() => return Ok(None),
             Some(changed) => changed,
         };
 
         // Only update agent types that changed
-        Some(
+        Ok(Some(
             self.component_deploy_properties
                 .agent_type_configs
                 .iter()
                 .filter(|(name, _)| changed.contains(name.0.as_str()))
                 .map(|(name, manifest_config)| {
-                    let resolved_plugins = self.resolve_plugins_for(manifest_config);
+                    let resolved_plugins = self.resolve_plugins_for(manifest_config)?;
                     let creation = manifest_config.to_provision_config_creation(resolved_plugins);
 
                     let plugin_updates: Vec<PluginInstallationAction> = match &self.diff {
@@ -579,7 +587,7 @@ impl<'a> ComponentStager<'a> {
                         .get(name)
                         .cloned()
                         .unwrap_or_default();
-                    (
+                    Ok((
                         name.clone(),
                         AgentTypeProvisionConfigUpdate {
                             env: Some(creation.env),
@@ -590,9 +598,9 @@ impl<'a> ComponentStager<'a> {
                             file_permission_updates,
                             plugin_updates,
                         },
-                    )
+                    ))
                 })
-                .collect(),
-        )
+                .collect::<anyhow::Result<_>>()?,
+        ))
     }
 }
