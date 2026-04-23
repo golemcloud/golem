@@ -121,6 +121,10 @@ impl WorkerService for DefaultWorkerService {
     async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
         record_worker_call("get");
 
+        if !self.oplog_service.exists(owned_agent_id).await {
+            return None;
+        }
+
         let initial_oplog_entry = self
             .oplog_service
             .read(owned_agent_id, OplogIndex::INITIAL, 1)
