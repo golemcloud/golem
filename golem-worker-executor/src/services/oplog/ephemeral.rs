@@ -16,7 +16,7 @@ use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::multilayer::{
     BackgroundTransferMessage, InstrumentedOplogArchive, OplogArchive, WrappedOplogArchive,
 };
-use crate::services::oplog::{CommitLevel, Oplog, downcast_oplog};
+use crate::services::oplog::{CommitLevel, Oplog, OplogService, downcast_oplog};
 use async_lock::Mutex;
 use async_trait::async_trait;
 use golem_common::model::OwnedAgentId;
@@ -35,7 +35,7 @@ use tracing::{Instrument, Level, Span, debug, info, span, warn};
 
 pub struct EphemeralOplog {
     owned_agent_id: OwnedAgentId,
-    primary: Arc<dyn Oplog>,
+    primary_service: Arc<dyn OplogService>,
     state: Arc<Mutex<EphemeralOplogState>>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     transfer: UnboundedSender<BackgroundTransferMessage>,
@@ -88,7 +88,7 @@ impl EphemeralOplog {
         owned_agent_id: OwnedAgentId,
         last_oplog_idx: OplogIndex,
         max_operations_before_commit: u64,
-        primary: Arc<dyn Oplog>,
+        primary_service: Arc<dyn OplogService>,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         transfer: UnboundedSender<BackgroundTransferMessage>,
         transfer_fiber: tokio::task::JoinHandle<()>,
@@ -97,7 +97,7 @@ impl EphemeralOplog {
         let target = lower.first().clone();
         Self {
             owned_agent_id,
-            primary,
+            primary_service,
             state: Arc::new(Mutex::new(EphemeralOplogState {
                 buffer: VecDeque::new(),
                 last_oplog_idx,
@@ -392,23 +392,12 @@ impl Oplog for EphemeralOplog {
 
         let state = self.state.lock().await;
 
-        let last_idx = oplog_index.range_end(n);
         let req_start: u64 = oplog_index.into();
-        let req_end: u64 = last_idx.into();
+        let req_end: u64 = oplog_index.range_end(n).into();
 
-        // Read committed entries from lower layers (only up to last_committed_idx)
         let mut result = BTreeMap::new();
-        let committed_end: u64 = state.last_committed_idx.into();
-        if committed_end >= req_start {
-            let storage_end = min(req_end, committed_end);
-            let storage_count = storage_end - req_start + 1;
-            for layer in &self.lower {
-                let partial = layer.read(oplog_index, storage_count).await;
-                result.extend(partial);
-            }
-        }
 
-        // Merge uncommitted entries from the buffer, respecting the requested range
+        // First, fill from the in-memory buffer (uncommitted entries)
         if !state.buffer.is_empty() {
             let first_uncommitted: u64 = state.last_committed_idx.next().into();
             let buffer_end: u64 = first_uncommitted + state.buffer.len() as u64 - 1;
@@ -427,6 +416,42 @@ impl Oplog for EphemeralOplog {
             }
         }
 
+        // Check if the buffer already satisfied the full request
+        let full_match = match result.first_key_value() {
+            Some((first_idx, _)) => {
+                *first_idx == oplog_index && result.len() as u64 >= n
+            }
+            None => false,
+        };
+
+        // Read remaining entries from committed lower layers, stopping as soon as
+        // the requested range starting at oplog_index is fully covered.
+        if !full_match {
+            let committed_end: u64 = state.last_committed_idx.into();
+            if committed_end >= req_start {
+                let storage_end = min(req_end, committed_end);
+                let mut remaining = storage_end - req_start + 1 - min(result.len() as u64, storage_end - req_start + 1);
+
+                for layer in &self.lower {
+                    if remaining == 0 {
+                        break;
+                    }
+                    let partial = layer.read(oplog_index, remaining).await;
+                    let layer_full_match = match partial.first_key_value() {
+                        None => false,
+                        Some((first_idx, _)) => {
+                            remaining -= partial.len() as u64;
+                            *first_idx == oplog_index
+                        }
+                    };
+                    result.extend(partial);
+                    if layer_full_match {
+                        break;
+                    }
+                }
+            }
+        }
+
         result
     }
 
@@ -441,12 +466,10 @@ impl Oplog for EphemeralOplog {
 
     async fn switch_persistence_level(&self, _mode: PersistenceLevel) {}
 
-    fn inner(&self) -> Option<Arc<dyn Oplog>> {
-        Some(self.primary.clone())
-    }
-
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
-        self.primary.upload_raw_payload(data).await
+        self.primary_service
+            .upload_raw_payload(&self.owned_agent_id, data)
+            .await
     }
 
     async fn download_raw_payload(
@@ -454,8 +477,8 @@ impl Oplog for EphemeralOplog {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
-        self.primary
-            .download_raw_payload(payload_id, md5_hash)
+        self.primary_service
+            .download_raw_payload(&self.owned_agent_id, payload_id, md5_hash)
             .await
     }
 }

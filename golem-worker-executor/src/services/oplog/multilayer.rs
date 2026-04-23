@@ -344,17 +344,6 @@ impl OplogConstructor for CreateOplogConstructor {
                 .await
             }
             AgentMode::Ephemeral => {
-                let primary = self
-                    .primary
-                    .open(
-                        &self.owned_agent_id,
-                        Some(last_oplog_index),
-                        self.initial_worker_metadata,
-                        self.last_known_status,
-                        self.execution_status,
-                    )
-                    .await;
-
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
                 let lower = EphemeralOplog::build_lower_layers(
@@ -384,7 +373,7 @@ impl OplogConstructor for CreateOplogConstructor {
                         self.owned_agent_id,
                         last_oplog_index,
                         self.service.max_operations_before_commit_ephemeral,
-                        primary,
+                        self.primary.clone(),
                         lower,
                         tx,
                         transfer_fiber,
