@@ -55,6 +55,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-file-io-rust` | Reading and writing files from agent code |
 | `golem-add-llm-rust` | Adding LLM and AI capabilities using golem-ai libraries |
 | `golem-make-http-request-rust` | Making outgoing HTTP requests from agent code using wstd |
+| `golem-logging-rust` | Adding logging to a Rust Golem agent using the `log` crate |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
 | `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
 | `golem-list-and-filter-agents` | Listing and querying agents with filters |

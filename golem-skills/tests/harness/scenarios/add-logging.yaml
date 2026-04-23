@@ -1,0 +1,125 @@
+name: "add-logging"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-logging-agent"
+    prompt:
+      rust: >
+        In the test-app project, add a new durable agent type called `LogDemoAgent`
+        identified by a single constructor parameter for the instance name.
+
+        It must expose a method called `do_work` that takes a string `task_name` and
+        returns the string "done". Inside `do_work`, log messages at three different
+        levels:
+        - At info level: "starting task: {task_name}"
+        - At debug level: "processing task: {task_name}"
+        - At warn level: "task is slow: {task_name}"
+        - After the log messages, return the string "done".
+
+        Make sure the project builds and deploys successfully.
+      ts: >
+        In the test-app project, add a new durable agent type called `LogDemoAgent`
+        identified by a single constructor parameter for the instance name.
+
+        It must expose a method called `doWork` that takes a string `taskName` and
+        returns the string "done". Inside `doWork`, log messages at three different
+        levels:
+        - At info level: "starting task: {taskName}"
+        - At debug level: "processing task: {taskName}"
+        - At warn level: "task is slow: {taskName}"
+        - After the log messages, return the string "done".
+
+        Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, add a new durable agent type called `LogDemoAgent`
+        identified by a single constructor parameter for the instance name.
+
+        It must expose a method called `doWork` that takes a string `taskName` and
+        returns the string "done". Inside `doWork`, log messages at three different
+        levels:
+        - At info level: "starting task: {taskName}"
+        - At debug level: "processing task: {taskName}"
+        - At warn level: "task is slow: {taskName}"
+        - After the log messages, return the string "done".
+
+        Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, add a new durable agent type called `LogDemoAgent`
+        identified by a single constructor parameter for the instance name.
+
+        It must expose a method called `do_work` that takes a String `task_name` and
+        returns the String "done". Inside `do_work`, log messages at three different
+        levels:
+        - At info level: "starting task: {task_name}"
+        - At debug level: "processing task: {task_name}"
+        - At warn level: "task is slow: {task_name}"
+        - After the log messages, return the string "done".
+
+        Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-logging-rust"
+      ts:
+        - "golem-logging-ts"
+      scala:
+        - "golem-logging-scala"
+      moonbit:
+        - "golem-logging-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "invoke-do-work"
+    invoke_json:
+      agent: 'LogDemoAgent("demo1")'
+      method:
+        rust: "do_work"
+        ts: "doWork"
+        scala: "doWork"
+        moonbit: "do_work"
+      args: '"my-task"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: "done"
+
+  - id: "invoke-with-stream"
+    prompt:
+      rust: >
+        Invoke the LogDemoAgent's do_work method for agent "demo1" with the argument
+        "streamed-task", with default streaming enabled. Redirect the full CLI output
+        (both stdout and stderr) to a file called log-output.txt in the test-app directory.
+      ts: >
+        Invoke the LogDemoAgent's doWork method for agent "demo1" with the argument
+        "streamed-task", with default streaming enabled. Redirect the full CLI output
+        (both stdout and stderr) to a file called log-output.txt in the test-app directory.
+      scala: >
+        Invoke the LogDemoAgent's doWork method for agent "demo1" with the argument
+        "streamed-task", with default streaming enabled. Redirect the full CLI output
+        (both stdout and stderr) to a file called log-output.txt in the test-app directory.
+      moonbit: >
+        Invoke the LogDemoAgent's do_work method for agent "demo1" with the argument
+        "streamed-task", with default streaming enabled. Redirect the full CLI output
+        (both stdout and stderr) to a file called log-output.txt in the test-app directory.
+
+  - id: "check-info-message"
+    check_file:
+      path: "log-output.txt"
+    expect:
+      stdout_matches: "\\[INFO\\s*\\].*starting task: streamed-task"
+
+  - id: "check-debug-message"
+    check_file:
+      path: "log-output.txt"
+    expect:
+      stdout_matches: "\\[DEBUG\\s*\\].*processing task: streamed-task"
+
+  - id: "check-warn-message"
+    check_file:
+      path: "log-output.txt"
+    expect:
+      stdout_matches: "\\[WARN\\s*\\].*task is slow: streamed-task"

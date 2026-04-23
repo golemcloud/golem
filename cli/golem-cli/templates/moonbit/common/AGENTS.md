@@ -55,6 +55,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-file-io-moonbit` | Reading and writing files from agent code |
 | `golem-add-llm-moonbit` | Adding LLM and AI capabilities by calling provider APIs with WASI HTTP |
 | `golem-make-http-request-moonbit` | Making outgoing HTTP requests from agent code |
+| `golem-logging-moonbit` | Adding logging to a MoonBit Golem agent using the `@logging` module and `wasi:logging` |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
 | `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
 | `golem-list-and-filter-agents` | Listing and querying agents with filters |
