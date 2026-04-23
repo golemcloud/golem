@@ -430,10 +430,20 @@ message AgentSecretChangedEvent {
 message ApplicationDeletedEvent {
   golem.common.ApplicationId application_id = 1;
   golem.common.AccountId account_id = 2;
+  // Human-readable application name; matches the AgentResolutionCache key.
+  string app_name = 3;
+  // UUIDs of all non-deleted environments that belonged to this application.
+  // Subscribers use these to perform targeted cache invalidation rather than
+  // flushing the entire cache.
+  repeated golem.common.EnvironmentId environment_ids = 4;
 }
 
 // Sent when an environment is soft-deleted so subscribers can flush any
 // caches scoped to the environment.
 message EnvironmentDeletedEvent {
   golem.common.EnvironmentId environment_id = 1;
+  // Human-readable application name; matches the AgentResolutionCache key.
+  string app_name = 2;
+  // Human-readable environment name; matches the AgentResolutionCache key.
+  string env_name = 3;
 }

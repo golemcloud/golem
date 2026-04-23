@@ -140,10 +140,18 @@ pub enum RegistryChangeEvent {
         event_id: ChangeEventId,
         application_id: Uuid,
         account_id: Uuid,
+        /// Human-readable application name (used for targeted cache invalidation).
+        app_name: String,
+        /// All non-deleted environment UUIDs under this application at deletion time.
+        environment_ids: Vec<Uuid>,
     },
     EnvironmentDeleted {
         event_id: ChangeEventId,
         environment_id: Uuid,
+        /// Human-readable application name (used for targeted cache invalidation).
+        app_name: String,
+        /// Human-readable environment name (used for targeted cache invalidation).
+        env_name: String,
     },
 }
 
@@ -315,10 +323,29 @@ impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
                         "ApplicationDeleted event missing account_id"
                     ))
                 })?;
+                let app_name = row.resource_name.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "ApplicationDeleted event missing app_name (resource_name)"
+                    ))
+                })?;
+                // env UUIDs were serialised into the `domains` column as UUID strings
+                let environment_ids = row
+                    .domains
+                    .iter()
+                    .map(|s| {
+                        Uuid::parse_str(s).map_err(|e| {
+                            RepoError::InternalError(anyhow::anyhow!(
+                                "ApplicationDeleted event: invalid env UUID in domains: {e}"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(RegistryChangeEvent::ApplicationDeleted {
                     event_id: row.event_id,
                     application_id,
                     account_id,
+                    app_name,
+                    environment_ids,
                 })
             }
             RegistryEventType::EnvironmentDeleted => {
@@ -327,9 +354,22 @@ impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
                         "EnvironmentDeleted event missing environment_id"
                     ))
                 })?;
+                // app_name is stored in domains[0], env_name in resource_name
+                let app_name = row.domains.into_iter().next().ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "EnvironmentDeleted event missing app_name (domains[0])"
+                    ))
+                })?;
+                let env_name = row.resource_name.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "EnvironmentDeleted event missing env_name (resource_name)"
+                    ))
+                })?;
                 Ok(RegistryChangeEvent::EnvironmentDeleted {
                     event_id: row.event_id,
                     environment_id,
+                    app_name,
+                    env_name,
                 })
             }
         }
@@ -503,7 +543,12 @@ impl NewRegistryChangeEvent {
         }
     }
 
-    pub fn application_deleted(application_id: Uuid, account_id: Uuid) -> Self {
+    pub fn application_deleted(
+        application_id: Uuid,
+        account_id: Uuid,
+        app_name: String,
+        environment_ids: Vec<Uuid>,
+    ) -> Self {
         Self {
             event_type: RegistryEventType::ApplicationDeleted,
             environment_id: None,
@@ -511,14 +556,15 @@ impl NewRegistryChangeEvent {
             current_deployment_revision_id: None,
             account_id: Some(account_id),
             grantee_account_id: None,
-            domains: Vec::new(),
+            // env UUIDs serialised as strings in the domains column
+            domains: environment_ids.iter().map(|id| id.to_string()).collect(),
             resource_definition_id: None,
-            resource_name: None,
+            resource_name: Some(app_name),
             application_id: Some(application_id),
         }
     }
 
-    pub fn environment_deleted(environment_id: Uuid) -> Self {
+    pub fn environment_deleted(environment_id: Uuid, app_name: String, env_name: String) -> Self {
         Self {
             event_type: RegistryEventType::EnvironmentDeleted,
             environment_id: Some(environment_id),
@@ -526,9 +572,10 @@ impl NewRegistryChangeEvent {
             current_deployment_revision_id: None,
             account_id: None,
             grantee_account_id: None,
-            domains: Vec::new(),
+            // app_name in domains[0], env_name in resource_name
+            domains: vec![app_name],
             resource_definition_id: None,
-            resource_name: None,
+            resource_name: Some(env_name),
             application_id: None,
         }
     }
@@ -873,6 +920,8 @@ mod tests {
         let grantee_account_id = Uuid::new_v4();
         let resource_definition_id = Uuid::new_v4();
         let application_id = Uuid::new_v4();
+        let app_name = "my-app".to_string();
+        let env_name = "my-env".to_string();
 
         let cases = vec![
             RegistryChangeEventRow {
@@ -987,9 +1036,10 @@ mod tests {
                 current_deployment_revision_id: None,
                 account_id: Some(account_id),
                 grantee_account_id: None,
-                domains: Vec::new(),
+                // env UUIDs as strings in domains, app_name in resource_name
+                domains: vec![environment_id.to_string()],
                 resource_definition_id: None,
-                resource_name: None,
+                resource_name: Some(app_name.clone()),
                 application_id: Some(application_id),
             },
             RegistryChangeEventRow {
@@ -1000,9 +1050,10 @@ mod tests {
                 current_deployment_revision_id: None,
                 account_id: None,
                 grantee_account_id: None,
-                domains: Vec::new(),
+                // app_name in domains[0], env_name in resource_name
+                domains: vec![app_name.clone()],
                 resource_definition_id: None,
-                resource_name: None,
+                resource_name: Some(env_name.clone()),
                 application_id: None,
             },
         ];

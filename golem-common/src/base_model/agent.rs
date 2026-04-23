@@ -215,6 +215,10 @@ pub enum RegistryInvalidationEvent {
         event_id: u64,
         application_id: ApplicationId,
         account_id: AccountId,
+        /// Human-readable application name (matches AgentResolutionCache key).
+        app_name: String,
+        /// All non-deleted environment UUIDs under this application at deletion time.
+        environment_ids: Vec<EnvironmentId>,
     },
     /// An environment was deleted. Subscribers should flush any cache entries
     /// scoped to this environment so that a same-name recreation does not serve
@@ -222,6 +226,10 @@ pub enum RegistryInvalidationEvent {
     EnvironmentDeleted {
         event_id: u64,
         environment_id: EnvironmentId,
+        /// Human-readable application name (matches AgentResolutionCache key).
+        app_name: String,
+        /// Human-readable environment name (matches AgentResolutionCache key).
+        env_name: String,
     },
 }
 

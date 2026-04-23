@@ -137,24 +137,41 @@ impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
             RegistryInvalidationEvent::ApplicationDeleted {
                 application_id,
                 account_id,
+                app_name,
+                environment_ids,
                 ..
             } => {
                 debug!(
                     application_id = %application_id,
                     account_id = %account_id,
-                    "Received application deleted event, flushing all caches"
+                    app_name,
+                    environment_count = environment_ids.len(),
+                    "Received application deleted event, invalidating per-environment caches"
                 );
-                // Worker-executor caches are keyed per-environment/component/agent-type,
-                // none of which carry the application_id. Flush all to guarantee no
-                // cached entries for environments under the deleted application
-                // survive into a same-name recreation cycle.
-                self.component_service.invalidate_all().await;
-                self.environment_state_service.invalidate_all().await;
-                self.agent_types_service.invalidate_all().await;
+                // Invalidate each environment individually using the provided UUIDs
+                // rather than flushing all caches.
+                for env_id in environment_ids {
+                    self.component_service
+                        .invalidate_latest_deployed_metadata_for_environment(*env_id)
+                        .await;
+                    self.environment_state_service
+                        .invalidate_environment(*env_id)
+                        .await;
+                    self.agent_types_service
+                        .invalidate_environment(*env_id)
+                        .await;
+                }
             }
-            RegistryInvalidationEvent::EnvironmentDeleted { environment_id, .. } => {
+            RegistryInvalidationEvent::EnvironmentDeleted {
+                environment_id,
+                app_name,
+                env_name,
+                ..
+            } => {
                 debug!(
                     environment_id = %environment_id,
+                    app_name,
+                    env_name,
                     "Received environment deleted event, invalidating environment caches"
                 );
                 self.component_service

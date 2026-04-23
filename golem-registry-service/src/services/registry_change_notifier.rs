@@ -386,20 +386,31 @@ fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvali
             event_id,
             application_id,
             account_id,
+            app_name,
+            environment_ids,
         } => (
             *event_id,
             Payload::ApplicationDeleted(ApplicationDeletedEvent {
                 application_id: Some(ApplicationId(*application_id).into()),
                 account_id: Some(AccountId(*account_id).into()),
+                app_name: app_name.clone(),
+                environment_ids: environment_ids
+                    .iter()
+                    .map(|id| EnvironmentId(*id).into())
+                    .collect(),
             }),
         ),
         RegistryChangeEvent::EnvironmentDeleted {
             event_id,
             environment_id,
+            app_name,
+            env_name,
         } => (
             *event_id,
             Payload::EnvironmentDeleted(EnvironmentDeletedEvent {
                 environment_id: Some(EnvironmentId(*environment_id).into()),
+                app_name: app_name.clone(),
+                env_name: env_name.clone(),
             }),
         ),
     };

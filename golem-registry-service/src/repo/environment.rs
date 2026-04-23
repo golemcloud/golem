@@ -32,7 +32,7 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::{BindingsStack, RepoError, ResultExt};
 use indoc::{formatdoc, indoc};
-use sqlx::Database;
+use sqlx::{Database, Row};
 use std::fmt::Debug;
 use tap::Pipe;
 use tracing::{Instrument, Span, info_span};
@@ -844,12 +844,27 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 .await?
                 .ok_or(EnvironmentRepoError::ConcurrentModification)?;
 
-                // Emit an EnvironmentDeleted invalidation event so worker-service
-                // flushes any cached agent resolution that would otherwise continue
-                // to point at this environment's (now-orphaned) component_id after a
-                // same-name recreation.
-                let change_event =
-                    NewRegistryChangeEvent::environment_deleted(revision.environment_id);
+                // Emit an EnvironmentDeleted invalidation event carrying the
+                // human-readable app_name and env_name so subscribers can perform
+                // targeted cache invalidation without a full flush.
+                let app_name_row = tx
+                    .fetch_optional(
+                        sqlx::query(indoc! { r#"
+                            SELECT name FROM applications
+                            WHERE application_id = $1
+                        "#})
+                        .bind(environment_record.application_id),
+                    )
+                    .await?;
+                let app_name: String = app_name_row
+                    .as_ref()
+                    .and_then(|row| row.try_get::<String, _>("name").ok())
+                    .unwrap_or_default();
+                let change_event = NewRegistryChangeEvent::environment_deleted(
+                    revision.environment_id,
+                    app_name,
+                    revision.name.clone(),
+                );
                 DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
                     tx,
                     &change_event,

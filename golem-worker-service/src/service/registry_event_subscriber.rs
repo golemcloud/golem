@@ -139,29 +139,41 @@ impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
             RegistryInvalidationEvent::ApplicationDeleted {
                 application_id,
                 account_id,
+                app_name,
+                environment_ids,
                 ..
             } => {
                 debug!(
                     application_id = %application_id,
                     account_id = %account_id,
-                    "Received application deleted event, flushing agent resolution and route caches"
+                    app_name,
+                    environment_count = environment_ids.len(),
+                    "Received application deleted event, invalidating targeted cache entries"
                 );
-                // The AgentResolutionCache is keyed on (app_name, env_name, ...)
-                // strings and has no UUID in its key, so we cannot target entries
-                // for this specific application. Flush the whole cache to ensure a
-                // same-name recreation resolves through a fresh registry lookup.
-                self.agent_resolution_cache.clear().await;
-                self.route_resolver.clear_all().await;
+                self.agent_resolution_cache
+                    .invalidate_by_app_name(app_name, environment_ids)
+                    .await;
+                for env_id in environment_ids {
+                    self.route_resolver
+                        .invalidate_domains_for_environment(*env_id)
+                        .await;
+                }
             }
-            RegistryInvalidationEvent::EnvironmentDeleted { environment_id, .. } => {
+            RegistryInvalidationEvent::EnvironmentDeleted {
+                environment_id,
+                app_name,
+                env_name,
+                ..
+            } => {
                 debug!(
                     environment_id = %environment_id,
-                    "Received environment deleted event, flushing agent resolution and route caches for environment"
+                    app_name,
+                    env_name,
+                    "Received environment deleted event, invalidating targeted cache entries"
                 );
-                // As with ApplicationDeleted, the cache key does not contain the
-                // environment UUID, so we conservatively flush the whole cache
-                // rather than miss stale entries.
-                self.agent_resolution_cache.clear().await;
+                self.agent_resolution_cache
+                    .invalidate_by_env(app_name, env_name, *environment_id)
+                    .await;
                 self.route_resolver
                     .invalidate_domains_for_environment(*environment_id)
                     .await;

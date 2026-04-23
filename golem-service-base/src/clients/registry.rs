@@ -1227,11 +1227,21 @@ fn proto_registry_event_to_model(
                 })?
                 .try_into()
                 .map_err(|e: String| RegistryServiceError::internal_client_error(e))?;
+            let environment_ids = ad
+                .environment_ids
+                .into_iter()
+                .map(|id| {
+                    id.try_into()
+                        .map_err(|e: String| RegistryServiceError::internal_client_error(e))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(
                 golem_common::model::agent::RegistryInvalidationEvent::ApplicationDeleted {
                     event_id,
                     application_id,
                     account_id,
+                    app_name: ad.app_name,
+                    environment_ids,
                 },
             )
         }
@@ -1249,6 +1259,8 @@ fn proto_registry_event_to_model(
                 golem_common::model::agent::RegistryInvalidationEvent::EnvironmentDeleted {
                     event_id,
                     environment_id,
+                    app_name: ed.app_name,
+                    env_name: ed.env_name,
                 },
             )
         }
