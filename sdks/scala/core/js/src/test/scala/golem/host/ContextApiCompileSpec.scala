@@ -25,7 +25,7 @@ object ContextApiCompileSpec extends ZIOSpecDefault {
   private val attribute: Attribute           = Attribute("key", stringAttr)
   private val attributeChain: AttributeChain =
     AttributeChain("key", List(stringAttr, AttributeValue.StringValue("world")))
-  private val dateTime: DateTime = DateTime(BigInt(1700000000L), 500000000L)
+  private val dateTime: DateTime = DateTime(BigInt(1700000000L), 500000000)
 
   private def describeAttributeValue(av: AttributeValue): String = av match {
     case AttributeValue.StringValue(v) => s"string($v)"
