@@ -168,9 +168,7 @@ function generateMatrixTable(summary: MergedSummary): string {
   if (summary.heatMap.length === 0) return "";
 
   const languages = [...new Set(summary.heatMap.map((e) => e.language))].sort();
-  const drivers = [
-    ...new Set(summary.heatMap.map((e) => driverLabel(e.agent, e.model))),
-  ].sort();
+  const drivers = [...new Set(summary.heatMap.map((e) => driverLabel(e.agent, e.model)))].sort();
 
   const colHeaders = languages
     .map((l) => `<div class="mx-col-header">${escapeHtml(l)}</div>`)

@@ -147,7 +147,7 @@ const TriggerSchema = z.object({
 const CreateAgentSchema = z.object({
   name: z.string(),
   env: z.record(z.string()).optional(),
-  config: z.record(z.string()).optional(),
+  config: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
 });
 
 const DeleteAgentSchema = z.object({
@@ -309,7 +309,7 @@ type ResolvedTriggerSpec = { agent: string; method: string; args?: string };
 type CreateAgentSpec = {
   name: string;
   env?: Record<string, string>;
-  config?: Record<string, string>;
+  config?: Record<string, string | number | boolean>;
 };
 type DeleteAgentSpec = { name: string };
 type CreateProjectSpec = { name: string; presets?: LangConditional<string[]> };
@@ -1352,8 +1352,7 @@ export class ScenarioExecutor {
     }
     if (spec.config) {
       for (const [k, v] of Object.entries(spec.config)) {
-        const jsonValue = typeof v === "string" ? JSON.stringify(v) : String(v);
-        args.push("-c", `${k}=${jsonValue}`);
+        args.push("-c", `${k}=${JSON.stringify(v)}`);
       }
     }
     const result = await this.runLocalCommand("golem", args, timeout, projectDir, commandEnv);

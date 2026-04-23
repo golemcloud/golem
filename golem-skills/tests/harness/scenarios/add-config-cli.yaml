@@ -56,7 +56,7 @@ steps:
       name: 'GreeterAgent("g1")'
       config:
         greeting: "Howdy"
-        style.uppercase: "false"
+        style.uppercase: false
         style.suffix: "!"
 
   - id: "invoke-greet"
