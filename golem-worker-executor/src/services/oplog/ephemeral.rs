@@ -418,9 +418,7 @@ impl Oplog for EphemeralOplog {
 
         // Check if the buffer already satisfied the full request
         let full_match = match result.first_key_value() {
-            Some((first_idx, _)) => {
-                *first_idx == oplog_index && result.len() as u64 >= n
-            }
+            Some((first_idx, _)) => *first_idx == oplog_index && result.len() as u64 >= n,
             None => false,
         };
 
@@ -430,7 +428,8 @@ impl Oplog for EphemeralOplog {
             let committed_end: u64 = state.last_committed_idx.into();
             if committed_end >= req_start {
                 let storage_end = min(req_end, committed_end);
-                let mut remaining = storage_end - req_start + 1 - min(result.len() as u64, storage_end - req_start + 1);
+                let mut remaining = storage_end - req_start + 1
+                    - min(result.len() as u64, storage_end - req_start + 1);
 
                 for layer in &self.lower {
                     if remaining == 0 {

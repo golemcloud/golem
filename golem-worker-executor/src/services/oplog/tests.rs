@@ -652,7 +652,13 @@ async fn ephemeral_read_many_across_archive_layers(_tracing: &Tracing) {
         .await
         .into_values()
         .collect::<Vec<_>>();
-    let original_last10 = entries.iter().rev().take(10).rev().cloned().collect::<Vec<_>>();
+    let original_last10 = entries
+        .iter()
+        .rev()
+        .take(10)
+        .rev()
+        .cloned()
+        .collect::<Vec<_>>();
     assert_eq!(last10, original_last10);
 
     // Read all entries
