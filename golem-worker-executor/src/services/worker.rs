@@ -357,6 +357,18 @@ impl WorkerService for DefaultWorkerService {
     }
 }
 
+impl HasOplogService for DefaultWorkerService {
+    fn oplog_service(&self) -> Arc<dyn OplogService> {
+        self.oplog_service.clone()
+    }
+}
+
+impl HasConfig for DefaultWorkerService {
+    fn config(&self) -> Arc<GolemConfig> {
+        self.config.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,17 +426,5 @@ mod tests {
         assert!(!DefaultWorkerService::should_track_for_assignment_recovery(
             &status
         ));
-    }
-}
-
-impl HasOplogService for DefaultWorkerService {
-    fn oplog_service(&self) -> Arc<dyn OplogService> {
-        self.oplog_service.clone()
-    }
-}
-
-impl HasConfig for DefaultWorkerService {
-    fn config(&self) -> Arc<GolemConfig> {
-        self.config.clone()
     }
 }
