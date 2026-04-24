@@ -16,6 +16,7 @@
 
 package golem
 
+import golem.host.Retry
 import golem.host.RetryApi
 import golem.host.js.JsNamedRetryPolicy
 
@@ -44,6 +45,9 @@ object Guards {
   def withRetryPolicy[A](policy: JsNamedRetryPolicy)(block: => Future[A]): Future[A] =
     withGuard(useRetryPolicy(policy))(block)
 
+  def withRetryPolicy[A](policy: Retry.NamedPolicy)(block: => Future[A]): Future[A] =
+    withRetryPolicy(Retry.namedPolicyToJsOrThrow(policy))(block)
+
   def useRetryPolicy(policy: JsNamedRetryPolicy): RetryPolicyGuard = {
     val previous = RetryApi.getRetryPolicyByName(policy.name)
     val name     = policy.name
@@ -55,6 +59,9 @@ object Guards {
       }
     )
   }
+
+  def useRetryPolicy(policy: Retry.NamedPolicy): RetryPolicyGuard =
+    useRetryPolicy(Retry.namedPolicyToJsOrThrow(policy))
 
   def withIdempotenceMode[A](flag: Boolean)(block: => Future[A]): Future[A] =
     withGuard(useIdempotenceMode(flag))(block)
@@ -93,7 +100,12 @@ object Guards {
 
   private def withGuard[A, G <: Guard](guard: => G)(block: => Future[A]): Future[A] = {
     val active = guard
-    block.andThen { case _ => active.drop() }
+    try block.andThen { case _ => active.drop() }
+    catch {
+      case error: Throwable =>
+        active.drop()
+        throw error
+    }
   }
 
   sealed abstract class Guard private[golem] (release: () => Unit) extends AutoCloseable {

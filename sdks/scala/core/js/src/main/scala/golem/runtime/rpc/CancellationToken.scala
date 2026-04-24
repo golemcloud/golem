@@ -23,6 +23,14 @@ private[rpc] trait RawCancellationToken extends js.Object {
   def cancel(): Unit = js.native
 }
 
-final class CancellationToken private[rpc] (private val underlying: RawCancellationToken) {
-  def cancel(): Unit = underlying.cancel()
+final class CancellationToken private[rpc] (private val cancelFn: () => Unit) {
+  def cancel(): Unit = cancelFn()
+}
+
+object CancellationToken {
+  private[rpc] def apply(raw: RawCancellationToken): CancellationToken =
+    new CancellationToken(() => raw.cancel())
+
+  private[rpc] def fromFunction(fn: () => Unit): CancellationToken =
+    new CancellationToken(fn)
 }

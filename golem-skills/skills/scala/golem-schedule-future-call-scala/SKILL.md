@@ -11,21 +11,21 @@ A **scheduled invocation** enqueues a method call on the target agent to be exec
 
 ## Usage
 
-Access the `.schedule` proxy on the client and pass a `Datetime` as the first argument:
+Each method on the remote proxy has a `.scheduleAt(when)` method that enqueues the call for the given time:
 
 ```scala
 import golem.Datetime
 
-val counter = CounterAgent.get("my-counter")
+val counter = CounterAgentClient.get("my-counter")
 
 // Schedule increment to run 5 seconds from now
-counter.schedule.increment(Datetime.afterSeconds(5))
+counter.increment.scheduleAt(Datetime.afterSeconds(5))
 
-// Schedule with arguments
-val reporter = ReportAgent.get("daily")
-reporter.schedule.generateReport(
-  Datetime.afterSeconds(3600), // 1 hour from now
-  "summary"
+// Schedule with arguments — method params first, then when
+val reporter = ReportAgentClient.get("daily")
+reporter.generateReport.scheduleAt(
+  "summary",
+  when = Datetime.afterSeconds(3600) // 1 hour from now
 )
 ```
 

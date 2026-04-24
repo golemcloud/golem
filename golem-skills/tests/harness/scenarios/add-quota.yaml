@@ -1,0 +1,187 @@
+name: "add-quota"
+steps:
+  - id: "create-project"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+
+  - id: "add-quota-agent"
+    prompt:
+      rust: >
+        In the test-app project, add a new durable agent type called `QuotaAgent`
+        identified by a single constructor parameter for the instance name.
+
+        QuotaAgent must use the Golem resource quota system. In the constructor,
+        acquire a QuotaToken for a resource called "api-calls" with an expected
+        use of 1.
+
+        Store the QuotaToken in the agent's state.
+
+        Expose a method called `rate_limited_call` that takes a string parameter
+        called `input` and returns a record with two fields:
+        - `input` (string) — the input that was passed in
+        - `success` (bool) — whether the reservation succeeded
+
+        The method should use `with_reservation` to reserve 1 token. Inside the
+        reservation closure, just return the input string as the result.
+        If the reservation fails, return the input with success=false.
+
+        In `golem.yaml`, define a resource default under `resourceDefaults` for
+        the `local` environment:
+        - resource name: `api-calls`
+        - limit type: `Rate` with value `100`, period `minute`, max `1000`
+        - enforcementAction: `reject`
+        - unit: `request`
+        - units: `requests`
+
+        Make sure the project builds and deploys successfully.
+      ts: >
+        In the test-app project, add a new durable agent type called `QuotaAgent`
+        identified by a single constructor parameter for the instance name.
+
+        QuotaAgent must use the Golem resource quota system. In the constructor,
+        acquire a QuotaToken for a resource called "api-calls" with an expected
+        use of 1n (bigint).
+
+        Store the QuotaToken in the agent's state.
+
+        Expose a method called `rateLimitedCall` that takes a string parameter
+        called `input` and returns a record/object with two fields:
+        - `input` (string) — the input that was passed in
+        - `success` (boolean) — whether the reservation succeeded
+
+        The method should use `withReservation` to reserve 1n token. Inside the
+        reservation callback, just return the input string as the result.
+        If the reservation fails, return the input with success=false.
+
+        In `golem.yaml`, define a resource default under `resourceDefaults` for
+        the `local` environment:
+        - resource name: `api-calls`
+        - limit type: `Rate` with value `100`, period `minute`, max `1000`
+        - enforcementAction: `reject`
+        - unit: `request`
+        - units: `requests`
+
+        Make sure the project builds and deploys successfully.
+      scala: >
+        In the test-app project, add a new durable agent type called `QuotaAgent`
+        identified by a single constructor parameter for the instance name.
+
+        QuotaAgent must use the Golem resource quota system. In the constructor,
+        acquire a QuotaToken for a resource called "api-calls" with an expected
+        use of BigInt(1).
+
+        Store the QuotaToken in the agent's state.
+
+        Expose a method called `rateLimitedCall` that takes a string parameter
+        called `input` and returns a record/object with two fields:
+        - `input` (string) — the input that was passed in
+        - `success` (boolean) — whether the reservation succeeded
+
+        The method should use `withReservation` to reserve BigInt(1) token. Inside
+        the reservation callback, just return the input string as the result.
+        If the reservation fails, return the input with success=false.
+
+        In `golem.yaml`, define a resource default under `resourceDefaults` for
+        the `local` environment:
+        - resource name: `api-calls`
+        - limit type: `Rate` with value `100`, period `minute`, max `1000`
+        - enforcementAction: `reject`
+        - unit: `request`
+        - units: `requests`
+
+        Make sure the project builds and deploys successfully.
+      moonbit: >
+        In the test-app project, add a new durable agent type called `QuotaAgent`
+        identified by a single constructor parameter for the instance name.
+
+        QuotaAgent must use the Golem resource quota system. In the constructor,
+        acquire a QuotaToken for a resource called "api-calls" with an expected
+        use of 1UL.
+
+        Store the QuotaToken in the agent's state.
+
+        Expose a method called `rate_limited_call` that takes a string parameter
+        called `input` and returns a record with two fields:
+        - `input` (string) — the input that was passed in
+        - `success` (bool) — whether the reservation succeeded
+
+        The method should use `@quota.with_reservation` to reserve 1UL token.
+        Inside the reservation callback, just return the input string as the
+        result. If the reservation fails, return the input with success=false.
+
+        In `golem.yaml`, define a resource default under `resourceDefaults` for
+        the `local` environment:
+        - resource name: `api-calls`
+        - limit type: `Rate` with value `100`, period `minute`, max `1000`
+        - enforcementAction: `reject`
+        - unit: `request`
+        - units: `requests`
+
+        Make sure the project builds and deploys successfully.
+    expectedSkills:
+      rust:
+        - "golem-quota-rust"
+      ts:
+        - "golem-quota-ts"
+      scala:
+        - "golem-quota-scala"
+      moonbit:
+        - "golem-quota-moonbit"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "verify-golem-yaml-resources"
+    shell:
+      command: "cat"
+      args: ["test-app/golem.yaml"]
+    expect:
+      stdout_matches: "[\\s\\S]*resourceDefaults:[\\s\\S]*api-calls:[\\s\\S]*Rate[\\s\\S]*reject[\\s\\S]*"
+
+  - id: "verify-quota-api-in-source"
+    shell:
+      command: "rg"
+      args:
+        rust: ["-l", "with_reservation|QuotaToken::new", "test-app/", "-g", "*.rs"]
+        ts: ["-l", "withReservation|acquireQuotaToken", "test-app/", "-g", "*.ts"]
+        scala: ["-l", "withReservation|QuotaToken", "test-app/", "-g", "*.scala"]
+        moonbit: ["-l", "with_reservation|QuotaToken::new", "test-app/", "-g", "*.mbt"]
+    expect:
+      exit_code: 0
+
+  - id: "invoke-rate-limited-call"
+    invoke_json:
+      agent: 'QuotaAgent("test")'
+      method:
+        rust: "rate_limited_call"
+        ts: "rateLimitedCall"
+        scala: "rateLimitedCall"
+        moonbit: "rate_limited_call"
+      args: '"hello"'
+    expect:
+      rust:
+        result_json:
+          - path: "$.input"
+            equals: "hello"
+          - path: "$.success"
+            equals: true
+      ts:
+        result_json:
+          - path: "$.input"
+            equals: "hello"
+          - path: "$.success"
+            equals: true
+      scala:
+        result_json:
+          - path: "$.input"
+            equals: "hello"
+          - path: "$.success"
+            equals: true
+      moonbit:
+        result_json:
+          - path: "$.input"
+            equals: "hello"
+          - path: "$.success"
+            equals: true

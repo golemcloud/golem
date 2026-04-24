@@ -39,6 +39,13 @@ pub fn set_retry_policy(policy : NamedRetryPolicy) -> Unit {
 }
 
 ///|
+/// Add or overwrite a high-level named retry policy after validating and
+/// compiling it to the raw flattened WIT representation.
+pub fn set_named_policy(policy : NamedPolicy) -> Unit raise RetryBuilderError {
+  set_retry_policy(policy.to_raw())
+}
+
+///|
 /// Remove a named retry policy by name (persisted to oplog).
 pub fn remove_retry_policy(name : String) -> Unit {
   @retry.remove_retry_policy(name)
@@ -56,11 +63,32 @@ pub fn use_retry_policy(policy : NamedRetryPolicy) -> RetryPolicyGuard {
 }
 
 ///|
+/// Temporarily sets a high-level named retry policy. The previous raw policy
+/// with the same name is restored when the returned guard is dropped.
+pub fn use_named_policy(
+  policy : NamedPolicy,
+) -> RetryPolicyGuard raise RetryBuilderError {
+  use_retry_policy(policy.to_raw())
+}
+
+///|
 /// Runs a function with a named retry policy temporarily set.
 /// The previous policy is restored (or removed) after the function completes,
 /// even if it raises.
 pub fn[T] with_retry_policy(policy : NamedRetryPolicy, f : () -> T) -> T {
   let g = use_retry_policy(policy)
+  defer g.drop()
+  f()
+}
+
+///|
+/// Runs a function with a high-level named retry policy temporarily set.
+/// The previous raw policy is restored even if the function raises.
+pub fn[T] with_named_policy(
+  policy : NamedPolicy,
+  f : () -> T,
+) -> T raise RetryBuilderError {
+  let g = use_named_policy(policy)
   defer g.drop()
   f()
 }

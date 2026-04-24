@@ -61,6 +61,8 @@ pub fn revert_agent(@types.AgentId, @host.RevertAgentTarget) -> Unit
 
 pub fn set_idempotence_mode(Bool) -> Unit
 
+pub fn set_named_policy(NamedPolicy) -> Unit raise RetryBuilderError
+
 pub fn set_oplog_index(UInt64) -> Unit
 
 pub fn set_oplog_persistence_level(@host.PersistenceLevel) -> Unit
@@ -69,17 +71,24 @@ pub fn set_retry_policy(@retry.NamedRetryPolicy) -> Unit
 
 pub fn update_agent(@types.AgentId, UInt64, @host.UpdateMode) -> Unit
 
+pub fn use_named_policy(NamedPolicy) -> RetryPolicyGuard raise RetryBuilderError
+
 pub fn use_retry_policy(@retry.NamedRetryPolicy) -> RetryPolicyGuard
 
 pub fn[T] with_atomic_operation(() -> T) -> T
 
 pub fn[T] with_idempotence_mode(Bool, () -> T) -> T
 
+pub fn[T] with_named_policy(NamedPolicy, () -> T) -> T raise RetryBuilderError
+
 pub fn[T] with_persistence_level(@host.PersistenceLevel, () -> T) -> T
 
 pub fn[T] with_retry_policy(@retry.NamedRetryPolicy, () -> T) -> T
 
 // Errors
+pub suberror RetryBuilderError {
+  RetryBuilderError(String)
+}
 
 // Types and methods
 pub(all) struct AgentsPager {
@@ -89,6 +98,74 @@ pub fn AgentsPager::collect_all(Self) -> Array[@host.AgentMetadata]
 pub fn AgentsPager::drop(Self) -> Unit
 pub fn AgentsPager::next_page(Self) -> Array[@host.AgentMetadata]?
 
+pub struct Duration {
+  repr : DurationRepr
+} derive(Eq, Show)
+pub fn Duration::hours(UInt64) -> Self
+pub fn Duration::micros(UInt64) -> Self
+pub fn Duration::millis(UInt64) -> Self
+pub fn Duration::minutes(UInt64) -> Self
+pub fn Duration::nanos(UInt64) -> Self
+pub fn Duration::seconds(UInt64) -> Self
+pub fn Duration::to_nanos(Self) -> UInt64 raise RetryBuilderError
+
+type DurationRepr derive(Eq, Show)
+
+pub struct NamedPolicy {
+  name : String
+  priority : UInt
+  predicate : Predicate
+  policy : Policy
+} derive(Eq, Show)
+pub fn NamedPolicy::applies_when(Self, Predicate) -> Self
+pub fn NamedPolicy::named(String, Policy) -> Self
+pub fn NamedPolicy::priority(Self, UInt) -> Self
+pub fn NamedPolicy::to_raw(Self) -> @retry.NamedRetryPolicy raise RetryBuilderError
+
+pub struct Policy {
+  repr : PolicyRepr
+} derive(Eq, Show)
+pub fn Policy::add_delay(Self, Duration) -> Self
+pub fn Policy::and_then(Self, Self) -> Self
+pub fn Policy::clamp(Self, Duration, Duration) -> Self
+pub fn Policy::exponential(Duration, Double) -> Self
+pub fn Policy::fibonacci(Duration, Duration) -> Self
+pub fn Policy::immediate() -> Self
+pub fn Policy::intersect(Self, Self) -> Self
+pub fn Policy::max_retries(Self, UInt) -> Self
+pub fn Policy::never() -> Self
+pub fn Policy::only_when(Self, Predicate) -> Self
+pub fn Policy::periodic(Duration) -> Self
+pub fn Policy::to_raw(Self) -> @retry.RetryPolicy raise RetryBuilderError
+pub fn Policy::union(Self, Self) -> Self
+pub fn Policy::with_jitter(Self, Double) -> Self
+pub fn Policy::within(Self, Duration) -> Self
+
+type PolicyRepr derive(Eq, Show)
+
+pub struct Predicate {
+  repr : PredicateRepr
+} derive(Eq, Show)
+pub fn Predicate::always() -> Self
+pub fn Predicate::and_(Self, Self) -> Self
+pub fn Predicate::contains(Props, String) -> Self
+pub fn Predicate::eq(Props, Value) -> Self
+pub fn Predicate::exists(Props) -> Self
+pub fn Predicate::gt(Props, Value) -> Self
+pub fn Predicate::gte(Props, Value) -> Self
+pub fn Predicate::lt(Props, Value) -> Self
+pub fn Predicate::lte(Props, Value) -> Self
+pub fn Predicate::matches_glob(Props, String) -> Self
+pub fn Predicate::neq(Props, Value) -> Self
+pub fn Predicate::never() -> Self
+pub fn Predicate::not_(Self) -> Self
+pub fn Predicate::one_of(Props, Array[Value]) -> Self
+pub fn Predicate::or_(Self, Self) -> Self
+pub fn Predicate::starts_with(Props, String) -> Self
+pub fn Predicate::to_raw(Self) -> @retry.RetryPredicate raise RetryBuilderError
+
+type PredicateRepr derive(Eq, Show)
+
 pub(all) struct PromiseResult {
   // private fields
 }
@@ -96,11 +173,43 @@ pub fn PromiseResult::drop(Self) -> Unit
 pub fn PromiseResult::get(Self) -> Bytes?
 pub fn PromiseResult::subscribe(Self) -> @poll.Pollable
 
+pub struct Props {
+  key : String
+} derive(Eq, Show)
+pub fn Props::custom(String) -> Self
+pub fn Props::db_type() -> Self
+pub fn Props::error_type() -> Self
+pub fn Props::function() -> Self
+pub fn Props::key(Self) -> String
+pub fn Props::noun_uri() -> Self
+pub fn Props::status_code() -> Self
+pub fn Props::target_agent_type() -> Self
+pub fn Props::target_component_id() -> Self
+pub fn Props::trap_type() -> Self
+pub fn Props::uri_host() -> Self
+pub fn Props::uri_path() -> Self
+pub fn Props::uri_port() -> Self
+pub fn Props::uri_scheme() -> Self
+pub fn Props::verb() -> Self
+
 pub(all) struct RetryPolicyGuard {
   previous : @retry.NamedRetryPolicy?
   name : String
 }
 pub fn RetryPolicyGuard::drop(Self) -> Unit
+
+pub struct Value {
+  repr : ValueRepr
+} derive(Eq, Show)
+pub fn Value::boolean(Bool) -> Self
+pub fn Value::int(Int) -> Self
+pub fn Value::integer(Int64) -> Self
+pub fn Value::text(String) -> Self
+pub fn Value::to_raw(Self) -> @retry.PredicateValue raise RetryBuilderError
+pub fn Value::uint(UInt) -> Self
+pub fn Value::uint64(UInt64) -> Self
+
+type ValueRepr derive(Eq, Show)
 
 // Type aliases
 pub using @host {type AgentAllFilter}

@@ -232,6 +232,7 @@ pub use bindings::golem::api::host::{
 pub mod websocket;
 pub use checkpoint::*;
 pub use quota::*;
+pub mod retry;
 pub use transaction::*;
 pub use websocket::{WebSocketCloseInfo, WebSocketError, WebSocketMessage, WebsocketConnection};
 
@@ -259,86 +260,6 @@ pub async fn await_promise(promise_id: &PromiseId) -> Vec<u8> {
     let pollable = promise.subscribe();
     wstd::io::AsyncPollable::new(pollable).wait_for().await;
     promise.get().unwrap()
-}
-
-pub mod retry {
-    use crate::bindings::golem::api::retry as retry_api;
-
-    pub use retry_api::{NamedRetryPolicy, PredicateValue, RetryPolicy, RetryPredicate};
-
-    /// Get all retry policies active for this agent.
-    pub fn get_retry_policies() -> Vec<NamedRetryPolicy> {
-        retry_api::get_retry_policies()
-    }
-
-    /// Get a specific retry policy by name.
-    pub fn get_retry_policy_by_name(name: &str) -> Option<NamedRetryPolicy> {
-        retry_api::get_retry_policy_by_name(name)
-    }
-
-    /// Resolve the matching retry policy for a given operation context.
-    /// Evaluates named policies in descending priority order; returns the
-    /// policy from the first rule whose predicate matches, or none.
-    pub fn resolve_retry_policy(
-        verb: &str,
-        noun_uri: &str,
-        properties: &[(String, PredicateValue)],
-    ) -> Option<RetryPolicy> {
-        let props: Vec<(String, PredicateValue)> = properties.to_vec();
-        retry_api::resolve_retry_policy(verb, noun_uri, &props)
-    }
-
-    /// Add or overwrite a named retry policy (persisted to oplog).
-    /// If a policy with the same name exists, it is replaced.
-    pub fn set_retry_policy(policy: &NamedRetryPolicy) {
-        retry_api::set_retry_policy(policy);
-    }
-
-    /// Remove a named retry policy by name (persisted to oplog).
-    pub fn remove_retry_policy(name: &str) {
-        retry_api::remove_retry_policy(name);
-    }
-
-    /// Guard that restores the previous state of a named retry policy on drop.
-    /// If the policy existed before, it is restored; if it was newly added, it is removed.
-    pub struct RetryPolicyGuard {
-        previous: Option<NamedRetryPolicy>,
-        name: String,
-    }
-
-    impl Drop for RetryPolicyGuard {
-        fn drop(&mut self) {
-            match self.previous.take() {
-                Some(original) => set_retry_policy(&original),
-                None => remove_retry_policy(&self.name),
-            }
-        }
-    }
-
-    /// Temporarily sets a named retry policy. When the returned guard is dropped,
-    /// the previous policy with the same name is restored (or removed if it didn't exist).
-    #[must_use]
-    pub fn use_retry_policy(policy: NamedRetryPolicy) -> RetryPolicyGuard {
-        let previous = get_retry_policy_by_name(&policy.name);
-        let name = policy.name.clone();
-        set_retry_policy(&policy);
-        RetryPolicyGuard { previous, name }
-    }
-
-    /// Executes the given function with a named retry policy temporarily set.
-    pub fn with_retry_policy<R>(policy: NamedRetryPolicy, f: impl FnOnce() -> R) -> R {
-        let _guard = use_retry_policy(policy);
-        f()
-    }
-
-    /// Executes the given async function with a named retry policy temporarily set.
-    pub async fn with_retry_policy_async<R, F: std::future::Future<Output = R>>(
-        policy: NamedRetryPolicy,
-        f: impl FnOnce() -> F,
-    ) -> R {
-        let _guard = use_retry_policy(policy);
-        f().await
-    }
 }
 
 pub struct PersistenceLevelGuard {

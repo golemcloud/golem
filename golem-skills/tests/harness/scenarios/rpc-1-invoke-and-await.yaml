@@ -7,20 +7,67 @@ steps:
       build: true
 
   - id: "add-global-registry-and-rpc"
-    prompt: >
-      In the test-app project, add a second agent type called `GlobalRegistry` that is a
-      singleton (no constructor parameter / single global instance). It must expose two
-      externally invokable methods: `register(name: string, count: u64) -> bool` and
-      `get-all() -> list<tuple<string, u64>>`. `register` must store or update the name
-      and count in agent state and return `true` if count < 5, `false` otherwise.
-      `get-all` must return all stored entries as a list of (name, count) pairs.
+    prompt:
+      rust: >
+        In the test-app project, add a second agent type called `GlobalRegistry` that is a
+        singleton (no constructor parameter / single global instance). It must expose two
+        externally invokable methods: `register(name: String, count: u64) -> bool` and
+        `get_all() -> Vec<RegistryEntry>`. Define a `RegistryEntry` struct with fields
+        `name: String` and `count: u64`. `register` must store or update the name and count
+        in agent state and return `true` if count < 5, `false` otherwise. `get_all` must
+        return all stored entries.
 
-      Then modify the existing `CounterAgent` so that every time `increment` is called it
-      invokes the `GlobalRegistry` singleton's `register` method, passing the counter's
-      own name and its new count value, and awaits the result. Change `increment` to
-      return a `bool` — the value returned by `register`.
+        Then modify the existing `CounterAgent` so that every time `increment` is called it
+        invokes the `GlobalRegistry` singleton's `register` method, passing the counter's
+        own name and its new count value, and awaits the result. Change `increment` to
+        return a `bool` — the value returned by `register`.
 
-      Make sure the project builds successfully.
+        Make sure the project builds successfully.
+      ts: >
+        In the test-app project, add a second agent type called `GlobalRegistry` that is a
+        singleton (no constructor parameter / single global instance). It must expose two
+        externally invokable methods: `register(name: string, count: number): boolean` and
+        `getAll(): RegistryEntry[]`. Define a `RegistryEntry` type with fields `name: string`
+        and `count: number` (unsigned 64-bit integer). `register` must store or update the
+        name and count in agent state and return `true` if count < 5, `false` otherwise.
+        `getAll` must return all stored entries.
+
+        Then modify the existing `CounterAgent` so that every time `increment` is called it
+        invokes the `GlobalRegistry` singleton's `register` method, passing the counter's
+        own name and its new count value, and awaits the result. Change `increment` to
+        return a `boolean` — the value returned by `register`.
+
+        Make sure the project builds successfully.
+      scala: >
+        In the test-app project, add a second agent type called `GlobalRegistry` that is a
+        singleton (no constructor parameter / single global instance). It must expose two
+        externally invokable methods: `register(name: String, count: Long): Future[Boolean]`
+        and `getAll(): Future[List[RegistryEntry]]`. Define a `RegistryEntry` case class with
+        fields `name: String` and `count: Long`. `register` must store or update the name
+        and count in agent state and return `true` if count < 5, `false` otherwise. `getAll`
+        must return all stored entries.
+
+        Then modify the existing `CounterAgent` so that every time `increment` is called it
+        invokes the `GlobalRegistry` singleton's `register` method, passing the counter's
+        own name and its new count value, and awaits the result. Change `increment` to
+        return a `Future[Boolean]` — the value returned by `register`.
+
+        Make sure the project builds successfully.
+      moonbit: >
+        In the test-app project, add a second agent type called `GlobalRegistry` that is a
+        singleton (no constructor parameter / single global instance). It must expose two
+        externally invokable methods: `register(name: String, count: UInt64) -> Bool` and
+        `get_all() -> Array[RegistryEntry]`. Define a `RegistryEntry` struct with fields
+        `name: String` and `count: UInt64`. `register` must store or update the name and
+        count in agent state and return `true` if count < 5, `false` otherwise. `get_all`
+        must return all stored entries.
+
+        Then modify the existing `CounterAgent` so that every time `increment` is called it
+        invokes the `GlobalRegistry` singleton's `register` method, passing the counter's
+        own name and its new count value, and awaits the result. Change `increment` to
+        return a `Bool` — the value returned by `register`.
+
+        Make sure the project builds successfully.
     expectedSkills:
       rust:
         - "golem-call-another-agent-rust"
@@ -109,7 +156,7 @@ steps:
       result_json:
         - path: "$"
           equals_unordered:
-            - - "c1"
-              - 6
-            - - "c2"
-              - 1
+            - name: "c1"
+              count: 6
+            - name: "c2"
+              count: 1

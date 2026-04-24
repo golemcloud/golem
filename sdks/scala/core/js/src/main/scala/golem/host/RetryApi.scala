@@ -34,8 +34,14 @@ object RetryApi {
   def getRetryPolicies(): List[JsNamedRetryPolicy] =
     RetryModule.getRetryPolicies().toList
 
+  def getNamedPolicies(): List[Retry.NamedPolicy] =
+    getRetryPolicies().map(Retry.NamedPolicy.fromJs)
+
   def getRetryPolicyByName(name: String): Option[JsNamedRetryPolicy] =
     RetryModule.getRetryPolicyByName(name).toOption
+
+  def getNamedPolicyByName(name: String): Option[Retry.NamedPolicy] =
+    getRetryPolicyByName(name).map(Retry.NamedPolicy.fromJs)
 
   def resolveRetryPolicy(
     verb: String,
@@ -44,8 +50,17 @@ object RetryApi {
   ): Option[JsRetryPolicyTree] =
     RetryModule.resolveRetryPolicy(verb, nounUri, properties.map(t => js.Tuple2(t._1, t._2)).toJSArray).toOption
 
+  def resolvePolicy(verb: String, nounUri: String, properties: Retry.Property*): Option[Retry.Policy] =
+    RetryModule
+      .resolveRetryPolicy(verb, nounUri, Retry.propertiesToJsOrThrow(properties))
+      .toOption
+      .map(Retry.Policy.fromJs)
+
   def setRetryPolicy(policy: JsNamedRetryPolicy): Unit =
     RetryModule.setRetryPolicy(policy)
+
+  def setRetryPolicy(policy: Retry.NamedPolicy): Unit =
+    RetryModule.setRetryPolicy(Retry.namedPolicyToJsOrThrow(policy))
 
   def removeRetryPolicy(name: String): Unit =
     RetryModule.removeRetryPolicy(name)

@@ -63,6 +63,20 @@ object AgentClientTypeEndToEndSpec extends ZIOSpecDefault {
               }
             }
 
+          override def asyncInvokeAndAwait(functionName: String, input: JsDataValue): scala.concurrent.Future[JsDataValue] =
+            if (functionName != "echo") scala.concurrent.Future.failed(js.JavaScriptException(s"unexpected method: $functionName"))
+            else {
+              import golem.GolemSchema._
+              val witValue = RpcValueCodec.encodeValue("hello world")
+              witValue match {
+                case Right(wv) => scala.concurrent.Future.successful(JsDataValue.tuple(js.Array(JsElementValue.componentModel(wv))))
+                case Left(err) => scala.concurrent.Future.failed(js.JavaScriptException(err))
+              }
+            }
+
+          override def cancelableAsyncInvokeAndAwait(functionName: String, input: JsDataValue): (scala.concurrent.Future[JsDataValue], CancellationToken) =
+            (asyncInvokeAndAwait(functionName, input), CancellationToken.fromFunction(() => ()))
+
           override def invoke(functionName: String, input: JsDataValue): Either[String, Unit] =
             Left("not used")
 
@@ -91,7 +105,7 @@ object AgentClientTypeEndToEndSpec extends ZIOSpecDefault {
           m
         }.get
 
-        resolvedAgent.call(echo, "world")
+        resolvedAgent.await(echo, "world")
       }.map(out => assertTrue(out == "hello world"))
     }
   )

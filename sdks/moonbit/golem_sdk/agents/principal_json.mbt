@@ -6,8 +6,7 @@ pub suberror JsonCodecError {
 
 ///|
 let hex_chars : FixedArray[Char] = [
-  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e',
-  'f',
+  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
 ]
 
 ///|
@@ -113,20 +112,16 @@ pub fn principal_to_json(principal : @common.Principal) -> Json {
       fields["claims"] = Json::string(oidc.claims)
       Json::object({ "tag": Json::string("oidc"), "val": Json::object(fields) })
     }
-    Agent(agent) => {
+    Agent(agent) =>
       Json::object({
         "tag": Json::string("agent"),
         "val": agent_id_to_json(agent.agent_id),
       })
-    }
-    GolemUser(user) => {
+    GolemUser(user) =>
       Json::object({
         "tag": Json::string("golem-user"),
-        "val": Json::object({
-          "accountId": account_id_to_json(user.account_id),
-        }),
+        "val": Json::object({ "accountId": account_id_to_json(user.account_id) }),
       })
-    }
   }
 }
 
@@ -220,8 +215,7 @@ pub fn principal_from_json(
       }
       let account_id_str = match val.get("accountId") {
         Some(String(s)) => s
-        _ =>
-          raise JsonCodecError("Missing 'accountId' in golem-user principal")
+        _ => raise JsonCodecError("Missing 'accountId' in golem-user principal")
       }
       @common.Principal::GolemUser({
         account_id: { uuid: uuid_from_standard_string(account_id_str) },
@@ -263,5 +257,3 @@ fn agent_id_from_json(json : Json) -> @rpcTypes.AgentId raise JsonCodecError {
 fn account_id_to_json(id : @rpcTypes.AccountId) -> Json {
   Json::string(uuid_to_standard_string(id.uuid))
 }
-
-

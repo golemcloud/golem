@@ -49,6 +49,8 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-manage-plugins` | Managing Golem plugins — listing available plugins, installing and configuring plugins via golem.yaml or CLI, and understanding built-in plugins like the OTLP exporter |
 | `golem-add-config-moonbit` | Adding typed configuration to a MoonBit Golem agent |
 | `golem-add-secret-moonbit` | Adding secrets to MoonBit Golem agents |
+| `golem-quota-moonbit` | Adding resource quotas (rate limiting, capacity, concurrency) to MoonBit Golem agents using QuotaToken and reservations |
+| `golem-retry-policies-moonbit` | Configuring semantic retry policies — composable exponential/periodic/fibonacci backoff, predicates on error properties, scoped overrides with `with_named_policy!`, and live CLI management |
 | `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |

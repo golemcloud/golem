@@ -9,7 +9,7 @@ description: "Fan out work to multiple parallel agents and collect results in a 
 
 Golem agents process invocations **sequentially** — a single agent cannot run work in parallel. To execute work concurrently, distribute it across **multiple agent instances**. This skill covers two approaches:
 
-1. **Child agents via `AgentCompanion.get(id)`** — spawn separate agent instances, dispatch work, and collect results
+1. **Child agents via codegen-generated `XClient.get(id)`** — spawn separate agent instances, dispatch work, and collect results
 2. **`HostApi.fork()`** — clone the current agent at the current execution point for lightweight parallel execution
 
 ## Approach 1: Child Agent Fan-Out
@@ -31,14 +31,12 @@ trait Coordinator extends BaseAgent {
   def fanOut(items: List[String]): Future[List[String]]
 }
 
-object Coordinator extends AgentCompanion[Coordinator]
-
 @agentImplementation()
 class CoordinatorImpl() extends Coordinator {
   override def fanOut(items: List[String]): Future[List[String]] = {
     // Spawn one child per item and call concurrently
     val futures = items.zipWithIndex.map { case (item, i) =>
-      val child = Worker.get(i)
+      val child = WorkerClient.get(i)
       child.process(item)
     }
 
@@ -52,8 +50,6 @@ trait Worker extends BaseAgent {
   class Id(val id: Int)
   def process(data: String): Future[String]
 }
-
-object Worker extends AgentCompanion[Worker]
 
 @agentImplementation()
 class WorkerImpl(private val id: Int) extends Worker {
@@ -82,8 +78,8 @@ class CoordinatorImpl() extends Coordinator {
 
     // Fire-and-forget: trigger each child with its promise ID
     regions.zip(promiseIds).foreach { case (region, pid) =>
-      val child = RegionWorker.get(region)
-      child.trigger.runReport(pid)
+      val child = RegionWorkerClient.get(region)
+      child.runReport.trigger(pid)
     }
 
     // Collect all results (agent suspends on each until completed)
@@ -115,7 +111,7 @@ override def fanOutChunked(items: List[String]): Future[List[String]] = {
   chunks.foldLeft(Future.successful(List.empty[String])) { (accFut, chunk) =>
     accFut.flatMap { acc =>
       val futures = chunk.zipWithIndex.map { case (item, i) =>
-        Worker.get(i).process(item)
+        WorkerClient.get(i).process(item)
       }
       Future.sequence(futures).map(acc ++ _)
     }
@@ -130,7 +126,7 @@ Use `Future.traverse` with `recover` for partial failure handling:
 ```scala
 override def fanOutWithErrors(items: List[String]): Future[(List[String], List[String])] = {
   val futures = items.zipWithIndex.map { case (item, i) =>
-    Worker.get(i).process(item)
+    WorkerClient.get(i).process(item)
       .map(Right(_))
       .recover { case e: Throwable => Left(s"Item $item failed: ${e.getMessage}") }
   }
