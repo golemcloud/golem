@@ -13,10 +13,10 @@
 // limitations under the License.
 
 pub mod sdk {
-    pub const RUST: &str = "2.0.0-dev.8";
-    pub const TS: &str = "1.0.0-dev.6";
-    pub const SCALA: &str = "1.5.0-M9";
-    pub const MOONBIT: &str = "0.5.0-dev.1";
+    pub const RUST: &str = "2.0.0-rc1";
+    pub const TS: &str = "1.0.0-rc1";
+    pub const SCALA: &str = "1.5.0-RC2";
+    pub const MOONBIT: &str = "0.5.0-rc1";
     pub const MANIFEST: &str = "1.5.0";
 
     #[macro_export]
