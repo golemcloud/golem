@@ -50,10 +50,10 @@ secretDefaults:                    # Secret defaults per environment
   <env-name>: {...}
 
 retryPolicyDefaults:               # Retry policy defaults per environment
-  <env-name>: [...]
+  <env-name>: {...}
 
 resourceDefaults:                  # Quota resource defaults per environment
-  <env-name>: [...]
+  <env-name>: {...}
 ```
 
 ## Components
@@ -457,7 +457,7 @@ Named retry policies created in the environment during deployment:
 ```yaml
 retryPolicyDefaults:
   local:
-    - name: default-retry
+    default-retry:
       priority: 10
       predicate: "true"                    # Always match
       policy:
@@ -516,7 +516,7 @@ Quota resource definitions created during deployment:
 ```yaml
 resourceDefaults:
   local:
-    - name: api-calls
+    api-calls:
       limit:
         type: Rate
         value: 100
@@ -525,7 +525,7 @@ resourceDefaults:
       enforcementAction: reject        # reject, throttle, or terminate
       unit: request
       units: requests
-    - name: storage
+    storage:
       limit:
         type: Capacity
         value: 1073741824              # 1 GB

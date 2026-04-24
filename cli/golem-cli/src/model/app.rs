@@ -2109,9 +2109,7 @@ mod app_builder {
         Environment(EnvironmentName),
         SecretDefaults(EnvironmentName),
         RetryPolicyDefaults(EnvironmentName),
-        RetryPolicyDefault(EnvironmentName, String),
         ResourceDefaults(EnvironmentName),
-        ResourceDefault(EnvironmentName, ResourceName),
         Bridge,
     }
 
@@ -2128,9 +2126,7 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Environment(_) => "Environment",
                 UniqueSourceCheckedEntityKey::SecretDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::RetryPolicyDefaults(_) => property,
-                UniqueSourceCheckedEntityKey::RetryPolicyDefault(_, _) => property,
                 UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
-                UniqueSourceCheckedEntityKey::ResourceDefault(_, _) => property,
                 UniqueSourceCheckedEntityKey::Bridge => "Bridge",
             }
         }
@@ -2170,27 +2166,11 @@ mod app_builder {
                         environment_name.0.log_color_highlight()
                     )
                 }
-                UniqueSourceCheckedEntityKey::RetryPolicyDefault(environment_name, name) => {
-                    format!(
-                        "{}.{}.{}",
-                        "retryPolicyDefaults".log_color_highlight(),
-                        environment_name.0.log_color_highlight(),
-                        name.log_color_highlight()
-                    )
-                }
                 UniqueSourceCheckedEntityKey::ResourceDefaults(environment_name) => {
                     format!(
                         "{}.{}",
                         "resourceDefaults".log_color_highlight(),
                         environment_name.0.log_color_highlight()
-                    )
-                }
-                UniqueSourceCheckedEntityKey::ResourceDefault(environment_name, resource_name) => {
-                    format!(
-                        "{}.{}.{}",
-                        "resourceDefaults".log_color_highlight(),
-                        environment_name.0.log_color_highlight(),
-                        resource_name.0.log_color_highlight()
                     )
                 }
                 UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
@@ -2534,31 +2514,23 @@ mod app_builder {
                             UniqueSourceCheckedEntityKey::RetryPolicyDefaults(environment.clone()),
                             &app.source,
                         ) {
-                            for rpd in env_retry_policy_defaults {
-                                if self.add_entity_source(
-                                    UniqueSourceCheckedEntityKey::RetryPolicyDefault(
-                                        environment.clone(),
-                                        rpd.name.clone(),
+                            for (retry_policy_name, retry_policy) in env_retry_policy_defaults {
+                                let entry = self
+                                    .retry_policy_defaults
+                                    .entry(environment.clone())
+                                    .or_default();
+                                entry.insert(
+                                    retry_policy_name.clone(),
+                                    WithSource::new(
+                                        app.source.to_path_buf(),
+                                        DeploymentRetryPolicyDefault {
+                                            name: retry_policy_name,
+                                            priority: retry_policy.priority,
+                                            predicate: retry_policy.predicate.into(),
+                                            policy: retry_policy.policy.into(),
+                                        },
                                     ),
-                                    &app.source,
-                                ) {
-                                    let entry = self
-                                        .retry_policy_defaults
-                                        .entry(environment.clone())
-                                        .or_default();
-                                    entry.insert(
-                                        rpd.name.clone(),
-                                        WithSource::new(
-                                            app.source.to_path_buf(),
-                                            DeploymentRetryPolicyDefault {
-                                                name: rpd.name,
-                                                priority: rpd.priority,
-                                                predicate: rpd.predicate.into(),
-                                                policy: rpd.policy.into(),
-                                            },
-                                        ),
-                                    );
-                                }
+                                );
                             }
                         }
                     }
@@ -2568,23 +2540,24 @@ mod app_builder {
                             UniqueSourceCheckedEntityKey::ResourceDefaults(environment.clone()),
                             &app.source,
                         ) {
-                            for resource_def in resource_defs {
-                                if self.add_entity_source(
-                                    UniqueSourceCheckedEntityKey::ResourceDefault(
-                                        environment.clone(),
-                                        resource_def.name.clone(),
+                            for (resource_name, resource) in resource_defs {
+                                let entry = self
+                                    .resource_definition_defaults
+                                    .entry(environment.clone())
+                                    .or_default();
+                                entry.insert(
+                                    resource_name.clone(),
+                                    WithSource::new(
+                                        app.source.to_path_buf(),
+                                        ResourceDefinitionCreation {
+                                            name: resource_name,
+                                            limit: resource.limit,
+                                            enforcement_action: resource.enforcement_action,
+                                            unit: resource.unit,
+                                            units: resource.units,
+                                        },
                                     ),
-                                    &app.source,
-                                ) {
-                                    let entry = self
-                                        .resource_definition_defaults
-                                        .entry(environment.clone())
-                                        .or_default();
-                                    entry.insert(
-                                        resource_def.name.clone(),
-                                        WithSource::new(app.source.to_path_buf(), resource_def),
-                                    );
-                                }
+                                );
                             }
                         }
                     }
