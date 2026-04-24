@@ -15,6 +15,7 @@
 use self::api::agent_secret::AgentSecretSubcommand;
 use self::api::resource_definition::ResourceDefinitionSubcommand;
 use self::api::retry_policy::RetryPolicySubcommand;
+use crate::command::agent_type::AgentTypeSubcommand;
 use crate::app::template::AppTemplateName;
 use crate::command::api::ApiSubcommand;
 use crate::command::cloud::CloudSubcommand;
@@ -709,9 +710,6 @@ pub enum GolemCliSubcommand {
         #[command(flatten)]
         component_name: OptionalComponentNames,
     },
-    /// List all the deployed agent types
-    ListAgentTypes {},
-
     // Other entities ------------------------------------------------------------------------------
     /// Execute custom, application manifest defined commands
     Exec {
@@ -732,6 +730,11 @@ pub enum GolemCliSubcommand {
     Agent {
         #[clap(subcommand)]
         subcommand: AgentSubcommand,
+    },
+    /// Manage deployed agent types
+    AgentType {
+        #[clap(subcommand)]
+        subcommand: AgentTypeSubcommand,
     },
     /// Manage API gateway objects
     Api {
@@ -1272,6 +1275,22 @@ pub mod worker {
             /// Only required when multiple installations of the same plugin exist.
             #[arg(long)]
             plugin_priority: Option<i32>,
+        },
+    }
+}
+
+pub mod agent_type {
+    use clap::Subcommand;
+    use golem_common::model::agent::AgentTypeName;
+
+    #[derive(Debug, Subcommand)]
+    pub enum AgentTypeSubcommand {
+        /// List all deployed agent types
+        List,
+        /// Get deployed agent type metadata
+        Get {
+            /// Agent type name
+            agent_type_name: AgentTypeName,
         },
     }
 }
@@ -1899,6 +1918,7 @@ pub fn help_target_to_command(target: ShowClapHelpTarget) -> Command {
 
 #[cfg(test)]
 mod test {
+    use crate::command::agent_type::AgentTypeSubcommand;
     use crate::command::api::agent_secret::AgentSecretSubcommand;
     use crate::command::{
         GolemCliCommand, GolemCliSubcommand, builtin_exec_subcommands,
@@ -1930,6 +1950,30 @@ mod test {
             subcommand,
             AgentSecretSubcommand::List { ids: true }
         ));
+    }
+
+    #[test]
+    fn agent_type_list_parses() {
+        let command = GolemCliCommand::try_parse_from(["golem", "agent-type", "list"])
+            .expect("command should parse");
+
+        let GolemCliSubcommand::AgentType { subcommand } = command.subcommand else {
+            panic!("expected agent-type subcommand");
+        };
+
+        assert!(matches!(subcommand, AgentTypeSubcommand::List));
+    }
+
+    #[test]
+    fn agent_type_get_parses() {
+        let command = GolemCliCommand::try_parse_from(["golem", "agent-type", "get", "CounterAgent"])
+            .expect("command should parse");
+
+        let GolemCliSubcommand::AgentType { subcommand } = command.subcommand else {
+            panic!("expected agent-type subcommand");
+        };
+
+        assert!(matches!(subcommand, AgentTypeSubcommand::Get { .. }));
     }
 
     #[test]
