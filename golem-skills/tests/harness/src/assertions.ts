@@ -1,6 +1,22 @@
 import { JSONPath } from "jsonpath-plus";
 import { z } from "zod";
 
+function deepEquals(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    return a.every((val, i) => deepEquals(val, b[i]));
+  }
+  const keysA = Object.keys(a as Record<string, unknown>);
+  const keysB = Object.keys(b as Record<string, unknown>);
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every(
+    (key) => key in (b as Record<string, unknown>) && deepEquals((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
+  );
+}
+
 const ResultJsonAssertionSchema = z.object({
   path: z.string(),
   equals: z.unknown().optional(),
@@ -246,7 +262,7 @@ function evaluateJsonAssertions(
         Array.isArray(expected) &&
         actual.length === expected.length &&
         expected.every((exp: unknown) =>
-          actual.some((act: unknown) => JSON.stringify(act) === JSON.stringify(exp)),
+          actual.some((act: unknown) => deepEquals(act, exp)),
         );
       results.push({
         assertion: `${label}[${jsonAssert.path}].equals_unordered`,

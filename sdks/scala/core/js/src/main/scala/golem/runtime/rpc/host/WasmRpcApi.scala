@@ -81,7 +81,7 @@ private[golem] object WasmRpcApi {
           Left(decodeRpcError(e))
       }
 
-    def asyncInvokeAndAwait(functionName: String, input: JsDataValue): Either[RpcError, JsDataValue] =
+    def asyncInvokeAndAwait(functionName: String, input: JsDataValue): Either[RpcError, RawFutureInvokeResult] =
       try Right(raw.asyncInvokeAndAwait(functionName, input))
       catch {
         case js.JavaScriptException(e) =>
@@ -106,7 +106,7 @@ private[golem] object WasmRpcApi {
       functionName: String,
       input: JsDataValue
     ): Either[RpcError, CancellationToken] =
-      try Right(new CancellationToken(raw.scheduleCancelableInvocation(datetimeToJs(datetime), functionName, input).asInstanceOf[RawCancellationToken]))
+      try Right(CancellationToken(raw.scheduleCancelableInvocation(datetimeToJs(datetime), functionName, input).asInstanceOf[RawCancellationToken]))
       catch {
         case js.JavaScriptException(e) =>
           Left(decodeRpcError(e))
@@ -129,6 +129,14 @@ private[golem] object WasmRpcApi {
   }
 
   @js.native
+  @JSImport("golem:agent/host@1.5.0", "FutureInvokeResult")
+  private[rpc] class RawFutureInvokeResult extends js.Object {
+    def subscribe(): AgentHostApi.Pollable                      = js.native
+    def get(): js.UndefOr[JsResult[JsDataValue, JsRpcError]]   = js.native
+    def cancel(): Unit                                          = js.native
+  }
+
+  @js.native
   @JSImport("golem:agent/host@1.5.0", "WasmRpc")
   private final class RawWasmRpc(
     @unused agentTypeName: String,
@@ -138,7 +146,7 @@ private[golem] object WasmRpcApi {
   ) extends js.Object {
     def invokeAndAwait(methodName: String, input: JsDataValue): JsDataValue                                     = js.native
     def invoke(methodName: String, input: JsDataValue): Unit                                                    = js.native
-    def asyncInvokeAndAwait(methodName: String, input: JsDataValue): JsDataValue                                = js.native
+    def asyncInvokeAndAwait(methodName: String, input: JsDataValue): RawFutureInvokeResult                      = js.native
     def scheduleInvocation(scheduledTime: JsDatetime, methodName: String, input: JsDataValue): Unit             = js.native
     def scheduleCancelableInvocation(scheduledTime: JsDatetime, methodName: String, input: JsDataValue): js.Any =
       js.native

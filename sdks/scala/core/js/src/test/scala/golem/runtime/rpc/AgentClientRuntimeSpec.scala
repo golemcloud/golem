@@ -20,8 +20,7 @@ import golem.data.GolemSchema
 import golem.host.js._
 import golem.runtime.annotations.{DurabilityMode, agentDefinition}
 import golem.BaseAgent
-import golem.runtime.{AgentMethod, AgentType, MethodInvocation}
-import golem.runtime.rpc.AgentClientRuntime.TestHooks
+import golem.runtime.{AgentMethod, AgentType}
 import golem.runtime.rpc.AgentClientRuntimeSpecFixtures._
 import golem.runtime.rpc.host.AgentHostApi
 import zio._
@@ -44,7 +43,7 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
       val expected = SampleOutput("ack")
       invoker.enqueueInvokeResult(encodeValue(expected)(using method.outputSchema))
 
-      ZIO.fromFuture(_ => resolved.call(method, SampleInput("hello", 2))).map { result =>
+      ZIO.fromFuture(_ => resolved.await(method, SampleInput("hello", 2))).map { result =>
         assertTrue(
           result == expected,
           invoker.invokeCalls.headOption.exists(_._1 == method.functionName)
@@ -73,18 +72,15 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
       val resolved = resolvedAgent(invoker)
       val method   = findMethod[RpcParityAgent, SampleInput, SampleOutput](rpcAgentType, "rpcCall")
 
-      ZIO.fromFuture(_ => resolved.call(method, SampleInput("oops", 1))).flip.map { ex =>
+      ZIO.fromFuture(_ => resolved.await(method, SampleInput("oops", 1))).flip.map { ex =>
         assertTrue(ex.getMessage.contains("rpc failed"))
       }
     },
-    test("Trigger works for awaitable methods (invocation kind does not restrict trigger)") {
-      val agentType                                             = rpcAgentType
-      val invoker                                               = new RecordingRpcInvoker
-      val resolved                                              = resolvedAgent(invoker, agentType)
-      val methodBase: AgentMethod[RpcParityAgent, String, Unit] =
-        findMethod[RpcParityAgent, String, Unit](agentType, "fireAndForget")
-      val method: AgentMethod[RpcParityAgent, String, Unit] =
-        methodBase.copy(invocation = MethodInvocation.Awaitable)
+    test("Trigger works for any method") {
+      val agentType = rpcAgentType
+      val invoker   = new RecordingRpcInvoker
+      val resolved  = resolvedAgent(invoker, agentType)
+      val method    = findMethod[RpcParityAgent, String, Unit](agentType, "fireAndForget")
 
       ZIO.fromFuture(_ => resolved.trigger(method, "noop")).map { _ =>
         assertTrue(
@@ -93,56 +89,16 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
         )
       }
     },
-    test("Schedule works for awaitable methods (invocation kind does not restrict schedule)") {
-      val agentType                                             = rpcAgentType
-      val invoker                                               = new RecordingRpcInvoker
-      val resolved                                              = resolvedAgent(invoker, agentType)
-      val methodBase: AgentMethod[RpcParityAgent, String, Unit] =
-        findMethod[RpcParityAgent, String, Unit](agentType, "fireAndForget")
-      val method: AgentMethod[RpcParityAgent, String, Unit] =
-        methodBase.copy(invocation = MethodInvocation.Awaitable)
+    test("Schedule works for any method") {
+      val agentType = rpcAgentType
+      val invoker   = new RecordingRpcInvoker
+      val resolved  = resolvedAgent(invoker, agentType)
+      val method    = findMethod[RpcParityAgent, String, Unit](agentType, "fireAndForget")
 
       ZIO.fromFuture(_ => resolved.schedule(method, golem.Datetime.fromEpochMillis(1.0), "noop")).map { _ =>
         assertTrue(
           invoker.scheduleCalls.nonEmpty,
           invoker.scheduleCalls.head._2 == method.functionName
-        )
-      }
-    },
-    test("AgentClient binder override proxies awaitable RPC methods") {
-      val agentType = rpcAgentType
-      val invoker   = new RecordingRpcInvoker
-      val resolved  = resolvedAgent(invoker, agentType)
-
-      TestHooks.withClientBinder(manualBinder(agentType)) {
-        val client =
-          TestHooks.bindOverride(resolved).getOrElse(throw new RuntimeException("client binder override missing"))
-
-        val output = SampleOutput("ack")
-        invoker.enqueueInvokeResult(encodeValue(output))
-
-        val method = findMethod[RpcParityAgent, SampleInput, SampleOutput](agentType, "rpcCall")
-        ZIO.fromFuture(_ => client.rpcCall(SampleInput("hello", 1))).map { result =>
-          assertTrue(
-            result == output,
-            invoker.invokeCalls.headOption.exists(_._1 == method.functionName)
-          )
-        }
-      }
-    },
-    test("AgentClient binder override proxies fire-and-forget RPC methods") {
-      val agentType = rpcAgentType
-      val invoker   = new RecordingRpcInvoker
-      val resolved  = resolvedAgent(invoker, agentType)
-
-      TestHooks.withClientBinder(manualBinder(agentType)) {
-        val client =
-          TestHooks.bindOverride(resolved).getOrElse(throw new RuntimeException("client binder override missing"))
-        val method = findMethod[RpcParityAgent, String, Unit](agentType, "fireAndForget")
-        client.fireAndForget("event")
-        assertTrue(
-          invoker.triggerCalls.nonEmpty,
-          invoker.triggerCalls.head._1 == method.functionName
         )
       }
     }
@@ -178,36 +134,6 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
   private def encodeValue[A](value: A)(implicit codec: GolemSchema[A]): Either[String, JsDataValue] =
     RpcValueCodec.encodeValue(value).map(wv => JsDataValue.tuple(js.Array(JsElementValue.componentModel(wv))))
 
-  private def manualBinder(
-    rpcAgentType: AgentType[RpcParityAgent, Any]
-  ): AgentClientRuntime.ResolvedAgent[RpcParityAgent] => RpcParityAgent =
-    resolved =>
-      new RpcParityAgent {
-        override def `new`(token: String): RpcParityAgent =
-          this
-
-        override def rpcCall(input: SampleInput): Future[SampleOutput] = {
-          val method = findMethod[RpcParityAgent, SampleInput, SampleOutput](rpcAgentType, "rpcCall")
-          resolved.call(method, input)
-        }
-
-        override def multiArgs(message: String, count: Int): Future[Int] = {
-          val method = findMethod[RpcParityAgent, Vector[Any], Int](rpcAgentType, "multiArgs")
-          resolved.call(method, Vector[Any](message, count))
-        }
-
-        override def fireAndForget(event: String): Unit = {
-          val method = findMethod[RpcParityAgent, String, Unit](rpcAgentType, "fireAndForget")
-          resolved
-            .trigger(method, event)
-            .failed
-            .foreach { err =>
-              js.Dynamic.global.console.error("fire-and-forget trigger failed", err.asInstanceOf[js.Any])
-            }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
-          ()
-        }
-      }
-
   private def findMethod[Trait, In, Out](
     agentType: AgentType[Trait, Any],
     name: String
@@ -232,6 +158,19 @@ object AgentClientRuntimeSpec extends ZIOSpecDefault {
       if (invokeResults.nonEmpty) invokeResults.dequeue()
       else Right(js.Dynamic.literal().asInstanceOf[JsDataValue])
     }
+
+    override def asyncInvokeAndAwait(functionName: String, input: JsDataValue): Future[JsDataValue] = {
+      invokeCalls += ((functionName, input))
+      if (invokeResults.nonEmpty) {
+        invokeResults.dequeue() match {
+          case Right(v)  => Future.successful(v)
+          case Left(err) => Future.failed(js.JavaScriptException(err))
+        }
+      } else Future.successful(js.Dynamic.literal().asInstanceOf[JsDataValue])
+    }
+
+    override def cancelableAsyncInvokeAndAwait(functionName: String, input: JsDataValue): (Future[JsDataValue], CancellationToken) =
+      (asyncInvokeAndAwait(functionName, input), CancellationToken.fromFunction(() => ()))
 
     override def invoke(functionName: String, input: JsDataValue): Either[String, Unit] = {
       triggerCalls += ((functionName, input))

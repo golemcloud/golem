@@ -19,7 +19,7 @@ package golem.runtime.rpc
 import golem.config.ConfigOverride
 import golem.data.GolemSchema
 import golem.host.js._
-import golem.runtime.{AgentMethod, AgentType, MethodInvocation}
+import golem.runtime.{AgentMethod, AgentType}
 import golem.FutureInterop
 import golem.Uuid
 import golem.Datetime
@@ -30,7 +30,6 @@ import scala.scalajs.js
 object AgentClientRuntime {
   @volatile private var remoteResolverOverride: Option[(String, JsDataValue) => Either[String, RemoteAgentClient]] =
     None
-  @volatile private var clientBinderOverride: Option[Any => Any] = None
 
   def resolve[Trait, Constructor](
     agentType: AgentType[Trait, Constructor],
@@ -104,16 +103,8 @@ object AgentClientRuntime {
     def await[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[Out] =
       runAwaitable(method, input)
 
-    def call[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[Out] =
-      method.invocation match {
-        case MethodInvocation.Awaitable =>
-          runAwaitable(method, input)
-        case MethodInvocation.FireAndForget =>
-          runFireAndForget(method, input).asInstanceOf[Future[Out]]
-      }
-
-    private[golem] def callByName[In, Out](methodName: String, input: In): Future[Out] =
-      call(methodByName[In, Out](methodName), input)
+    def cancelableAwait[In, Out](method: AgentMethod[Trait, In, Out], input: In): (Future[Out], CancellationToken) =
+      runCancelableAwaitable(method, input)
 
     def trigger[In](method: AgentMethod[Trait, In, _], input: In): Future[Unit] =
       runFireAndForget(method, input)
@@ -127,18 +118,38 @@ object AgentClientRuntime {
     private def runAwaitable[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[Out] = {
       implicit val inSchema: GolemSchema[In] = method.inputSchema
 
-      val encoded                     = RpcValueCodec.encodeArgs(input)
-      val functionName                = method.functionName
-      val result: Either[String, Out] = for {
-        params <- encoded
-        raw    <- client.rpc.invokeAndAwait(functionName, params)
-        value  <- {
-          implicit val outSchema: GolemSchema[Out] = method.outputSchema
-          RpcValueCodec.decodeResult[Out](raw)
-        }
-      } yield value
+      val functionName = method.functionName
+      RpcValueCodec.encodeArgs(input) match {
+        case Left(err) => FutureInterop.failed(err)
+        case Right(params) =>
+          client.rpc.asyncInvokeAndAwait(functionName, params).map { raw =>
+            implicit val outSchema: GolemSchema[Out] = method.outputSchema
+            RpcValueCodec.decodeResult[Out](raw) match {
+              case Left(err)    => throw scala.scalajs.js.JavaScriptException(err)
+              case Right(value) => value
+            }
+          }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+      }
+    }
 
-      FutureInterop.fromEither(result)
+    private def runCancelableAwaitable[In, Out](method: AgentMethod[Trait, In, Out], input: In): (Future[Out], CancellationToken) = {
+      implicit val inSchema: GolemSchema[In] = method.inputSchema
+
+      val functionName = method.functionName
+      RpcValueCodec.encodeArgs(input) match {
+        case Left(err) =>
+          (FutureInterop.failed(err), CancellationToken.fromFunction(() => ()))
+        case Right(params) =>
+          val (rawFuture, token) = client.rpc.cancelableAsyncInvokeAndAwait(functionName, params)
+          val mappedFuture = rawFuture.map { raw =>
+            implicit val outSchema: GolemSchema[Out] = method.outputSchema
+            RpcValueCodec.decodeResult[Out](raw) match {
+              case Left(err)    => throw scala.scalajs.js.JavaScriptException(err)
+              case Right(value) => value
+            }
+          }(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+          (mappedFuture, token)
+      }
     }
 
     private def runFireAndForget[In, Out0](method: AgentMethod[Trait, In, Out0], input: In): Future[Unit] = {
@@ -194,15 +205,5 @@ object AgentClientRuntime {
       finally remoteResolverOverride = previous
     }
 
-    def withClientBinder[Trait, A](binder: AgentClientRuntime.ResolvedAgent[Trait] => Trait)(thunk: => A): A = {
-      val previous = clientBinderOverride
-      clientBinderOverride =
-        Some((resolved: Any) => binder(resolved.asInstanceOf[AgentClientRuntime.ResolvedAgent[Trait]]))
-      try thunk
-      finally clientBinderOverride = previous
-    }
-
-    def bindOverride[Trait](resolved: AgentClientRuntime.ResolvedAgent[Trait]): Option[Trait] =
-      clientBinderOverride.map(_.asInstanceOf[AgentClientRuntime.ResolvedAgent[Trait] => Trait](resolved))
   }
 }
