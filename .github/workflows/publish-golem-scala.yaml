@@ -36,6 +36,7 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           rust-targets: wasm32-wasip1 wasm32-wasip2
+          install-cargo-binstall: 'true'
 
       - name: Install cargo-make
         run: cargo install --force cargo-make
