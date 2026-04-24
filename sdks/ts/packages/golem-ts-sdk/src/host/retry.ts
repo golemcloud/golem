@@ -20,17 +20,51 @@ export {
   getRetryPolicies,
   getRetryPolicyByName,
   resolveRetryPolicy,
-  setRetryPolicy,
   removeRetryPolicy,
 } from 'golem:api/retry@1.5.0';
 
 import {
   type NamedRetryPolicy,
   getRetryPolicyByName,
-  setRetryPolicy,
-  removeRetryPolicy,
+  setRetryPolicy as rawSetRetryPolicy,
+  removeRetryPolicy as rawRemoveRetryPolicy,
 } from 'golem:api/retry@1.5.0';
 import { executeWithDrop } from './guard';
+import {
+  Duration,
+  NamedPolicy,
+  Policy,
+  Predicate,
+  Props,
+  type DurationInput,
+  type NamedPolicyInput,
+  type PredicateValueInput,
+  toRawDuration,
+  toRawNamedPolicy,
+  toRawPolicy,
+  toRawPredicate,
+  toRawPredicateValue,
+} from './retryBuilder';
+
+export {
+  Duration,
+  NamedPolicy,
+  Policy,
+  Predicate,
+  Props,
+  type DurationInput,
+  type NamedPolicyInput,
+  type PredicateValueInput,
+  toRawDuration,
+  toRawNamedPolicy,
+  toRawPolicy,
+  toRawPredicate,
+  toRawPredicateValue,
+};
+
+export function setRetryPolicy(policy: NamedPolicyInput): void {
+  rawSetRetryPolicy(toRawNamedPolicy(policy));
+}
 
 /**
  * RetryPolicyGuard is a guard type that restores the previous retry policy on drop.
@@ -44,9 +78,9 @@ export class RetryPolicyGuard {
   ) {}
   drop() {
     if (this.previous !== undefined) {
-      setRetryPolicy(this.previous);
+      rawSetRetryPolicy(this.previous);
     } else {
-      removeRetryPolicy(this.name);
+      rawRemoveRetryPolicy(this.name);
     }
   }
 }
@@ -55,13 +89,14 @@ export class RetryPolicyGuard {
  * Temporarily sets a named retry policy and returns a guard.
  * When the guard is dropped, the previous policy with the same name is restored
  * (or removed if it didn't exist).
- * @param policy - The named retry policy to set.
+ * @param policy - The named retry policy to set, either as a raw WIT shape or a high-level NamedPolicy.
  * @returns A RetryPolicyGuard instance.
  */
-export function useRetryPolicy(policy: NamedRetryPolicy): RetryPolicyGuard {
-  const previous = getRetryPolicyByName(policy.name);
-  const name = policy.name;
-  setRetryPolicy(policy);
+export function useRetryPolicy(policy: NamedPolicyInput): RetryPolicyGuard {
+  const rawPolicy = toRawNamedPolicy(policy);
+  const previous = getRetryPolicyByName(rawPolicy.name);
+  const name = rawPolicy.name;
+  rawSetRetryPolicy(rawPolicy);
   return new RetryPolicyGuard(previous, name);
 }
 
@@ -69,11 +104,11 @@ export function useRetryPolicy(policy: NamedRetryPolicy): RetryPolicyGuard {
  * Executes a function with a named retry policy temporarily set.
  * Supports both sync and async callbacks.
  * The policy is restored (or removed) after the function completes.
- * @param policy - The named retry policy to set.
+ * @param policy - The named retry policy to set, either as a raw WIT shape or a high-level NamedPolicy.
  * @param f - The function to execute (sync or async).
  * @returns The result of the executed function, or a Promise if an async function was passed.
  */
-export function withRetryPolicy<R>(policy: NamedRetryPolicy, f: () => R): R {
+export function withRetryPolicy<R>(policy: NamedPolicyInput, f: () => R): R {
   const guard = useRetryPolicy(policy);
   return executeWithDrop([guard], f);
 }
