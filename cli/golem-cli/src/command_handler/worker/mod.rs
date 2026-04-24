@@ -16,7 +16,7 @@ mod stream;
 mod stream_output;
 
 use crate::command::shared_args::{
-    AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
+    AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
 };
 use crate::command::worker::AgentSubcommand;
 use crate::command_handler::Handlers;
@@ -34,7 +34,7 @@ use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::{log_fuzzy_match, log_text_view};
 use crate::model::text::help::{
-    AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp, WorkerNameHelp,
+    AgentNameHelp, AvailableAgentConstructorsHelp, AvailableFunctionNamesHelp,
 };
 use crate::model::text::worker::{
     FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView, format_agent_name_match,
@@ -312,8 +312,8 @@ impl WorkerCommandHandler {
     async fn cmd_invoke(
         &self,
         agent_name: AgentIdArgs,
-        function_name: &WorkerFunctionName,
-        arguments: Vec<WorkerFunctionArgument>,
+        function_name: &AgentFunctionName,
+        arguments: Vec<AgentFunctionArgument>,
         trigger: bool,
         idempotency_key: Option<IdempotencyKey>,
         no_stream: bool,
@@ -579,7 +579,7 @@ impl WorkerCommandHandler {
 
     async fn cmd_repl_stream(
         &self,
-        agent_type_name: String,
+        agent_type_name: AgentTypeName,
         parameters: String,
         idempotency_key: IdempotencyKey,
         phantom_id: Option<Uuid>,
@@ -599,10 +599,10 @@ impl WorkerCommandHandler {
         let Some(agent_type) = self
             .ctx
             .app_handler()
-            .get_agent_type_by_name(&environment, &agent_type_name)
+            .get_agent_type_by_name(&environment, agent_type_name.0.as_str())
             .await?
         else {
-            bail!("Agent type not found: {}", agent_type_name);
+            bail!("Agent type not found: {}", agent_type_name.0);
         };
 
         let typed_parameters = DataValue::try_from_untyped_json(
@@ -813,7 +813,7 @@ impl WorkerCommandHandler {
 
     async fn cmd_list(
         &self,
-        agent_type_name: Option<String>,
+        agent_type_name: Option<AgentTypeName>,
         component_name: Option<ComponentName>,
         filters: Vec<String>,
         scan_cursor: Option<ScanCursor>,
@@ -898,7 +898,7 @@ impl WorkerCommandHandler {
 
     async fn resolve_list_components(
         &self,
-        agent_type_name: Option<String>,
+        agent_type_name: Option<AgentTypeName>,
         component_name: Option<ComponentName>,
         filters: Vec<String>,
     ) -> anyhow::Result<(Vec<ComponentDto>, Vec<String>)> {
@@ -912,16 +912,16 @@ impl WorkerCommandHandler {
                     .environment_handler()
                     .resolve_environment(EnvironmentResolveMode::Any)
                     .await?;
-                debug!("Finding agent type {}", agent_type_name);
+                debug!("Finding agent type {}", agent_type_name.0);
                 let Some(agent_type) = self
                     .ctx
                     .app_handler()
-                    .get_agent_type_by_name(&environment, &agent_type_name)
+                    .get_agent_type_by_name(&environment, agent_type_name.0.as_str())
                     .await?
                 else {
                     log_error(format!(
                         "Agent type {} not found",
-                        agent_type_name.log_color_highlight()
+                        agent_type_name.0.log_color_highlight()
                     ));
                     bail!(NonSuccessfulExit)
                 };
@@ -2232,7 +2232,7 @@ impl WorkerCommandHandler {
                     agent_name.log_color_error_highlight()
                 ));
                 logln("");
-                log_text_view(&WorkerNameHelp);
+                log_text_view(&AgentNameHelp);
                 bail!(NonSuccessfulExit);
             }
         };
@@ -2253,7 +2253,7 @@ impl WorkerCommandHandler {
                 "Deploy the component that defines this agent type or specify environment/application/account prefixes.",
             );
             logln("");
-            log_text_view(&WorkerNameHelp);
+            log_text_view(&AgentNameHelp);
             bail!(NonSuccessfulExit);
         };
 
@@ -2303,7 +2303,7 @@ impl WorkerCommandHandler {
                             name = name.log_color_highlight()
                         ));
                         logln("");
-                        log_text_view(&WorkerNameHelp);
+                        log_text_view(&AgentNameHelp);
                         bail!(NonSuccessfulExit);
                     }
                     Ok(value)
@@ -2324,7 +2324,7 @@ impl WorkerCommandHandler {
                                 err = err.log_color_error_highlight()
                             ));
                             logln("");
-                            log_text_view(&WorkerNameHelp);
+                            log_text_view(&AgentNameHelp);
                             bail!(NonSuccessfulExit);
                         }
                     }
@@ -2391,7 +2391,7 @@ impl WorkerCommandHandler {
                     agent_name.0.log_color_error_highlight()
                 ));
                 logln("");
-                log_text_view(&WorkerNameHelp);
+                log_text_view(&AgentNameHelp);
                 bail!(NonSuccessfulExit);
             }
         }

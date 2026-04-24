@@ -38,6 +38,7 @@ use crate::log::{
     logged_failed_to, logged_finished_or_failed_to, logln,
 };
 use crate::model::GuestLanguage;
+use crate::model::agent::view::AgentTypeView;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
     WithSource,
@@ -62,7 +63,7 @@ use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::schema_evolution::validate_schema_evolution;
-use golem_common::model::agent::{AgentConfigSource, DeployedRegisteredAgentType};
+use golem_common::model::agent::{AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType};
 use golem_common::model::agent_secret::AgentSecretPath;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
@@ -414,6 +415,31 @@ impl AppCommandHandler {
         let agent_types = self.list_agent_types(&environment).await?;
 
         self.ctx.log_handler().log_view(&agent_types);
+
+        Ok(())
+    }
+
+    pub async fn cmd_get_agent_type(&self, agent_type_name: AgentTypeName) -> anyhow::Result<()> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+
+        let Some(agent_type) = self
+            .get_agent_type_by_name(&environment, agent_type_name.0.as_str())
+            .await?
+        else {
+            log_error(format!(
+                "Agent type {} not found",
+                agent_type_name.0.log_color_highlight()
+            ));
+            bail!(NonSuccessfulExit);
+        };
+
+        self.ctx
+            .log_handler()
+            .log_view(&AgentTypeView::new(&agent_type, true));
 
         Ok(())
     }
