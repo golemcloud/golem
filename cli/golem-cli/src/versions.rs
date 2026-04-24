@@ -22,7 +22,7 @@ pub mod sdk {
     #[macro_export]
     macro_rules! manifest_schema_version {
         () => {
-            "1.5.0-rc-1"
+            "1.5.0-rc1"
         };
     }
 }
