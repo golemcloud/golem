@@ -31,7 +31,7 @@ use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
     ComponentRevisionSelection, ComponentView, SelectedComponents,
 };
-use crate::model::config::{collect_leaf_paths, value_at_path};
+use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{DeployConfig, TryUpdateAllWorkersResult};
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
@@ -1347,12 +1347,8 @@ fn collect_unused_agent_config_paths(
         .map(|decl| decl.path.clone())
         .collect::<BTreeSet<_>>();
 
-    let leaf_paths = collect_leaf_paths(config_root);
-
-    let mut unused = leaf_paths
+    let mut unused = collect_unused_leaf_paths(config_root, |path| declared_paths.contains(path))
         .into_iter()
-        .filter(|path| !path.is_empty())
-        .filter(|path| !declared_paths.contains(path))
         .map(|path| path.join("."))
         .collect::<Vec<_>>();
     unused.sort();

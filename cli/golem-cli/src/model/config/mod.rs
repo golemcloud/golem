@@ -48,9 +48,27 @@ pub fn collect_leaf_paths(value: &serde_json::Value) -> Vec<Vec<String>> {
     result
 }
 
+pub fn collect_unused_leaf_paths<F>(
+    value: &serde_json::Value,
+    mut is_consumed: F,
+) -> Vec<Vec<String>>
+where
+    F: FnMut(&[String]) -> bool,
+{
+    let mut unused = collect_leaf_paths(value)
+        .into_iter()
+        .filter(|path| !path.is_empty())
+        .filter(|path| !is_consumed(path))
+        .collect::<Vec<_>>();
+
+    unused.sort();
+    unused.dedup();
+    unused
+}
+
 #[cfg(test)]
 mod test {
-    use super::{collect_leaf_paths, value_at_path};
+    use super::{collect_leaf_paths, collect_unused_leaf_paths, value_at_path};
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use test_r::test;
@@ -114,5 +132,59 @@ mod test {
         result.sort();
 
         assert_eq!(result, vec!["db", "nested.conn"]);
+    }
+
+    #[test]
+    fn collect_unused_leaf_paths_supports_exact_match() {
+        let input = json!({
+            "a": { "x": 1, "y": true },
+            "b": [1,2],
+            "c": "v"
+        });
+
+        let declared = [
+            vec!["a".to_string(), "x".to_string()],
+            vec!["c".to_string()],
+        ];
+
+        let mut result =
+            collect_unused_leaf_paths(&input, |path| declared.contains(&path.to_vec()))
+                .into_iter()
+                .map(|path| path.join("."))
+                .collect::<Vec<_>>();
+        result.sort();
+
+        assert_eq!(result, vec!["a.y", "b"]);
+    }
+
+    #[test]
+    fn collect_unused_leaf_paths_supports_prefix_match() {
+        let input = json!({
+            "db": {
+                "user": "u",
+                "password": "p"
+            },
+            "x": 1
+        });
+
+        let consumed = [vec!["db".to_string()]];
+
+        let result = collect_unused_leaf_paths(&input, |path| {
+            consumed.iter().any(|prefix| path.starts_with(prefix))
+        })
+        .into_iter()
+        .map(|path| path.join("."))
+        .collect::<Vec<_>>();
+
+        assert_eq!(result, vec!["x"]);
+    }
+
+    #[test]
+    fn collect_unused_leaf_paths_filters_root_empty_path() {
+        let input = json!({});
+
+        let result = collect_unused_leaf_paths(&input, |_| false);
+
+        assert!(result.is_empty());
     }
 }

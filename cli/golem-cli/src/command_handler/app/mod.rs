@@ -42,7 +42,7 @@ use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
     WithSource,
 };
-use crate::model::config::{collect_leaf_paths, value_at_path};
+use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
     DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult,
     PostDeploySummary,
@@ -2241,18 +2241,11 @@ fn materialize_agent_secret_defaults(
             }
         }
 
-        let leaf_paths = collect_leaf_paths(&raw_default.value);
-
-        unused_paths.extend(
-            leaf_paths
-                .into_iter()
-                .filter(|leaf_path| !leaf_path.is_empty())
-                .filter(|leaf_path| {
-                    !consumed_paths
-                        .iter()
-                        .any(|consumed_path| leaf_path.starts_with(consumed_path))
-                }),
-        );
+        unused_paths.extend(collect_unused_leaf_paths(&raw_default.value, |leaf_path| {
+            consumed_paths
+                .iter()
+                .any(|consumed_path| leaf_path.starts_with(consumed_path))
+        }));
     }
 
     unused_paths.sort();
