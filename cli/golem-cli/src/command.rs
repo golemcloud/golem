@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use self::api::agent_secret::AgentSecretSubcommand;
-use self::api::resource_definition::ResourceDefinitionSubcommand;
-use self::api::retry_policy::RetryPolicySubcommand;
-use crate::command::agent_type::AgentTypeSubcommand;
 use crate::app::template::AppTemplateName;
+use crate::command::agent_type::AgentTypeSubcommand;
 use crate::command::api::ApiSubcommand;
+use crate::command::api::agent_secret::AgentSecretSubcommand;
 use crate::command::cloud::CloudSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
 use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
+use crate::command::resource_definition::ResourceDefinitionSubcommand;
+use crate::command::retry_policy::RetryPolicySubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::{
@@ -191,7 +191,7 @@ pub struct GolemCliGlobalFlags {
     #[arg(long, short = 'Y', global = true, display_order = 110)]
     pub yes: bool,
 
-    /// Disables filtering of potentially sensitive use values in text mode (e.g. component environment variable values)
+    /// Disables filtering of potentially sensitive user values in text mode (e.g. component environment variable values)
     #[arg(long, global = true, display_order = 111)]
     pub show_sensitive: bool,
 
@@ -477,7 +477,7 @@ impl GolemCliCommand {
                 subcommands: vec!["agent", "invoke"],
                 found_positional_args: vec![],
                 missing_positional_arg: "agent_id",
-                to_partial_match: |_| GolemCliCommandPartialMatch::WorkerInvokeMissingWorkerName,
+                to_partial_match: |_| GolemCliCommandPartialMatch::AgentInvokeMissingAgentName,
             },
             InvalidArgMatcher {
                 subcommands: vec!["agent", "invoke"],
@@ -588,7 +588,7 @@ pub enum GolemCliCommandPartialMatch {
     ComponentMissingSubcommandHelp,
     AgentHelp,
     AgentInvokeMissingFunctionName { agent_name: RawAgentId },
-    WorkerInvokeMissingWorkerName,
+    AgentInvokeMissingAgentName,
     ProfileSwitchMissingProfileName,
 }
 
@@ -762,12 +762,12 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: CloudSubcommand,
     },
-    /// Manage Agent Secrets
+    /// Manage agent secrets
     AgentSecret {
         #[clap(subcommand)]
         subcommand: AgentSecretSubcommand,
     },
-    /// Manage Retry Policies
+    /// Manage retry policies
     RetryPolicy {
         #[clap(subcommand)]
         subcommand: RetryPolicySubcommand,
@@ -779,7 +779,7 @@ pub enum GolemCliSubcommand {
     },
     /// Generate shell completion
     Completion {
-        /// Selects shell
+        /// Select shell
         shell: clap_complete::Shell,
     },
 }
@@ -793,9 +793,9 @@ pub mod shared_args {
     use golem_common::model::component::ComponentName;
 
     pub type ComponentTemplateName = String;
-    pub type NewWorkerArgument = String;
-    pub type WorkerFunctionArgument = String;
-    pub type WorkerFunctionName = String;
+    pub type NewAgentArgument = String;
+    pub type AgentFunctionArgument = String;
+    pub type AgentFunctionName = String;
 
     #[derive(Debug, Args)]
     pub struct OptionalComponentName {
@@ -1046,13 +1046,14 @@ pub mod worker {
     use crate::args::parse_cursor;
     use crate::args::parse_key_val;
     use crate::command::shared_args::{
-        AgentIdArgs, PostDeployArgs, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
+        AgentFunctionArgument, AgentFunctionName, AgentIdArgs, PostDeployArgs, StreamArgs,
     };
     use crate::model::worker::AgentUpdateMode;
     use chrono::{DateTime, Utc};
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
     use golem_common::model::IdempotencyKey;
+    use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::{ComponentName, ComponentRevision};
     use golem_common::model::worker::AgentConfigEntryDto;
     use uuid::Uuid;
@@ -1067,7 +1068,7 @@ pub mod worker {
             #[arg(short, long, value_parser = parse_key_val, value_name = "ENV=VAL")]
             env: Vec<(String, String)>,
             /// Configuration to be provided to the agent.
-            /// This parameter can be provided multiple times in the form --config ${DOT_SEPERATED_CONFIG_PATH}=${CONFIG_VALUE}.
+            /// This parameter can be provided multiple times in the form --config ${DOT_SEPARATED_CONFIG_PATH}=${CONFIG_VALUE}.
             /// Only configuration declared by the agent can be provided. If a given config path is not provided, the default from the manifest
             /// (agents.*.config) is used. If neither value nor default is provided and the config is non-optional, creation
             /// of the agent will fail.
@@ -1080,9 +1081,9 @@ pub mod worker {
             #[command(flatten)]
             agent_id: AgentIdArgs,
             /// Agent function name to invoke
-            function_name: WorkerFunctionName,
+            function_name: AgentFunctionName,
             /// Agent function arguments specified using the agent's language's syntax
-            arguments: Vec<WorkerFunctionArgument>,
+            arguments: Vec<AgentFunctionArgument>,
             /// Only trigger invocation and do not wait for it
             #[clap(long, short)]
             trigger: bool,
@@ -1114,7 +1115,7 @@ pub mod worker {
         List {
             /// Optional filter for a specific agent type
             #[arg(conflicts_with = "component_name")]
-            agent_type_name: Option<String>,
+            agent_type_name: Option<AgentTypeName>,
 
             /// Optional filter for a specific component
             #[arg(long, conflicts_with = "agent_type_name")]
@@ -1133,8 +1134,8 @@ pub mod worker {
             /// The cursor has the format 'layer/position' where both layer and position are numbers.
             #[arg(long, short, value_parser = parse_cursor)]
             scan_cursor: Option<ScanCursor>,
-            /// The maximum the number of returned agents, returns all values is not specified.
-            /// When multiple component is selected, then the limit it is applied separately
+            /// The maximum number of returned agents; returns all values if not specified.
+            /// When multiple components are selected, the limit is applied separately.
             #[arg(long, short)]
             max_count: Option<u64>,
             /// When set to true it queries for most up-to-date status for each agent, default is false
@@ -1156,8 +1157,8 @@ pub mod worker {
         /// Like stream, but for helping Bridge SDK-based REPLs
         #[clap(hide = true)]
         ReplStream {
-            /// AgentTypeName
-            agent_type_name: String,
+            /// Agent type name
+            agent_type_name: AgentTypeName,
             /// Agent parameters in UntypedDataValue JSON format
             parameters: String,
             /// Idempotency key, used for filtering
@@ -1228,7 +1229,7 @@ pub mod worker {
             /// Idempotency key of the invocation to be cancelled
             idempotency_key: IdempotencyKey,
         },
-        /// List files in a worker's directory
+        /// List files in an agent's directory
         Files {
             #[command(flatten)]
             agent_name: AgentIdArgs,
@@ -1236,7 +1237,7 @@ pub mod worker {
             #[arg(default_value = "/")]
             path: String,
         },
-        /// Get contents of a file in a worker
+        /// Get contents of a file in an agent
         FileContents {
             #[command(flatten)]
             agent_name: AgentIdArgs,
@@ -1397,146 +1398,6 @@ pub mod api {
         }
     }
 
-    pub mod resource_definition {
-        use crate::model::EnforcementActionArg;
-        use clap::Subcommand;
-        use golem_common::model::quota::ResourceDefinitionId;
-
-        #[derive(Debug, Subcommand)]
-        pub enum ResourceDefinitionSubcommand {
-            /// Create a quota resource definition in the environment
-            Create {
-                /// Name of the resource (unique within the environment)
-                name: String,
-                /// Resource limit as JSON: one of
-                ///   {"type":"rate","value":N,"period":"second|minute|hour|day|month|year","max":N}
-                ///   {"type":"capacity","value":N}
-                ///   {"type":"concurrency","value":N}
-                #[arg(long)]
-                limit: String,
-                /// Enforcement action when the limit is exceeded: throttle | reject | terminate
-                #[arg(long, default_value_t = EnforcementActionArg::Throttle)]
-                enforcement_action: EnforcementActionArg,
-                /// Singular unit label (e.g. "token")
-                #[arg(long, default_value = "unit")]
-                unit: String,
-                /// Plural unit label (e.g. "tokens")
-                #[arg(long, default_value = "units")]
-                units: String,
-            },
-
-            /// Update an existing quota resource definition
-            Update {
-                /// Name of the resource definition
-                #[arg(required_unless_present = "id", conflicts_with = "id")]
-                name: Option<String>,
-                /// ID of the resource definition (alternative to name)
-                #[arg(long, required_unless_present = "name", conflicts_with = "name")]
-                id: Option<ResourceDefinitionId>,
-                /// New resource limit as JSON (optional)
-                #[arg(long)]
-                limit: Option<String>,
-                /// New enforcement action (optional): throttle | reject | terminate
-                #[arg(long)]
-                enforcement_action: Option<EnforcementActionArg>,
-                /// New singular unit label (optional)
-                #[arg(long)]
-                unit: Option<String>,
-                /// New plural unit label (optional)
-                #[arg(long)]
-                units: Option<String>,
-            },
-
-            /// Delete a quota resource definition
-            Delete {
-                /// Name of the resource definition
-                #[arg(required_unless_present = "id", conflicts_with = "id")]
-                name: Option<String>,
-                /// ID of the resource definition (alternative to name)
-                #[arg(long, required_unless_present = "name", conflicts_with = "name")]
-                id: Option<ResourceDefinitionId>,
-            },
-
-            /// Get a quota resource definition by name or ID
-            Get {
-                /// Name of the resource definition
-                #[arg(required_unless_present = "id", conflicts_with = "id")]
-                name: Option<String>,
-                /// ID of the resource definition (alternative to name)
-                #[arg(long, required_unless_present = "name", conflicts_with = "name")]
-                id: Option<ResourceDefinitionId>,
-            },
-
-            /// List quota resource definitions in the environment
-            List,
-        }
-    }
-
-    pub mod retry_policy {
-        use clap::Subcommand;
-        use golem_common::model::retry_policy::RetryPolicyId;
-
-        #[derive(Debug, Subcommand)]
-        pub enum RetryPolicySubcommand {
-            /// Create a retry policy in the environment
-            Create {
-                /// Name of the retry policy
-                name: String,
-                /// Priority (higher = checked first)
-                #[arg(long)]
-                priority: u32,
-                /// Predicate as JSON or YAML
-                #[arg(long)]
-                predicate: String,
-                /// Policy as JSON or YAML
-                #[arg(long)]
-                policy: String,
-            },
-
-            /// List retry policies in the environment
-            List,
-
-            /// Get a retry policy by name or ID
-            Get {
-                /// Name of the retry policy
-                #[arg(required_unless_present = "id", conflicts_with = "id")]
-                name: Option<String>,
-                /// ID of the retry policy (alternative to name)
-                #[arg(long, required_unless_present = "name", conflicts_with = "name")]
-                id: Option<RetryPolicyId>,
-            },
-
-            /// Update a retry policy
-            Update {
-                /// Name of the retry policy
-                #[arg(required_unless_present = "id", conflicts_with = "id")]
-                name: Option<String>,
-                /// ID of the retry policy (alternative to name)
-                #[arg(long, required_unless_present = "name", conflicts_with = "name")]
-                id: Option<RetryPolicyId>,
-                /// New priority (optional)
-                #[arg(long)]
-                priority: Option<u32>,
-                /// New predicate as JSON or YAML (optional)
-                #[arg(long)]
-                predicate: Option<String>,
-                /// New policy as JSON or YAML (optional)
-                #[arg(long)]
-                policy: Option<String>,
-            },
-
-            /// Delete a retry policy
-            Delete {
-                /// Name of the retry policy
-                #[arg(required_unless_present = "id", conflicts_with = "id")]
-                name: Option<String>,
-                /// ID of the retry policy (alternative to name)
-                #[arg(long, required_unless_present = "name", conflicts_with = "name")]
-                id: Option<RetryPolicyId>,
-            },
-        }
-    }
-
     pub mod security_scheme {
         use clap::Subcommand;
         use golem_common::model::security_scheme::{ProviderKind, SecuritySchemeName};
@@ -1635,6 +1496,146 @@ pub mod api {
     }
 }
 
+pub mod resource_definition {
+    use crate::model::EnforcementActionArg;
+    use clap::Subcommand;
+    use golem_common::model::quota::ResourceDefinitionId;
+
+    #[derive(Debug, Subcommand)]
+    pub enum ResourceDefinitionSubcommand {
+        /// Create a quota resource definition in the environment
+        Create {
+            /// Name of the resource (unique within the environment)
+            name: String,
+            /// Resource limit as JSON: one of
+            ///   {"type":"rate","value":N,"period":"second|minute|hour|day|month|year","max":N}
+            ///   {"type":"capacity","value":N}
+            ///   {"type":"concurrency","value":N}
+            #[arg(long)]
+            limit: String,
+            /// Enforcement action when the limit is exceeded: throttle | reject | terminate
+            #[arg(long, default_value_t = EnforcementActionArg::Throttle)]
+            enforcement_action: EnforcementActionArg,
+            /// Singular unit label (e.g. "token")
+            #[arg(long, default_value = "unit")]
+            unit: String,
+            /// Plural unit label (e.g. "tokens")
+            #[arg(long, default_value = "units")]
+            units: String,
+        },
+
+        /// Update an existing quota resource definition
+        Update {
+            /// Name of the resource definition
+            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            name: Option<String>,
+            /// ID of the resource definition (alternative to name)
+            #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+            id: Option<ResourceDefinitionId>,
+            /// New resource limit as JSON (optional)
+            #[arg(long)]
+            limit: Option<String>,
+            /// New enforcement action (optional): throttle | reject | terminate
+            #[arg(long)]
+            enforcement_action: Option<EnforcementActionArg>,
+            /// New singular unit label (optional)
+            #[arg(long)]
+            unit: Option<String>,
+            /// New plural unit label (optional)
+            #[arg(long)]
+            units: Option<String>,
+        },
+
+        /// Delete a quota resource definition
+        Delete {
+            /// Name of the resource definition
+            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            name: Option<String>,
+            /// ID of the resource definition (alternative to name)
+            #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+            id: Option<ResourceDefinitionId>,
+        },
+
+        /// Get a quota resource definition by name or ID
+        Get {
+            /// Name of the resource definition
+            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            name: Option<String>,
+            /// ID of the resource definition (alternative to name)
+            #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+            id: Option<ResourceDefinitionId>,
+        },
+
+        /// List quota resource definitions in the environment
+        List,
+    }
+}
+
+pub mod retry_policy {
+    use clap::Subcommand;
+    use golem_common::model::retry_policy::RetryPolicyId;
+
+    #[derive(Debug, Subcommand)]
+    pub enum RetryPolicySubcommand {
+        /// Create a retry policy in the environment
+        Create {
+            /// Name of the retry policy
+            name: String,
+            /// Priority (higher = checked first)
+            #[arg(long)]
+            priority: u32,
+            /// Predicate as JSON or YAML
+            #[arg(long)]
+            predicate: String,
+            /// Policy as JSON or YAML
+            #[arg(long)]
+            policy: String,
+        },
+
+        /// List retry policies in the environment
+        List,
+
+        /// Get a retry policy by name or ID
+        Get {
+            /// Name of the retry policy
+            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            name: Option<String>,
+            /// ID of the retry policy (alternative to name)
+            #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+            id: Option<RetryPolicyId>,
+        },
+
+        /// Update a retry policy
+        Update {
+            /// Name of the retry policy
+            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            name: Option<String>,
+            /// ID of the retry policy (alternative to name)
+            #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+            id: Option<RetryPolicyId>,
+            /// New priority (optional)
+            #[arg(long)]
+            priority: Option<u32>,
+            /// New predicate as JSON or YAML (optional)
+            #[arg(long)]
+            predicate: Option<String>,
+            /// New policy as JSON or YAML (optional)
+            #[arg(long)]
+            policy: Option<String>,
+        },
+
+        /// Delete a retry policy
+        Delete {
+            /// Name of the retry policy
+            #[arg(required_unless_present = "id", conflicts_with = "id")]
+            name: Option<String>,
+            /// ID of the retry policy (alternative to name)
+            #[arg(long, required_unless_present = "name", conflicts_with = "name")]
+            id: Option<RetryPolicyId>,
+        },
+    }
+}
+
 pub mod plugin {
     use crate::model::PathBufOrStdin;
     use clap::Subcommand;
@@ -1642,11 +1643,11 @@ pub mod plugin {
 
     #[derive(Debug, Subcommand)]
     pub enum PluginSubcommand {
-        /// List account components
+        /// List account plugins
         List,
-        /// Get
+        /// Get plugin details
         Get {
-            /// PluginID
+            /// Plugin ID
             plugin_id: Uuid, // TODO: atomic: missing method for looking up by name
         },
         /// Register a new plugin for the account
@@ -1656,7 +1657,7 @@ pub mod plugin {
         },
         /// Unregister a plugin
         Unregister {
-            /// PluginID
+            /// Plugin ID
             plugin_id: Uuid, // TODO: atomic: missing method for deleting by name
         },
     }
@@ -1918,15 +1919,13 @@ pub fn help_target_to_command(target: ShowClapHelpTarget) -> Command {
 
 #[cfg(test)]
 mod test {
-    use crate::command::agent_type::AgentTypeSubcommand;
-    use crate::command::api::agent_secret::AgentSecretSubcommand;
+
     use crate::command::{
-        GolemCliCommand, GolemCliSubcommand, builtin_exec_subcommands,
-        help_target_to_subcommand_names,
+        GolemCliCommand, builtin_exec_subcommands, help_target_to_subcommand_names,
     };
     use crate::error::ShowClapHelpTarget;
     use clap::builder::StyledStr;
-    use clap::{Command, CommandFactory, Parser};
+    use clap::{Command, CommandFactory};
     use itertools::Itertools;
     use std::collections::{BTreeMap, BTreeSet};
     use strum::IntoEnumIterator;
@@ -1935,45 +1934,6 @@ mod test {
     #[test]
     fn command_debug_assert() {
         GolemCliCommand::command().debug_assert();
-    }
-
-    #[test]
-    fn agent_secret_list_accepts_ids_flag() {
-        let command = GolemCliCommand::try_parse_from(["golem", "agent-secret", "list", "--ids"])
-            .expect("command should parse");
-
-        let GolemCliSubcommand::AgentSecret { subcommand } = command.subcommand else {
-            panic!("expected agent-secret subcommand");
-        };
-
-        assert!(matches!(
-            subcommand,
-            AgentSecretSubcommand::List { ids: true }
-        ));
-    }
-
-    #[test]
-    fn agent_type_list_parses() {
-        let command = GolemCliCommand::try_parse_from(["golem", "agent-type", "list"])
-            .expect("command should parse");
-
-        let GolemCliSubcommand::AgentType { subcommand } = command.subcommand else {
-            panic!("expected agent-type subcommand");
-        };
-
-        assert!(matches!(subcommand, AgentTypeSubcommand::List));
-    }
-
-    #[test]
-    fn agent_type_get_parses() {
-        let command = GolemCliCommand::try_parse_from(["golem", "agent-type", "get", "CounterAgent"])
-            .expect("command should parse");
-
-        let GolemCliSubcommand::AgentType { subcommand } = command.subcommand else {
-            panic!("expected agent-type subcommand");
-        };
-
-        assert!(matches!(subcommand, AgentTypeSubcommand::Get { .. }));
     }
 
     #[test]

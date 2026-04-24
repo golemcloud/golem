@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::api::retry_policy::RetryPolicySubcommand;
+use crate::command::retry_policy::RetryPolicySubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
