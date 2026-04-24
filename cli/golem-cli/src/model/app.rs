@@ -32,7 +32,7 @@ use anyhow::{Context, anyhow};
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
-use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
+use golem_common::model::deployment::DeploymentRetryPolicyDefault;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::quota::ResourceDefinitionCreation;
@@ -347,8 +347,7 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>>,
     mcp_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
-    agent_secrets_defaults:
-        BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
+    agent_secrets_defaults: BTreeMap<EnvironmentName, Vec<WithSource<serde_json::Value>>>,
     retry_policy_defaults: BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
     resource_definition_defaults:
         BTreeMap<EnvironmentName, Vec<WithSource<ResourceDefinitionCreation>>>,
@@ -678,16 +677,11 @@ impl Application {
     pub fn deployment_agent_secret_defaults(
         &self,
         environment: &EnvironmentName,
-    ) -> Vec<DeploymentAgentSecretDefault> {
-        let mut result = Vec::new();
-        if let Some(environment_agent_secret_defaults) =
-            self.agent_secrets_defaults.get(environment)
-        {
-            for agent_secret_default in environment_agent_secret_defaults {
-                result.push(agent_secret_default.value.clone())
-            }
-        }
-        result
+    ) -> Vec<WithSource<serde_json::Value>> {
+        self.agent_secrets_defaults
+            .get(environment)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn deployment_retry_policy_defaults(
@@ -2041,7 +2035,6 @@ impl PluginInstallation {
 
 mod app_builder {
     use super::ResourceDefinitionCreation;
-    use super::flatten_json_leaf_paths;
     use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
@@ -2060,12 +2053,9 @@ mod app_builder {
     use crate::{fs, fuzzy};
     use colored::Colorize;
     use golem_common::model::agent::AgentTypeName;
-    use golem_common::model::agent_secret::AgentSecretPath;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
-    use golem_common::model::deployment::{
-        DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault,
-    };
+    use golem_common::model::deployment::DeploymentRetryPolicyDefault;
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::{
@@ -2191,8 +2181,7 @@ mod app_builder {
 
         bridge_sdks: WithSource<app_raw::BridgeSdks>,
 
-        agent_secret_defaults:
-            BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
+        agent_secret_defaults: BTreeMap<EnvironmentName, Vec<WithSource<serde_json::Value>>>,
 
         retry_policy_defaults:
             BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
@@ -2474,23 +2463,10 @@ mod app_builder {
                     }
 
                     for (environment, environment_secret_defaults) in app.application.secret_defaults {
-                        let entry = self.agent_secret_defaults
+                        self.agent_secret_defaults
                             .entry(environment.clone())
-                            .or_default();
-
-                        for (path, secret_value) in
-                            flatten_json_leaf_paths(environment_secret_defaults)
-                        {
-                            entry.push(
-                                WithSource::new(
-                                    app.source.to_path_buf(),
-                                    DeploymentAgentSecretDefault {
-                                        path: AgentSecretPath(path),
-                                        secret_value,
-                                    }
-                                )
-                            )
-                        }
+                            .or_default()
+                            .push(WithSource::new(app.source.to_path_buf(), environment_secret_defaults));
                     }
 
                     for (environment, env_retry_policy_defaults) in app.application.retry_policy_defaults {
@@ -3041,33 +3017,6 @@ mod app_builder {
             (None, None) => None,
         }
     }
-}
-
-fn collect_json_leaf_paths(
-    value: serde_json::Value,
-    prefix: &mut Vec<String>,
-    result: &mut Vec<(Vec<String>, serde_json::Value)>,
-) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, nested) in map {
-                prefix.push(key);
-                collect_json_leaf_paths(nested, prefix, result);
-                prefix.pop();
-            }
-        }
-        leaf => {
-            if !prefix.is_empty() {
-                result.push((prefix.clone(), leaf));
-            }
-        }
-    }
-}
-
-fn flatten_json_leaf_paths(value: serde_json::Value) -> Vec<(Vec<String>, serde_json::Value)> {
-    let mut result = Vec::new();
-    collect_json_leaf_paths(value, &mut vec![], &mut result);
-    result
 }
 
 #[cfg(test)]

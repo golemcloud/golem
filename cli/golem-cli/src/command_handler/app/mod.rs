@@ -40,7 +40,9 @@ use crate::log::{
 use crate::model::GuestLanguage;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
+    WithSource,
 };
+use crate::model::config::{collect_leaf_paths, value_at_path};
 use crate::model::deploy::{
     DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult,
     PostDeploySummary,
@@ -61,6 +63,7 @@ use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRol
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::schema_evolution::validate_schema_evolution;
 use golem_common::model::agent::{AgentConfigSource, DeployedRegisteredAgentType};
+use golem_common::model::agent_secret::AgentSecretPath;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
@@ -1476,13 +1479,15 @@ impl AppCommandHandler {
     ) -> anyhow::Result<CurrentDeployment> {
         let app_ctx = self.ctx.app_context_lock().await;
 
-        let mut agent_secret_defaults = app_ctx
+        let raw_agent_secret_defaults = app_ctx
             .some_or_err()?
             .application()
             .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name);
 
-        let unused_secret_default_paths =
-            collect_unused_agent_secret_default_paths(deploy_diff, &agent_secret_defaults);
+        let declared_secret_paths = collect_declared_agent_secret_paths(deploy_diff)?;
+
+        let (agent_secret_defaults, unused_secret_default_paths) =
+            materialize_agent_secret_defaults(&raw_agent_secret_defaults, &declared_secret_paths);
 
         if !unused_secret_default_paths.is_empty() {
             let rendered_unused_secret_default_paths = unused_secret_default_paths
@@ -1504,12 +1509,6 @@ impl AppCommandHandler {
             {
                 bail!(NonSuccessfulExit);
             }
-
-            let unused_set = unused_secret_default_paths
-                .into_iter()
-                .collect::<BTreeSet<_>>();
-
-            agent_secret_defaults.retain(|default| !unused_set.contains(&default.path.0));
         }
 
         let agent_secret_defaults = agent_secret_defaults.apply(resolve_secret_defaults)?;
@@ -2180,31 +2179,83 @@ fn resolve_secret_defaults(
         .collect()
 }
 
-fn collect_declared_agent_secret_paths(deploy_diff: &DeployDiff) -> BTreeSet<Vec<String>> {
-    deploy_diff
-        .deployable_components
-        .values()
-        .flat_map(|component| component.agent_types.iter())
-        .flat_map(|agent_type| agent_type.config.iter())
-        .filter(|config| config.source == AgentConfigSource::Secret)
-        .map(|config| config.path.clone())
-        .collect()
+fn collect_declared_agent_secret_paths(
+    deploy_diff: &DeployDiff,
+) -> anyhow::Result<BTreeSet<Vec<String>>> {
+    let mut declared_secret_paths = BTreeSet::new();
+    let mut declared_secret_types = BTreeMap::<Vec<String>, _>::new();
+
+    for component in deploy_diff.deployable_components.values() {
+        for agent_type in &component.agent_types {
+            for config in &agent_type.config {
+                if config.source != AgentConfigSource::Secret {
+                    continue;
+                }
+
+                declared_secret_paths.insert(config.path.clone());
+
+                if let Some((existing_type, existing_agent_type)) =
+                    declared_secret_types.get(&config.path)
+                {
+                    if existing_type != &config.value_type {
+                        bail!(
+                            "Conflicting secret declaration for path '{}' across agents '{}' and '{}': declared types differ ({} vs {}).",
+                            config.path.join("."),
+                            existing_agent_type,
+                            agent_type.type_name.0,
+                            format!("{:?}", existing_type),
+                            format!("{:?}", config.value_type),
+                        );
+                    }
+                } else {
+                    declared_secret_types.insert(
+                        config.path.clone(),
+                        (config.value_type.clone(), agent_type.type_name.0.clone()),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(declared_secret_paths)
 }
 
-fn collect_unused_agent_secret_default_paths(
-    deploy_diff: &DeployDiff,
-    defaults: &[DeploymentAgentSecretDefault],
-) -> Vec<Vec<String>> {
-    let declared_secret_paths = collect_declared_agent_secret_paths(deploy_diff);
+fn materialize_agent_secret_defaults(
+    raw_defaults: &[WithSource<serde_json::Value>],
+    declared_secret_paths: &BTreeSet<Vec<String>>,
+) -> (Vec<DeploymentAgentSecretDefault>, Vec<Vec<String>>) {
+    let mut materialized_defaults = Vec::new();
+    let mut unused_paths = Vec::new();
 
-    let mut unused_paths = defaults
-        .iter()
-        .map(|default| default.path.0.clone())
-        .filter(|path| !declared_secret_paths.contains(path))
-        .collect::<Vec<_>>();
+    for raw_default in raw_defaults {
+        let mut consumed_paths = Vec::new();
+
+        for declared_path in declared_secret_paths {
+            if let Some(secret_value) = value_at_path(&raw_default.value, declared_path) {
+                materialized_defaults.push(DeploymentAgentSecretDefault {
+                    path: AgentSecretPath(declared_path.clone()),
+                    secret_value: secret_value.clone(),
+                });
+                consumed_paths.push(declared_path.clone());
+            }
+        }
+
+        let leaf_paths = collect_leaf_paths(&raw_default.value);
+
+        unused_paths.extend(
+            leaf_paths
+                .into_iter()
+                .filter(|leaf_path| !leaf_path.is_empty())
+                .filter(|leaf_path| {
+                    !consumed_paths
+                        .iter()
+                        .any(|consumed_path| leaf_path.starts_with(consumed_path))
+                }),
+        );
+    }
 
     unused_paths.sort();
     unused_paths.dedup();
 
-    unused_paths
+    (materialized_defaults, unused_paths)
 }

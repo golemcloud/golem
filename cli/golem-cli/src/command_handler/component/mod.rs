@@ -31,6 +31,7 @@ use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
     ComponentRevisionSelection, ComponentView, SelectedComponents,
 };
+use crate::model::config::{collect_leaf_paths, value_at_path};
 use crate::model::deploy::{DeployConfig, TryUpdateAllWorkersResult};
 use crate::model::environment::{
     EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
@@ -1310,20 +1311,6 @@ fn resolve_env_vars(
     )
 }
 
-fn config_value_at_path<'a>(
-    root: &'a serde_json::Value,
-    path: &[String],
-) -> Option<&'a serde_json::Value> {
-    let mut current = root;
-    for segment in path {
-        current = match current {
-            serde_json::Value::Object(map) => map.get(segment)?,
-            _ => return None,
-        };
-    }
-    Some(current)
-}
-
 fn materialize_agent_config_entries(
     agent_type: &AgentType,
     config_root: Option<&serde_json::Value>,
@@ -1337,29 +1324,12 @@ fn materialize_agent_config_entries(
         .iter()
         .filter(|decl| decl.source == AgentConfigSource::Local)
         .filter_map(|decl| {
-            config_value_at_path(config_root, &decl.path).map(|value| AgentConfigEntryDto {
+            value_at_path(config_root, &decl.path).map(|value| AgentConfigEntryDto {
                 path: decl.path.clone(),
                 value: value.clone().into(),
             })
         })
         .collect()
-}
-
-fn collect_config_leaf_paths(
-    value: &serde_json::Value,
-    prefix: &mut Vec<String>,
-    result: &mut Vec<Vec<String>>,
-) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, nested) in map {
-                prefix.push(key.clone());
-                collect_config_leaf_paths(nested, prefix, result);
-                prefix.pop();
-            }
-        }
-        _ => result.push(prefix.clone()),
-    }
 }
 
 fn collect_unused_agent_config_paths(
@@ -1377,8 +1347,7 @@ fn collect_unused_agent_config_paths(
         .map(|decl| decl.path.clone())
         .collect::<BTreeSet<_>>();
 
-    let mut leaf_paths = Vec::new();
-    collect_config_leaf_paths(config_root, &mut vec![], &mut leaf_paths);
+    let leaf_paths = collect_leaf_paths(config_root);
 
     let mut unused = leaf_paths
         .into_iter()
