@@ -140,17 +140,13 @@ pub enum RegistryChangeEvent {
         event_id: ChangeEventId,
         application_id: Uuid,
         account_id: Uuid,
-        /// Human-readable application name (used for targeted cache invalidation).
         app_name: String,
-        /// All non-deleted environment UUIDs under this application at deletion time.
         environment_ids: Vec<Uuid>,
     },
     EnvironmentDeleted {
         event_id: ChangeEventId,
         environment_id: Uuid,
-        /// Human-readable application name (used for targeted cache invalidation).
         app_name: String,
-        /// Human-readable environment name (used for targeted cache invalidation).
         env_name: String,
     },
 }
