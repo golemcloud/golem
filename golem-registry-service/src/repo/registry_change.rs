@@ -403,14 +403,8 @@ pub struct NewRegistryChangeEvent {
     pub resource_definition_id: Option<Uuid>,
     pub resource_name: Option<String>,
     pub application_id: Option<Uuid>,
-    /// Set for ApplicationDeleted and EnvironmentDeleted: the application's
-    /// human-readable name, used for targeted cache invalidation.
     pub app_name: Option<String>,
-    /// Set for ApplicationDeleted: UUIDs of all non-deleted environments under
-    /// the deleted application, used for targeted cache invalidation.
     pub environment_ids: Vec<Uuid>,
-    /// Set for EnvironmentDeleted: the environment's human-readable name,
-    /// used for targeted cache invalidation.
     pub env_name: Option<String>,
 }
 
@@ -775,29 +769,6 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                 Some(json) if !json.is_empty() => serde_json::from_str(&json).map_err(|e| {
                     RepoError::InternalError(anyhow::anyhow!("Failed to deserialize domains: {e}"))
                 })?,
-                _ => Vec::new(),
-            };
-            // SQLite stores UUID arrays as JSON strings
-            let environment_ids_json: Option<String> =
-                row.try_get("environment_ids").map_err(RepoError::from)?;
-            let _environment_ids: Vec<Uuid> = match environment_ids_json {
-                Some(json) if !json.is_empty() => {
-                    let strings: Vec<String> = serde_json::from_str(&json).map_err(|e| {
-                        RepoError::InternalError(anyhow::anyhow!(
-                            "Failed to deserialize environment_ids: {e}"
-                        ))
-                    })?;
-                    strings
-                        .iter()
-                        .map(|s| {
-                            Uuid::parse_str(s).map_err(|e| {
-                                RepoError::InternalError(anyhow::anyhow!(
-                                    "Invalid UUID in environment_ids: {e}"
-                                ))
-                            })
-                        })
-                        .collect::<Result<Vec<_>, _>>()?
-                }
                 _ => Vec::new(),
             };
             // SQLite stores UUID arrays as JSON strings
