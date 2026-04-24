@@ -14,6 +14,7 @@
 
 use crate::base_model::AgentId;
 use crate::base_model::account::AccountId;
+use crate::base_model::application::ApplicationId;
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use crate::base_model::diff::Hash as DiffHash;
@@ -206,6 +207,30 @@ pub enum RegistryInvalidationEvent {
         event_id: u64,
         environment_id: EnvironmentId,
     },
+    /// An application was deleted. Subscribers should flush any cache entries
+    /// keyed on the application's name so that a subsequent same-name recreation
+    /// resolves through a fresh lookup rather than returning stale identifiers
+    /// for the now-orphaned environments/components.
+    ApplicationDeleted {
+        event_id: u64,
+        application_id: ApplicationId,
+        account_id: AccountId,
+        /// Human-readable application name (matches AgentResolutionCache key).
+        app_name: String,
+        /// All non-deleted environment UUIDs under this application at deletion time.
+        environment_ids: Vec<EnvironmentId>,
+    },
+    /// An environment was deleted. Subscribers should flush any cache entries
+    /// scoped to this environment so that a same-name recreation does not serve
+    /// stale resolutions pointing at the deleted environment's components.
+    EnvironmentDeleted {
+        event_id: u64,
+        environment_id: EnvironmentId,
+        /// Human-readable application name (matches AgentResolutionCache key).
+        app_name: String,
+        /// Human-readable environment name (matches AgentResolutionCache key).
+        env_name: String,
+    },
 }
 
 impl RegistryInvalidationEvent {
@@ -220,6 +245,8 @@ impl RegistryInvalidationEvent {
             Self::RetryPolicyChanged { event_id, .. } => *event_id,
             Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
             Self::AgentSecretChanged { event_id, .. } => *event_id,
+            Self::ApplicationDeleted { event_id, .. } => *event_id,
+            Self::EnvironmentDeleted { event_id, .. } => *event_id,
         }
     }
 }

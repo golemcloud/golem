@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use super::model::application::{ApplicationExtRevisionRecord, ApplicationRepoError};
+use super::registry_change::{
+    DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
+};
 use crate::repo::model::BindFields;
 use crate::repo::model::application::{ApplicationRecord, ApplicationRevisionRecord};
 use async_trait::async_trait;
@@ -24,7 +27,7 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::{RepoError, ResultExt};
 use indoc::indoc;
-use sqlx::Database;
+use sqlx::{Database, Row};
 use std::fmt::Debug;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
@@ -61,7 +64,7 @@ pub trait ApplicationRepo: Send + Sync {
     async fn delete(
         &self,
         revision: ApplicationRevisionRecord,
-    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError>;
+    ) -> Result<RequiresNotificationSignal<ApplicationExtRevisionRecord>, ApplicationRepoError>;
 }
 
 pub struct LoggedApplicationRepo<Repo: ApplicationRepo> {
@@ -143,7 +146,8 @@ impl<Repo: ApplicationRepo> ApplicationRepo for LoggedApplicationRepo<Repo> {
     async fn delete(
         &self,
         revision: ApplicationRevisionRecord,
-    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
+    ) -> Result<RequiresNotificationSignal<ApplicationExtRevisionRecord>, ApplicationRepoError>
+    {
         let span = Self::span_app_id(revision.application_id);
         self.repo.delete(revision).instrument(span).await
     }
@@ -356,7 +360,8 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
     async fn delete(
         &self,
         revision: ApplicationRevisionRecord,
-    ) -> Result<ApplicationExtRevisionRecord, ApplicationRepoError> {
+    ) -> Result<RequiresNotificationSignal<ApplicationExtRevisionRecord>, ApplicationRepoError>
+    {
         self.with_tx_err("delete", |tx| {
             async move {
                 let revision = Self::insert_revision(tx, revision).await?;
@@ -377,6 +382,40 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
                 .await?
                 .ok_or(ApplicationRepoError::ConcurrentModification)?;
 
+                // When an application is soft-deleted, its child environments become
+                // unreachable through the public API. Worker-service keeps an
+                // in-memory AgentResolutionCache keyed on (app_name, env_name, ...)
+                // that would otherwise continue to serve the old environment's
+                // resolution after a same-name recreation, pointing at an orphaned
+                // component_id. Emit an ApplicationDeleted invalidation event carrying
+                // the app name and all live environment UUIDs so subscribers can
+                // perform targeted cache invalidation without a full flush.
+                let env_id_rows = tx
+                    .fetch_all(
+                        sqlx::query(indoc! { r#"
+                            SELECT environment_id FROM environments
+                            WHERE application_id = $1
+                              AND deleted_at IS NULL
+                        "#})
+                        .bind(revision.application_id),
+                    )
+                    .await?;
+                let environment_ids: Vec<Uuid> = env_id_rows
+                    .iter()
+                    .map(|row| row.try_get::<Uuid, _>("environment_id").map_err(RepoError::from))
+                    .collect::<Result<_, _>>()?;
+                let change_event = NewRegistryChangeEvent::application_deleted(
+                    revision.application_id,
+                    application_record.account_id,
+                    revision.name.clone(),
+                    environment_ids,
+                );
+                DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
+                    tx,
+                    &change_event,
+                )
+                .await?;
+
                 Ok(ApplicationExtRevisionRecord {
                     account_id: application_record.account_id,
                     entity_created_at: application_record.audit.created_at,
@@ -386,6 +425,7 @@ impl ApplicationRepo for DbApplicationRepo<PostgresPool> {
             .boxed()
         })
         .await
+        .map(RequiresSignalExt::requires_notification_signal)
     }
 }
 
