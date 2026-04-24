@@ -30,6 +30,9 @@ pub fn collect_leaf_paths(value: &serde_json::Value) -> Vec<Vec<String>> {
     fn collect(value: &serde_json::Value, prefix: &mut Vec<String>, result: &mut Vec<Vec<String>>) {
         match value {
             serde_json::Value::Object(map) => {
+                if map.is_empty() {
+                    result.push(prefix.clone());
+                }
                 for (key, nested) in map {
                     prefix.push(key.clone());
                     collect(nested, prefix, result);
@@ -93,5 +96,23 @@ mod test {
         result.sort();
 
         assert_eq!(result, vec!["a.x", "a.y", "b", "c"]);
+    }
+
+    #[test]
+    fn collect_leaf_paths_treats_empty_object_as_terminal() {
+        let input = json!({
+            "db": {},
+            "nested": {
+                "conn": {}
+            }
+        });
+
+        let mut result = collect_leaf_paths(&input)
+            .into_iter()
+            .map(|path| path.join("."))
+            .collect::<Vec<_>>();
+        result.sort();
+
+        assert_eq!(result, vec!["db", "nested.conn"]);
     }
 }

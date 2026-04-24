@@ -1351,6 +1351,7 @@ fn collect_unused_agent_config_paths(
 
     let mut unused = leaf_paths
         .into_iter()
+        .filter(|path| !path.is_empty())
         .filter(|path| !declared_paths.contains(path))
         .map(|path| path.join("."))
         .collect::<Vec<_>>();
