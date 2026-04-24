@@ -2990,12 +2990,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             .on_shard_assignment_changed()
             .await?;
 
-        let current_assignment = this.shard_service().try_get_current_assignment();
-        info!(
-            current_assignment = ?current_assignment,
-            "Investigation: starting shard assignment recovery"
-        );
-
+        let _current_assignment = this.shard_service().try_get_current_assignment();
         let workers = this.worker_service().get_running_workers_in_shards().await;
 
         debug!(workers = ?workers, "Recovering running workers");
@@ -3025,10 +3020,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             }
         }
 
-        info!(
-            current_assignment = ?current_assignment,
-            "Investigation: finished shard assignment recovery"
-        );
         Ok(())
     }
 }
