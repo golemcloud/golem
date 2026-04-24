@@ -64,6 +64,6 @@ pub mod scala_dep {
 }
 
 pub mod ai {
-    pub const VERSION: &str = "v0.5.0-dev.1";
-    pub const SUFFIX: &str = "-dev.wasm";
+    pub const VERSION: &str = "v0.5.0";
+    pub const SUFFIX: &str = ".wasm";
 }

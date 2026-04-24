@@ -1,10 +1,10 @@
 [dependencies]
 # Golem AI provider crates - uncomment the ones you need:
 # LLM providers (pick one plus the base library)
-golem-ai-llm = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
-golem-ai-llm-openai = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
-# golem-ai-llm-anthropic = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
-# golem-ai-llm-openrouter = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
-# golem-ai-llm-bedrock = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
-# golem-ai-llm-grok = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
-# golem-ai-llm-ollama = { git = "https://github.com/golemcloud/golem-ai", branch = "dev" }
+golem-ai-llm = "0.5.0"
+golem-ai-llm-openai = "0.5.0"
+# golem-ai-llm-anthropic = "0.5.0"
+# golem-ai-llm-openrouter = "0.5.0"
+# golem-ai-llm-bedrock = "0.5.0"
+# golem-ai-llm-grok = "0.5.0"
+# golem-ai-llm-ollama = "0.5.0"
