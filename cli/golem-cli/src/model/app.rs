@@ -35,7 +35,7 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, Co
 use golem_common::model::deployment::DeploymentRetryPolicyDefault;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::quota::ResourceDefinitionCreation;
+use golem_common::model::quota::{ResourceDefinitionCreation, ResourceName};
 use golem_common::model::validate_lower_kebab_case_identifier;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
@@ -347,10 +347,11 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>>,
     mcp_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
-    agent_secrets_defaults: BTreeMap<EnvironmentName, Vec<WithSource<serde_json::Value>>>,
-    retry_policy_defaults: BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
+    agent_secrets_defaults: BTreeMap<EnvironmentName, WithSource<serde_json::Value>>,
+    retry_policy_defaults:
+        BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
     resource_definition_defaults:
-        BTreeMap<EnvironmentName, Vec<WithSource<ResourceDefinitionCreation>>>,
+        BTreeMap<EnvironmentName, BTreeMap<ResourceName, WithSource<ResourceDefinitionCreation>>>,
     bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
@@ -677,24 +678,23 @@ impl Application {
     pub fn deployment_agent_secret_defaults(
         &self,
         environment: &EnvironmentName,
-    ) -> Vec<WithSource<serde_json::Value>> {
-        self.agent_secrets_defaults
-            .get(environment)
-            .cloned()
-            .unwrap_or_default()
+    ) -> Option<WithSource<serde_json::Value>> {
+        self.agent_secrets_defaults.get(environment).cloned()
     }
 
     pub fn deployment_retry_policy_defaults(
         &self,
         environment: &EnvironmentName,
     ) -> Vec<DeploymentRetryPolicyDefault> {
-        let mut result = Vec::new();
-        if let Some(env_defaults) = self.retry_policy_defaults.get(environment) {
-            for default in env_defaults {
-                result.push(default.value.clone())
-            }
-        }
-        result
+        self.retry_policy_defaults
+            .get(environment)
+            .map(|defaults_by_name| {
+                defaults_by_name
+                    .values()
+                    .map(|default| default.value.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn resource_definition_defaults(
@@ -703,7 +703,12 @@ impl Application {
     ) -> Vec<ResourceDefinitionCreation> {
         self.resource_definition_defaults
             .get(environment)
-            .map(|v| v.iter().map(|ws| ws.value.clone()).collect())
+            .map(|defaults_by_name| {
+                defaults_by_name
+                    .values()
+                    .map(|with_source| with_source.value.clone())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -2035,6 +2040,7 @@ impl PluginInstallation {
 
 mod app_builder {
     use super::ResourceDefinitionCreation;
+    use super::ResourceName;
     use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
@@ -2103,7 +2109,9 @@ mod app_builder {
         Environment(EnvironmentName),
         SecretDefaults(EnvironmentName),
         RetryPolicyDefaults(EnvironmentName),
+        RetryPolicyDefault(EnvironmentName, String),
         ResourceDefaults(EnvironmentName),
+        ResourceDefault(EnvironmentName, ResourceName),
         Bridge,
     }
 
@@ -2120,7 +2128,9 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Environment(_) => "Environment",
                 UniqueSourceCheckedEntityKey::SecretDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::RetryPolicyDefaults(_) => property,
+                UniqueSourceCheckedEntityKey::RetryPolicyDefault(_, _) => property,
                 UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
+                UniqueSourceCheckedEntityKey::ResourceDefault(_, _) => property,
                 UniqueSourceCheckedEntityKey::Bridge => "Bridge",
             }
         }
@@ -2160,11 +2170,27 @@ mod app_builder {
                         environment_name.0.log_color_highlight()
                     )
                 }
+                UniqueSourceCheckedEntityKey::RetryPolicyDefault(environment_name, name) => {
+                    format!(
+                        "{}.{}.{}",
+                        "retryPolicyDefaults".log_color_highlight(),
+                        environment_name.0.log_color_highlight(),
+                        name.log_color_highlight()
+                    )
+                }
                 UniqueSourceCheckedEntityKey::ResourceDefaults(environment_name) => {
                     format!(
                         "{}.{}",
                         "resourceDefaults".log_color_highlight(),
                         environment_name.0.log_color_highlight()
+                    )
+                }
+                UniqueSourceCheckedEntityKey::ResourceDefault(environment_name, resource_name) => {
+                    format!(
+                        "{}.{}.{}",
+                        "resourceDefaults".log_color_highlight(),
+                        environment_name.0.log_color_highlight(),
+                        resource_name.0.log_color_highlight()
                     )
                 }
                 UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
@@ -2208,13 +2234,15 @@ mod app_builder {
 
         bridge_sdks: WithSource<app_raw::BridgeSdks>,
 
-        agent_secret_defaults: BTreeMap<EnvironmentName, Vec<WithSource<serde_json::Value>>>,
+        agent_secret_defaults: BTreeMap<EnvironmentName, WithSource<serde_json::Value>>,
 
         retry_policy_defaults:
-            BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
+            BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
 
-        resource_definition_defaults:
-            BTreeMap<EnvironmentName, Vec<WithSource<ResourceDefinitionCreation>>>,
+        resource_definition_defaults: BTreeMap<
+            EnvironmentName,
+            BTreeMap<ResourceName, WithSource<ResourceDefinitionCreation>>,
+        >,
 
         all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
@@ -2494,13 +2522,10 @@ mod app_builder {
                             UniqueSourceCheckedEntityKey::SecretDefaults(environment.clone()),
                             &app.source,
                         ) {
-                            self.agent_secret_defaults
-                                .entry(environment.clone())
-                                .or_default()
-                                .push(WithSource::new(
-                                    app.source.to_path_buf(),
-                                    environment_secret_defaults,
-                                ));
+                            self.agent_secret_defaults.insert(
+                                environment.clone(),
+                                WithSource::new(app.source.to_path_buf(), environment_secret_defaults),
+                            );
                         }
                     }
 
@@ -2509,22 +2534,31 @@ mod app_builder {
                             UniqueSourceCheckedEntityKey::RetryPolicyDefaults(environment.clone()),
                             &app.source,
                         ) {
-                            let entry = self.retry_policy_defaults
-                                .entry(environment.clone())
-                                .or_default();
-
                             for rpd in env_retry_policy_defaults {
-                                entry.push(
-                                    WithSource::new(
-                                        app.source.to_path_buf(),
-                                        DeploymentRetryPolicyDefault {
-                                            name: rpd.name,
-                                            priority: rpd.priority,
-                                            predicate: rpd.predicate.into(),
-                                            policy: rpd.policy.into(),
-                                        }
-                                    )
-                                )
+                                if self.add_entity_source(
+                                    UniqueSourceCheckedEntityKey::RetryPolicyDefault(
+                                        environment.clone(),
+                                        rpd.name.clone(),
+                                    ),
+                                    &app.source,
+                                ) {
+                                    let entry = self
+                                        .retry_policy_defaults
+                                        .entry(environment.clone())
+                                        .or_default();
+                                    entry.insert(
+                                        rpd.name.clone(),
+                                        WithSource::new(
+                                            app.source.to_path_buf(),
+                                            DeploymentRetryPolicyDefault {
+                                                name: rpd.name,
+                                                priority: rpd.priority,
+                                                predicate: rpd.predicate.into(),
+                                                policy: rpd.policy.into(),
+                                            },
+                                        ),
+                                    );
+                                }
                             }
                         }
                     }
@@ -2534,12 +2568,23 @@ mod app_builder {
                             UniqueSourceCheckedEntityKey::ResourceDefaults(environment.clone()),
                             &app.source,
                         ) {
-                            let entry = self.resource_definition_defaults
-                                .entry(environment.clone())
-                                .or_default();
-
                             for resource_def in resource_defs {
-                                entry.push(WithSource::new(app.source.to_path_buf(), resource_def));
+                                if self.add_entity_source(
+                                    UniqueSourceCheckedEntityKey::ResourceDefault(
+                                        environment.clone(),
+                                        resource_def.name.clone(),
+                                    ),
+                                    &app.source,
+                                ) {
+                                    let entry = self
+                                        .resource_definition_defaults
+                                        .entry(environment.clone())
+                                        .or_default();
+                                    entry.insert(
+                                        resource_def.name.clone(),
+                                        WithSource::new(app.source.to_path_buf(), resource_def),
+                                    );
+                                }
                             }
                         }
                     }

@@ -1488,7 +1488,10 @@ impl AppCommandHandler {
         let declared_secret_paths = collect_declared_agent_secret_paths(deploy_diff)?;
 
         let (agent_secret_defaults, unused_secret_default_paths) =
-            materialize_agent_secret_defaults(&raw_agent_secret_defaults, &declared_secret_paths);
+            materialize_agent_secret_defaults(
+                raw_agent_secret_defaults.as_ref(),
+                &declared_secret_paths,
+            );
 
         if !unused_secret_default_paths.is_empty() {
             let rendered_unused_secret_default_paths = unused_secret_default_paths
@@ -2222,13 +2225,13 @@ fn collect_declared_agent_secret_paths(
 }
 
 fn materialize_agent_secret_defaults(
-    raw_defaults: &[WithSource<serde_json::Value>],
+    raw_default: Option<&WithSource<serde_json::Value>>,
     declared_secret_paths: &BTreeSet<Vec<String>>,
 ) -> (Vec<DeploymentAgentSecretDefault>, Vec<Vec<String>>) {
     let mut materialized_defaults = Vec::new();
     let mut unused_paths = Vec::new();
 
-    for raw_default in raw_defaults {
+    if let Some(raw_default) = raw_default {
         let mut consumed_paths = Vec::new();
 
         for declared_path in declared_secret_paths {
