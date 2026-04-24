@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::api::resource_definition::ResourceDefinitionSubcommand;
+use crate::command::resource_definition::ResourceDefinitionSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
