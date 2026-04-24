@@ -32,10 +32,10 @@ use anyhow::{Context, anyhow};
 use golem_common::model::agent::{AgentType, AgentTypeName};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
-use golem_common::model::deployment::{DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault};
+use golem_common::model::deployment::DeploymentRetryPolicyDefault;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::quota::ResourceDefinitionCreation;
+use golem_common::model::quota::{ResourceDefinitionCreation, ResourceName};
 use golem_common::model::validate_lower_kebab_case_identifier;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
@@ -347,11 +347,11 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<HttpApiDeploymentDeployProperties>>>,
     mcp_deployments:
         BTreeMap<EnvironmentName, BTreeMap<Domain, WithSource<McpDeploymentDeployProperties>>>,
-    agent_secrets_defaults:
-        BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
-    retry_policy_defaults: BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
+    agent_secrets_defaults: BTreeMap<EnvironmentName, WithSource<serde_json::Value>>,
+    retry_policy_defaults:
+        BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
     resource_definition_defaults:
-        BTreeMap<EnvironmentName, Vec<WithSource<ResourceDefinitionCreation>>>,
+        BTreeMap<EnvironmentName, BTreeMap<ResourceName, WithSource<ResourceDefinitionCreation>>>,
     bridge_sdks: WithSource<app_raw::BridgeSdks>,
 }
 
@@ -678,29 +678,23 @@ impl Application {
     pub fn deployment_agent_secret_defaults(
         &self,
         environment: &EnvironmentName,
-    ) -> Vec<DeploymentAgentSecretDefault> {
-        let mut result = Vec::new();
-        if let Some(environment_agent_secret_defaults) =
-            self.agent_secrets_defaults.get(environment)
-        {
-            for agent_secret_default in environment_agent_secret_defaults {
-                result.push(agent_secret_default.value.clone())
-            }
-        }
-        result
+    ) -> Option<WithSource<serde_json::Value>> {
+        self.agent_secrets_defaults.get(environment).cloned()
     }
 
     pub fn deployment_retry_policy_defaults(
         &self,
         environment: &EnvironmentName,
     ) -> Vec<DeploymentRetryPolicyDefault> {
-        let mut result = Vec::new();
-        if let Some(env_defaults) = self.retry_policy_defaults.get(environment) {
-            for default in env_defaults {
-                result.push(default.value.clone())
-            }
-        }
-        result
+        self.retry_policy_defaults
+            .get(environment)
+            .map(|defaults_by_name| {
+                defaults_by_name
+                    .values()
+                    .map(|default| default.value.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn resource_definition_defaults(
@@ -709,7 +703,12 @@ impl Application {
     ) -> Vec<ResourceDefinitionCreation> {
         self.resource_definition_defaults
             .get(environment)
-            .map(|v| v.iter().map(|ws| ws.value.clone()).collect())
+            .map(|defaults_by_name| {
+                defaults_by_name
+                    .values()
+                    .map(|with_source| with_source.value.clone())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -2041,6 +2040,7 @@ impl PluginInstallation {
 
 mod app_builder {
     use super::ResourceDefinitionCreation;
+    use super::ResourceName;
     use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
@@ -2059,12 +2059,9 @@ mod app_builder {
     use crate::{fs, fuzzy};
     use colored::Colorize;
     use golem_common::model::agent::AgentTypeName;
-    use golem_common::model::agent_secret::AgentSecretPath;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
-    use golem_common::model::deployment::{
-        DeploymentAgentSecretDefault, DeploymentRetryPolicyDefault,
-    };
+    use golem_common::model::deployment::DeploymentRetryPolicyDefault;
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::{
@@ -2110,6 +2107,9 @@ mod app_builder {
         Component(ComponentName),
         Agent(AgentTypeName),
         Environment(EnvironmentName),
+        SecretDefaults(EnvironmentName),
+        RetryPolicyDefaults(EnvironmentName),
+        ResourceDefaults(EnvironmentName),
         Bridge,
     }
 
@@ -2124,6 +2124,9 @@ mod app_builder {
                 UniqueSourceCheckedEntityKey::Component(_) => "Component",
                 UniqueSourceCheckedEntityKey::Agent(_) => "Agent",
                 UniqueSourceCheckedEntityKey::Environment(_) => "Environment",
+                UniqueSourceCheckedEntityKey::SecretDefaults(_) => property,
+                UniqueSourceCheckedEntityKey::RetryPolicyDefaults(_) => property,
+                UniqueSourceCheckedEntityKey::ResourceDefaults(_) => property,
                 UniqueSourceCheckedEntityKey::Bridge => "Bridge",
             }
         }
@@ -2148,6 +2151,27 @@ mod app_builder {
                 }
                 UniqueSourceCheckedEntityKey::Environment(environment_name) => {
                     environment_name.0.log_color_highlight().to_string()
+                }
+                UniqueSourceCheckedEntityKey::SecretDefaults(environment_name) => {
+                    format!(
+                        "{}.{}",
+                        "secretDefaults".log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
+                }
+                UniqueSourceCheckedEntityKey::RetryPolicyDefaults(environment_name) => {
+                    format!(
+                        "{}.{}",
+                        "retryPolicyDefaults".log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
+                }
+                UniqueSourceCheckedEntityKey::ResourceDefaults(environment_name) => {
+                    format!(
+                        "{}.{}",
+                        "resourceDefaults".log_color_highlight(),
+                        environment_name.0.log_color_highlight()
+                    )
                 }
                 UniqueSourceCheckedEntityKey::Bridge => "bridge".log_color_highlight().to_string(),
             }
@@ -2190,14 +2214,15 @@ mod app_builder {
 
         bridge_sdks: WithSource<app_raw::BridgeSdks>,
 
-        agent_secret_defaults:
-            BTreeMap<EnvironmentName, Vec<WithSource<DeploymentAgentSecretDefault>>>,
+        agent_secret_defaults: BTreeMap<EnvironmentName, WithSource<serde_json::Value>>,
 
         retry_policy_defaults:
-            BTreeMap<EnvironmentName, Vec<WithSource<DeploymentRetryPolicyDefault>>>,
+            BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
 
-        resource_definition_defaults:
-            BTreeMap<EnvironmentName, Vec<WithSource<ResourceDefinitionCreation>>>,
+        resource_definition_defaults: BTreeMap<
+            EnvironmentName,
+            BTreeMap<ResourceName, WithSource<ResourceDefinitionCreation>>,
+        >,
 
         all_sources: BTreeSet<PathBuf>,
         entity_sources: HashMap<UniqueSourceCheckedEntityKey, Vec<PathBuf>>,
@@ -2472,48 +2497,68 @@ mod app_builder {
                         }
                     }
 
-                    for (environment, environment_agent_secrets) in app.application.secret_defaults {
-                        let entry = self.agent_secret_defaults
-                            .entry(environment.clone())
-                            .or_default();
-
-                        for environment_agent_secret in environment_agent_secrets {
-                            entry.push(
-                                WithSource::new(
-                                    app.source.to_path_buf(),
-                                    DeploymentAgentSecretDefault { path: AgentSecretPath(environment_agent_secret.path), secret_value: environment_agent_secret.value }
-                                )
-                            )
+                    for (environment, environment_secret_defaults) in app.application.secret_defaults {
+                        if self.add_entity_source(
+                            UniqueSourceCheckedEntityKey::SecretDefaults(environment.clone()),
+                            &app.source,
+                        ) {
+                            self.agent_secret_defaults.insert(
+                                environment.clone(),
+                                WithSource::new(app.source.to_path_buf(), environment_secret_defaults),
+                            );
                         }
                     }
 
                     for (environment, env_retry_policy_defaults) in app.application.retry_policy_defaults {
-                        let entry = self.retry_policy_defaults
-                            .entry(environment.clone())
-                            .or_default();
-
-                        for rpd in env_retry_policy_defaults {
-                            entry.push(
-                                WithSource::new(
-                                    app.source.to_path_buf(),
-                                    DeploymentRetryPolicyDefault {
-                                        name: rpd.name,
-                                        priority: rpd.priority,
-                                        predicate: rpd.predicate.into(),
-                                        policy: rpd.policy.into(),
-                                    }
-                                )
-                            )
+                        if self.add_entity_source(
+                            UniqueSourceCheckedEntityKey::RetryPolicyDefaults(environment.clone()),
+                            &app.source,
+                        ) {
+                            for (retry_policy_name, retry_policy) in env_retry_policy_defaults {
+                                let entry = self
+                                    .retry_policy_defaults
+                                    .entry(environment.clone())
+                                    .or_default();
+                                entry.insert(
+                                    retry_policy_name.clone(),
+                                    WithSource::new(
+                                        app.source.to_path_buf(),
+                                        DeploymentRetryPolicyDefault {
+                                            name: retry_policy_name,
+                                            priority: retry_policy.priority,
+                                            predicate: retry_policy.predicate.into(),
+                                            policy: retry_policy.policy.into(),
+                                        },
+                                    ),
+                                );
+                            }
                         }
                     }
 
                     for (environment, resource_defs) in app.application.resource_defaults {
-                        let entry = self.resource_definition_defaults
-                            .entry(environment.clone())
-                            .or_default();
-
-                        for resource_def in resource_defs {
-                            entry.push(WithSource::new(app.source.to_path_buf(), resource_def));
+                        if self.add_entity_source(
+                            UniqueSourceCheckedEntityKey::ResourceDefaults(environment.clone()),
+                            &app.source,
+                        ) {
+                            for (resource_name, resource) in resource_defs {
+                                let entry = self
+                                    .resource_definition_defaults
+                                    .entry(environment.clone())
+                                    .or_default();
+                                entry.insert(
+                                    resource_name.clone(),
+                                    WithSource::new(
+                                        app.source.to_path_buf(),
+                                        ResourceDefinitionCreation {
+                                            name: resource_name,
+                                            limit: resource.limit,
+                                            enforcement_action: resource.enforcement_action,
+                                            unit: resource.unit,
+                                            units: resource.units,
+                                        },
+                                    ),
+                                );
+                            }
                         }
                     }
 

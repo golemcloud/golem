@@ -24,7 +24,7 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::diff;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
-use golem_common::model::quota::ResourceDefinitionCreation;
+use golem_common::model::quota::{EnforcementAction, ResourceLimit, ResourceName};
 use golem_common::model::security_scheme::SecuritySchemeName;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -121,11 +121,11 @@ pub struct Application {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge: Option<BridgeSdks>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub secret_defaults: IndexMap<EnvironmentName, Vec<EnvironmentAgentSecret>>,
+    pub secret_defaults: IndexMap<EnvironmentName, serde_json::Value>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub retry_policy_defaults: IndexMap<EnvironmentName, Vec<EnvironmentRetryPolicyDefault>>,
+    pub retry_policy_defaults: IndexMap<EnvironmentName, IndexMap<String, EnvironmentRetryPolicy>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub resource_defaults: IndexMap<EnvironmentName, Vec<ResourceDefinitionCreation>>,
+    pub resource_defaults: IndexMap<EnvironmentName, IndexMap<ResourceName, ResourceDefinition>>,
 }
 
 #[derive(Debug)]
@@ -489,18 +489,19 @@ impl AgentPreset {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EnvironmentAgentSecret {
-    pub path: Vec<String>,
-    pub value: serde_json::Value,
+pub struct EnvironmentRetryPolicy {
+    pub priority: u32,
+    pub predicate: golem_common::model::retry_policy::Predicate,
+    pub policy: golem_common::model::retry_policy::RetryPolicy,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EnvironmentRetryPolicyDefault {
-    pub name: String,
-    pub priority: u32,
-    pub predicate: golem_common::model::retry_policy::Predicate,
-    pub policy: golem_common::model::retry_policy::RetryPolicy,
+pub struct ResourceDefinition {
+    pub limit: ResourceLimit,
+    pub enforcement_action: EnforcementAction,
+    pub unit: String,
+    pub units: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -979,8 +980,8 @@ mod test {
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::quota::{
-        EnforcementAction, ResourceCapacityLimit, ResourceConcurrencyLimit,
-        ResourceDefinitionCreation, ResourceLimit, ResourceName, ResourceRateLimit, TimePeriod,
+        EnforcementAction, ResourceCapacityLimit, ResourceConcurrencyLimit, ResourceLimit,
+        ResourceName, ResourceRateLimit, TimePeriod,
     };
     use golem_common::model::security_scheme::SecuritySchemeName;
     use indexmap::IndexMap;
@@ -1576,17 +1577,15 @@ mod test {
             .boxed()
     }
 
-    fn arb_secret_defaults_model()
-    -> BoxedStrategy<IndexMap<EnvironmentName, Vec<EnvironmentAgentSecret>>> {
+    fn arb_json_object() -> BoxedStrategy<Value> {
+        prop::collection::btree_map(arb_ident(), arb_json_value(), 0..=3)
+            .prop_map(|m| Value::Object(m.into_iter().collect()))
+            .boxed()
+    }
+
+    fn arb_secret_defaults_model() -> BoxedStrategy<IndexMap<EnvironmentName, serde_json::Value>> {
         prop::collection::vec(
-            (
-                arb_ident().prop_map(EnvironmentName),
-                prop::collection::vec(
-                    (prop::collection::vec(arb_ident(), 1..=3), arb_json_value())
-                        .prop_map(|(path, value)| EnvironmentAgentSecret { path, value }),
-                    0..=2,
-                ),
-            ),
+            (arb_ident().prop_map(EnvironmentName), arb_json_object()),
             0..=3,
         )
         .prop_map(IndexMap::from_iter)
@@ -1611,7 +1610,7 @@ mod test {
     }
 
     fn arb_resource_defaults_model()
-    -> BoxedStrategy<IndexMap<EnvironmentName, Vec<ResourceDefinitionCreation>>> {
+    -> BoxedStrategy<IndexMap<EnvironmentName, IndexMap<ResourceName, ResourceDefinition>>> {
         prop::collection::vec(
             (
                 arb_ident().prop_map(EnvironmentName),
@@ -1624,20 +1623,23 @@ mod test {
                         arb_ident(),
                     )
                         .prop_map(|(name, limit, reject, unit, units)| {
-                            ResourceDefinitionCreation {
-                                name: ResourceName(name),
-                                limit,
-                                enforcement_action: if reject {
-                                    EnforcementAction::Reject
-                                } else {
-                                    EnforcementAction::Throttle
+                            (
+                                ResourceName(name),
+                                ResourceDefinition {
+                                    limit,
+                                    enforcement_action: if reject {
+                                        EnforcementAction::Reject
+                                    } else {
+                                        EnforcementAction::Throttle
+                                    },
+                                    unit,
+                                    units,
                                 },
-                                unit,
-                                units,
-                            }
+                            )
                         }),
                     0..=2,
-                ),
+                )
+                .prop_map(IndexMap::from_iter),
             ),
             0..=3,
         )
@@ -1803,7 +1805,7 @@ mod test {
     }
 
     fn arb_retry_policy_defaults_model()
-    -> BoxedStrategy<IndexMap<EnvironmentName, Vec<EnvironmentRetryPolicyDefault>>> {
+    -> BoxedStrategy<IndexMap<EnvironmentName, IndexMap<String, EnvironmentRetryPolicy>>> {
         prop::collection::vec(
             (
                 arb_ident().prop_map(EnvironmentName),
@@ -1815,15 +1817,18 @@ mod test {
                         arb_api_retry_policy_model(),
                     )
                         .prop_map(|(name, priority, predicate, policy)| {
-                            EnvironmentRetryPolicyDefault {
+                            (
                                 name,
-                                priority,
-                                predicate: predicate.into(),
-                                policy: policy.into(),
-                            }
+                                EnvironmentRetryPolicy {
+                                    priority,
+                                    predicate: predicate.into(),
+                                    policy: policy.into(),
+                                },
+                            )
                         }),
                     0..=2,
-                ),
+                )
+                .prop_map(IndexMap::from_iter),
             ),
             0..=3,
         )
