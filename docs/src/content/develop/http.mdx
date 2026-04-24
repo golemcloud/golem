@@ -1,0 +1,225 @@
+import { Callout, Tabs } from "nextra/components"
+
+# HTTP requests
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs.Tab>
+    HTTP requests can be made with the standard `fetch` function.
+
+    For example:
+
+    ```typescript
+    const response = await fetch(`http://localhost:${port}/todos`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        title: "foo",
+        body: "bar",
+        userId: 1,
+      }),
+    });
+
+    const data = await response.json();
+    console.log("Body:", data);
+    ```
+</Tabs.Tab>
+
+<Tabs.Tab>
+    HTTP requests can be made using the `wstd` crate. Make sure to have the crate added to your `Cargo.toml`:
+
+    ```toml
+    [dependencies]
+    wstd = { version = "=0.6.5", features = ["default", "json"] }
+    ```
+
+    ```rust
+    use serde::Serialize;
+    use wstd::http::{Body, Client, Request};
+
+    #[derive(Serialize)]
+    struct ExampleRequest {
+        title: String,
+        body: String,
+        user_id: u16,
+    }
+
+    let request_body = ExampleRequest {
+        title: "foo".to_string(),
+        body: "bar".to_string(),
+        user_id: 1,
+    };
+
+    let request = Request::post(&format!("http://localhost:{port}/todos"))
+        .header("Content-Type", "application/json")
+        .body(Body::from_json(&request_body).expect("Failed to serialize request"))
+        .expect("Failed to build request");
+
+    let mut response = Client::new()
+        .send(request)
+        .await
+        .expect("Request failed");
+
+    let data: serde_json::Value = response
+        .body_mut()
+        .json()
+        .await
+        .expect("Failed to parse response");
+
+    println!("Body: {:?}", data);
+    ```
+
+    It's recommended to use `wstd`, but you can also use `golem-wasi-http` for a more reqwest-like client.
+    Make sure to have the crate added to your `Cargo.toml`:
+
+    ```toml
+    [dependencies]
+    golem-wasi-http = { version = "0.2.0", features = ["async", "json"] }
+    ```
+
+
+    ```rust
+    use golem_wasi_http::{Client, Response};
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct ExampleRequest {
+        title: String,
+        body: String,
+        user_id: u16,
+    }
+
+    let request_body = ExampleRequest {
+        title: "foo".to_string(),
+        body: "bar".to_string(),
+        user_id: 1,
+    };
+
+    let client = Client::builder().build().expect("Failed to build client");
+
+    let response: Response = client
+      .post(&format!("http://localhost:{port}/todos"))
+      .header("X-Test", "Golem")
+      .json(&request_body)
+      .basic_auth("some", Some("body"))
+      .send()
+      .await
+      .expect("Request failed");
+
+    let data: serde_json::Value = response.json().await.expect("Failed to parse response");
+
+    println!("Body: {:?}", data);
+    ```
+</Tabs.Tab>
+
+<Tabs.Tab>
+    HTTP requests can be made with the standard `fetch` function through Scala.js interop.
+
+    For example:
+
+    ```scala
+    import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+    import scala.scalajs.js
+    import scala.scalajs.js.Thenable.Implicits._
+
+    for {
+      response <- js.Dynamic.global
+        .fetch(
+          s"http://localhost:$port/todos",
+          js.Dynamic.literal(
+            method = "POST",
+            headers = js.Dynamic.literal(
+              "Content-Type" -> "application/json"
+            ),
+            body = js.JSON.stringify(
+              js.Dynamic.literal(
+                title = "foo",
+                body = "bar",
+                userId = 1
+              )
+            )
+          )
+        )
+        .asInstanceOf[js.Promise[js.Dynamic]]
+        .toFuture
+      data <- response.json().asInstanceOf[js.Promise[js.Dynamic]].toFuture
+    } yield println(s"Body: ${js.JSON.stringify(data)}")
+    ```
+
+</Tabs.Tab>
+
+<Tabs.Tab>
+    HTTP requests can be made using generated `wasi:http` bindings. Assuming your generated `wasi:http/types` bindings are imported as `@http`, your `wasi:http/outgoingHandler` bindings are imported as `@outgoingHandler`, and `moonbitlang/core/json` is imported as `@json`:
+
+    ```moonbit
+    struct ExampleRequest {
+      title : String
+      body : String
+      userId : Int
+    } derive(ToJson)
+
+    fn string_to_bytes(value : String) -> FixedArray[Byte] {
+      let chars = value.to_array()
+      let bytes = FixedArray::make(chars.length(), b'\x00')
+      for i in 0..<chars.length() {
+        bytes[i] = chars[i].to_int().to_byte()
+      }
+      bytes
+    }
+
+    fn bytes_to_string(bytes : FixedArray[Byte]) -> String {
+      let chars : Array[Char] = []
+      for i in 0..<bytes.length() {
+        chars.push(Int::unsafe_to_char(bytes[i].to_int()))
+      }
+      String::from_array(chars)
+    }
+
+    let request_body = ExampleRequest::{
+      title: "foo",
+      body: "bar",
+      userId: 1,
+    }
+
+    let headers = @http.Fields::from_list(
+      [("Content-Type", string_to_bytes("application/json"))],
+    ).unwrap()
+
+    let request = @http.OutgoingRequest::outgoing_request(headers)
+    let _ = request.set_method(@http.Post)
+    let _ = request.set_scheme(Some(@http.Http))
+    let _ = request.set_authority(Some("localhost:\{port}"))
+    let _ = request.set_path_with_query(Some("/todos"))
+
+    let body = request.body().unwrap()
+    let output_stream = body.write().unwrap()
+    output_stream.blocking_write_and_flush(
+      string_to_bytes(request_body.to_json().stringify()),
+    ).unwrap()
+    output_stream.drop()
+    @http.OutgoingBody::finish(body, None).unwrap()
+
+    let future_response = @outgoingHandler.handle(request, None).unwrap()
+    let pollable = future_response.subscribe()
+    pollable.block()
+    let response = future_response.get().unwrap().unwrap().unwrap()
+
+    let incoming_body = response.consume().unwrap()
+    let stream = incoming_body.stream().unwrap()
+    let bytes = stream.blocking_read(1048576UL).unwrap()
+    stream.drop()
+    ignore(@http.IncomingBody::finish(incoming_body))
+
+    let data = @json.parse(bytes_to_string(bytes)) catch {
+      _ => panic()
+    }
+    println("Body: \{data.stringify()}")
+    ```
+
+</Tabs.Tab>
+</Tabs>
+
+<Callout type="info">
+For WebSocket connections, see the [WebSocket client](/develop/websocket) page. The HTTP APIs described above do not support WebSocket upgrades.
+</Callout>

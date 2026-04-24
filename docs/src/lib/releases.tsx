@@ -1,5 +1,5 @@
 export const RELEASE = {
-  version: "v1.4.1",
+  version: "v1.5.0",
   baseDownloadUrl: "https://github.com/golemcloud/golem/releases/download",
   baseReleaseUrl: "https://github.com/golemcloud/golem/releases/tag",
 

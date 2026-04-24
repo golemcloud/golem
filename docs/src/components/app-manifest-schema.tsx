@@ -1,3 +1,5 @@
+"use client"
+
 import { createContext, FC, ReactNode, useContext, useEffect, useState } from "react"
 
 export const enum Release {
@@ -8,6 +10,7 @@ export const enum Release {
   R_1_2_4,
   R_1_3_0,
   R_1_4_0,
+  R_1_5_0,
 }
 
 type ReleaseMeta = {
@@ -69,6 +72,27 @@ const Releases: { [key in Release]: ReleaseMeta } = {
     json: "1.4.0",
     otherChanges: <></>,
   },
+  [Release.R_1_5_0]: {
+    json: "1.5.0",
+    otherChanges: (
+      <>
+        <div>
+          removed {code("tempDir")}, {code("witDeps")},{" "}
+          {code("components.<component-name>.sourceWit")},{" "}
+          {code("components.<component-name>.generatedWit")},{" "}
+          {code("components.<component-name>.linkedWasm")},{" "}
+          {code("components.<component-name>.componentType")},{" "}
+          {code("components.<component-name>.dependencies")},{" "}
+          {code("components.<component-name>.dependenciesMergeMode")}
+        </div>
+        <div>removed {code("httpApi.definitions")} subtree</div>
+        <div>
+          renamed {code("linkedWasm")} to {code("outputWasm")}
+        </div>
+        <div>restructured {code("httpApi")} to deployment-only model</div>
+      </>
+    ),
+  },
 }
 
 export type FieldMeta = {
@@ -117,6 +141,11 @@ const FieldSpecializations: FieldSpecialization[] = [
     parentPrefix: "clean",
     descriptionPrefix: "Component specific ",
   },
+  {
+    pathPrefixMatch: "agents.<agent-type-name>.presets.<preset-name>.",
+    parentPrefix: "agents.<agent-type-name>.",
+    descriptionPrefix: "Preset specific ",
+  },
 ]
 
 function fieldSpecializationDescription(path: string): ReactNode | undefined {
@@ -131,7 +160,7 @@ function fieldSpecializationDescription(path: string): ReactNode | undefined {
   const parentPath = `${spec.parentPrefix}${path.substring(spec.pathPrefixMatch.length)}`
 
   return (
-    <p className="nx-mt-6 nx-leading-7">
+    <p className="mt-6 leading-7">
       <em>
         <strong>{spec.descriptionPrefix}</strong>
       </em>
@@ -152,17 +181,17 @@ function relatedFieldDescription(path: string): ReactNode | undefined {
   }
 
   return (
-    <div className="nx-text-xs">
-      <p className="nx-mt-6 nx-leading-6">
+    <div className="text-xs">
+      <p className="mt-6 leading-6">
         <em>
           <strong>Related fields:</strong>
         </em>
       </p>
-      <ul className="nx-list-disc first:nx-mt-0 ltr:nx-ml-6 rtl:nx-mr-6">
+      <ul className="list-disc first:mt-0 ltr:ml-6 rtl:mr-6">
         {relatedSpecs.map(spec => {
           const relatedPath = `${spec.pathPrefixMatch}${path.substring(spec.parentPrefix.length)}`
           return (
-            <li className="nx-my-2" key={relatedPath}>
+            <li className="my-2" key={relatedPath}>
               {fieldLink({ path: relatedPath })}
             </li>
           )
@@ -192,18 +221,18 @@ export const Field: FC<FieldProps> = ({
     fieldContext?.addField(since_release, path, id)
   })
 
-  let headerClassName = "nx-tracking-tight nx-text-slate-900 dark:nx-text-slate-100 nx-mt-8"
+  let headerClassName = "tracking-tight text-slate-900 dark:text-slate-100 mt-8"
   if (deprecated) {
     headerClassName += " line-through"
   } else {
-    headerClassName += " nx-font-semibold"
+    headerClassName += " font-semibold"
   }
 
   return (
     <>
       <h5 className={headerClassName}>
         <code
-          className="nx-border-black nx-border-opacity-[0.04] nx-bg-opacity-[0.03] nx-bg-black nx-break-words nx-rounded-md nx-border nx-py-0.5 nx-px-[.25em] nx-text-[.9em] dark:nx-border-white/10 dark:nx-bg-white/10"
+          className="break-words rounded-md border border-black border-opacity-[0.04] bg-black bg-opacity-[0.03] px-[.25em] py-0.5 text-[.9em] dark:border-white/10 dark:bg-white/10"
           dir="ltr"
         >
           {path}
@@ -215,9 +244,9 @@ export const Field: FC<FieldProps> = ({
           aria-label="Permalink for this section"
         ></a>
       </h5>
-      <div className="nx-bg-primary-700/5 dark:nx-bg-primary-300/10 nx-rounded-lg nx-px-2 nx-py-2">
-        {availableAndDeprecatedSince(since_release, deprecated_release, "nx-flex nx-justify-end")}
-        <hr className="nx-opacity-50" />
+      <div className="rounded-lg bg-[color-mix(in_srgb,var(--x-color-primary-700)_5%,transparent)] px-2 py-2 dark:bg-[color-mix(in_srgb,var(--x-color-primary-300)_10%,transparent)]">
+        {availableAndDeprecatedSince(since_release, deprecated_release, "flex justify-end")}
+        <hr className="opacity-50" />
         {specializationDescription && specializationDescription}
         {children}
         {relatedDescription && relatedDescription}
@@ -233,7 +262,7 @@ type ExampleProps = {
 export const Example: FC<ExampleProps> = ({ children }) => {
   return (
     <>
-      <div className="nx-font-semibold nx-mt-6">Example usage:</div>
+      <div className="mt-6 font-semibold">Example usage:</div>
       {children}
     </>
   )
@@ -244,7 +273,7 @@ type EnumValuesProps = {
 }
 
 export const EnumValues: FC<EnumValuesProps> = ({ children }) => {
-  return <ul className="nx-list-disc first:nx-mt-0 ltr:nx-ml-6 rtl:nx-mr-6">{children}</ul>
+  return <ul className="list-disc first:mt-0 ltr:ml-6 rtl:mr-6">{children}</ul>
 }
 
 type EnumValueMeta = {
@@ -264,19 +293,19 @@ export const EnumValue: FC<EnumValueProps> = ({
   children,
 }: EnumValueProps) => {
   let codeClassName =
-    "nx-border-black nx-border-opacity-[0.04] nx-bg-opacity-[0.03] nx-bg-black nx-break-words nx-rounded-md nx-border nx-py-0.5 nx-px-[.25em] nx-text-[.9em] dark:nx-border-white/10 dark:nx-bg-white/10"
+    "border-black border-opacity-[0.04] bg-opacity-[0.03] bg-black break-words rounded-md border py-0.5 px-[.25em] text-[.9em] dark:border-white/10 dark:bg-white/10"
   if (deprecated) {
     codeClassName += " line-through"
   } else {
-    codeClassName += " nx-font-semibold"
+    codeClassName += " font-semibold"
   }
   return (
-    <li className="nx-my-2">
+    <li className="my-2">
       <div>
         <code className={codeClassName} dir="ltr">
           {value}
         </code>
-        {isDefault && <span className="nx-italic nx-px-3">(default value)</span>}
+        {isDefault && <span className="px-3 italic">(default value)</span>}
         {availableAndDeprecatedSince(release(since), deprecated ? release(deprecated) : undefined)}
         <div>{children}</div>
       </div>
@@ -297,6 +326,7 @@ export const Fields: FC<FieldsProps> = ({ children }) => {
     [Release.R_1_2_4]: {},
     [Release.R_1_3_0]: {},
     [Release.R_1_4_0]: {},
+    [Release.R_1_5_0]: {},
   })
 
   const addField = (relase: Release, path: string, id: string) => {
@@ -320,11 +350,11 @@ export const FieldReleases: FC = ({}) => {
   }
   return (
     <>
-      <div className="nx-text-xs nx-py-4">
+      <div className="py-4 text-xs">
         {(Object.keys(fields) as unknown as Release[]).map(release => {
           return (
             <div key={release}>
-              <div className="nx-py-4">{availableAndDeprecatedSince(release, undefined)}</div>
+              <div className="py-4">{availableAndDeprecatedSince(release, undefined)}</div>
               {Object.keys(fields[release])
                 .sort()
                 .map(path => {
@@ -332,7 +362,7 @@ export const FieldReleases: FC = ({}) => {
                   return <div key={id}>{fieldLink({ path: path, id: id })}</div>
                 })}
               {Releases[release].otherChanges && Releases[release].otherChanges}
-              <hr className="nx-my-4" />
+              <hr className="my-4" />
             </div>
           )
         })}
@@ -354,7 +384,7 @@ function availableAndDeprecatedSince(
   divClassExt?: string
 ) {
   const release = Releases[since]
-  let className = "nx-text-xs nx-py-1"
+  let className = "text-xs py-1"
   if (divClassExt) {
     className += " "
     className += divClassExt
@@ -365,9 +395,9 @@ function availableAndDeprecatedSince(
     const release = Releases[deprecated]
     deprecatedBlock = (
       <>
-        <span className="nx-px-1 nx-italic nx-font-bold">deprecated since</span>
-        <span className="nx-font-bold">{release.json}</span>
-        <span className="nx-select-none nx-px-1">|</span>
+        <span className="px-1 font-bold italic">deprecated since</span>
+        <span className="font-bold">{release.json}</span>
+        <span className="select-none px-1">|</span>
       </>
     )
   }
@@ -375,8 +405,8 @@ function availableAndDeprecatedSince(
   return (
     <div className={className}>
       {deprecatedBlock}
-      <span className="nx-px-1 nx-italic">available since</span>
-      <span className="nx-font-bold">{release.json}</span>
+      <span className="px-1 italic">available since</span>
+      <span className="font-bold">{release.json}</span>
     </div>
   )
 }
@@ -388,7 +418,7 @@ function fieldPathToId(path: string): string {
 function code(text: string): ReactNode {
   return (
     <code
-      className="nx-break-words nx-py-0.5 nx-px-[.25em] nx-text-[.9em] dark:nx-border-white/10 dark:nx-bg-white/10"
+      className="break-words px-[.25em] py-0.5 text-[.9em] dark:border-white/10 dark:bg-white/10"
       dir="ltr"
     >
       {text}
@@ -405,7 +435,7 @@ export function fieldLink({ path, id }: FieldLinkProps): ReactNode {
   return (
     <a href={`#${id || fieldPathToId(path)}`}>
       <code
-        className="nx-underline nx-break-words nx-py-0.5 nx-px-[.25em] nx-text-[.9em] dark:nx-border-white/10 dark:nx-bg-white/10"
+        className="break-words px-[.25em] py-0.5 text-[.9em] underline dark:border-white/10 dark:bg-white/10"
         dir="ltr"
       >
         {path}

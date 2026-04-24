@@ -1,0 +1,87 @@
+import { Callout } from "nextra/components"
+import { Cards } from "nextra/components"
+import { Tabs } from "nextra/components"
+import {ArtifactLink} from "@/components/releaselink"
+
+# Golem CLI Introduction
+
+Golem CLI is a command-line interface for interacting with Golem. Golem CLI allows users to upload their components, launch new agents based on these components and call functions on running agents.
+
+## Golem CLI versions
+There are precompiled binaries of two variants of the CLI:
+
+- `golem` is the full version of the command line interface, including a locally runnable version of Golem itself.
+- `golem-cli` is a lightweight version of the command line interface, requiring a running Golem cluster.
+
+In this documentation we will use the `golem` command in the snippets.
+
+## Installation
+
+There are two ways to install any of the above described versions of Golem CLI:
+
+- Downloading a precompiled platform-specific binary
+- Installing from source using Rust tooling
+
+### Downloading precompiled binaries
+
+You can download the precompiled version of `golem` (and `golem-cli`) from the following pages:
+
+<Tabs items={["golem", "golem-cli"]} storageKey="nextra-tabs-golem|golem-cli">
+  <Tabs.Tab>
+  ##### Full version, including a locally executable Golem server
+  
+  | Platform | Link |
+  | -------- | ---- |
+  | Mac ARM64 | <ArtifactLink artifact="golem" platform="mac-arm64" /> |
+  | Mac x86_64 | <ArtifactLink artifact="golem" platform="mac-x64" /> |
+  | Linux ARM64 | <ArtifactLink artifact="golem" platform="linux-arm64" /> |
+  | Linux x86_64 | <ArtifactLink artifact="golem" platform="linux-x64" /> |
+  | Windows x86_64 | <ArtifactLink artifact="golem" platform="windows-x64" /> |
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ##### Lightweight client version, to work with an existing Golem cluster
+  
+  | Platform | Link |
+  | -------- | ---- |
+  | Mac ARM64 | <ArtifactLink artifact="golem-cli" platform="mac-arm64" /> |
+  | Mac x86_64 | <ArtifactLink artifact="golem-cli" platform="mac-x64" /> |
+  | Linux ARM64 | <ArtifactLink artifact="golem-cli" platform="linux-arm64" /> |
+  | Linux x86_64 | <ArtifactLink artifact="golem-cli" platform="linux-x64" /> |
+  | Windows x86_64 | <ArtifactLink artifact="golem-cli" platform="windows-x64" /> |
+  
+  <Callout type="info">
+      Windows is not supported for the current version, and is expected to be added in a future patch release.
+  </Callout>
+  </Tabs.Tab>
+</Tabs>
+
+<Callout type="info">
+  Some platforms may prevent downloaded binaries from running by default. You may need to
+  allow them in your system settings.
+</Callout>
+
+### Installing from source
+
+It is also possible to build it from source for yourself using Rust tooling. Refer to [the page about building Golem CLI for yourself](/cli/install-from-source) for more information.
+
+### Installing bootstrap skills
+
+Golem provides **AI coding agent skills** that teach your coding agent (such as Amp, Cursor, or Claude Code) how to work with Golem. To install the two **bootstrap skills**, run:
+
+```shell copy
+npx skills add golemcloud/skills
+```
+
+These bootstrap skills give your coding agent enough knowledge to get started with Golem. When you create a new project with `golem new`, additional language- and project-specific skills are automatically added to the project directory, providing much deeper guidance.
+
+<Callout type="info">
+  Learn more about AI coding agent skills at [skills.sh](https://skills.sh).
+</Callout>
+
+## Working with components
+
+Golem CLI can manage components. See the [Golem CLI components page](/cli/components) for details.
+
+## Interacting with agents
+
+Golem CLI allows creating, invoking and observing [agents](/concepts/agents). See the [Golem CLI agents page](/cli/agents) for more information.

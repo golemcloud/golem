@@ -1,0 +1,46 @@
+import { Callout } from "nextra/components"
+import { Cards } from "nextra/components"
+import {
+  Code,
+  Cog,
+  Gamepad,
+  LibraryBig,
+  Terminal,
+  ArrowUpDown,
+  SquareFunction,
+  HardHat,
+  CircleHelp,
+  Rocket,
+} from "lucide-react"
+import { GolemIcon } from "@/components/golem-logo"
+
+# Golem Developer Documentation
+
+Welcome to the Golem developer documentation portal! Here you will find comprehensive documentation on how to build, deploy, and manage applications on Golem.
+
+<Callout type="info">
+  <div>
+    Golem is available in both an open source version that you can deploy yourself and a hosted
+    version that we manage for you. This documentation covers both versions, and we will discuss any
+    differences between the two.
+  </div>
+</Callout>
+
+### Getting Started
+
+<Cards num={3}>
+  <Cards.Card title="Why Golem?" href="/why-golem" icon={<GolemIcon />} />
+  <Cards.Card title="Fundamentals" href="/fundamentals" icon={<HardHat />} />
+  <Cards.Card title="Quickstart" href="/quickstart" icon={<Rocket />} />
+</Cards>
+
+### Quick Links
+
+<Cards num={2}>
+  <Cards.Card title="Develop" href="/develop" icon={<Code />} />
+  <Cards.Card title="Deploy" href="/deploy" icon={<ArrowUpDown />} />
+  <Cards.Card title="Invoke" href="/invoke/http" icon={<SquareFunction />} />
+  <Cards.Card title="Operate" href="/operate/persistence" icon={<Cog />} />
+  <Cards.Card title="CLI" href="/cli" icon={<Terminal />} />
+  <Cards.Card title="REST API" href="/rest-api" icon={<LibraryBig />} />
+</Cards>

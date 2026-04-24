@@ -1,0 +1,52 @@
+# Invoke using Golem CLI
+
+The `golem` command line interface exposes one invocation subcommand:
+
+- `golem agent invoke` triggers a function invocation on an agent and awaits its result
+- `golem agent invoke --trigger` (or `-t`) fire-and-forget mode — triggers the invocation without waiting for the result
+- `golem agent invoke --trigger --schedule-at <DATETIME>` schedules the invocation at a specific time (ISO 8601 format; requires `--trigger`)
+
+## Specifying what to invoke
+
+The command requires specifying which agent to invoke, and the name of the function.
+
+There are multiple options for selecting the agent:
+
+- `AgentType(agent-parameters)`
+- `environment/AgentType(agent-parameters)`
+- `application/environment/AgentType(agent-parameters)`
+- `account/application/environment/AgentType(agent-parameters)`
+
+Note that `AgentType(agent-parameters)` is the _agent ID_. The agent type name uses PascalCase, matching the name in the source code.
+
+Also note that you can only omit the component name if it can be inferred from the context, for example if the current directory is a component directory or the application root with a single component only.
+
+The function to be invoked is selected by the second parameter. Read the [page about name mapping](/name-mapping) for more information about the possible function names.
+
+## Encoding parameters
+
+The function parameters are specified as positional arguments following the function name (one for each invocation parameter), using the source language's native syntax. See the [Type Mapping](/type-mapping) page for details on how types are represented.
+
+## Getting results
+
+When using `invoke` without the `--trigger` flag, the CLI awaits the result of the invocation and prints the result value to the standard output. By default it uses the `text` format, in which case it prints the result value using the [WebAssembly Value Encoding](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave).
+
+This can be changed with `--format json` or `--format yaml` to print the invocation result in JSON or YAML, using the [mapping described on Type Mapping page](/type-mapping).
+
+## Logs
+
+By default, `agent invoke` streams the agent's standard output, standard error, and log channels live during the invocation. This works the same as running a separate `golem agent stream` command during the invocation. Use `--no-stream` (or `-n`) to disable this behavior.
+
+The streaming output can be customized with the following parameters:
+
+- `--stream-no-log-level` to hide log levels in stream output
+- `--stream-no-timestamp` to hide timestamps in stream output
+- `--logs-only` to only show entries coming from the agent, suppressing invocation markers and stream status messages
+
+## Cancelling pending invocations
+
+As invocations are executed sequentially, it is possible to cancel a pending invocation before it starts executing. This can be done using the command line interface by running the `agent cancel-invocation` subcommand:
+
+```shell copy
+golem agent cancel-invocation <agent-id> <idempotency-key>
+```

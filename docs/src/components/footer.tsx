@@ -9,10 +9,10 @@ import { GolemLogo } from "./golem-logo"
 export function Footer() {
   const year = new Date().getFullYear()
   return (
-    <footer className="nx-bg-gray-100 nx-pb-[env(safe-area-inset-bottom)] dark:nx-bg-neutral-900 print:nx-bg-transparent mt-auto">
+    <footer className="mt-auto bg-gray-100 pb-[env(safe-area-inset-bottom)] dark:bg-neutral-900 print:bg-transparent">
       <div
         className={
-          "nx-border-t dark:nx-border-neutral-800 contrast-more:nx-border-neutral-400 dark:contrast-more:nx-border-neutral-400 overflow-hidden py-10"
+          "overflow-hidden border-t py-10 contrast-more:border-neutral-400 dark:border-neutral-800 dark:contrast-more:border-neutral-400"
         }
       >
         <div className="mx-auto max-w-7xl px-6 pb-8 pt-12 lg:px-8">
@@ -27,7 +27,7 @@ export function Footer() {
                     href={item.href}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="nx-h-7 nx-rounded-md nx-transition-colors nx-text-gray-600 dark:nx-text-gray-400 nx-px-2 hover:nx-bg-gray-100 hover:nx-text-gray-900 dark:hover:nx-bg-primary-100/5 dark:hover:nx-text-gray-50 dark:nx-border-neutral-700 contrast-more:nx-border-neutral-400 dark:contrast-more:nx-border-neutral-400 grid place-items-center border"
+                    className="grid h-7 place-items-center rounded-md border px-2 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 contrast-more:border-neutral-400 dark:border-neutral-700 dark:text-gray-400 dark:hover:bg-[color-mix(in_srgb,var(--x-color-primary-100)_5%,transparent)] dark:hover:text-gray-50 dark:contrast-more:border-neutral-400"
                   >
                     <span className="sr-only">{item.name}</span>
                     <item.icon className="h-5 w-5" aria-hidden="true" />
@@ -50,7 +50,7 @@ export function Footer() {
                         href={item.href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="nx-inline-block nx-text-gray-500 hover:nx-text-gray-900 dark:nx-text-gray-400 dark:hover:nx-text-gray-300 contrast-more:nx-text-gray-900 contrast-more:nx-underline contrast-more:dark:nx-text-gray-50 nx-w-full nx-break-words text-sm leading-6"
+                        className="inline-block w-full break-words text-sm leading-6 text-gray-500 hover:text-gray-900 contrast-more:text-gray-900 contrast-more:underline dark:text-gray-400 dark:hover:text-gray-300 contrast-more:dark:text-gray-50"
                       >
                         {item.name}
                       </a>
@@ -68,7 +68,7 @@ export function Footer() {
                         href={item.href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="nx-inline-block nx-text-gray-500 hover:nx-text-gray-900 dark:nx-text-gray-400 dark:hover:nx-text-gray-300 contrast-more:nx-text-gray-900 contrast-more:nx-underline contrast-more:dark:nx-text-gray-50 nx-w-full nx-break-words text-sm leading-6"
+                        className="inline-block w-full break-words text-sm leading-6 text-gray-500 hover:text-gray-900 contrast-more:text-gray-900 contrast-more:underline dark:text-gray-400 dark:hover:text-gray-300 contrast-more:dark:text-gray-50"
                       >
                         {item.name}
                       </a>
@@ -89,10 +89,7 @@ const support = [
   { name: "Help Center", href: "https://help.golem.cloud" },
 ]
 
-const golem = [
-  { name: "About", href: "https://www.golem.cloud" },
-  { name: "Console", href: "https://console.golem.cloud" },
-]
+const golem = [{ name: "About", href: "https://www.golem.cloud" }]
 
 const socials = [
   {

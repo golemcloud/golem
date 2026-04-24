@@ -141,7 +141,7 @@ const checkLink = async (params: {
 
     // Handle absolute links from `src/pages/docs/`
     if (link.startsWith("/")) {
-      const docPath = path.join(process.cwd(), "src/pages", link)
+      const docPath = path.join(process.cwd(), "src/content", link)
       const filePath = await MarkdownPath.resolve(docPath)
       return filePath !== null ? { link, status: "alive", filePath } : { link, status: "dead" }
     }
@@ -233,7 +233,7 @@ const execute = async (files: string[]) => {
 const main = async () => {
   const args = process.argv.slice(2)
   const files =
-    args.length > 0 ? args : await glob("src/pages/**/*.{mdx,md}", { ignore: "node_modules/**" })
+    args.length > 0 ? args : await glob("src/content/**/*.{mdx,md}", { ignore: "node_modules/**" })
   await execute(files)
 }
 

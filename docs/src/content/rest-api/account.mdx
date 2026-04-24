@@ -1,0 +1,285 @@
+# Account API
+The account API allows users to query and manipulate their own account data.
+## Create a new account. The response is the created account data.
+Path|Method|Protected
+---|---|---
+`/v1/accounts`|POST|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "name": "string",
+  "email": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "roles": [
+    "admin"
+  ]
+}
+```
+
+## Retrieve an account for a given Account ID
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "roles": [
+    "admin"
+  ]
+}
+```
+
+## Delete an account.
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}`|DELETE|Yes
+
+
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+current_revision|integer|Yes|-
+
+
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Update account
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}`|PATCH|Yes
+
+Allows the user to change the account details such as name and email.
+
+Changing the planId is not allowed and the request will be rejected.
+The response is the updated account data.
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "currentRevision": 0,
+  "name": "string",
+  "email": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "roles": [
+    "admin"
+  ]
+}
+```
+
+## Get an account's plan
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/plan`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "name": "string",
+  "appLimit": 0,
+  "envLimit": 0,
+  "componentLimit": 0,
+  "workerConnectionLimit": 0,
+  "storageLimit": 0,
+  "monthlyGasLimit": 0,
+  "monthlyUploadLimit": 0,
+  "maxMemoryPerWorker": 0,
+  "maxTableElementsPerWorker": 0,
+  "maxDiskSpacePerWorker": 0,
+  "perInvocationHttpCallLimit": 0,
+  "perInvocationRpcCallLimit": 0,
+  "monthlyHttpCallLimit": 0,
+  "monthlyRpcCallLimit": 0,
+  "maxConcurrentAgentsPerExecutor": 0,
+  "oplogWritesPerSecond": 0
+}
+```
+
+## Set the plan of an account
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/plan`|PUT|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "currentRevision": 0,
+  "plan": "c685f150-7cb7-436f-9700-386be171480b"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "roles": [
+    "admin"
+  ]
+}
+```
+
+## Set the roles of an account
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/roles`|PUT|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "currentRevision": 0,
+  "roles": [
+    "admin"
+  ]
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "revision": 0,
+  "name": "string",
+  "email": "string",
+  "planId": "b3f60ba2-c1fd-4b3a-a23d-8e876e0ef75d",
+  "roles": [
+    "admin"
+  ]
+}
+```
+
+## List all tokens of an account.
+The format of each element is the same as the data object in the oauth2 endpoint's response.
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/tokens`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "values": [
+    {
+      "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+      "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+      "createdAt": "2019-08-24T14:15:22Z",
+      "expiresAt": "2019-08-24T14:15:22Z"
+    }
+  ]
+}
+```
+
+## Create new token
+Path|Method|Protected
+---|---|---
+`/v1/accounts/{account_id}/tokens`|POST|Yes
+
+Creates a new token with a given expiration date.
+The response not only contains the token data but also the secret which can be passed as a bearer token to the Authorization header to the Golem Cloud REST API.
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "expiresAt": "2019-08-24T14:15:22Z"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "secret": "stringstringstri",
+  "accountId": "3d07c219-0a88-45be-9cfc-91e9d095a1e9",
+  "createdAt": "2019-08-24T14:15:22Z",
+  "expiresAt": "2019-08-24T14:15:22Z"
+}
+```
+## Account API Errors
+Status Code|Description|Body
+---|---|---
+400|Invalid request, returning with a list of issues detected in the request|`{"code":"string","errors":["string"]}`
+401|Unauthorized request|`{"code":"string","error":"string"}`
+403|Forbidden Request|`{"code":"string","error":"string"}`
+404|Entity not found|`{"code":"string","error":"string"}`
+409||`{"code":"string","error":"string"}`
+422|Limits of the plan exceeded|`{"code":"string","error":"string"}`
+500|Internal server error|`{"code":"string","error":"string"}`

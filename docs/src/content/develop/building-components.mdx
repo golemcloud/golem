@@ -1,0 +1,36 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+
+# Building Golem Components
+Building Golem components having an [application manifest](/app-manifest) is straightforward.
+
+Use the `golem` command line interface to run the build:
+
+```shell copy
+golem build
+```
+
+The result of the `golem build` command is a WebAssembly component file ready to be deployed to Golem. To deploy it, use the `deploy` command:
+
+```shell copy
+golem deploy
+```
+
+## Redeployment options
+
+By default, `golem deploy` uploads and activates the latest component versions but leaves existing agents untouched — they continue running the previous version with their current state. To control what happens to running agents after deployment, use one of the following **mutually exclusive** flags:
+
+| Flag | Behavior |
+|------|----------|
+| `--reset` | Delete all agents **and** the environment (API deployments, retry policies, plugins, etc.), then deploy everything from scratch. This is the most destructive option, but the most useful during **iterative development**. |
+| `--update-agents <MODE>` | Update agents **in-place** to the new component version. Use `auto` for automatic oplog-replay–based migration, or `manual` when you have implemented snapshot-based migration. Agent state is **preserved**. |
+| `--redeploy-agents` | Delete every existing agent and recreate it with the same name, environment variables, and configuration, pointing to the latest component version. Agent state is **lost**. |
+
+### When to use each option
+
+- **`--reset`** — Use when you want a completely clean slate, for example during iterative local development or in CI pipelines where you need deterministic, reproducible deployments.
+- **`--update-agents auto`** — Use in production or whenever you need to preserve agent state across a backward-compatible code change.
+- **`--update-agents manual`** — Use when you have a breaking change but have implemented a snapshot-based migration so state can be carried over.
+- **`--redeploy-agents`** — Use during development when agent state does not matter but you want to preserve the existing agent list and per-agent environment variables / configuration
+
+For more details see the [Redeploying Existing Agents](/how-to-guides/common/golem-redeploy-agents) and [Updating Running Agents](/how-to-guides/common/golem-update-running-agents) guides.

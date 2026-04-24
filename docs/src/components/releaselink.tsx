@@ -1,5 +1,5 @@
 import { RELEASE, Artifact, Platform } from "@/lib/releases"
-import { Link } from "nextra-theme-docs"
+import Link from "next/link"
 
 export function ReleaseLink({ children = "release page" }: { children?: React.ReactNode }) {
   const url = `${RELEASE.baseReleaseUrl}/${RELEASE.version}`

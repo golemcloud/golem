@@ -1,21 +1,8 @@
-@tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Table of contents */
-.nextra-toc > div.nextra-scrollbar > div:last-child {
-  @apply bg-background-light shadow-none dark:bg-background-dark;
-}
-
-/* Theme switcher and collapse */
-aside.nextra-sidebar-container > div:last-child {
-  @apply bg-background-light shadow-none dark:bg-background-dark;
-}
-
-@layer base {
-  * {
-    /* Handle overly bold fonts in safari */
-    -webkit-font-smoothing: antialiased;
-    min-width: 0;
-  }
+* {
+  /* Handle overly bold fonts in safari */
+  -webkit-font-smoothing: antialiased;
+  min-width: 0;
 }

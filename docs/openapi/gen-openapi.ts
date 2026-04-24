@@ -5,7 +5,7 @@ import { OpenAPIV3 } from "openapi-types"
 import OpenAPISampler from "openapi-sampler"
 
 const CLOUD_SPEC_SRC = "./openapi/golem-service.yaml"
-const CLOUD_GEN_PATH = "./src/pages/rest-api"
+const CLOUD_GEN_PATH = "./src/content/rest-api"
 
 main().catch(e => console.error("Failed to update API Docs", e))
 

@@ -1,0 +1,155 @@
+import {Callout, Tabs} from "nextra/components"
+
+# User-Defined Snapshotting
+
+Golem recovers agent state by **replaying the oplog** — the log of all operations performed by the agent. For long-running or CPU-heavy agents, this replay can become slow. Golem 1.5 introduces **user-defined snapshotting**, allowing agents to opt in to periodic snapshots so that recovery only needs to replay entries recorded _after_ the last snapshot.
+
+Snapshotting also enables **manual agent updates** between incompatible versions — see [Updating Agents](/develop/updating) for details.
+
+<Callout type="info">
+    Snapshotting is optional. If you do not configure it, Golem will continue to recover agents by replaying the full oplog.
+</Callout>
+
+## Default snapshotting implementation
+
+Each language SDK provides a built-in snapshotting implementation that requires no custom code. As long as your agent's state is serializable, you can rely on the default implementation.
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        Simply **do not** define `loadSnapshot` and `saveSnapshot` on your agent class. The SDK will automatically serialize the agent instance as JSON.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        If your agent struct derives `Serialize` and `Deserialize` (from [serde](https://serde.rs/)), **do not** override the `save_snapshot` and `load_snapshot` methods. The SDK will use a default JSON-based implementation.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        If your agent case class derives `Schema` (from [zio-blocks-schema](https://github.com/zio/zio-blocks)), the SDK provides a default implementation automatically.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        If your agent struct derives `ToJson` and `@json.FromJson`, the SDK auto-generates a `Snapshottable` implementation.
+    </Tabs.Tab>
+</Tabs>
+
+## Custom snapshotting
+
+You can implement custom `save`/`load` logic to control exactly how agent state is serialized. The following example shows a simple counter agent that saves its count as raw bytes:
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        Override `saveSnapshot` and `loadSnapshot` on your agent class:
+
+        ```typescript
+        override async saveSnapshot(): Promise<Uint8Array> {
+            const snapshot = new Uint8Array(4);
+            const view = new DataView(snapshot.buffer);
+            view.setUint32(0, this.value);
+            return snapshot;
+        }
+
+        override async loadSnapshot(bytes: Uint8Array): Promise<void> {
+            let view = new DataView(bytes.buffer);
+            this.value = view.getUint32(0);
+        }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Override `save_snapshot` and `load_snapshot` on your agent implementation:
+
+        ```rust
+        fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+            Ok(self.value.to_le_bytes().to_vec())
+        }
+
+        fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+            let arr: [u8; 4] = bytes
+                .try_into()
+                .map_err(|_| "Invalid snapshot".to_string())?;
+            self.value = u32::from_le_bytes(arr);
+            Ok(())
+        }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Override `saveSnapshot` and `loadSnapshot` on your agent:
+
+        ```scala
+        override def saveSnapshot: Future[Array[Byte]] =
+          Future.successful {
+            val buffer = java.nio.ByteBuffer.allocate(4)
+            buffer.putInt(value)
+            buffer.array()
+          }
+
+        override def loadSnapshot(bytes: Array[Byte]): Future[Unit] =
+          Future.successful {
+            val buffer = java.nio.ByteBuffer.wrap(bytes)
+            value = buffer.getInt()
+          }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Implement the `@agents.Snapshottable` trait for your agent struct:
+
+        ```moonbit
+        fn save_snapshot(self : Counter) -> Bytes {
+          let bytes = Bytes::new(4)
+          bytes[0] = (self.value & 0xFF).to_byte()
+          bytes[1] = ((self.value >> 8) & 0xFF).to_byte()
+          bytes[2] = ((self.value >> 16) & 0xFF).to_byte()
+          bytes[3] = ((self.value >> 24) & 0xFF).to_byte()
+          bytes
+        }
+
+        fn load_snapshot(self : Counter, bytes : Bytes) -> Result[Unit, String] {
+          self.value = bytes[0].to_int()
+            | (bytes[1].to_int() << 8)
+            | (bytes[2].to_int() << 16)
+            | (bytes[3].to_int() << 24)
+          Ok(())
+        }
+        ```
+    </Tabs.Tab>
+</Tabs>
+
+## Configuring snapshot-based recovery
+
+To enable snapshotting, add a `snapshotting` configuration to your agent definition annotation:
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+    <Tabs.Tab>
+        ```typescript
+        @agent({ snapshotting: { periodic: '5s' } })
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        ```rust
+        #[agent_definition(snapshotting = "periodic(5s)")]
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        ```scala
+        @agentDefinition(snapshotting = "periodic(5 seconds)")
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        ```moonbit
+        #derive.agent(snapshotting="periodic(5)")
+        ```
+    </Tabs.Tab>
+</Tabs>
+
+The available snapshotting options are:
+
+| Option | Description |
+|---|---|
+| `disabled` | Snapshotting is turned off. Recovery replays the full oplog. |
+| `enabled` | Uses the server-side default snapshotting configuration. |
+| `every(N)` | Takes a snapshot every **N** oplog entries. |
+| `periodic(duration)` | Takes a snapshot every **duration** interval (e.g. `5s`, `1m`). |
+
+## Observability
+
+When using the default (JSON-based) snapshotting implementation, snapshot entries recorded in the oplog contain the serialized JSON state of the agent. This makes it easy to inspect agent state at any snapshot point for debugging purposes.
+
+<Callout type="info">
+    Snapshotting is also used when [updating agents](/develop/updating) across incompatible versions, allowing Golem to capture the agent's state before applying the update.
+</Callout>

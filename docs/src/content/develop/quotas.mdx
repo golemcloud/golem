@@ -1,0 +1,69 @@
+import { Callout } from "nextra/components"
+
+# Quotas / Resource Limits
+
+Golem 1.5 introduces resource quotas to control and limit resource usage across agents within an environment. Quotas can enforce rate limits, capacity limits, or concurrency limits with configurable enforcement actions.
+
+<Callout>
+  Quotas are configured at the environment level and apply to all agents deployed in that environment.
+</Callout>
+
+### Resource limit types
+
+Golem supports three types of resource limits:
+
+| Type          | Fields                 | Description                                                                                                   |
+| ------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `Rate`        | `value`, `period`, `max` | Rate limit per time period. Periods: `second`, `minute`, `hour`, `day`, `month`, `year`. `max` is the burst limit. |
+| `Capacity`    | `value`                | Total capacity limit                                                                                          |
+| `Concurrency` | `value`                | Maximum concurrent usage                                                                                      |
+
+### Enforcement actions
+
+Each quota has an enforcement action that determines what happens when the limit is exceeded:
+
+| Action      | Description                                       |
+| ----------- | ------------------------------------------------- |
+| `reject`    | Reject requests exceeding the limit               |
+| `throttle`  | Slow down requests exceeding the limit            |
+| `terminate` | Terminate the agent when the limit is exceeded    |
+
+### Configuring quotas in golem.yaml
+
+Quotas are defined per environment using `resourceDefaults`:
+
+```yaml
+resourceDefaults:
+  local:
+    - name: api-calls
+      limit:
+        type: Rate
+        value: 100
+        period: minute
+        max: 1000
+      enforcementAction: reject
+      unit: request
+      units: requests
+    - name: storage
+      limit:
+        type: Capacity
+        value: 1073741824
+      enforcementAction: reject
+      unit: byte
+      units: bytes
+    - name: connections
+      limit:
+        type: Concurrency
+        value: 50
+      enforcementAction: throttle
+      unit: connection
+      units: connections
+```
+
+### Managing quotas via REST API
+
+Resources can also be managed via the REST API — CRUD operations on `/v1/envs/{environment_id}/resources`. See the [REST API reference](/rest-api/resources) for details.
+
+### How quotas work internally
+
+Quota enforcement uses a lease-based system. Worker executor nodes acquire resource leases from the shard manager, with local credit tracking and periodic renewal. This ensures efficient enforcement without per-request coordination.

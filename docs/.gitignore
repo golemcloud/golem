@@ -37,3 +37,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# snippet update tool
+snippets/progress.json
+snippets/loop.log

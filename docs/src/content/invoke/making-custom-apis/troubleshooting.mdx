@@ -1,0 +1,26 @@
+# Troubleshooting
+
+## Route conflict errors during deployment
+
+If you already deployed an API with the same path pattern, you will receive a conflict error. This can happen when you change agent code but keep the same endpoint paths with a conflicting deployment already active.
+
+```bash filename="Terminal" copy
+API deployment definitions conflict error: /task-agents/{name}/tasks
+```
+
+Make sure to remove or update conflicting deployments before redeploying.
+
+## Type mismatch errors
+
+When an endpoint receives input that doesn't match the expected parameter types, Golem returns a `400 Bad Request` with details about the type mismatch. This makes Golem's API gateway much more type-safe than a typical gateway where requests are always routed to the backend regardless of input validity.
+
+For example, if an endpoint expects a `u64` parameter but receives a string, the error response will indicate the expected and actual types.
+
+## Endpoints not showing up
+
+If your endpoints are not accessible after deployment, verify that:
+
+1. The agent has a `mount` defined in the agent decorator/macro
+2. The `httpApi.deployments` section in `golem.yaml` lists the agent
+3. The deployment domain matches the URL you are trying to access
+4. The component was redeployed after code changes (`golem app deploy`)

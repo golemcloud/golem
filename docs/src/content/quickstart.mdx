@@ -1,0 +1,521 @@
+import { Callout, Cards, Tabs, Steps } from "nextra/components"
+import {ArtifactLink} from "@/components/releaselink"
+
+# Quickstart
+
+This guide will get you up and running in Golem in minutes.
+
+### Install Golem CLI
+
+Golem CLI is a command-line application that allows you to deploy components,
+create and invoke agents, and otherwise manage your Golem applications.
+
+There are **precompiled binaries** of `golem` (and its other variants) for
+various platforms. Alternatively, you can [build Golem CLI for yourself](/cli/install-from-source).
+
+#### Precompiled binaries
+
+There are precompiled binaries of two variants of the CLI here:
+
+- `golem` is the full version of the command line interface, including a locally runnable version of Golem itself.
+- `golem-cli` is a lightweight version of the command line interface, requiring a running Golem cluster
+
+You can download the full version of `golem` from the following page:
+
+<Tabs items={["golem", "golem-cli"]} storageKey="nextra-tabs-golem|golem-cli">
+  <Tabs.Tab>
+  ##### Full version, including a locally executable Golem server
+  | Platform | Link |
+  | -------- | ---- |
+  | Mac ARM64 | <ArtifactLink artifact="golem" platform="mac-arm64" /> |
+  | Mac x86_64 | <ArtifactLink artifact="golem" platform="mac-x64" /> |
+  | Linux ARM64 | <ArtifactLink artifact="golem" platform="linux-arm64" /> |
+  | Linux x86_64 | <ArtifactLink artifact="golem" platform="linux-x64" /> |
+  | Windows x86_64 | <ArtifactLink artifact="golem" platform="windows-x64" /> |
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ##### Lightweight client version, to work with an existing Golem cluster
+  | Platform | Link |
+  | -------- | ---- |
+  | Mac ARM64 | <ArtifactLink artifact="golem-cli" platform="mac-arm64" /> |
+  | Mac x86_64 | <ArtifactLink artifact="golem-cli" platform="mac-x64" /> |
+  | Linux ARM64 | <ArtifactLink artifact="golem-cli" platform="linux-arm64" /> |
+  | Linux x86_64 | <ArtifactLink artifact="golem-cli" platform="linux-x64" /> |
+  | Windows x86_64 | <ArtifactLink artifact="golem-cli" platform="windows-x64" /> |
+  </Tabs.Tab>
+</Tabs>
+
+In this documentation we will use the `golem` command in the snippets. The available commands (except the one for starting the local Golem cluster) are the same in both variants.
+
+### Install Bootstrap Skills
+
+Golem provides **AI coding agent skills** that teach your coding agent (such as Amp, Cursor, or Claude Code) how to work with Golem. To install the two **bootstrap skills**, run:
+
+```shell copy
+npx skills add golemcloud/skills
+```
+
+These bootstrap skills give your coding agent enough knowledge to get started with Golem. When you create a new project with `golem new`, additional language- and project-specific skills are automatically added to the project directory, providing much deeper guidance.
+
+<Callout type="info">
+  Learn more about AI coding agent skills at [skills.sh](https://skills.sh).
+</Callout>
+
+### Running Golem
+
+It is possible to test Golem locally without installing anything other than the `golem` executable described above. To use it, start the local Golem cluster by running the following command:
+
+```shell copy
+golem server run
+```
+
+<Callout type="info">
+    If you want to start with a clean state, deleting all previous data, use `--clean`:
+    ```shell copy
+    golem server run --clean
+    ```
+</Callout>
+
+To use the open source version of Golem in production, you will need to deploy it to your own infrastructure. See the [deployment](/deploy) page for available deployment options.
+
+
+### Building an Example
+
+Golem runs components that are WebAssembly programs implementing **agents**. Every component defines one or more **agent types**, and Golem runs stateful, durable instances of these agent types that we call agents.
+
+The `golem` command line interface provides a set of commands to create, build, and deploy components.
+
+To get started, you create an application and a single component using one of the supported programming languages with the `golem new` command. If no additional parameters are provided, the command will interactively ask for all required information.
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+  <Tabs.Tab>
+  Create a TypeScript agent using the default template:
+
+  ```shell copy
+  golem new --template ts --component-name example:counter --yes agent-examples
+  ```
+
+  Note: For TypeScript, you need to have `npm` installed on your system.
+  </Tabs.Tab>
+
+    <Tabs.Tab>
+    Create a Rust agent using the default template:
+
+    ```shell copy
+    golem new --template rust --component-name example:counter --yes agent-examples
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    Create a Scala agent using the default template:
+
+    ```shell copy
+    golem new --template scala --component-name example:counter --yes agent-examples
+    ```
+
+    Note: For Scala, you need Java 17 or newer and `sbt` installed on your system.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    Create a MoonBit agent using the default template:
+
+    ```shell copy
+    golem new --template moonbit --component-name example:counter --yes agent-examples
+    ```
+
+    Note: For MoonBit, you need the MoonBit toolchain (`moon`) and `wasm-tools` installed on your system.
+    </Tabs.Tab>
+</Tabs>
+
+This will generate a new component in a new directory named after the provided application name, and it is ready to be compiled and deployed to Golem.
+
+To **build** the newly created component, use the following command:
+
+```shell copy
+golem build
+```
+
+This compiles the newly created application, which consists of a _single Golem component_ at the moment. An application can have multiple components, each implementing a different set of agent types. New components can be added to the application by using the `golem component new` command.
+
+### Write the code
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+  <Tabs.Tab>
+The default template's source code is located in the `src/counter-agent.ts` file, assuming that the `example:counter` name has been used in the `golem new` command. The directory structure allows applications to have multiple components, even implemented in multiple programming languages if needed.
+
+Let's use the following code snippet for this example:
+
+```typescript
+import {
+    BaseAgent,
+    agent,
+    prompt,
+    description,
+} from '@golemcloud/golem-ts-sdk';
+
+@agent()
+class CounterAgent extends BaseAgent {
+    private readonly name: string;
+    private value: number = 0;
+
+    constructor(name: string) {
+        super();
+        this.name = name;
+    }
+
+    @prompt("Increase the count by one")
+    @description("Increases the count by one and returns the new value")
+    async increment(): Promise<number> {
+        this.value += 1;
+        return this.value;
+    }
+}
+```
+
+  </Tabs.Tab>
+
+ <Tabs.Tab>
+  The default template's source code is located in the `src/counter_agent.rs` file, assuming that the `example:counter` name has been used in the `golem new` command.
+
+  Let's use the following code snippet for this example:
+
+  ```rust
+use golem_rust::{
+    agent_definition, agent_implementation, description, prompt, agentic::BaseAgent,
+};
+
+#[agent_definition]
+pub trait CounterAgent: BaseAgent {
+    fn new(name: String) -> Self;
+
+    #[prompt("Increase the count by one")]
+    #[description("Increases the count by one and returns the new value")]
+    fn increment(&mut self) -> u32;
+}
+
+struct CounterImpl {
+    count: u32,
+    _name: String,
+}
+
+#[agent_implementation]
+impl CounterAgent for CounterImpl {
+    fn new(name: String) -> Self {
+        Self {
+            _name: name,
+            count: 0,
+        }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+}
+
+ ```
+
+    </Tabs.Tab>
+
+  <Tabs.Tab>
+  The default template's source code is located in the `src/main/scala/example_counter/CounterAgent.scala` and `src/main/scala/example_counter/CounterAgentImpl.scala` files, assuming that the `example:counter` name has been used in the `golem new` command.
+
+  Let's use the following code snippets for this example:
+
+  `CounterAgent.scala`
+
+  ```scala
+package example_counter
+
+import golem.runtime.annotations.{agentDefinition, description, prompt}
+import golem.BaseAgent
+
+import scala.concurrent.Future
+
+@agentDefinition()
+trait CounterAgent extends BaseAgent {
+
+  class Id(val name: String)
+
+  @prompt("Increase the count by one")
+  @description("Increases the count by one and returns the new value")
+  def increment(): Future[Int]
+}
+  ```
+
+  `CounterAgentImpl.scala`
+
+  ```scala
+package example_counter
+
+import golem.runtime.annotations.agentImplementation
+
+import scala.annotation.unused
+import scala.concurrent.Future
+
+@agentImplementation()
+final class CounterAgentImpl(@unused private val name: String) extends CounterAgent {
+  private var count: Int = 0
+
+  override def increment(): Future[Int] =
+    Future.successful {
+      count += 1
+      count
+    }
+}
+  ```
+
+    </Tabs.Tab>
+  <Tabs.Tab>
+  The default template's source code is located in the `counter.mbt` file, assuming that the `example:counter` name has been used in the `golem new` command.
+
+  Let's use the following code snippet for this example:
+
+  ```moonbit
+///|
+/// Counter agent in MoonBit
+#derive.agent
+struct CounterAgent {
+  name : String
+  mut value : UInt64
+}
+
+///|
+/// Creates a new counter with the given name
+fn CounterAgent::new(name : String) -> CounterAgent {
+  { name, value: 0 }
+}
+
+///|
+/// Increases the count by one and returns the new value
+#derive.prompt_hint("Increase the count by one")
+pub fn CounterAgent::increment(self : Self) -> UInt64 {
+  self.value += 1
+  self.value
+}
+
+///|
+fn main {
+
+}
+  ```
+
+    </Tabs.Tab>
+</Tabs>
+
+In this simple example we define a very simple agent that is identified by a `name` string, and exposes a single agent method `increment` that increments the count by one and returns the new value.
+This is a simple example of an agent that does not communicate with other agents or external services, but has state.
+
+### Uploading Your Component
+
+To upload your component to Golem, you can use the `app deploy` command.
+
+```shell copy
+golem deploy
+```
+
+When you add a component you will see some basic information about the component such as its name, unique identifier, version, and size. In addition, you will see a list of exports. These are the exported agent types of the component.
+
+Uploading a component to Golem does not actually execute the component. Instead, it only makes it available for execution in Golem.
+
+Every separate running instance of your component is referred to as an _agent_, based on one of the agent types implemented by that component.
+
+### Create Agents
+
+In Golem, every agent has a unique ID that has a specific format: it consists of the _agent type_ followed by the values passed to the agent's constructor.
+
+There are individual CLI commands to create agents and invoke agent methods, where this agent name is used to identify the agent.
+
+For testing purposes, it is much easier to use the **Golem REPL** to create agents and interact with them.
+
+First start the REPL using:
+
+```shell copy
+golem repl
+```
+
+The REPL by default is a TypeScript REPL, although we also have limited support for a Rust REPL as well. In the REPL we have access to all agents defined in the current application, we can get or create instances of them and invoke their methods:
+
+```shell copy
+>>> const a1 = await CounterAgent.get("agent-1")
+>>> const a2 = await CounterAgent.get("another")
+>>> a1.increment()
+1
+>>> a1.increment()
+2
+>>> a2.increment()
+1
+```
+
+Note that the REPL provides autocompletion on Tab, and gives access to many CLI commands through `:` prefixed aliases.
+
+Check the [Invoke section](/invoke) to learn more about other ways to invoke agents.
+
+### Expose an HTTP API
+
+Agents can be invoked from other agents, through the REPL or CLI, or Golem's Invocation API, but Golem Applications can also define **HTTP APIs** that map routes to agents and agent methods using [code-first routes](/invoke/making-custom-apis).
+
+To finish the Quickstart example with an HTTP POST endpoint for tracking counts, first add a **mount point** and an **endpoint** decorator to the agent code:
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+  <Tabs.Tab>
+```typescript
+import {
+    BaseAgent,
+    agent,
+    endpoint,
+    prompt,
+    description,
+} from '@golemcloud/golem-ts-sdk';
+
+@agent({ mount: '/counters/{name}' })
+class CounterAgent extends BaseAgent {
+    private readonly name: string;
+    private value: number = 0;
+
+    constructor(name: string) {
+        super();
+        this.name = name;
+    }
+
+    @endpoint({ post: '/increment' })
+    @prompt("Increase the count by one")
+    @description("Increases the count by one and returns the new value")
+    async increment(): Promise<number> {
+        this.value += 1;
+        return this.value;
+    }
+}
+```
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+```rust
+use golem_rust::{
+    agent_definition, agent_implementation, description, prompt, agentic::BaseAgent,
+};
+
+#[agent_definition(mount = "/counters/{name}")]
+pub trait CounterAgent: BaseAgent {
+    fn new(name: String) -> Self;
+
+    #[endpoint(post = "/increment")]
+    #[prompt("Increase the count by one")]
+    #[description("Increases the count by one and returns the new value")]
+    fn increment(&mut self) -> u32;
+}
+
+struct CounterImpl {
+    count: u32,
+    _name: String,
+}
+
+#[agent_implementation]
+impl CounterAgent for CounterImpl {
+    fn new(name: String) -> Self {
+        Self {
+            _name: name,
+            count: 0,
+        }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+}
+```
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+```scala
+package example_counter
+
+import golem.runtime.annotations.{agentDefinition, description, endpoint, prompt}
+import golem.BaseAgent
+
+import scala.concurrent.Future
+
+@agentDefinition(mount = "/counters/{name}")
+trait CounterAgent extends BaseAgent {
+
+  class Id(val name: String)
+
+  @endpoint(method = "POST", path = "/increment")
+  @prompt("Increase the count by one")
+  @description("Increases the count by one and returns the new value")
+  def increment(): Future[Int]
+}
+```
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+```moonbit
+///|
+/// Counter agent in MoonBit
+#derive.agent
+#derive.mount("/counters/{name}")
+struct CounterAgent {
+  name : String
+  mut value : UInt64
+}
+
+///|
+fn CounterAgent::new(name : String) -> CounterAgent {
+  { name, value: 0 }
+}
+
+///|
+/// Increases the count by one and returns the new value
+#derive.prompt_hint("Increase the count by one")
+#derive.endpoint(post = "/increment")
+pub fn CounterAgent::increment(self : Self) -> UInt64 {
+  self.value += 1
+  self.value
+}
+
+///|
+fn main {
+
+}
+```
+  </Tabs.Tab>
+</Tabs>
+
+Then, add a deployment section to the component's `golem.yaml` to expose the API:
+
+```yaml
+httpApi:
+  deployments:
+    local:
+    - domain: localhost:9006
+      agents:
+        CounterAgent: {}
+```
+
+Now rebuild and deploy:
+
+```shell copy
+golem deploy
+```
+
+After this command, the API is deployed to our locally running Golem instance and can be tried out by sending POST requests to `http://localhost:9006/counters/{name}/increment`:
+
+```shell copy
+curl -X POST http://localhost:9006/counters/agent-1/increment
+```
+
+### Next Steps
+
+In this guide, you have learned how to build and deploy invincible serverless agents on Golem, and seen how you can interact with them as they execute.
+
+Take your next steps with Golem by exploring the following resources:
+
+- Read about the [fundamentals of Golem](fundamentals)
+- Learn about the [main concepts](concepts)
+- Read everything [developing Golem applications](develop)
+- Check out how to [deploy](deploy) Golem to your infrastructure
+- Read the details of how to [invoke agents](invoke)
+- Learn more about the [Golem CLI](cli)
+- Explore operational aspects such as [how agent state is persisted](operate/persistence), what [metrics](operate/metrics) and [logs](operate/logs) are available
+- Check the **References** section for detailed information on APIs and syntaxes

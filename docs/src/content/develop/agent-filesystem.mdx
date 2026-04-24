@@ -1,0 +1,266 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+import { Tabs } from "nextra/components"
+
+# Agent Filesystem
+
+Each agent runs in a sandboxed filesystem. Both the `/` path and the current working directory of an agent point to the root of this sandboxed filesystem.
+There is no way for an agent to access files outside its own filesystem.
+
+## Accessing the filesystem
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-MoonBit|Rust|TypeScript">
+    <Tabs.Tab>
+    For TypeScript agents, use [`node:fs`](https://nodejs.org/api/fs.html) or [`node:fs/promises`](https://nodejs.org/api/fs.html#promises-api) to work with files.
+
+    In Golem 1.5, the QuickJS runtime provides a comprehensive filesystem API, so standard operations such as reading, writing, checking existence, creating directories, and listing directories are available.
+    </Tabs.Tab>
+    <Tabs.Tab>
+    For Rust agents, use the standard [`std::fs`](https://doc.rust-lang.org/std/fs/index.html) module to work with files.
+
+    Golem Rust agents compile to WASI, so standard filesystem operations such as `read_to_string`, `read`, `write`, and `read_dir` work out of the box.
+    </Tabs.Tab>
+    <Tabs.Tab>
+    For Scala agents, use [`node:fs`](https://nodejs.org/api/fs.html) via Scala.js JavaScript interop.
+
+    Standard JVM file I/O APIs such as `java.io.File` and `java.nio.file.*` are not available in Scala.js. Define a small `@JSImport("node:fs", JSImport.Namespace)` facade and access it lazily at runtime.
+    </Tabs.Tab>
+    <Tabs.Tab>
+    For MoonBit agents, use the [`moonbitlang/x/fs`](https://mooncakes.io/docs/moonbitlang/x/fs) package to work with files.
+
+    Golem MoonBit agents compile to WASI, so helper functions such as `read_file_to_string`, `write_string_to_file`, `path_exists`, and `read_dir` cover standard filesystem operations.
+    </Tabs.Tab>
+</Tabs>
+
+## Initial File System
+
+The Initial File System (IFS) refers to all files that are present in the agent filesystem _before_ the agent is started.
+These can include configuration files, static assets and other things that you want to include with your agent.
+
+The IFS is configured on the level of a component, meaning that all agents created from a given component + version will always start with the
+same filesystem. To configure the IFS, include a `files` section in your golem.yaml
+
+<Callout type="warning">
+    If you are using profiles in your golem.yaml, you currently have to include the files section in each of your profiles when overriding.
+</Callout>
+
+```yaml
+components:
+  example:filesystem:
+    template: ts
+    files:
+    - sourcePath: ./files/foo.txt
+      targetPath: /foobar.txt
+      permissions: read-write
+    - sourcePath: ./files/bar.txt
+      targetPath: /bar.txt
+      permissions: read-only
+```
+
+After deploying the component, any new agents created will have the file `/foobar.txt` (and `./foobar.txt` as the agent's initial current directory is the root) available to them.
+The file `/bar.txt` on the other hand is only available for reading. Trying to open the file for writing will fail with a language-dependent error.
+
+### Updating an agent
+
+Updating an agent that uses IFS requires some special consideration depending on the update mode you choose:
+
+* **Automatic updates**: When using automatic updates the old agent invocations are replayed on top of the new IFS. This means that the agent
+should produce _exactly_ the same results and side effects as it did with the old IFS. For example, changing the format of a file will work without issues, but changing
+a file that gets read by the agent and returned to the user will likely lead to divergence. In such cases a manual update might be necessary.
+* **Manual updates**: When using manual updates, you are responsible for saving and restoring the content of files in the agent filesystem. You can
+use the `golem:api/save-snapshot` function to persist the files and later restore / migrate them using `golem:api/load-snapshot`.
+
+## Externally accessing agent files
+
+It is easy to expose files on the agent filesystem via HTTP using code-first route definitions.
+
+For example, we can define an agent with a `download` endpoint that serves files:
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-MoonBit|Rust|TypeScript">
+    <Tabs.Tab>
+    ```typescript
+    import * as fs from 'node:fs';
+    import { BaseAgent, agent, endpoint, UnstructuredBinary } from '@golemcloud/golem-ts-sdk';
+
+    @agent({ mount: "/files/{name}" })
+    class FileServerAgent extends BaseAgent {
+      constructor(readonly name: string) {
+        super();
+      }
+
+      @endpoint({ get: "/download/{path}" })
+      downloadFile(path: string): UnstructuredBinary {
+        try {
+          const buffer = fs.readFileSync(`/web/${path}`);
+
+          let contentType = 'application/octet-stream';
+          if (path.endsWith('.html')) {
+            contentType = 'text/html';
+          } else if (path.endsWith('.js')) {
+            contentType = 'application/javascript';
+          }
+
+          return UnstructuredBinary.fromInline(buffer, contentType);
+        } catch (err) {
+          return UnstructuredBinary.fromInline(
+            new TextEncoder().encode(`Not found! (${err})`),
+            'text/plain',
+          );
+        }
+      }
+    }
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```rust
+    use std::fs;
+
+    use golem_rust::{agent_definition, agent_implementation, UnstructuredBinary};
+
+    #[agent_definition(mount = "/files/{name}")]
+    pub trait FileServerAgent {
+        fn new(name: String) -> Self;
+
+        #[endpoint(get = "/download/{*path}")]
+        fn download_file(&self, path: String) -> UnstructuredBinary<String>;
+    }
+
+    struct FileServerAgentImpl {
+        _name: String,
+    }
+
+    #[agent_implementation]
+    impl FileServerAgent for FileServerAgentImpl {
+        fn new(name: String) -> Self {
+            Self { _name: name }
+        }
+
+        fn download_file(&self, path: String) -> UnstructuredBinary<String> {
+            match fs::read(format!("/web/{path}")) {
+                Ok(contents) => {
+                    let content_type = if path.ends_with(".html") {
+                        "text/html"
+                    } else if path.ends_with(".js") {
+                        "application/javascript"
+                    } else {
+                        "application/octet-stream"
+                    };
+                    UnstructuredBinary::inline(contents, content_type)
+                }
+                Err(_) => UnstructuredBinary::inline(
+                    b"Not found!".to_vec(),
+                    "text/plain",
+                ),
+            }
+        }
+    }
+
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```scala
+    import golem.runtime.annotations.{agentDefinition, agentImplementation, endpoint}
+    import golem.{BaseAgent, UnstructuredBinary}
+
+    import scala.annotation.unused
+    import scala.concurrent.Future
+    import scala.scalajs.js
+    import scala.scalajs.js.annotation.JSImport
+    import scala.scalajs.js.typedarray.Uint8Array
+
+    @js.native
+    @JSImport("node:fs", JSImport.Namespace)
+    private object Fs extends js.Object {
+      def readFileSync(path: String): Uint8Array = js.native
+    }
+
+    @agentDefinition(mount = "/files/{name}")
+    trait FileServerAgent extends BaseAgent {
+      class Id(val name: String)
+
+      @endpoint(get = "/download/{path}")
+      def downloadFile(path: String): Future[UnstructuredBinary]
+    }
+
+    @agentImplementation()
+    final class FileServerAgentImpl(@unused private val name: String) extends FileServerAgent {
+      override def downloadFile(path: String): Future[UnstructuredBinary] =
+        Future.successful {
+          try {
+            val bytes = Fs.readFileSync(s"/web/$path")
+
+            val contentType =
+              if path.endsWith(".html") then "text/html"
+              else if path.endsWith(".js") then "application/javascript"
+              else "application/octet-stream"
+
+            UnstructuredBinary.inline(toByteList(bytes), contentType)
+          } catch {
+            case _: Throwable =>
+              UnstructuredBinary.inline(
+                "Not found!".getBytes("UTF-8").iterator.map(_.toByte).toList,
+                "text/plain"
+              )
+          }
+        }
+
+      private def toByteList(bytes: Uint8Array): List[Byte] = {
+        val result = List.newBuilder[Byte]
+        var i      = 0
+        while i < bytes.length do {
+          result += bytes(i).toByte
+          i += 1
+        }
+        result.result()
+      }
+    }
+
+    ```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```moonbit
+    #derive.agent(mount="/files/{name}")
+    struct FileServerAgent {
+      _name : String
+    }
+
+    fn FileServerAgent::new(name : String) -> FileServerAgent {
+      { _name: name }
+    }
+
+    #endpoint(get="/download/{path}")
+    pub fn FileServerAgent::download_file(self : Self, path : String) -> UnstructuredBinary {
+      ignore(self)
+      let full_path = "/web/\{path}"
+
+      try {
+        let data = @fs.read_file_to_bytes(full_path)
+        let content_type =
+          if path.has_suffix(".html") {
+            "text/html"
+          } else if path.has_suffix(".js") {
+            "application/javascript"
+          } else {
+            "application/octet-stream"
+          }
+
+        UnstructuredBinary::inline(data, content_type)
+      } catch {
+        _ => UnstructuredBinary::inline(b"Not found!", "text/plain")
+      }
+    }
+    ```
+    </Tabs.Tab>
+
+</Tabs>
+
+
+
+With the `@endpoint` / `#[endpoint]` annotations, the HTTP route is automatically registered — no separate API mapping is needed. The agent above will serve files at `GET /files/{name}/download/{path}`.
+
+For more information about defining code-first HTTP endpoints for agents, [check the dedicated documentation page](/invoke/making-custom-apis).
+
+For serving static content, it is good practice to define a separate agent in an **ephemeral component** that is only responsible for serving files. This way the file-serving endpoints will not ever block by waiting for a stateful agent to process their requests.

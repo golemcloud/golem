@@ -1,0 +1,152 @@
+import { Tabs } from "nextra/components"
+
+# Make Secure HTTP APIs
+
+Golem API gateway has built-in authentication support to identify users using the OpenID protocol.
+When authentication is enabled on a mount or endpoint, agent constructors and methods can receive a `Principal` parameter containing information about the authenticated caller.
+
+## Setup Security for your API routes in Golem
+
+### Register an app with an Identity Provider and get a client-id and client-secret.
+
+Golem supports the following OIDC provider types: **google**, **facebook**, **microsoft**, **gitlab**, and **custom** (any OIDC-compliant provider via `--custom-issuer-url`).
+
+For Google, here is the direct link to register your app with [Google Identity Provider](https://console.cloud.google.com/apis/credentials).
+Make sure your app with a redirect URL and get the client-id and client secret.
+
+When using a locally executed Golem instance during development, the redirect URI can be `http://localhost:9006/auth/callback`. Otherwise it should be be `https://mydomain.com/auth/callback`, where `mydomain.com` is the domain in which you will be deploying your API in Golem.
+
+The `/auth/callback` part is just an example and it can be anything, as far as it doesn't collide with any other existing routes.
+
+We call these details "Api Security Scheme" in Golem API Gateway. Next step is to register this scheme in Golem.
+
+### Register API Security Scheme with your app's client-id and client-secret with Golem
+
+Make sure you name your security scheme uniquely, and provide the client-id, client-secret and redirect-url as given below.
+
+#### Google example
+
+```shell copy
+golem api security-scheme create \
+  --provider-type google \
+  --client-id REPLACE_WITH_GOOGLE_CLIENT_ID \
+  --client-secret REPLACE_WITH_GOOGLE_CLIENT_SECRET \
+  --redirect-url http://localhost:9006/auth/callback
+  --scope openid,email,profile \
+  my-security
+```
+
+#### Custom OIDC provider
+
+For any OIDC-compliant provider not in the built-in list, use `--provider-type custom` with `--custom-provider-name` and `--custom-issuer-url`:
+
+```shell copy
+golem api security-scheme create my-custom-oidc \
+  --provider-type custom \
+  --custom-provider-name "my-provider" \
+  --custom-issuer-url "https://auth.example.com" \
+  --client-id "YOUR_CLIENT_ID" \
+  --client-secret "YOUR_CLIENT_SECRET" \
+  --redirect-url "https://app.example.com/auth/callback" \
+  --scope openid
+```
+
+By now, you are having a security scheme registered with `golem` which enables authentication for your agents.
+
+### Enable authentication in your agent code
+
+Once the security scheme is registered, enable authentication using the `auth` option on your agent's mount or on individual endpoints:
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs.Tab>
+```typescript
+@agent({
+  mount: '/secure/{name}',
+  auth: true, // all endpoints require authentication
+})
+export class SecureAgent extends BaseAgent {
+  constructor(readonly name: string) { super(); }
+
+  @endpoint({ get: "/profile" })
+  async getProfile(principal: Principal): Promise<Profile> {
+    // principal.email, principal.name, etc.
+  }
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[agent_definition(mount = "/secure/{name}", auth = true)]
+pub trait SecureAgent {
+    fn new(name: String) -> Self;
+
+    #[endpoint(get = "/profile")]
+    fn get_profile(&self, principal: Principal) -> Profile;
+    // principal contains the authenticated user's identity
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@agentDefinition(mount = "/secure/{name}", auth = true)
+trait SecureAgent extends BaseAgent {
+  class Id(val name: String)
+
+  @endpoint(method = "GET", path = "/whoami")
+  def whoAmI(principal: Principal): Future[String]
+}
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+#derive.agent
+#derive.mount("/secure/{name}")
+#derive.mount_auth(true)
+struct SecureAgent {
+  name : String
+}
+
+#derive.endpoint(get = "/whoami")
+pub fn SecureAgent::who_am_i(self: Self, principal: Principal) -> String {
+  // principal contains authenticated user info
+  principal.subject
+}
+```
+</Tabs.Tab>
+</Tabs>
+
+The `Principal` parameter is automatically injected from the authentication context — it is not part of the HTTP request body.
+
+### Redirects and Cookies
+
+Internally, there are a couple of redirects that's going on when you access the protected endpoint.
+The first redirect is to the identity provider's login page as explained below, and internally this is followed by the identity provider hitting the redirect URL (
+which is exposed on your behalf by Golem API gateway) with all the details of the user.
+This is followed by another redirect to the original URL that you tried to access, and this time the session-id, tokens/secrets set in a secure Cookie, which your
+browser will resend. Once the browser sends the cookie, Golem API gateway will validate the cookie and allow you to access the protected endpoint.
+
+We will be adding more support for various clients and use-cases in future releases based on the user feedback.
+
+### Unexposed CallBack Endpoint
+
+Note that the callback endpoint is exposed automatically based on the re-direct url specified in the API security scheme. Users cannot customise or add
+these call back endpoints manually. This is to avoid any security issues that may arise due to misconfiguration of the callback endpoint.
+
+### Troubleshooting
+
+Most of the errors in this use-case are originated from a wrong security scheme configuration. For example, a wrong `redirect-url`
+can result in odd errors that is difficult to spot, as this is originated from the providers and not Golem.
+
+Make sure the scope is correct and includes email. Trying to access the email claim while the scope doesn't have it in the security scheme,
+will result in errors.
+
+### Known Issues
+
+Using multiple security schemes (with the names foo-security-scheme, and bar-security-scheme ) with the same redirect-url is not supported and leads to an internal error.
+
+```sh
+Selected profile: local
+
+error: API Security Scheme Service - Error: 500 Internal Server Error, InternalError: Internal repository error (unique
+     key violation)
+```
