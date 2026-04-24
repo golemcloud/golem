@@ -13,7 +13,9 @@ function deepEquals(a: unknown, b: unknown): boolean {
   const keysB = Object.keys(b as Record<string, unknown>);
   if (keysA.length !== keysB.length) return false;
   return keysA.every(
-    (key) => key in (b as Record<string, unknown>) && deepEquals((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
+    (key) =>
+      key in (b as Record<string, unknown>) &&
+      deepEquals((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
   );
 }
 
@@ -261,9 +263,7 @@ function evaluateJsonAssertions(
         Array.isArray(actual) &&
         Array.isArray(expected) &&
         actual.length === expected.length &&
-        expected.every((exp: unknown) =>
-          actual.some((act: unknown) => deepEquals(act, exp)),
-        );
+        expected.every((exp: unknown) => actual.some((act: unknown) => deepEquals(act, exp)));
       results.push({
         assertion: `${label}[${jsonAssert.path}].equals_unordered`,
         passed,
