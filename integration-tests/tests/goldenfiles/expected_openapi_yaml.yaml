@@ -2,6 +2,9 @@ openapi: 3.0.0
 info:
   title: Managed api provided by Golem
   version: 1.0.0
+servers:
+- url: https://<ENV_ID>.golem.cloud
+- url: http://<ENV_ID>.golem.cloud
 paths:
   /cors-agents/{agent-name}/inherited:
     get:
