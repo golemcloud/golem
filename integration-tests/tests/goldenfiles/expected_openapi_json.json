@@ -1414,5 +1414,13 @@
         }
       }
     }
-  }
+  },
+  "servers": [
+    {
+      "url": "https://<ENV_ID>.golem.cloud"
+    },
+    {
+      "url": "http://<ENV_ID>.golem.cloud"
+    }
+  ]
 }
