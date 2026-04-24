@@ -61,10 +61,19 @@ async fn agent_reads_secret_created_from_default(
         .await?;
 
     user.deploy_environment_with(env.id, |d| {
-        d.agent_secret_defaults = vec![DeploymentAgentSecretDefault {
-            path: AgentSecretPath(vec!["secret".into()]),
-            secret_value: json!("foo"),
-        }];
+        d.agent_secret_defaults = vec![
+            DeploymentAgentSecretDefault {
+                path: AgentSecretPath(vec!["secret".into()]),
+                secret_value: json!("foo"),
+            },
+            DeploymentAgentSecretDefault {
+                path: AgentSecretPath(vec![ctx.case_config_path_segment("complex-secret")]),
+                secret_value: json!({
+                    "foo": "foo",
+                    "bar": 1,
+                }),
+            },
+        ];
     })
     .await?;
 
@@ -90,7 +99,11 @@ async fn agent_reads_secret_created_from_default(
     assert_eq!(
         parsed,
         json!({
-            "secret": "foo"
+            "secret": "foo",
+            "complexSecret": {
+                "foo": "foo",
+                "bar": 1,
+            }
         })
     );
 
@@ -126,10 +139,19 @@ async fn agent_reads_secret_updated_from_default(
         .await?;
 
     user.deploy_environment_with(env.id, |d| {
-        d.agent_secret_defaults = vec![DeploymentAgentSecretDefault {
-            path: AgentSecretPath(vec!["secret".into()]),
-            secret_value: json!("foo"),
-        }];
+        d.agent_secret_defaults = vec![
+            DeploymentAgentSecretDefault {
+                path: AgentSecretPath(vec!["secret".into()]),
+                secret_value: json!("foo"),
+            },
+            DeploymentAgentSecretDefault {
+                path: AgentSecretPath(vec![ctx.case_config_path_segment("complex-secret")]),
+                secret_value: json!({
+                    "foo": "foo",
+                    "bar": 1,
+                }),
+            },
+        ];
     })
     .await?;
 
@@ -155,7 +177,11 @@ async fn agent_reads_secret_updated_from_default(
     assert_eq!(
         parsed,
         json!({
-            "secret": "foo"
+            "secret": "foo",
+            "complexSecret": {
+                "foo": "foo",
+                "bar": 1,
+            }
         })
     );
 

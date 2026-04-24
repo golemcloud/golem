@@ -1,4 +1,4 @@
-use golem_rust::{ConfigSchema, agent_definition, agent_implementation};
+use golem_rust::{ConfigSchema, agent_definition, agent_implementation, Schema};
 use golem_rust::agentic::{Config, Secret};
 use serde_json::json;
 use serde::Serialize;
@@ -110,10 +110,18 @@ impl LocalConfigAgent for LocalConfigAgentImpl {
     }
 }
 
+#[derive(Schema, Serialize)]
+pub struct ComplexSecret {
+    foo: String,
+    bar: u32
+}
+
 #[derive(ConfigSchema)]
 pub struct SharedConfigAgentConfig {
     #[config_schema(secret)]
     pub secret: Secret<String>,
+    #[config_schema(secret)]
+    pub complex_secret: Secret<ComplexSecret>,
 }
 
 #[agent_definition]
@@ -137,6 +145,7 @@ impl SharedConfigAgent for SharedConfigAgentImpl {
         let config = self.config.get();
         let result_json = json!({
             "secret": config.secret.get(),
+            "complexSecret": config.complex_secret.get(),
         });
 
         serde_json::to_string(&result_json).unwrap()
