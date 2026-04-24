@@ -52,6 +52,14 @@ async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
         .filter(|template| template.starts_with(language.id()))
         .collect::<Vec<_>>();
 
+    // MoonBit does not yet support single->multi component upgrade via
+    // incremental template application, so we only apply the base template.
+    let templates: Vec<_> = if language == GuestLanguage::MoonBit {
+        vec![language.id().to_string()]
+    } else {
+        templates
+    };
+
     println!("{templates:#?}");
 
     fs::create_dir_all(ctx.cwd_path_join(&app_name)).unwrap();

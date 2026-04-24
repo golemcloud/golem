@@ -140,8 +140,8 @@ Add the core crate plus your chosen provider to the component's `Cargo.toml`:
 ```toml
 [dependencies]
 # LLM — core + provider
-golem-ai-llm = { git = "https://github.com/golemcloud/golem-ai", tag = "v0.5.0-dev.2" }
-golem-ai-llm-openai = { git = "https://github.com/golemcloud/golem-ai", tag = "v0.5.0-dev.2" }
+golem-ai-llm = "0.5.0"
+golem-ai-llm-openai = "0.5.0"
 ```
 
 Store the required API key as a **secret** using Golem's typed config system. Load the `golem-add-secret-rust` skill for full details. In brief:
@@ -355,7 +355,7 @@ impl ChatAgent for ChatAgentImpl {
 
 ## Key Constraints
 
-- All golem-ai crates must be added as git dependencies from `https://github.com/golemcloud/golem-ai` with `tag = "v0.5.0-dev.2"` — they are not on crates.io yet
+- All golem-ai crates should use version `"0.5.0"` from crates.io
 - Always add both the core crate and a provider crate (e.g., `golem-ai-llm` + `golem-ai-llm-openai`)
 - Provider API keys should be stored as secrets using Golem's typed config system (load the `golem-add-secret-rust` skill)
 - The `Durable*` provider types (e.g., `DurableOpenAI`) automatically integrate with Golem's durable execution — responses are recorded in the oplog and replayed on recovery
