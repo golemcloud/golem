@@ -103,8 +103,8 @@ agents:
 ```yaml
 secretDefaults:
   local:
-    - path: [database, password]
-      value: "{{ DB_PASSWORD }}"
+    database:
+      password: "{{ DB_PASSWORD }}"
 ```
 
 ### Secrets via CLI

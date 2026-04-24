@@ -17,12 +17,13 @@ use crate::repo::registry_change::{
 };
 use golem_api_grpc::proto::golem::registry::v1::AgentSecretChangedEvent;
 use golem_api_grpc::proto::golem::registry::v1::{
-    AccountTokensInvalidatedEvent, CursorExpiredEvent, DeploymentChangedEvent,
-    DomainRegistrationChangedEvent, EnvironmentPermissionsChangedEvent, RegistryInvalidationEvent,
-    ResourceDefinitionChangedEvent, RetryPolicyChangedEvent, SecuritySchemeChangedEvent,
-    registry_invalidation_event::Payload,
+    AccountTokensInvalidatedEvent, ApplicationDeletedEvent, CursorExpiredEvent,
+    DeploymentChangedEvent, DomainRegistrationChangedEvent, EnvironmentDeletedEvent,
+    EnvironmentPermissionsChangedEvent, RegistryInvalidationEvent, ResourceDefinitionChangedEvent,
+    RetryPolicyChangedEvent, SecuritySchemeChangedEvent, registry_invalidation_event::Payload,
 };
 use golem_common::model::account::AccountId;
+use golem_common::model::application::ApplicationId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::ResourceDefinitionId;
 use std::sync::Arc;
@@ -379,6 +380,37 @@ fn to_registry_invalidation_event(event: &RegistryChangeEvent) -> RegistryInvali
             *event_id,
             Payload::AgentSecretChanged(AgentSecretChangedEvent {
                 environment_id: Some(EnvironmentId(*environment_id).into()),
+            }),
+        ),
+        RegistryChangeEvent::ApplicationDeleted {
+            event_id,
+            application_id,
+            account_id,
+            app_name,
+            environment_ids,
+        } => (
+            *event_id,
+            Payload::ApplicationDeleted(ApplicationDeletedEvent {
+                application_id: Some(ApplicationId(*application_id).into()),
+                account_id: Some(AccountId(*account_id).into()),
+                app_name: app_name.clone(),
+                environment_ids: environment_ids
+                    .iter()
+                    .map(|id| EnvironmentId(*id).into())
+                    .collect(),
+            }),
+        ),
+        RegistryChangeEvent::EnvironmentDeleted {
+            event_id,
+            environment_id,
+            app_name,
+            env_name,
+        } => (
+            *event_id,
+            Payload::EnvironmentDeleted(EnvironmentDeletedEvent {
+                environment_id: Some(EnvironmentId(*environment_id).into()),
+                app_name: app_name.clone(),
+                env_name: env_name.clone(),
             }),
         ),
     };

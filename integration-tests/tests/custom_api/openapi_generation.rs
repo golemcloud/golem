@@ -17,12 +17,19 @@ use crate::custom_api::http_test_context::{
 };
 use goldenfile::Mint;
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_test_framework::config::EnvBasedTestDependencies;
 use pretty_assertions::assert_eq;
 use std::io::Write;
 use test_r::test_dep;
 use test_r::{inherit_test_dep, test};
+
+/// Normalizes server URLs in OpenAPI spec strings by replacing dynamic domains with placeholders
+fn normalize_server_servers_urls_in_openapi_spec(spec_str: &str, env: &EnvironmentId) -> String {
+    let dynamic_domain = format!("{}.golem.cloud", env.0);
+    spec_str.replace(&dynamic_domain, "<ENV_ID>.golem.cloud")
+}
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
@@ -74,7 +81,9 @@ async fn test_open_api_yaml_generation(agent: &HttpTestContext) -> anyhow::Resul
 
     let yaml_value: serde_yaml::Value = serde_yaml::from_slice(&yaml_response.bytes().await?)?;
     let encoded_yaml = serde_yaml::to_string(&yaml_value)?;
-    let _ = mint_goldenfile.write(encoded_yaml.as_bytes())?;
+    let encoded_yaml_normalized =
+        normalize_server_servers_urls_in_openapi_spec(&encoded_yaml, &agent.env_id);
+    let _ = mint_goldenfile.write(encoded_yaml_normalized.as_bytes())?;
 
     let json_response = agent
         .client
@@ -146,7 +155,9 @@ async fn test_open_api_custom_prefix_json_generation(
 
     let json_value: serde_json::Value = serde_json::from_slice(&json_response.bytes().await?)?;
     let encoded_json = serde_json::to_string_pretty(&json_value)?;
-    let _ = mint_goldenfile.write(encoded_json.as_bytes())?;
+    let encoded_json_normalized =
+        normalize_server_servers_urls_in_openapi_spec(&encoded_json, &agent.env_id);
+    let _ = mint_goldenfile.write(encoded_json_normalized.as_bytes())?;
 
     let yaml_response = agent
         .client
