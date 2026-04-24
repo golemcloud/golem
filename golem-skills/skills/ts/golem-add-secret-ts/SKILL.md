@@ -71,10 +71,9 @@ For development environments, define secret defaults in `golem.yaml`. These are 
 ```yaml
 secretDefaults:
   local:
-    - path: [apiKey]
-      value: "dev-key-123"
-    - path: [db, password]
-      value: "dev-password"
+    apiKey: "dev-key-123"
+    db:
+      password: "dev-password"
 ```
 
 ## Key Points

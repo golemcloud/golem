@@ -183,11 +183,9 @@ mcp:
 
 secretDefaults:
   local:
-    - path: ["agents", "MyAgent", "config", "api_key"]
-      value: "test-key"
+    apiKey: "test-key"
   prod:
-    - path: ["agents", "MyAgent", "config", "api_key"]
-      value: "{{ PROD_API_KEY }}"
+    apiKey: "{{ PROD_API_KEY }}"
 
 retryPolicyDefaults:
   local:

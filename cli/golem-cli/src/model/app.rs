@@ -2041,6 +2041,7 @@ impl PluginInstallation {
 
 mod app_builder {
     use super::ResourceDefinitionCreation;
+    use super::flatten_json_leaf_paths;
     use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
@@ -2472,16 +2473,21 @@ mod app_builder {
                         }
                     }
 
-                    for (environment, environment_agent_secrets) in app.application.secret_defaults {
+                    for (environment, environment_secret_defaults) in app.application.secret_defaults {
                         let entry = self.agent_secret_defaults
                             .entry(environment.clone())
                             .or_default();
 
-                        for environment_agent_secret in environment_agent_secrets {
+                        for (path, secret_value) in
+                            flatten_json_leaf_paths(environment_secret_defaults)
+                        {
                             entry.push(
                                 WithSource::new(
                                     app.source.to_path_buf(),
-                                    DeploymentAgentSecretDefault { path: AgentSecretPath(environment_agent_secret.path), secret_value: environment_agent_secret.value }
+                                    DeploymentAgentSecretDefault {
+                                        path: AgentSecretPath(path),
+                                        secret_value,
+                                    }
                                 )
                             )
                         }
@@ -3035,6 +3041,33 @@ mod app_builder {
             (None, None) => None,
         }
     }
+}
+
+fn collect_json_leaf_paths(
+    value: serde_json::Value,
+    prefix: &mut Vec<String>,
+    result: &mut Vec<(Vec<String>, serde_json::Value)>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, nested) in map {
+                prefix.push(key);
+                collect_json_leaf_paths(nested, prefix, result);
+                prefix.pop();
+            }
+        }
+        leaf => {
+            if !prefix.is_empty() {
+                result.push((prefix.clone(), leaf));
+            }
+        }
+    }
+}
+
+fn flatten_json_leaf_paths(value: serde_json::Value) -> Vec<(Vec<String>, serde_json::Value)> {
+    let mut result = Vec::new();
+    collect_json_leaf_paths(value, &mut vec![], &mut result);
+    result
 }
 
 #[cfg(test)]

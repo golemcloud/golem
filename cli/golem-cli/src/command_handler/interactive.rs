@@ -192,6 +192,30 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_ignore_unused_agent_secret_defaults(
+        &self,
+        paths: &[String],
+    ) -> anyhow::Result<bool> {
+        let rendered = paths
+            .iter()
+            .map(|path| format!(" - {}", path.log_color_warn()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        self.confirm(
+            true,
+            format!(
+                concat!(
+                    "The following secret default paths do not match any declared secret config path and will be ignored:\n\n",
+                    "{}\n\n",
+                    "Do you want to continue?"
+                ),
+                rendered
+            ),
+            None,
+        )
+    }
+
     pub fn confirm_deleting_agents(&self, number_of_agents: usize) -> anyhow::Result<bool> {
         self.confirm(
             true,

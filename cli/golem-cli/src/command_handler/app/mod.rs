@@ -59,8 +59,8 @@ use futures_util::{StreamExt, TryStreamExt, stream};
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::schema_evolution::validate_schema_evolution;
+use golem_common::model::agent::{AgentConfigSource, DeployedRegisteredAgentType};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
@@ -72,7 +72,7 @@ use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use itertools::Itertools;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -1476,11 +1476,43 @@ impl AppCommandHandler {
     ) -> anyhow::Result<CurrentDeployment> {
         let app_ctx = self.ctx.app_context_lock().await;
 
-        let agent_secret_defaults = app_ctx
+        let mut agent_secret_defaults = app_ctx
             .some_or_err()?
             .application()
-            .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name)
-            .apply(resolve_secret_defaults)?;
+            .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name);
+
+        let unused_secret_default_paths =
+            collect_unused_agent_secret_default_paths(deploy_diff, &agent_secret_defaults);
+
+        if !unused_secret_default_paths.is_empty() {
+            let rendered_unused_secret_default_paths = unused_secret_default_paths
+                .iter()
+                .map(|path| path.join("."))
+                .collect::<Vec<_>>();
+
+            log_warn_action(
+                "Ignoring unused secret default paths",
+                rendered_unused_secret_default_paths.join(", "),
+            );
+
+            if !self
+                .ctx
+                .interactive_handler()
+                .confirm_ignore_unused_agent_secret_defaults(
+                    &rendered_unused_secret_default_paths,
+                )?
+            {
+                bail!(NonSuccessfulExit);
+            }
+
+            let unused_set = unused_secret_default_paths
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+
+            agent_secret_defaults.retain(|default| !unused_set.contains(&default.path.0));
+        }
+
+        let agent_secret_defaults = agent_secret_defaults.apply(resolve_secret_defaults)?;
 
         let retry_policy_defaults = app_ctx
             .some_or_err()?
@@ -2146,4 +2178,33 @@ fn resolve_secret_defaults(
             })
         })
         .collect()
+}
+
+fn collect_declared_agent_secret_paths(deploy_diff: &DeployDiff) -> BTreeSet<Vec<String>> {
+    deploy_diff
+        .deployable_components
+        .values()
+        .flat_map(|component| component.agent_types.iter())
+        .flat_map(|agent_type| agent_type.config.iter())
+        .filter(|config| config.source == AgentConfigSource::Secret)
+        .map(|config| config.path.clone())
+        .collect()
+}
+
+fn collect_unused_agent_secret_default_paths(
+    deploy_diff: &DeployDiff,
+    defaults: &[DeploymentAgentSecretDefault],
+) -> Vec<Vec<String>> {
+    let declared_secret_paths = collect_declared_agent_secret_paths(deploy_diff);
+
+    let mut unused_paths = defaults
+        .iter()
+        .map(|default| default.path.0.clone())
+        .filter(|path| !declared_secret_paths.contains(path))
+        .collect::<Vec<_>>();
+
+    unused_paths.sort();
+    unused_paths.dedup();
+
+    unused_paths
 }

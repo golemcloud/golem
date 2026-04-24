@@ -47,7 +47,7 @@ clean:                             # Extra paths for `golem clean`
   - "path/to/clean"
 
 secretDefaults:                    # Secret defaults per environment
-  <env-name>: [...]
+  <env-name>: {...}
 
 retryPolicyDefaults:               # Retry policy defaults per environment
   <env-name>: [...]
@@ -440,16 +440,14 @@ Missing host variables cause deployment failure.
 
 ## Secret Defaults
 
-Secret defaults per environment. Each entry specifies a JSON path and value:
+Secret defaults per environment use the same nested object style as `config`:
 
 ```yaml
 secretDefaults:
   local:
-    - path: ["agents", "MyAgent", "config", "api_key"]
-      value: "test-key-123"
+    apiKey: "test-key-123"
   prod:
-    - path: ["agents", "MyAgent", "config", "api_key"]
-      value: "{{ PROD_API_KEY }}"
+    apiKey: "{{ PROD_API_KEY }}"
 ```
 
 ## Retry Policy Defaults

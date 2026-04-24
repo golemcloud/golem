@@ -121,7 +121,7 @@ pub struct Application {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bridge: Option<BridgeSdks>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub secret_defaults: IndexMap<EnvironmentName, Vec<EnvironmentAgentSecret>>,
+    pub secret_defaults: IndexMap<EnvironmentName, serde_json::Value>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub retry_policy_defaults: IndexMap<EnvironmentName, Vec<EnvironmentRetryPolicyDefault>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -485,13 +485,6 @@ impl AgentPreset {
             files: self.files,
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EnvironmentAgentSecret {
-    pub path: Vec<String>,
-    pub value: serde_json::Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1576,17 +1569,15 @@ mod test {
             .boxed()
     }
 
-    fn arb_secret_defaults_model()
-    -> BoxedStrategy<IndexMap<EnvironmentName, Vec<EnvironmentAgentSecret>>> {
+    fn arb_json_object() -> BoxedStrategy<Value> {
+        prop::collection::btree_map(arb_ident(), arb_json_value(), 0..=3)
+            .prop_map(|m| Value::Object(m.into_iter().collect()))
+            .boxed()
+    }
+
+    fn arb_secret_defaults_model() -> BoxedStrategy<IndexMap<EnvironmentName, serde_json::Value>> {
         prop::collection::vec(
-            (
-                arb_ident().prop_map(EnvironmentName),
-                prop::collection::vec(
-                    (prop::collection::vec(arb_ident(), 1..=3), arb_json_value())
-                        .prop_map(|(path, value)| EnvironmentAgentSecret { path, value }),
-                    0..=2,
-                ),
-            ),
+            (arb_ident().prop_map(EnvironmentName), arb_json_object()),
             0..=3,
         )
         .prop_map(IndexMap::from_iter)
