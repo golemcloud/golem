@@ -63,6 +63,8 @@ pub enum RegistryEventType {
     ResourceDefinitionChanged = 5,
     RetryPolicyChanged = 6,
     AgentSecretChanged = 7,
+    ApplicationDeleted = 8,
+    EnvironmentDeleted = 9,
 }
 
 impl TryFrom<i16> for RegistryEventType {
@@ -78,6 +80,8 @@ impl TryFrom<i16> for RegistryEventType {
             5 => Ok(RegistryEventType::ResourceDefinitionChanged),
             6 => Ok(RegistryEventType::RetryPolicyChanged),
             7 => Ok(RegistryEventType::AgentSecretChanged),
+            8 => Ok(RegistryEventType::ApplicationDeleted),
+            9 => Ok(RegistryEventType::EnvironmentDeleted),
             other => Err(RepoError::InternalError(anyhow::anyhow!(
                 "Unknown registry event type: {other}"
             ))),
@@ -132,6 +136,19 @@ pub enum RegistryChangeEvent {
         event_id: ChangeEventId,
         environment_id: Uuid,
     },
+    ApplicationDeleted {
+        event_id: ChangeEventId,
+        application_id: Uuid,
+        account_id: Uuid,
+        app_name: String,
+        environment_ids: Vec<Uuid>,
+    },
+    EnvironmentDeleted {
+        event_id: ChangeEventId,
+        environment_id: Uuid,
+        app_name: String,
+        env_name: String,
+    },
 }
 
 impl RegistryChangeEvent {
@@ -145,6 +162,8 @@ impl RegistryChangeEvent {
             Self::RetryPolicyChanged { event_id, .. } => *event_id,
             Self::ResourceDefinitionChanged { event_id, .. } => *event_id,
             Self::AgentSecretChanged { event_id, .. } => *event_id,
+            Self::ApplicationDeleted { event_id, .. } => *event_id,
+            Self::EnvironmentDeleted { event_id, .. } => *event_id,
         }
     }
 }
@@ -161,6 +180,15 @@ struct RegistryChangeEventRow {
     domains: Vec<String>,
     resource_definition_id: Option<Uuid>,
     resource_name: Option<String>,
+    application_id: Option<Uuid>,
+    /// Set for ApplicationDeleted and EnvironmentDeleted: the application's
+    /// human-readable name.
+    app_name: Option<String>,
+    /// Set for ApplicationDeleted: the UUIDs of all non-deleted environments
+    /// under the deleted application.
+    environment_ids: Vec<Uuid>,
+    /// Set for EnvironmentDeleted: the environment's human-readable name.
+    env_name: Option<String>,
 }
 
 impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
@@ -288,6 +316,53 @@ impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
                     environment_id,
                 })
             }
+            RegistryEventType::ApplicationDeleted => {
+                let application_id = row.application_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "ApplicationDeleted event missing application_id"
+                    ))
+                })?;
+                let account_id = row.account_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "ApplicationDeleted event missing account_id"
+                    ))
+                })?;
+                let app_name = row.app_name.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "ApplicationDeleted event missing app_name"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::ApplicationDeleted {
+                    event_id: row.event_id,
+                    application_id,
+                    account_id,
+                    app_name,
+                    environment_ids: row.environment_ids,
+                })
+            }
+            RegistryEventType::EnvironmentDeleted => {
+                let environment_id = row.environment_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "EnvironmentDeleted event missing environment_id"
+                    ))
+                })?;
+                let app_name = row.app_name.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "EnvironmentDeleted event missing app_name"
+                    ))
+                })?;
+                let env_name = row.env_name.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "EnvironmentDeleted event missing env_name"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::EnvironmentDeleted {
+                    event_id: row.event_id,
+                    environment_id,
+                    app_name,
+                    env_name,
+                })
+            }
         }
     }
 }
@@ -327,6 +402,10 @@ pub struct NewRegistryChangeEvent {
     pub domains: Vec<String>,
     pub resource_definition_id: Option<Uuid>,
     pub resource_name: Option<String>,
+    pub application_id: Option<Uuid>,
+    pub app_name: Option<String>,
+    pub environment_ids: Vec<Uuid>,
+    pub env_name: Option<String>,
 }
 
 impl NewRegistryChangeEvent {
@@ -345,6 +424,10 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
         }
     }
 
@@ -359,6 +442,10 @@ impl NewRegistryChangeEvent {
             domains,
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
         }
     }
 
@@ -373,6 +460,10 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
         }
     }
 
@@ -387,6 +478,10 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
         }
     }
 
@@ -401,6 +496,10 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
         }
     }
 
@@ -415,6 +514,10 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
         }
     }
 
@@ -433,6 +536,10 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: Some(resource_definition_id),
             resource_name: Some(resource_name),
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
         }
     }
 
@@ -447,6 +554,51 @@ impl NewRegistryChangeEvent {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
+        }
+    }
+
+    pub fn application_deleted(
+        application_id: Uuid,
+        account_id: Uuid,
+        app_name: String,
+        environment_ids: Vec<Uuid>,
+    ) -> Self {
+        Self {
+            event_type: RegistryEventType::ApplicationDeleted,
+            environment_id: None,
+            deployment_revision_id: None,
+            current_deployment_revision_id: None,
+            account_id: Some(account_id),
+            grantee_account_id: None,
+            domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
+            application_id: Some(application_id),
+            app_name: Some(app_name),
+            environment_ids,
+            env_name: None,
+        }
+    }
+
+    pub fn environment_deleted(environment_id: Uuid, app_name: String, env_name: String) -> Self {
+        Self {
+            event_type: RegistryEventType::EnvironmentDeleted,
+            environment_id: Some(environment_id),
+            deployment_revision_id: None,
+            current_deployment_revision_id: None,
+            account_id: None,
+            grantee_account_id: None,
+            domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
+            application_id: None,
+            app_name: Some(app_name),
+            environment_ids: Vec::new(),
+            env_name: Some(env_name),
         }
     }
 }
@@ -501,7 +653,8 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
                     SELECT event_id, event_type, environment_id,
                            deployment_revision_id, current_deployment_revision_id, account_id,
                            grantee_account_id, domains,
-                           resource_definition_id, resource_name
+                           resource_definition_id, resource_name,
+                           application_id, environment_ids, app_name, env_name
                     FROM registry_change_events
                     WHERE event_id > $1
                     ORDER BY event_id ASC
@@ -515,6 +668,8 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
         for row in &rows {
             let event_type_raw: i16 = row.try_get("event_type").map_err(RepoError::from)?;
             let domains: Option<Vec<String>> = row.try_get("domains").map_err(RepoError::from)?;
+            let environment_ids: Option<Vec<Uuid>> =
+                row.try_get("environment_ids").map_err(RepoError::from)?;
             let parsed_row = RegistryChangeEventRow {
                 event_id: ChangeEventId(row.try_get("event_id").map_err(RepoError::from)?),
                 event_type: RegistryEventType::try_from(event_type_raw)?,
@@ -532,6 +687,10 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
                     .try_get("resource_definition_id")
                     .map_err(RepoError::from)?,
                 resource_name: row.try_get("resource_name").map_err(RepoError::from)?,
+                application_id: row.try_get("application_id").map_err(RepoError::from)?,
+                app_name: row.try_get("app_name").map_err(RepoError::from)?,
+                environment_ids: environment_ids.unwrap_or_default(),
+                env_name: row.try_get("env_name").map_err(RepoError::from)?,
             };
 
             if let Some(event) = try_map_registry_change_event_row(parsed_row)? {
@@ -591,7 +750,8 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                     SELECT event_id, event_type, environment_id,
                            deployment_revision_id, current_deployment_revision_id, account_id,
                            grantee_account_id, domains,
-                           resource_definition_id, resource_name
+                           resource_definition_id, resource_name,
+                           application_id, environment_ids, app_name, env_name
                     FROM registry_change_events
                     WHERE event_id > $1
                     ORDER BY event_id ASC
@@ -611,6 +771,29 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                 })?,
                 _ => Vec::new(),
             };
+            // SQLite stores UUID arrays as JSON strings
+            let environment_ids_json: Option<String> =
+                row.try_get("environment_ids").map_err(RepoError::from)?;
+            let environment_ids: Vec<Uuid> = match environment_ids_json {
+                Some(json) if !json.is_empty() => {
+                    let strings: Vec<String> = serde_json::from_str(&json).map_err(|e| {
+                        RepoError::InternalError(anyhow::anyhow!(
+                            "Failed to deserialize environment_ids: {e}"
+                        ))
+                    })?;
+                    strings
+                        .iter()
+                        .map(|s| {
+                            Uuid::parse_str(s).map_err(|e| {
+                                RepoError::InternalError(anyhow::anyhow!(
+                                    "Invalid UUID in environment_ids: {e}"
+                                ))
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                }
+                _ => Vec::new(),
+            };
             let parsed_row = RegistryChangeEventRow {
                 event_id: ChangeEventId(row.try_get("event_id").map_err(RepoError::from)?),
                 event_type: RegistryEventType::try_from(event_type_raw)?,
@@ -628,6 +811,10 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
                     .try_get("resource_definition_id")
                     .map_err(RepoError::from)?,
                 resource_name: row.try_get("resource_name").map_err(RepoError::from)?,
+                application_id: row.try_get("application_id").map_err(RepoError::from)?,
+                app_name: row.try_get("app_name").map_err(RepoError::from)?,
+                environment_ids,
+                env_name: row.try_get("env_name").map_err(RepoError::from)?,
             };
 
             if let Some(event) = try_map_registry_change_event_row(parsed_row)? {
@@ -697,14 +884,16 @@ impl DbRegistryChangeRepo<PostgresPool> {
 
         let event_type: i16 = event.event_type.into();
         let domains: &[String] = &event.domains;
+        let environment_ids: &[Uuid] = &event.environment_ids;
         let row = tx
             .fetch_one(
                 sqlx::query(indoc! { r#"
                     INSERT INTO registry_change_events
                         (event_type, environment_id, deployment_revision_id, current_deployment_revision_id,
                          account_id, grantee_account_id, domains,
-                         resource_definition_id, resource_name)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9)
+                         resource_definition_id, resource_name,
+                         application_id, environment_ids, app_name, env_name)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7::text[], $8, $9, $10, $11::uuid[], $12, $13)
                     RETURNING event_id
                 "#})
                 .bind(event_type)
@@ -715,7 +904,11 @@ impl DbRegistryChangeRepo<PostgresPool> {
                 .bind(event.grantee_account_id)
                 .bind(domains)
                 .bind(event.resource_definition_id)
-                .bind(&event.resource_name),
+                .bind(&event.resource_name)
+                .bind(event.application_id)
+                .bind(environment_ids)
+                .bind(event.app_name.as_deref())
+                .bind(event.env_name.as_deref()),
             )
             .await?;
 
@@ -741,14 +934,30 @@ impl DbRegistryChangeRepo<SqlitePool> {
                 RepoError::InternalError(anyhow::anyhow!("Failed to serialize domains: {e}"))
             })?)
         };
+        // SQLite stores UUID arrays as JSON strings
+        let environment_ids_json = if event.environment_ids.is_empty() {
+            None
+        } else {
+            let strings: Vec<String> = event
+                .environment_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect();
+            Some(serde_json::to_string(&strings).map_err(|e| {
+                RepoError::InternalError(anyhow::anyhow!(
+                    "Failed to serialize environment_ids: {e}"
+                ))
+            })?)
+        };
         let row = tx
             .fetch_one(
                 sqlx::query(indoc! { r#"
                     INSERT INTO registry_change_events
                         (event_type, environment_id, deployment_revision_id, current_deployment_revision_id,
                          account_id, grantee_account_id, domains,
-                         resource_definition_id, resource_name)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                         resource_definition_id, resource_name,
+                         application_id, environment_ids, app_name, env_name)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                     RETURNING event_id
                 "#})
                 .bind(event_type)
@@ -759,7 +968,11 @@ impl DbRegistryChangeRepo<SqlitePool> {
                 .bind(event.grantee_account_id)
                 .bind(&domains_json)
                 .bind(event.resource_definition_id)
-                .bind(&event.resource_name),
+                .bind(&event.resource_name)
+                .bind(event.application_id)
+                .bind(environment_ids_json.as_deref())
+                .bind(event.app_name.as_deref())
+                .bind(event.env_name.as_deref()),
             )
             .await?;
 
@@ -781,6 +994,9 @@ mod tests {
         let account_id = Uuid::new_v4();
         let grantee_account_id = Uuid::new_v4();
         let resource_definition_id = Uuid::new_v4();
+        let application_id = Uuid::new_v4();
+        let app_name = "my-app".to_string();
+        let env_name = "my-env".to_string();
 
         let cases = vec![
             RegistryChangeEventRow {
@@ -794,6 +1010,10 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
+                app_name: None,
+                environment_ids: Vec::new(),
+                env_name: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -806,6 +1026,10 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
+                app_name: None,
+                environment_ids: Vec::new(),
+                env_name: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -818,6 +1042,10 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
+                app_name: None,
+                environment_ids: Vec::new(),
+                env_name: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -830,6 +1058,10 @@ mod tests {
                 domains: vec!["example.com".to_string()],
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
+                app_name: None,
+                environment_ids: Vec::new(),
+                env_name: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -842,6 +1074,10 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
+                app_name: None,
+                environment_ids: Vec::new(),
+                env_name: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -854,6 +1090,10 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
+                app_name: None,
+                environment_ids: Vec::new(),
+                env_name: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -866,6 +1106,10 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: Some(resource_definition_id),
                 resource_name: Some("res-name".to_string()),
+                application_id: None,
+                app_name: None,
+                environment_ids: Vec::new(),
+                env_name: None,
             },
             RegistryChangeEventRow {
                 event_id,
@@ -878,6 +1122,42 @@ mod tests {
                 domains: Vec::new(),
                 resource_definition_id: None,
                 resource_name: None,
+                application_id: None,
+                app_name: None,
+                environment_ids: Vec::new(),
+                env_name: None,
+            },
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::ApplicationDeleted,
+                environment_id: None,
+                deployment_revision_id: None,
+                current_deployment_revision_id: None,
+                account_id: Some(account_id),
+                grantee_account_id: None,
+                domains: Vec::new(),
+                resource_definition_id: None,
+                app_name: Some(app_name.clone()),
+                resource_name: None,
+                application_id: Some(application_id),
+                environment_ids: vec![environment_id],
+                env_name: None,
+            },
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::EnvironmentDeleted,
+                environment_id: Some(environment_id),
+                deployment_revision_id: None,
+                current_deployment_revision_id: None,
+                account_id: None,
+                grantee_account_id: None,
+                domains: Vec::new(),
+                resource_definition_id: None,
+                resource_name: None,
+                application_id: None,
+                app_name: Some(app_name.clone()),
+                environment_ids: Vec::new(),
+                env_name: Some(env_name.clone()),
             },
         ];
 
@@ -903,6 +1183,10 @@ mod tests {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
         };
 
         let valid_row = RegistryChangeEventRow {
@@ -916,6 +1200,10 @@ mod tests {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
         };
 
         let skipped = try_map_registry_change_event_row(legacy_row).expect("row mapping failed");
@@ -938,6 +1226,10 @@ mod tests {
             domains: Vec::new(),
             resource_definition_id: None,
             resource_name: None,
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
         };
 
         let result = try_map_registry_change_event_row(malformed_row);
