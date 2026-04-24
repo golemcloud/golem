@@ -18,6 +18,7 @@ use crate::custom_api::openapi::schema_mapping::{
     arbitrary_binary_schema, create_schema_from_analysed_type,
 };
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
+use golem_common::model::domain_registration::Domain;
 use golem_service_base::custom_api::{
     PathSegment, PathSegmentType, QueryOrHeaderType, RequestBodySchema, SecuritySchemeDetails,
 };
@@ -26,7 +27,7 @@ use indexmap::IndexMap;
 use openapiv3::{
     Components, Header, HeaderStyle, Info, MediaType, OpenAPI, Operation, Parameter, ParameterData,
     ParameterSchemaOrContent, PathItem, PathStyle, QueryStyle, ReferenceOr, RequestBody, Response,
-    Schema, SecurityScheme, StatusCode,
+    Schema, SecurityScheme, Server, StatusCode,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -34,10 +35,10 @@ use std::sync::Arc;
 pub struct HttpApiOpenApiSpec(pub OpenAPI);
 
 impl HttpApiOpenApiSpec {
-    pub fn from_routes(routes: &[RichCompiledRoute]) -> Result<Self, String> {
+    pub fn from_routes(routes: &[RichCompiledRoute], domain: &Domain) -> Result<Self, String> {
         let security_scheme_details = get_security_scheme_details(routes);
 
-        let mut open_api = create_base_openapi(&security_scheme_details);
+        let mut open_api = create_base_openapi(&security_scheme_details, domain);
 
         let mut paths = BTreeMap::new();
 
@@ -68,7 +69,10 @@ fn get_security_scheme_details(
     schemes
 }
 
-fn create_base_openapi(security_schemes: &Vec<Arc<SecuritySchemeDetails>>) -> OpenAPI {
+fn create_base_openapi(
+    security_schemes: &Vec<Arc<SecuritySchemeDetails>>,
+    domain: &Domain,
+) -> OpenAPI {
     let mut open_api = OpenAPI {
         openapi: "3.0.0".to_string(),
         info: Info {
@@ -80,6 +84,20 @@ fn create_base_openapi(security_schemes: &Vec<Arc<SecuritySchemeDetails>>) -> Op
             version: "1.0.0".to_string(),
             extensions: Default::default(),
         },
+        servers: vec![
+            Server {
+                url: format!("https://{}", domain.0),
+                description: None,
+                variables: Default::default(),
+                extensions: Default::default(),
+            },
+            Server {
+                url: format!("http://{}", domain.0),
+                description: None,
+                variables: Default::default(),
+                extensions: Default::default(),
+            },
+        ],
         ..Default::default()
     };
 

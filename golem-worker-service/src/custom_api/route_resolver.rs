@@ -173,7 +173,7 @@ impl RouteResolver {
             }
         };
 
-        let openapi_spec = match HttpApiOpenApiSpec::from_routes(&finalized_routes) {
+        let openapi_spec = match HttpApiOpenApiSpec::from_routes(&finalized_routes, domain) {
             Ok(spec) => Some(Arc::new(spec)),
             Err(e) => {
                 tracing::warn!("Failed to build openapi spec for http api: {e}");
