@@ -74,6 +74,7 @@ use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
+use golem_wasm::analysis::AnalysedType;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -2183,7 +2184,7 @@ fn collect_declared_agent_secret_paths(
     deploy_diff: &DeployDiff,
 ) -> anyhow::Result<BTreeSet<Vec<String>>> {
     let mut declared_secret_paths = BTreeSet::new();
-    let mut declared_secret_types = BTreeMap::<Vec<String>, _>::new();
+    let mut declared_secret_types = BTreeMap::<Vec<String>, (AnalysedType, String)>::new();
 
     for component in deploy_diff.deployable_components.values() {
         for agent_type in &component.agent_types {
@@ -2199,12 +2200,12 @@ fn collect_declared_agent_secret_paths(
                 {
                     if existing_type != &config.value_type {
                         bail!(
-                            "Conflicting secret declaration for path '{}' across agents '{}' and '{}': declared types differ ({} vs {}).",
-                            config.path.join("."),
-                            existing_agent_type,
-                            agent_type.type_name.0,
-                            format!("{:?}", existing_type),
-                            format!("{:?}", config.value_type),
+                            "Conflicting secret declaration for path '{}' across agents '{}' and '{}': declared types differ ({:?} vs {:?}).",
+                            config.path.join(".").log_color_error_highlight(),
+                            existing_agent_type.log_color_highlight(),
+                            agent_type.type_name.0.log_color_highlight(),
+                            existing_type,
+                            config.value_type,
                         );
                     }
                 } else {
