@@ -1347,10 +1347,14 @@ fn collect_unused_agent_config_paths(
         .map(|decl| decl.path.clone())
         .collect::<BTreeSet<_>>();
 
-    let mut unused = collect_unused_leaf_paths(config_root, |path| declared_paths.contains(path))
-        .into_iter()
-        .map(|path| path.join("."))
-        .collect::<Vec<_>>();
+    let mut unused = collect_unused_leaf_paths(config_root, |path| {
+        declared_paths
+            .iter()
+            .any(|declared_path| path.starts_with(declared_path))
+    })
+    .into_iter()
+    .map(|path| path.join("."))
+    .collect::<Vec<_>>();
     unused.sort();
     unused
 }

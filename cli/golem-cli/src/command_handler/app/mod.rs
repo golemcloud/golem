@@ -2212,7 +2212,6 @@ fn resolve_secret_defaults(
 fn collect_declared_agent_secret_paths(
     deploy_diff: &DeployDiff,
 ) -> anyhow::Result<BTreeSet<Vec<String>>> {
-    let mut declared_secret_paths = BTreeSet::new();
     let mut declared_secret_types = BTreeMap::<Vec<String>, (AnalysedType, String)>::new();
 
     for component in deploy_diff.deployable_components.values() {
@@ -2221,8 +2220,6 @@ fn collect_declared_agent_secret_paths(
                 if config.source != AgentConfigSource::Secret {
                     continue;
                 }
-
-                declared_secret_paths.insert(config.path.clone());
 
                 if let Some((existing_type, existing_agent_type)) =
                     declared_secret_types.get(&config.path)
@@ -2247,7 +2244,7 @@ fn collect_declared_agent_secret_paths(
         }
     }
 
-    Ok(declared_secret_paths)
+    Ok(declared_secret_types.into_keys().collect())
 }
 
 fn materialize_agent_secret_defaults(
