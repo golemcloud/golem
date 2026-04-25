@@ -72,8 +72,14 @@ export class LocalConfigAgent extends BaseAgent {
   }
 }
 
+type ComplexSecret = {
+  foo: string,
+  bar: number
+};
+
 type SharedConfigAgentConfig = {
   secret: Secret<string>,
+  complexSecret: Secret<ComplexSecret>
 };
 
 @agent()
@@ -86,6 +92,7 @@ export class SharedConfigAgent extends BaseAgent {
     const config = this.config.value;
     return JSON.stringify({
       secret: config.secret.get(),
+      complexSecret: config.complexSecret.get()
     })
   }
 }
