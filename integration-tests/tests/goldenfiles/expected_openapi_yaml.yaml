@@ -8,6 +8,7 @@ servers:
 paths:
   /cors-agents/{agent-name}/inherited:
     get:
+      operationId: CorsAgent-inherited
       parameters:
       - in: path
         name: agent-name
@@ -62,6 +63,7 @@ paths:
                 - GET
   /cors-agents/{agent-name}/preflight-required:
     post:
+      operationId: CorsAgent-preflight
       parameters:
       - in: path
         name: agent-name
@@ -133,6 +135,7 @@ paths:
                 - POST
   /cors-agents/{agent-name}/wildcard:
     get:
+      operationId: CorsAgent-wildcard
       parameters:
       - in: path
         name: agent-name
@@ -187,6 +190,7 @@ paths:
                 - GET
   /http-agents/{agent-name}/json-body/{id}:
     post:
+      operationId: HttpAgent-json_body
       parameters:
       - in: path
         name: agent-name
@@ -235,6 +239,7 @@ paths:
                 - ok
   /http-agents/{agent-name}/multi-path-vars/{first}/{second}:
     get:
+      operationId: HttpAgent-multi_path_vars
       parameters:
       - in: path
         name: agent-name
@@ -274,6 +279,7 @@ paths:
                 - joined
   /http-agents/{agent-name}/path-and-header/{resource-id}:
     get:
+      operationId: HttpAgent-path_and_header
       parameters:
       - in: path
         name: agent-name
@@ -316,6 +322,7 @@ paths:
                 - request_id
   /http-agents/{agent-name}/path-and-query/{item-id}:
     get:
+      operationId: HttpAgent-path_and_query
       parameters:
       - in: path
         name: agent-name
@@ -363,6 +370,7 @@ paths:
                 - limit
   /http-agents/{agent-name}/resource/{id}:
     patch:
+      operationId: HttpAgent-patch_resource
       parameters:
       - in: path
         name: agent-name
@@ -422,6 +430,7 @@ paths:
                 - method
   /http-agents/{agent-name}/resource/{id}/partial:
     patch:
+      operationId: HttpAgent-patch_partial
       parameters:
       - in: path
         name: agent-name
@@ -459,6 +468,7 @@ paths:
                 - method
   /http-agents/{agent-name}/resp/binary:
     get:
+      operationId: HttpAgent-binary_response
       parameters:
       - in: path
         name: agent-name
@@ -478,6 +488,7 @@ paths:
                 format: binary
   /http-agents/{agent-name}/resp/json:
     get:
+      operationId: HttpAgent-json_response_func
       parameters:
       - in: path
         name: agent-name
@@ -501,6 +512,7 @@ paths:
                 - value
   /http-agents/{agent-name}/resp/no-content:
     get:
+      operationId: HttpAgent-no_content
       parameters:
       - in: path
         name: agent-name
@@ -515,6 +527,7 @@ paths:
           description: Response 204
   /http-agents/{agent-name}/resp/optional/{found}:
     get:
+      operationId: HttpAgent-optional_response_func
       parameters:
       - in: path
         name: agent-name
@@ -548,6 +561,7 @@ paths:
           description: Response 404
   /http-agents/{agent-name}/resp/result-json-json/{ok}:
     get:
+      operationId: HttpAgent-result_ok_or_err
       parameters:
       - in: path
         name: agent-name
@@ -590,6 +604,7 @@ paths:
                 - error
   /http-agents/{agent-name}/resp/result-json-void:
     get:
+      operationId: HttpAgent-result_json_void
       parameters:
       - in: path
         name: agent-name
@@ -620,6 +635,7 @@ paths:
                 format: binary
   /http-agents/{agent-name}/resp/result-void-json:
     post:
+      operationId: HttpAgent-result_void_err
       parameters:
       - in: path
         name: agent-name
@@ -650,6 +666,7 @@ paths:
                 - error
   /http-agents/{agent-name}/rest/{tail}:
     get:
+      operationId: HttpAgent-remaining_path
       parameters:
       - in: path
         name: agent-name
@@ -682,6 +699,7 @@ paths:
                 - tail
   /http-agents/{agent-name}/restricted-unstructured-binary/{bucket}:
     post:
+      operationId: HttpAgent-restricted_unstructured_binary
       parameters:
       - in: path
         name: agent-name
@@ -717,6 +735,7 @@ paths:
                 format: int64
   /http-agents/{agent-name}/string-path-var/{path-var}:
     get:
+      operationId: HttpAgent-string_path_var
       parameters:
       - in: path
         name: agent-name
@@ -748,6 +767,7 @@ paths:
                 - value
   /http-agents/{agent-name}/unrestricted-unstructured-binary/{bucket}:
     post:
+      operationId: HttpAgent-unrestricted_unstructured_binary
       parameters:
       - in: path
         name: agent-name
@@ -803,6 +823,7 @@ paths:
                 additionalProperties: true
   /webhook-agents/{agent-name}/set-test-server-url:
     post:
+      operationId: WebhookAgent-set_test_server_url
       parameters:
       - in: path
         name: agent-name
@@ -829,6 +850,7 @@ paths:
           description: Response 204
   /webhook-agents/{agent-name}/test-webhook:
     post:
+      operationId: WebhookAgent-test_webhook
       parameters:
       - in: path
         name: agent-name
