@@ -1,0 +1,53 @@
+{
+  "name": "effect-golem",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.mjs",
+  "types": "dist/effect-golem.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/effect-golem.d.ts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "wasm",
+    "golem-types"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node ./scripts/build-types-entry.mjs",
+    "build:bundle": "rollup -c",
+    "generate-dts": "wasm-rquickjs generate-dts --wit ./wit --output golem-types-generated --world agent-guest",
+    "generate-agent-template": "node ./scripts/generate-agent-template.mjs",
+    "compile-agent-template": "cargo build --target wasm32-wasip2 --manifest-path=agent-template/Cargo.toml --release --features full,golem",
+    "copy-agent-template": "node ./scripts/copy-agent-template.mjs",
+    "build-agent-template": "npm run build:bundle && npm run generate-agent-template && npm run compile-agent-template && npm run copy-agent-template",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.57"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@rollup/plugin-commonjs": "^29.0.2",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-terser": "^1.0.0",
+    "@types/node": "^22.10.2",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.4.2",
+    "rollup": "^4.60.2",
+    "rollup-plugin-typescript2": "^0.37.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^2.1.8"
+  }
+}

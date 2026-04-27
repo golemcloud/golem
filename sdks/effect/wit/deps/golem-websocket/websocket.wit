@@ -1,0 +1,51 @@
+package golem:websocket@1.5.0;
+
+interface client {
+  use wasi:io/poll@0.2.3.{pollable};
+
+  variant error {
+    connection-failure(string),
+    send-failure(string),
+    receive-failure(string),
+    protocol-error(string),
+    closed(option<close-info>),
+    other(string),
+  }
+
+  record close-info {
+    code: u16,
+    reason: string,
+  }
+
+  /// A WebSocket message — text or binary
+  variant message {
+    text(string),
+    binary(list<u8>),
+  }
+
+  /// A WebSocket connection resource
+  resource websocket-connection {
+    /// Connect to a WebSocket server at the given URL (ws:// or wss://)
+    /// Optional headers for auth, subprotocols, etc.
+    connect: static func(
+      url: string,
+      headers: option<list<tuple<string, string>>>
+    ) -> result<websocket-connection, error>;
+
+    /// Send a message (text or binary)
+    send: func(message: message) -> result<_, error>;
+
+    /// Receive the next message (blocks until available)
+    receive: func() -> result<message, error>;
+
+    /// Receive the next message with a timeout in milliseconds.
+    /// Returns none if the timeout expires before a message arrives.
+    receive-with-timeout: func(timeout-ms: u64) -> result<option<message>, error>;
+
+    /// Send a close frame with optional code and reason
+    close: func(code: option<u16>, reason: option<string>) -> result<_, error>;
+
+    /// Returns a pollable that resolves when a message is available to read
+    subscribe: func() -> pollable;
+  }
+}
