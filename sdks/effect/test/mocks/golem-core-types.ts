@@ -6,6 +6,10 @@
 
 export type Uuid = { highBits: bigint; lowBits: bigint }
 
+export type ComponentId = { uuid: Uuid }
+export type AgentId = { componentId: ComponentId; agentId: string }
+export type OplogIndex = bigint
+
 const HEX_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
 export const parseUuid = (uuid: string): Uuid => {

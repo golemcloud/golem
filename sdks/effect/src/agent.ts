@@ -1,6 +1,6 @@
 import { Effect, Exit, Ref, Schema, Scope } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
-import type * as ApiHost from "golem:api/host@1.5.0"
+import * as ApiHost from "golem:api/host@1.5.0"
 import * as AgentHost from "golem:agent/host@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import type { DatabaseSync } from "node:sqlite"
@@ -27,6 +27,7 @@ import {
   type ParamBinding,
 } from "./method.js"
 import { Principal } from "./principal.js"
+import { SelfAgentId } from "./self-agent-id.js"
 import {
   compileSnapshot,
   createBinding,
@@ -399,6 +400,13 @@ interface ActiveAgent {
   /** Principal supplied to `initialize` / embedded in the loaded snapshot. */
   readonly principal: AgentCommon.Principal
   /**
+   * Structured `AgentId` for this running instance. Captured once via
+   * `getSelfMetadata` during initialize/load and reused for the
+   * lifetime of the agent. Exposed to user code as the
+   * {@link SelfAgentId} Context service.
+   */
+  readonly selfAgentId: CoreTypes.AgentId
+  /**
    * Captured per-instance snapshot binding when the agent declared a
    * `snapshot` field; `null` otherwise. Read by `dispatchSaveSnapshot`
    * and written-through by `dispatchLoadSnapshot`.
@@ -470,11 +478,25 @@ const initAgentInstance = async (
   scope: Scope.Closeable
   handlers: Record<string, Handler<AnyMethodSpec>>
   bindingHandle: BindingHandle | null
+  selfAgentId: CoreTypes.AgentId
 }> => {
   const bindingHandle: BindingHandle | null =
     compiled.compiledSnapshot !== null
       ? createBinding(agentTypeName, compiled.compiledSnapshot)
       : null
+
+  // Capture the structured AgentId once at agent-init time. Subsequent
+  // user-side reads via the `SelfAgentId` Context service are free.
+  let selfAgentId: CoreTypes.AgentId
+  try {
+    selfAgentId = getSelfMetadataImpl().agentId
+  } catch (e) {
+    throw new Error(
+      `failed to fetch self metadata while initializing agent '${agentTypeName}': ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    )
+  }
 
   const scope = await Effect.runPromise(Scope.make())
   let handlers: Record<string, Handler<AnyMethodSpec>>
@@ -484,8 +506,15 @@ const initAgentInstance = async (
     let program = (
       (compiled.definition.impl as (...a: ReadonlyArray<unknown>) => unknown)(
         ...implArgs,
-      ) as Effect.Effect<Record<string, Handler<AnyMethodSpec>>, unknown, Scope.Scope | Principal>
-    ).pipe(Effect.provideService(Principal, principal))
+      ) as Effect.Effect<
+        Record<string, Handler<AnyMethodSpec>>,
+        unknown,
+        Scope.Scope | Principal | SelfAgentId
+      >
+    ).pipe(
+      Effect.provideService(Principal, principal),
+      Effect.provideService(SelfAgentId, selfAgentId),
+    )
     if (compiled.compiledConfig !== null && compiled.definition.config !== undefined) {
       const shape = await Effect.runPromise(
         compiled.compiledConfig.buildShape() as Effect.Effect<unknown, never>,
@@ -513,7 +542,7 @@ const initAgentInstance = async (
     throw e
   }
 
-  return { scope, handlers, bindingHandle }
+  return { scope, handlers, bindingHandle, selfAgentId }
 }
 
 /** Implementation of `agent-guest.guest.initialize`. */
@@ -533,7 +562,7 @@ export const dispatchInitialize = async (
   }
 
   const constructorInput = await decodeConstructorInput(agentTypeName, compiled, input)
-  const { scope, handlers, bindingHandle } = await initAgentInstance(
+  const { scope, handlers, bindingHandle, selfAgentId } = await initAgentInstance(
     agentTypeName,
     compiled,
     constructorInput,
@@ -550,7 +579,7 @@ export const dispatchInitialize = async (
     snapshot = bound
   }
 
-  activeAgent = { name: agentTypeName, scope, handlers, principal, snapshot }
+  activeAgent = { name: agentTypeName, scope, handlers, principal, selfAgentId, snapshot }
 }
 
 /** Implementation of `agent-guest.guest.invoke`. */
@@ -585,11 +614,10 @@ export const dispatchInvoke = async (
     mc,
     handler,
     input,
-  ).pipe(Effect.provideService(Principal, principal)) as Effect.Effect<
-    CoreTypes.DataValue,
-    unknown,
-    never
-  >
+  ).pipe(
+    Effect.provideService(Principal, principal),
+    Effect.provideService(SelfAgentId, activeAgent.selfAgentId),
+  ) as Effect.Effect<CoreTypes.DataValue, unknown, never>
   if (compiled.compiledConfig !== null && compiled.definition.config !== undefined) {
     const shape = await Effect.runPromise(
       compiled.compiledConfig.buildShape() as Effect.Effect<unknown, never>,
@@ -654,6 +682,25 @@ export const __setParseAgentIdForTest = (
 /** Reset the parse-agent-id shim back to the real binding. */
 export const __resetParseAgentIdForTest = (): void => {
   parseAgentIdImpl = (id) => AgentHost.parseAgentId(id)
+}
+
+/**
+ * Module-level indirection for the host's `getSelfMetadata` binding,
+ * used at agent-init time to capture the structured `SelfAgentId`
+ * service value. Tests can swap this out via
+ * `__setGetSelfMetadataForTest` to avoid pulling in the real host
+ * import.
+ */
+let getSelfMetadataImpl: () => ApiHost.AgentMetadata = () => ApiHost.getSelfMetadata()
+
+/** Test-only hook: replace the host `getSelfMetadata` shim. */
+export const __setGetSelfMetadataForTest = (fn: () => ApiHost.AgentMetadata): void => {
+  getSelfMetadataImpl = fn
+}
+
+/** Reset the `getSelfMetadata` shim back to the real binding. */
+export const __resetGetSelfMetadataForTest = (): void => {
+  getSelfMetadataImpl = () => ApiHost.getSelfMetadata()
 }
 
 /**
@@ -806,7 +853,7 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
     compiled,
     ctorDataValue as CoreTypes.DataValue,
   )
-  const { scope, handlers, bindingHandle } = await initAgentInstance(
+  const { scope, handlers, bindingHandle, selfAgentId } = await initAgentInstance(
     agentTypeName,
     compiled,
     constructorInput,
@@ -899,5 +946,12 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
   }
 
   // 5. Publish.
-  activeAgent = { name: agentTypeName, scope, handlers, principal, snapshot: bound }
+  activeAgent = {
+    name: agentTypeName,
+    scope,
+    handlers,
+    principal,
+    selfAgentId,
+    snapshot: bound,
+  }
 }

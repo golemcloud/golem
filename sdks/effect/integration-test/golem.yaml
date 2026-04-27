@@ -107,6 +107,8 @@ agents:
     config: {}
   IgniteCounter:
     config: {}
+  HostFeatures:
+    config: {}
 
 # Secret defaults applied automatically to the local environment at
 # deploy time. Production deployments would use

@@ -5,6 +5,7 @@ import { componentModelElement, ElementValueKindError, type ElementCodec } from 
 import type { EndpointDef } from "./http.js"
 import { isMultimodal, type Multimodal, type MultimodalShape } from "./multimodal.js"
 import { Principal } from "./principal.js"
+import { SelfAgentId } from "./self-agent-id.js"
 import { isElementSpec, type ElementSpec } from "./unstructured.js"
 import { toWitCodec, type UnsupportedSchemaError, type WitCodec } from "./wit-codec.js"
 
@@ -143,7 +144,7 @@ export const defineMethod: {
  */
 export type Handler<S extends MethodSpec<any, any, any>, CfgTag = never> = (
   input: MethodInput<S["params"]>,
-) => Effect.Effect<S["success"]["Type"], S["error"]["Type"], Principal | CfgTag>
+) => Effect.Effect<S["success"]["Type"], S["error"]["Type"], Principal | SelfAgentId | CfgTag>
 
 /**
  * Invoke a standalone {@link Method} with a *decoded* input record. Useful
