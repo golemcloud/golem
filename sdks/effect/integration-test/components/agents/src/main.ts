@@ -5,3 +5,6 @@
  */
 import "./counter-agent.js"
 import "./caller-agent.js"
+import "./sqlite-counter-agent.js"
+import "./pg-counter-agent.js"
+import "./mysql-counter-agent.js"

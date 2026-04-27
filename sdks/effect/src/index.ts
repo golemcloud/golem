@@ -28,9 +28,15 @@ export * as Snapshot from "./snapshot.js"
 export {
   InvalidSnapshotError,
   SnapshotAlreadyBoundError,
+  SnapshotDatabaseDuplicateAttachError,
+  SnapshotDatabaseHasAttachmentsError,
+  SnapshotDatabaseMissingPartError,
+  SnapshotDatabaseNotInAutocommitError,
+  SnapshotDatabaseUnknownPartError,
   SnapshotNotBoundError,
 } from "./snapshot.js"
 export type {
+  AttachableDatabase,
   AutoSnapshotBinding,
   AutoSnapshotDef,
   CustomSnapshotBinding,

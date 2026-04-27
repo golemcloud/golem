@@ -86,16 +86,27 @@ components:
   effect-golem:agents:
     dir: components/agents
     templates: effect-golem-ts
+  # Separately-deployable Ignite component. The
+  # `golem:rdbms/ignite2@1.5.0` host binding may not be available in
+  # every Golem environment; deploy this component only when targeting
+  # an Ignite-aware worker pool.
+  effect-golem:ignite-agent:
+    dir: components/ignite-agent
+    templates: effect-golem-ts
 
-# Per-agent default config values for the local source. Matches the
-# `defineConfig("Counter.Config", { greeting: ..., apiKey: ... })`
-# declaration in `components/agents/src/counter-agent.ts`. The secret
-# `apiKey` field is provisioned via `secretDefaults` below, NOT here —
-# the registry rejects secret values supplied through `agents.*.config`.
+# Per-agent default config values for the local source. The secret
+# `connectionAddress` field is provisioned via `secretDefaults` below
+# — the registry rejects secret values supplied through `agents.*.config`.
 agents:
   Counter:
     config:
       greeting: "Hello from golem.yaml"
+  PgCounter:
+    config: {}
+  MySqlCounter:
+    config: {}
+  IgniteCounter:
+    config: {}
 
 # Secret defaults applied automatically to the local environment at
 # deploy time. Production deployments would use
@@ -104,6 +115,12 @@ agents:
 secretDefaults:
   local:
     apiKey: "sk-effect-golem-test-1234"
+    # Per-RDBMS DSNs. Each adapter reads through its own
+    # agent-scoped config field so the registry holds them as
+    # independent secrets.
+    connectionAddress: "postgres://golem:golem@localhost:5432/golem"
+    mysqlConnectionAddress: "mysql://golem:golem@localhost:3306/golem"
+    igniteConnectionAddress: "ignite://localhost:10800"
 
 # HTTP API deployment — maps the Counter agent (which declares
 # `Http.mount(...)` + per-method `Http.get/post(...)` in

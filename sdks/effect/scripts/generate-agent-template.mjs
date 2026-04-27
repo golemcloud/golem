@@ -18,8 +18,19 @@ const wit = resolve(root, "wit")
 const output = resolve(root, "agent-template")
 const sdkBundle = resolve(root, "dist/index.mjs")
 const effectBundle = resolve(root, "dist/effect.mjs")
+const sqliteBundle = resolve(root, "dist/sqlite.mjs")
+const postgresBundle = resolve(root, "dist/postgres.mjs")
+const mysqlBundle = resolve(root, "dist/mysql.mjs")
+const igniteBundle = resolve(root, "dist/ignite.mjs")
 
-for (const f of [sdkBundle, effectBundle]) {
+for (const f of [
+  sdkBundle,
+  effectBundle,
+  sqliteBundle,
+  postgresBundle,
+  mysqlBundle,
+  igniteBundle,
+]) {
   if (!existsSync(f)) {
     console.error(`error: ${f} does not exist. Run "npm run build:bundle" first.`)
     process.exit(1)
@@ -42,6 +53,14 @@ const result = spawnSync(
     "agent-guest",
     "--js-modules",
     `effect-golem=${sdkBundle}`,
+    "--js-modules",
+    `effect-golem/sqlite=${sqliteBundle}`,
+    "--js-modules",
+    `effect-golem/postgres=${postgresBundle}`,
+    "--js-modules",
+    `effect-golem/mysql=${mysqlBundle}`,
+    "--js-modules",
+    `effect-golem/ignite2=${igniteBundle}`,
     "--js-modules",
     `effect=${effectBundle}`,
     "--js-modules",

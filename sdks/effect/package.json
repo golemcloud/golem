@@ -9,6 +9,22 @@
     ".": {
       "types": "./dist/effect-golem.d.ts",
       "import": "./dist/index.mjs"
+    },
+    "./sqlite": {
+      "types": "./dist/effect-golem-sqlite.d.ts",
+      "import": "./dist/sqlite.mjs"
+    },
+    "./postgres": {
+      "types": "./dist/effect-golem-postgres.d.ts",
+      "import": "./dist/postgres.mjs"
+    },
+    "./mysql": {
+      "types": "./dist/effect-golem-mysql.d.ts",
+      "import": "./dist/mysql.mjs"
+    },
+    "./ignite2": {
+      "types": "./dist/effect-golem-ignite2.d.ts",
+      "import": "./dist/ignite.mjs"
     }
   },
   "files": [
@@ -28,7 +44,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e:rdbms": "cd integration-test && npm run infra:up && golem -L build && golem -L -Y deploy && npm run test:rdbms"
   },
   "dependencies": {
     "effect": "4.0.0-beta.57"

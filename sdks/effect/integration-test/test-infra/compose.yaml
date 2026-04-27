@@ -1,0 +1,70 @@
+# Docker Compose configuration for the integration-test RDBMS suite.
+#
+# Brings up Postgres 16 and MySQL 8 instances on the host ports
+# specified by `PG_PORT` (default 5432) and `MYSQL_PORT` (default
+# 3306). Data is persisted to named volumes so consecutive runs reuse
+# the same dataset; run `npm run infra:down -v` to wipe.
+#
+# Healthchecks are configured so test scripts can wait for each
+# service to be healthy before running invocations.
+#
+# Apache Ignite is intentionally NOT included here: the
+# `golem:rdbms/ignite2@1.5.0` host binding may be missing from some
+# Golem environments and the IgniteCounter component is deployed as
+# a separately-gated artifact under `components/ignite-agent/`.
+# Operators that have an Ignite-aware Golem worker pool should run an
+# Ignite cluster out-of-band and configure
+# `IgniteCounter.connectionAddress` accordingly.
+#
+# Usage (from integration-test/):
+#   npm run infra:up      # docker compose up -d
+#   npm run infra:logs    # tail the postgres + mysql logs
+#   npm run infra:down    # docker compose down (keeps volumes)
+#
+# To wipe state:
+#   docker compose -f test-infra/compose.yaml down -v
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: effect-golem-pg
+    environment:
+      POSTGRES_USER: golem
+      POSTGRES_PASSWORD: golem
+      POSTGRES_DB: golem
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    volumes:
+      - effect-golem-pg-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U golem -d golem"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    container_name: effect-golem-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: golem
+      MYSQL_DATABASE: golem
+      MYSQL_USER: golem
+      MYSQL_PASSWORD: golem
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - effect-golem-mysql-data:/var/lib/mysql
+      - ./init-mysql.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h127.0.0.1 -ugolem -pgolem --silent"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+volumes:
+  effect-golem-pg-data:
+    name: effect-golem-pg-data
+  effect-golem-mysql-data:
+    name: effect-golem-mysql-data

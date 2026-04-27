@@ -16,6 +16,10 @@ const root = resolve(here, "..")
 const typesDir = resolve(root, "golem-types")
 const distDir = resolve(root, "dist")
 const outFile = resolve(distDir, "effect-golem.d.ts")
+const sqliteOutFile = resolve(distDir, "effect-golem-sqlite.d.ts")
+const postgresOutFile = resolve(distDir, "effect-golem-postgres.d.ts")
+const mysqlOutFile = resolve(distDir, "effect-golem-mysql.d.ts")
+const igniteOutFile = resolve(distDir, "effect-golem-ignite2.d.ts")
 
 const refs = readdirSync(typesDir)
   .filter((f) => f.endsWith(".d.ts"))
@@ -27,3 +31,19 @@ const body = `export * from "./src/index.js"\n`
 
 writeFileSync(outFile, refs + "\n" + body, "utf-8")
 console.log(`wrote ${outFile}`)
+
+const sqliteBody = `export * from "./src/sqlite.js"\n`
+writeFileSync(sqliteOutFile, refs + "\n" + sqliteBody, "utf-8")
+console.log(`wrote ${sqliteOutFile}`)
+
+const postgresBody = `export * from "./src/postgres.js"\n`
+writeFileSync(postgresOutFile, refs + "\n" + postgresBody, "utf-8")
+console.log(`wrote ${postgresOutFile}`)
+
+const mysqlBody = `export * from "./src/mysql.js"\n`
+writeFileSync(mysqlOutFile, refs + "\n" + mysqlBody, "utf-8")
+console.log(`wrote ${mysqlOutFile}`)
+
+const igniteBody = `export * from "./src/ignite.js"\n`
+writeFileSync(igniteOutFile, refs + "\n" + igniteBody, "utf-8")
+console.log(`wrote ${igniteOutFile}`)

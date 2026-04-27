@@ -28,6 +28,15 @@ const external = [
   "wasi:clocks/wall-clock@0.2.3",
   "node:sqlite",
   "effect",
+  "effect-golem",
+  "effect-golem/sqlite",
+  "effect-golem/postgres",
+  "effect-golem/mysql",
+  "effect-golem/ignite2",
+  "golem:rdbms/postgres@1.5.0",
+  "golem:rdbms/mysql@1.5.0",
+  "golem:rdbms/ignite2@1.5.0",
+  "golem:rdbms/types@1.5.0",
 ]
 
 export default defineConfig([
@@ -74,5 +83,123 @@ export default defineConfig([
     },
     treeshake: false,
     plugins: [resolve({ extensions: [".mjs", ".js"] }), commonjs(), terser()],
+  },
+
+  // SqliteClient adapter. Externalizes `effect`, `effect-golem`, and
+  // `node:sqlite` so the resulting bundle is small and shares the
+  // single Effect runtime instance embedded into the base WASM.
+  {
+    input: "src/sqlite.ts",
+    output: {
+      file: "dist/sqlite.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external: [...external, "effect-golem"],
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["src/**/*", "golem-types/**/*"],
+        tsconfigOverride: {
+          compilerOptions: {
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
+  },
+
+  // PgClient adapter. Externalizes `effect`, `effect-golem`, and the
+  // `golem:rdbms/*` host bindings so the bundle stays small and shares
+  // the single Effect runtime instance embedded into the base WASM.
+  {
+    input: "src/postgres.ts",
+    output: {
+      file: "dist/postgres.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external: [...external, "effect-golem"],
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["src/**/*", "golem-types/**/*"],
+        tsconfigOverride: {
+          compilerOptions: {
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
+  },
+
+  // MySqlClient adapter. Same externalization as PgClient.
+  {
+    input: "src/mysql.ts",
+    output: {
+      file: "dist/mysql.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external: [...external, "effect-golem"],
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["src/**/*", "golem-types/**/*"],
+        tsconfigOverride: {
+          compilerOptions: {
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
+  },
+
+  // IgniteClient adapter. Same externalization. Deployed as an
+  // optional adapter — some Golem environments may not expose
+  // `golem:rdbms/ignite2@1.5.0`.
+  {
+    input: "src/ignite.ts",
+    output: {
+      file: "dist/ignite.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external: [...external, "effect-golem"],
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["src/**/*", "golem-types/**/*"],
+        tsconfigOverride: {
+          compilerOptions: {
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
   },
 ])

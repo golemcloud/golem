@@ -3,6 +3,8 @@ import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import * as AgentHost from "golem:agent/host@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
+import type { DatabaseSync } from "node:sqlite"
+import * as NodeSqlite from "node:sqlite"
 import * as WasiEnv from "wasi:cli/environment@0.2.3"
 import { ElementValueKindError } from "./element.js"
 import {
@@ -29,6 +31,10 @@ import {
   compileSnapshot,
   createBinding,
   InvalidSnapshotError,
+  SnapshotDatabaseHasAttachmentsError,
+  SnapshotDatabaseMissingPartError,
+  SnapshotDatabaseNotInAutocommitError,
+  SnapshotDatabaseUnknownPartError,
   SnapshotNotBoundError,
   type BindingHandle,
   type BoundSnapshot,
@@ -40,6 +46,7 @@ import {
   decodeEnvelope,
   encodeBinaryEnvelope,
   encodeJsonEnvelope,
+  encodeMultipartJsonEnvelope,
   SnapshotEnvelopeError,
   UnsupportedSnapshotFormatError,
 } from "./snapshot-envelope.js"
@@ -491,7 +498,11 @@ const initAgentInstance = async (
         Effect.provideService(compiled.definition.config as never, shape as never),
       ) as typeof program
     }
-    handlers = (await Effect.runPromise(Scope.use(program, scope))) as Record<
+    // Use `Scope.provide` (NOT `Scope.use`) — the latter auto-closes
+    // the scope when `program` finishes, which would tear down any
+    // resources `impl` opened (e.g. SqliteClient handles) before the
+    // agent's first method invocation.
+    handlers = (await Effect.runPromise(Scope.provide(program, scope))) as Record<
       string,
       Handler<AnyMethodSpec>
     >
@@ -646,6 +657,41 @@ export const __resetParseAgentIdForTest = (): void => {
 }
 
 /**
+ * Module-level indirections for the three wasm-rquickjs extensions to
+ * `node:sqlite` (`serializeDatabaseSync` / `restoreDatabaseSync` /
+ * `isAutocommitDatabaseSync`). Tests can swap these out via
+ * `__setSerializeDatabaseSyncForTest` etc., mirroring the pattern used
+ * for `getEnvironment` / `parseAgentId`.
+ */
+let serializeDatabaseSyncImpl: (db: DatabaseSync) => Uint8Array = (db) =>
+  NodeSqlite.serializeDatabaseSync(db)
+let restoreDatabaseSyncImpl: (db: DatabaseSync, bytes: Uint8Array) => void = (db, bytes) =>
+  NodeSqlite.restoreDatabaseSync(db, bytes)
+let isAutocommitDatabaseSyncImpl: (db: DatabaseSync) => boolean = (db) =>
+  NodeSqlite.isAutocommitDatabaseSync(db)
+
+export const __setSerializeDatabaseSyncForTest = (fn: (db: DatabaseSync) => Uint8Array): void => {
+  serializeDatabaseSyncImpl = fn
+}
+export const __resetSerializeDatabaseSyncForTest = (): void => {
+  serializeDatabaseSyncImpl = (db) => NodeSqlite.serializeDatabaseSync(db)
+}
+export const __setRestoreDatabaseSyncForTest = (
+  fn: (db: DatabaseSync, bytes: Uint8Array) => void,
+): void => {
+  restoreDatabaseSyncImpl = fn
+}
+export const __resetRestoreDatabaseSyncForTest = (): void => {
+  restoreDatabaseSyncImpl = (db, bytes) => NodeSqlite.restoreDatabaseSync(db, bytes)
+}
+export const __setIsAutocommitDatabaseSyncForTest = (fn: (db: DatabaseSync) => boolean): void => {
+  isAutocommitDatabaseSyncImpl = fn
+}
+export const __resetIsAutocommitDatabaseSyncForTest = (): void => {
+  isAutocommitDatabaseSyncImpl = (db) => NodeSqlite.isAutocommitDatabaseSync(db)
+}
+
+/**
  * Implementation of `golem:api/save-snapshot.save`. Reads the active
  * agent's bound snapshot state, encodes it according to the active
  * variant (auto → JSON envelope; custom → binary v2 envelope), and
@@ -668,7 +714,28 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
     const encoded = await Effect.runPromise(
       Schema.encodeUnknownEffect(snap.schema)(state) as Effect.Effect<unknown, Schema.SchemaError>,
     )
-    return encodeJsonEnvelope(agent.principal, encoded)
+    if (snap.declaredDatabases.length === 0) {
+      return encodeJsonEnvelope(agent.principal, encoded)
+    }
+    const dbParts: Array<{ name: string; bytes: Uint8Array }> = []
+    for (const dbName of snap.declaredDatabases) {
+      const handle = snap.databases.get(dbName)
+      if (handle === undefined) {
+        throw new SnapshotDatabaseMissingPartError(agent.name, dbName, "save")
+      }
+      if (!isAutocommitDatabaseSyncImpl(handle)) {
+        throw new SnapshotDatabaseNotInAutocommitError(agent.name, dbName)
+      }
+      const rows = handle.prepare("PRAGMA database_list").all() as Array<{ name?: string }>
+      const extra = rows
+        .map((r) => String(r.name ?? ""))
+        .filter((n) => n !== "main" && n !== "temp" && n !== "")
+      if (extra.length > 0) {
+        throw new SnapshotDatabaseHasAttachmentsError(agent.name, dbName, extra)
+      }
+      dbParts.push({ name: dbName, bytes: serializeDatabaseSyncImpl(handle) })
+    }
+    return encodeMultipartJsonEnvelope(agent.principal, encoded, dbParts)
   }
   const bytes = await Effect.runPromise(
     snap.handlers.save.pipe(Effect.provideService(Principal, agent.principal)) as Effect.Effect<
@@ -755,18 +822,65 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
   // 4. Apply restored state.
   try {
     if (bound.kind === "auto") {
-      if (decoded.kind !== "json") {
-        throw new SnapshotEnvelopeError(
-          `agent '${agentTypeName}' expects a JSON envelope but received ${snapshot.mimeType}`,
+      const declared = bound.declaredDatabases
+      if (declared.length === 0) {
+        if (decoded.kind !== "json") {
+          throw new SnapshotEnvelopeError(
+            `agent '${agentTypeName}' expects a JSON envelope but received ${snapshot.mimeType}`,
+          )
+        }
+        const decodedState = await Effect.runPromise(
+          Schema.decodeUnknownEffect(bound.schema)(decoded.state) as Effect.Effect<
+            unknown,
+            Schema.SchemaError
+          >,
         )
+        await Effect.runPromise(Ref.set(bound.ref, decodedState) as Effect.Effect<void, never>)
+      } else {
+        if (decoded.kind !== "multipart") {
+          throw new SnapshotEnvelopeError(
+            `agent '${agentTypeName}' expects a multipart/mixed envelope (declared databases: ${declared.join(", ")}) but received ${snapshot.mimeType}`,
+          )
+        }
+        // Strict part validation: every declared name must be present
+        // exactly once; no unknown names allowed.
+        const declaredSet = new Set(declared)
+        const seen = new Set<string>()
+        for (const part of decoded.databases) {
+          if (!declaredSet.has(part.name)) {
+            throw new SnapshotDatabaseUnknownPartError(agentTypeName, part.name)
+          }
+          if (seen.has(part.name)) {
+            throw new SnapshotEnvelopeError(
+              `multipart envelope: duplicate db part 'db:${part.name}'`,
+            )
+          }
+          seen.add(part.name)
+        }
+        for (const dbName of declared) {
+          if (!seen.has(dbName)) {
+            throw new SnapshotDatabaseMissingPartError(agentTypeName, dbName, "load")
+          }
+        }
+        // Validate that the user attached every declared database.
+        for (const dbName of declared) {
+          if (!bound.databases.has(dbName)) {
+            throw new SnapshotDatabaseMissingPartError(agentTypeName, dbName, "save")
+          }
+        }
+        // Restore each DB in place via the wasm-rquickjs extension.
+        for (const part of decoded.databases) {
+          const handle = bound.databases.get(part.name)!
+          restoreDatabaseSyncImpl(handle, part.bytes)
+        }
+        const decodedState = await Effect.runPromise(
+          Schema.decodeUnknownEffect(bound.schema)(decoded.state) as Effect.Effect<
+            unknown,
+            Schema.SchemaError
+          >,
+        )
+        await Effect.runPromise(Ref.set(bound.ref, decodedState) as Effect.Effect<void, never>)
       }
-      const decodedState = await Effect.runPromise(
-        Schema.decodeUnknownEffect(bound.schema)(decoded.state) as Effect.Effect<
-          unknown,
-          Schema.SchemaError
-        >,
-      )
-      await Effect.runPromise(Ref.set(bound.ref, decodedState) as Effect.Effect<void, never>)
     } else {
       if (decoded.kind !== "binary") {
         throw new SnapshotEnvelopeError(
