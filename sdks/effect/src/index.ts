@@ -18,6 +18,30 @@ export * from "./config.js"
  */
 export * as Http from "./http.js"
 
+/**
+ * Snapshotting namespace — declarative metadata + per-instance
+ * binding helpers for opting in to Golem's snapshot/restore mechanism.
+ * See {@link ./snapshot} for the full API.
+ */
+export * as Snapshot from "./snapshot.js"
+
+export {
+  InvalidSnapshotError,
+  SnapshotAlreadyBoundError,
+  SnapshotNotBoundError,
+} from "./snapshot.js"
+export type {
+  AutoSnapshotBinding,
+  AutoSnapshotDef,
+  CustomSnapshotBinding,
+  CustomSnapshotDef,
+  CustomSnapshotHandlers,
+  SnapshotBinding,
+  SnapshotDef,
+  SnapshotPolicy,
+} from "./snapshot.js"
+export { SnapshotEnvelopeError, UnsupportedSnapshotFormatError } from "./snapshot-envelope.js"
+
 // Mandatory `agent-guest` host exports. Users should not touch these
 // directly — they are wired up automatically by `registerAgent`.
 export { guest, saveSnapshot, loadSnapshot } from "./exports.js"

@@ -5,6 +5,8 @@ import {
   dispatchGetDefinition,
   dispatchInitialize,
   dispatchInvoke,
+  dispatchLoadSnapshot,
+  dispatchSaveSnapshot,
 } from "./agent.js"
 
 /**
@@ -55,19 +57,15 @@ export const guest: GuestExports = {
 }
 
 /**
- * Snapshotting is not yet implemented. Both functions throw at runtime
- * if Golem actually invokes them; agents that opt out via
- * `snapshotting: { tag: "disabled" }` (the default) will never trigger
- * these calls.
+ * Snapshotting hooks. Wired through to the dispatchers in `./agent`.
+ * Agents that don't declare a `snapshot` field map to
+ * `snapshotting: { tag: "disabled" }`, so the host should never invoke
+ * these for them; the dispatchers raise a clear error if it does.
  */
 export const saveSnapshot: SaveSnapshotExports = {
-  save: async () => {
-    throw new Error("saveSnapshot.save is not implemented")
-  },
+  save: dispatchSaveSnapshot,
 }
 
 export const loadSnapshot: LoadSnapshotExports = {
-  load: async () => {
-    throw new Error("loadSnapshot.load is not implemented")
-  },
+  load: dispatchLoadSnapshot,
 }

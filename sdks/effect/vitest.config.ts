@@ -17,6 +17,7 @@ const golemAliases = [
   { find: "golem:core/types@1.5.0", replacement: resolve(mockDir, "golem-core-types.ts") },
   { find: "golem:api/host@1.5.0", replacement: resolve(mockDir, "golem-api-host.ts") },
   { find: "golem:quota/types@1.5.0", replacement: resolve(mockDir, "golem-quota-types.ts") },
+  { find: "wasi:cli/environment@0.2.3", replacement: resolve(mockDir, "wasi-cli-environment.ts") },
 ]
 
 export default defineConfig({

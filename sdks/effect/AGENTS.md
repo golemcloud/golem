@@ -14,7 +14,21 @@ A TypeScript library for writing [Golem](https://golem.cloud) agents on top of [
 
 ## Commands
 
-`npm install` · `npm run build` (tsc + types entry) · `npm run build:bundle` (rollup → `dist/index.mjs` + `dist/effect.mjs`) · `WASI_SDK_PATH=/opt/wasi-sdk npm run build-agent-template` (bundle → wasm-rquickjs → cargo `wasm32-wasip2` → `wasm/agent_guest.wasm`, ~2 min) · `npm run typecheck` · `npm run lint` · `npm run format[:check]` · `npm test` · single test: `npx vitest run test/agent.test.ts -t "registers the Counter"`. Integration: `cd integration-test && npm install && golem -L build && golem -L -Y deploy && golem -L agent invoke -n 'Counter({ name: "x" })' increment`.
+`npm install` · `npm run build` (tsc + types entry) · `npm run build:bundle` (rollup → `dist/index.mjs` + `dist/effect.mjs`) · `WASI_SDK_PATH=/opt/wasi-sdk npm run build-agent-template` (bundle → wasm-rquickjs → cargo `wasm32-wasip2` → `wasm/agent_guest.wasm`, ~2 min) · `npm run typecheck` · `npm run lint` · `npm run format[:check]` · `npm test` · single test: `npx vitest run test/agent.test.ts -t "registers the Counter"`. Integration: `cd integration-test && npm install && golem -L build && golem -L -Y deploy && golem -L agent invoke -n 'Counter("x")' increment`.
+
+## Required end-to-end testing after every change
+
+Unit tests (`npm test`) only cover the SDK in isolation against host mocks. They cannot catch issues that only surface inside the real Golem WASM runtime — e.g. `JSON.stringify` on bigint UUIDs, missing exports from the embedded `effect-golem` bundle, type-mismatch between WIT bindings and our generated host stubs, runtime principal serialization, oplog/snapshot interaction, etc.
+
+After **every** non-trivial change you must run a full local-deploy + invoke loop on a running `golem server run` instance. The minimum drill:
+
+1. `npm test && npm run typecheck && npm run lint && npm run format:check` — gate the SDK changes.
+2. `npm run build:bundle` — refresh `dist/index.mjs` (the integration-test consumes `effect-golem` via `file:..` symlink, so this is what the embedded code sees).
+3. `WASI_SDK_PATH=/opt/wasi-sdk npm run build-agent-template` — rebuilds `wasm/agent_guest.wasm` so the new `dist/index.mjs` is embedded inside the base WASM. **Required whenever `dist/index.mjs` changes**, otherwise components will load against the old SDK and fail with "Could not find export X in module 'effect-golem'" or stale-behaviour bugs.
+4. `cd integration-test && golem -L build && golem -L -Y deploy` — rebuild + deploy the test components.
+5. Invoke at least one method per affected feature, e.g. `golem -L agent invoke -n 'Counter("x")' increment`.
+6. For snapshotting changes specifically: drive enough invocations to trigger a save (the integration-test Counter uses `everyN(10)`), inspect with `golem -L agent oplog 'Counter("x")'` (look for a `SNAPSHOT` entry containing principal + state JSON, **no** `Exception during awaiting call result for saveSnapshot.save`), then exercise the load path with `golem -L -Y agent update --await 'Counter("x")' manual` and re-`invoke` to confirm state was preserved.
+7. If anything fails inside the runtime, treat it as a real bug and fix the SDK — do **not** ship green unit tests + red integration runs.
 
 ## Conventions
 
@@ -73,3 +87,60 @@ Verbs: `Http.get` / `post` / `put` / `del` / `patch` / `head` / `options` / `tra
 Auth & CORS: both `Http.mount(...)` and individual endpoints accept `auth?: boolean` and `cors?: string[]`. Merge semantics are host-defined; the SDK emits both verbatim into `HttpMountDetails` / `HttpEndpointDetails`.
 
 Errors: validation failures surface as `HttpRouteError` Effect typed failures from `registerAgent` (alongside `UnsupportedSchemaError`); the synchronous `defineAgent` re-throws them at module-import time so misconfigurations fail fast.
+
+## Snapshotting
+
+Snapshotting is opt-in via a per-agent `snapshot` field on `defineAgent`. When set, the agent's WIT `snapshotting` metadata becomes `enabled(...)` (instead of the default `disabled`) and the SDK wires up `golem:api/save-snapshot.save` / `golem:api/load-snapshot.load`. The wire envelope is bit-for-bit compatible with the official `golem-ts-sdk` (so components can be cross-loaded).
+
+`load` _replaces_ `initialize` on restore: the host calls one or the other, never both. The SDK reads `GOLEM_AGENT_ID` from `wasi:cli/environment`, calls `golem:agent/host.parse-agent-id` to recover constructor params, runs `impl` with the principal embedded in the snapshot envelope, then applies the restored state on top.
+
+Two variants:
+
+- **Auto (schema-driven)** — `Snapshot.define({ schema, policy })`. The SDK manages a `Ref.Ref<State>`; `impl` receives a second arg `snap` whose `init(initial)` allocates and registers the Ref. Encodes via `Schema.encodeUnknown` → JSON envelope (`mimeType: "application/json"`).
+- **Custom** — `Snapshot.custom({ policy })`. `impl` receives `snap.register({ save, load })`; the user owns the bytes. Wire format is the binary v2 envelope (`mimeType: "application/octet-stream"`), with the principal embedded in a 5-byte header (`u8 version=2 + u32-be princLen + princJson + userBytes`).
+
+```ts
+import { defineAgent, method, Schema, Snapshot } from "effect-golem"
+import { Effect, Ref } from "effect"
+
+defineAgent({
+  name: "Counter",
+  constructorParams: { name: Schema.String },
+  snapshot: Snapshot.define({
+    schema: Schema.Struct({ count: Schema.Number, owner: Schema.String }),
+    policy: Snapshot.policy.everyN(10),
+  }),
+  methods: {
+    value: method({ params: {}, success: Schema.Number }),
+    add: method({ params: { by: Schema.Number }, success: Schema.Number }),
+  },
+  impl: ({ name }, snap) =>
+    Effect.gen(function* () {
+      const state = yield* snap.init({ count: 0, owner: name })
+      return {
+        value: () => Ref.get(state).pipe(Effect.map((s) => s.count)),
+        add: ({ by }) =>
+          Ref.updateAndGet(state, (s) => ({ ...s, count: s.count + by })).pipe(
+            Effect.map((s) => s.count),
+          ),
+      }
+    }),
+})
+```
+
+Policy constructors (in `Snapshot.policy`):
+
+- `default` (alias `manual`) — host-default cadence; mapped to WIT `enabled(default)`.
+- `periodic(d)` — `Duration.Input` (e.g. `"5 minutes"` or `Duration.seconds(30)`); mapped to `enabled(periodic(<u64-nanos>))`.
+- `everyN(n)` — positive integer in `1..=65535`; mapped to `enabled(every-n-invocation(n))`.
+
+Rules (enforced inside `dispatchInitialize` / `dispatchLoadSnapshot`):
+
+- Inside `impl`, `snap.init` (auto) / `snap.register` (custom) must be called exactly once. Forgetting raises `SnapshotNotBoundError` at init/load time; calling twice raises `SnapshotAlreadyBoundError` from the second call.
+- `initialize` and `load` are mutually exclusive — calling either while an agent is already active throws.
+- `load` rejects mismatched envelopes (auto agent + binary envelope, or custom agent + JSON envelope) with `SnapshotEnvelopeError`.
+- `multipart/mixed` envelopes (the official SDK uses these when SQLite databases are present) are rejected with `UnsupportedSnapshotFormatError`; `effect-golem` does not yet have a SQLite story.
+
+Schema evolution: snapshots are JSON-encoded under the auto variant; users are responsible for keeping their `schema` backward-compatible (or versioning the payload manually). The SDK does not migrate.
+
+Errors: `InvalidSnapshotError` (from `registerAgent`, e.g. `everyN(0)`), `SnapshotNotBoundError`, `SnapshotAlreadyBoundError`, `SnapshotEnvelopeError`, `UnsupportedSnapshotFormatError`. All exported from the package barrel.

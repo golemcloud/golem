@@ -7,9 +7,13 @@
  * `Schema.Redacted` secret (`apiKey`), reads the greeting at construction
  * time AND inside a method handler, and exposes the secret's tail via
  * `keyTail` so the integration harness can verify the wiring end to end.
+ *
+ * Snapshotting: the counter state (the `count` integer + its `owner`)
+ * is auto-snapshotted via `Snapshot.define`, with the host driving
+ * save/load every 10 invocations.
  */
 import { Effect, Redacted, Ref, Schema } from "effect"
-import { defineAgent, defineConfig, Http, method, Principal } from "effect-golem"
+import { defineAgent, defineConfig, Http, method, Principal, Snapshot } from "effect-golem"
 
 export class CounterConfig extends defineConfig("Counter.Config", {
   greeting: Schema.String,
@@ -18,11 +22,15 @@ export class CounterConfig extends defineConfig("Counter.Config", {
 
 export const Counter = defineAgent({
   name: "Counter",
-  description: "A named integer counter (durable)",
+  description: "A named integer counter (durable, snapshotted)",
   mode: "durable",
   config: CounterConfig,
   constructorParams: { name: Schema.String },
   http: Http.mount("/counters/{name}", { cors: ["*"] }),
+  snapshot: Snapshot.define({
+    schema: Schema.Struct({ count: Schema.Number }),
+    policy: Snapshot.policy.everyN(10),
+  }),
   methods: {
     value: method({
       params: {},
@@ -79,17 +87,21 @@ export const Counter = defineAgent({
       http: [Http.get("/key-tail")],
     }),
   },
-  impl: ({ name: _name }) =>
+  impl: ({ name: _name }, snap) =>
     Effect.gen(function* () {
-      const ref = yield* Ref.make(0)
+      const state = yield* snap.init({ count: 0 })
       const ownerPrincipal = yield* Principal
       const ownerTag =
         ownerPrincipal.tag === "oidc" ? `oidc:${ownerPrincipal.val.sub}` : ownerPrincipal.tag
       return {
-        value: () => Ref.get(ref),
-        increment: () => Ref.updateAndGet(ref, (n) => n + 1),
-        add: ({ by }) => Ref.updateAndGet(ref, (n) => n + by),
-        reset: () => Ref.set(ref, 0),
+        value: () => Ref.get(state).pipe(Effect.map((s) => s.count)),
+        increment: () =>
+          Ref.updateAndGet(state, (s) => ({ count: s.count + 1 })).pipe(Effect.map((s) => s.count)),
+        add: ({ by }) =>
+          Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(
+            Effect.map((s) => s.count),
+          ),
+        reset: () => Ref.set(state, { count: 0 }),
         owner: () => Effect.succeed(ownerTag),
         caller: () =>
           Effect.gen(function* () {
