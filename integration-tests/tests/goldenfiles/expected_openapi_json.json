@@ -8,6 +8,7 @@
   "paths": {
     "/cors-agents/{agent-name}/inherited": {
       "get": {
+        "operationId": "CorsAgent-inherited",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -133,6 +134,7 @@
         }
       },
       "post": {
+        "operationId": "CorsAgent-preflight",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -197,6 +199,7 @@
     },
     "/cors-agents/{agent-name}/wildcard": {
       "get": {
+        "operationId": "CorsAgent-wildcard",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -312,6 +315,7 @@
     },
     "/http-agents/{agent-name}/json-body/{id}": {
       "post": {
+        "operationId": "HttpAgent-json_body",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -385,6 +389,7 @@
     },
     "/http-agents/{agent-name}/multi-path-vars/{first}/{second}": {
       "get": {
+        "operationId": "HttpAgent-multi_path_vars",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -444,6 +449,7 @@
     },
     "/http-agents/{agent-name}/path-and-header/{resource-id}": {
       "get": {
+        "operationId": "HttpAgent-path_and_header",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -507,6 +513,7 @@
     },
     "/http-agents/{agent-name}/path-and-query/{item-id}": {
       "get": {
+        "operationId": "HttpAgent-path_and_query",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -575,6 +582,7 @@
     },
     "/http-agents/{agent-name}/resource/{id}": {
       "patch": {
+        "operationId": "HttpAgent-patch_resource",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -664,6 +672,7 @@
     },
     "/http-agents/{agent-name}/resource/{id}/partial": {
       "patch": {
+        "operationId": "HttpAgent-patch_partial",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -720,6 +729,7 @@
     },
     "/http-agents/{agent-name}/resp/binary": {
       "get": {
+        "operationId": "HttpAgent-binary_response",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -750,6 +760,7 @@
     },
     "/http-agents/{agent-name}/resp/json": {
       "get": {
+        "operationId": "HttpAgent-json_response_func",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -787,6 +798,7 @@
     },
     "/http-agents/{agent-name}/resp/no-content": {
       "get": {
+        "operationId": "HttpAgent-no_content",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -809,6 +821,7 @@
     },
     "/http-agents/{agent-name}/resp/optional/{found}": {
       "get": {
+        "operationId": "HttpAgent-optional_response_func",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -860,6 +873,7 @@
     },
     "/http-agents/{agent-name}/resp/result-json-json/{ok}": {
       "get": {
+        "operationId": "HttpAgent-result_ok_or_err",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -926,6 +940,7 @@
     },
     "/http-agents/{agent-name}/resp/result-json-void": {
       "get": {
+        "operationId": "HttpAgent-result_json_void",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -974,6 +989,7 @@
     },
     "/http-agents/{agent-name}/resp/result-void-json": {
       "post": {
+        "operationId": "HttpAgent-result_void_err",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -1022,6 +1038,7 @@
     },
     "/http-agents/{agent-name}/rest/{tail}": {
       "get": {
+        "operationId": "HttpAgent-remaining_path",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -1071,6 +1088,7 @@
     },
     "/http-agents/{agent-name}/restricted-unstructured-binary/{bucket}": {
       "post": {
+        "operationId": "HttpAgent-restricted_unstructured_binary",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -1124,6 +1142,7 @@
     },
     "/http-agents/{agent-name}/string-path-var/{path-var}": {
       "get": {
+        "operationId": "HttpAgent-string_path_var",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -1172,6 +1191,7 @@
     },
     "/http-agents/{agent-name}/unrestricted-unstructured-binary/{bucket}": {
       "post": {
+        "operationId": "HttpAgent-unrestricted_unstructured_binary",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -1225,6 +1245,7 @@
     },
     "/webhook-agents/{agent-name}/set-test-server-url": {
       "post": {
+        "operationId": "WebhookAgent-set_test_server_url",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
@@ -1266,6 +1287,7 @@
     },
     "/webhook-agents/{agent-name}/test-webhook": {
       "post": {
+        "operationId": "WebhookAgent-test_webhook",
         "parameters": [
           {
             "description": "Path parameter: agent-name",
