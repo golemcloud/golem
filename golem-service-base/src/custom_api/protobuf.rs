@@ -192,6 +192,7 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .expected_agent_response
                     .ok_or("Missing expected_agent_response")?
                     .try_into()?,
+                method_description: call_agent.method_description,
             })),
             Kind::CorsPreflight(cors_preflight) => {
                 Ok(RouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
@@ -261,6 +262,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 method_name,
                 method_parameters,
                 expected_agent_response,
+                method_description,
             }) => Self {
                 kind: Some(Kind::CallAgent(
                     proto::golem::customapi::route_behaviour::CallAgent {
@@ -275,6 +277,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                         method_name,
                         method_parameters: method_parameters.into_iter().map(Into::into).collect(),
                         expected_agent_response: Some(expected_agent_response.into()),
+                        method_description,
                     },
                 )),
             },

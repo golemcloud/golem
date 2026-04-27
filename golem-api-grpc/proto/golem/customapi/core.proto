@@ -183,6 +183,7 @@ message RouteBehaviour {
     string method_name = 6;
     repeated MethodParameter method_parameters = 7;
     golem.component.DataSchema expected_agent_response = 8;
+    optional string method_description = 9;
   }
 
   message CorsPreflight {
