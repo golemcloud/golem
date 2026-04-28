@@ -87,19 +87,32 @@ export const Counter = defineAgent({
       http: [Http.get("/key-tail")],
     }),
   },
-  impl: ({ name: _name }, snap) =>
+  impl: ({ name }, snap) =>
     Effect.gen(function* () {
+      yield* Effect.logInfo("Counter constructed").pipe(Effect.annotateLogs({ counter: name }))
       const state = yield* snap.init({ count: 0 })
       const ownerPrincipal = yield* Principal
       const ownerTag =
         ownerPrincipal.tag === "oidc" ? `oidc:${ownerPrincipal.val.sub}` : ownerPrincipal.tag
       return {
-        value: () => Ref.get(state).pipe(Effect.map((s) => s.count)),
+        value: () =>
+          Ref.get(state).pipe(
+            Effect.map((s) => s.count),
+            Effect.withSpan("Counter.value"),
+          ),
         increment: () =>
-          Ref.updateAndGet(state, (s) => ({ count: s.count + 1 })).pipe(Effect.map((s) => s.count)),
+          Ref.updateAndGet(state, (s) => ({ count: s.count + 1 })).pipe(
+            Effect.tap((s) =>
+              Effect.logInfo("incremented").pipe(Effect.annotateLogs({ to: s.count })),
+            ),
+            Effect.map((s) => s.count),
+            Effect.withSpan("Counter.increment"),
+          ),
         add: ({ by }) =>
           Ref.updateAndGet(state, (s) => ({ count: s.count + by })).pipe(
+            Effect.tap(() => Effect.logDebug("added").pipe(Effect.annotateLogs({ by }))),
             Effect.map((s) => s.count),
+            Effect.withSpan("Counter.add", { attributes: { by } }),
           ),
         reset: () => Ref.set(state, { count: 0 }),
         owner: () => Effect.succeed(ownerTag),

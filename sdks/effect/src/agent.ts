@@ -1,4 +1,4 @@
-import { Effect, Exit, Ref, Schema, Scope } from "effect"
+import { Effect, Exit, Layer, Ref, Schema, Scope } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import * as ApiHost from "golem:api/host@1.5.0"
 import * as AgentHost from "golem:agent/host@1.5.0"
@@ -55,6 +55,24 @@ import { isElementSpec } from "./unstructured.js"
 import { type UnsupportedSchemaError, type WitCodec } from "./wit-codec.js"
 import { clientFor, type AgentClient } from "./client.js"
 import type { CompiledConfig, ConfigClass, ConfigFields, ConfigShape } from "./config.js"
+import * as GolemLogging from "./logging.js"
+import * as GolemTracing from "./tracing.js"
+
+/**
+ * Combined Logger + Tracer layer applied automatically to every piece
+ * of user code the dispatcher runs (`impl`, method handlers, custom
+ * snapshot save/load). Routes `Effect.log*` to `wasi:logging` and
+ * `Effect.withSpan` to `golem:api/context`.
+ */
+const observabilityLayer = Layer.mergeAll(GolemLogging.layer, GolemTracing.layer)
+
+/**
+ * Provide the host-backed Logger + Tracer to a user effect, then chain
+ * its span tree under the live host invocation context. Best-effort;
+ * never affects business logic on host failure.
+ */
+const provideObservability = <A, E, R>(eff: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+  GolemTracing.withInvocationParent(Effect.provide(eff, observabilityLayer))
 
 type AnyMethodSpec = MethodSpec<any, any, any>
 
@@ -531,10 +549,9 @@ const initAgentInstance = async (
     // the scope when `program` finishes, which would tear down any
     // resources `impl` opened (e.g. SqliteClient handles) before the
     // agent's first method invocation.
-    handlers = (await Effect.runPromise(Scope.provide(program, scope))) as Record<
-      string,
-      Handler<AnyMethodSpec>
-    >
+    handlers = (await Effect.runPromise(
+      provideObservability(Scope.provide(program, scope)),
+    )) as Record<string, Handler<AnyMethodSpec>>
   } catch (e) {
     // Initialization failed; close the scope to release anything that
     // managed to be acquired before the failure.
@@ -626,7 +643,7 @@ export const dispatchInvoke = async (
       Effect.provideService(compiled.definition.config as never, shape as never),
     ) as typeof program
   }
-  return await Effect.runPromise(program)
+  return await Effect.runPromise(provideObservability(program))
 }
 
 /** Implementation of `agent-guest.guest.discoverAgentTypes`. */
@@ -785,11 +802,13 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
     return encodeMultipartJsonEnvelope(agent.principal, encoded, dbParts)
   }
   const bytes = await Effect.runPromise(
-    snap.handlers.save.pipe(Effect.provideService(Principal, agent.principal)) as Effect.Effect<
-      Uint8Array,
-      unknown,
-      never
-    >,
+    provideObservability(
+      snap.handlers.save.pipe(Effect.provideService(Principal, agent.principal)) as Effect.Effect<
+        Uint8Array,
+        unknown,
+        never
+      >,
+    ),
   )
   return encodeBinaryEnvelope(agent.principal, bytes)
 }
@@ -935,9 +954,15 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
         )
       }
       await Effect.runPromise(
-        bound.handlers
-          .load(decoded.userPayload)
-          .pipe(Effect.provideService(Principal, principal)) as Effect.Effect<void, unknown, never>,
+        provideObservability(
+          bound.handlers
+            .load(decoded.userPayload)
+            .pipe(Effect.provideService(Principal, principal)) as Effect.Effect<
+            void,
+            unknown,
+            never
+          >,
+        ),
       )
     }
   } catch (e) {

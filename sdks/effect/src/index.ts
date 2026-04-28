@@ -44,7 +44,13 @@ export { RetryHostError, RetryPolicyValidationError } from "./retry.js"
  * API.
  */
 export * as Durability from "./durability.js"
-export { DurabilityHostError, DurabilityValidationError } from "./durability.js"
+export {
+  DurabilityDecodeError,
+  DurabilityHostError,
+  DurabilityReplayMismatchError,
+  DurabilityValidationError,
+  NestedDurableFunctionError,
+} from "./durability.js"
 
 /**
  * Oplog namespace — Effect-typed wrappers around `golem:api/oplog@1.5.0`
@@ -55,6 +61,19 @@ export * as Oplog from "./oplog.js"
 export { OplogHostError } from "./oplog.js"
 
 /**
+ * Saga namespace — Effect-idiomatic multi-step transactions on top of
+ * the Golem oplog. Provides `withCompensation` (canonical, infallible
+ * compensation) + `withFallibleCompensation` (fallible compensation
+ * that can drive `FailedAndRolledBackPartially`) + `operation` (paired
+ * execute+compensate factory) + `fallibleTransaction` /
+ * `infallibleTransaction` entry points. See {@link ./saga} for the
+ * full API.
+ */
+export * as Saga from "./saga.js"
+export { NestedSagaError } from "./saga.js"
+export type { TransactionFailure } from "./saga.js"
+
+/**
  * Agents namespace — Effect-typed wrappers around the
  * agent-management subset of `golem:api/host@1.5.0` (metadata,
  * fork/revert/update, resolve helpers, the `GetAgents` pager, and the
@@ -62,6 +81,27 @@ export { OplogHostError } from "./oplog.js"
  */
 export * as Agents from "./agents.js"
 export { AgentsHostError, AgentsValidationError, PromiseAlreadyCompletedError } from "./agents.js"
+
+/**
+ * Logging namespace — Effect `Logger` backed by `wasi:logging/logging`.
+ * The agent dispatcher installs `Logging.layer` automatically so every
+ * `Effect.log*` call is forwarded to the Golem host's structured log
+ * sink. See {@link ./logging} for the full API (custom layer wiring,
+ * imperative `log`, level mapping, safe stringification).
+ */
+export * as Logging from "./logging.js"
+export { LoggingHostError } from "./logging.js"
+
+/**
+ * Tracing namespace — Effect `Tracer` backed by `golem:api/context@1.5.0`.
+ * The agent dispatcher installs `Tracing.layer` automatically and
+ * chains the in-Effect span tree under the host's invocation context,
+ * so every `Effect.withSpan` becomes a child span of the live host
+ * invocation. See {@link ./tracing} for the full API (custom layer
+ * wiring, current-context snapshots, header-forwarding controls).
+ */
+export * as Tracing from "./tracing.js"
+export { TracingHostError } from "./tracing.js"
 
 export {
   InvalidSnapshotError,

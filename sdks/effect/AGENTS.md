@@ -214,6 +214,156 @@ const rows = yield * sql`SELECT count FROM counters WHERE id = ${name}`
 
 `SqliteClient.make`/`SqliteClient.layer`/`SqliteClient.fromDatabase` return / provide both the `effect-golem/sqlite` `SqliteClient` extension (which adds `export: Effect<Uint8Array, SqlError>` for snapshotting and `exec(sql)` for parameter-less DDL/seed batches) and the canonical `Client.SqlClient` tag. `executeStream` is unimplemented (`Stream.die`) because `node:sqlite`'s `StatementSync` has no native cursor; everything else is wired through `Statement.makeCompilerSqlite` so the SQL dialect, placeholders, identifier escaping, and result-column transforms match the rest of the Effect SQL ecosystem.
 
+## Durable function wrapper (`Durability.wrap` / `wrapInfallible`)
+
+`effect-golem` ships an Effect-idiomatic wrapper around the `golem:durability/durability@1.5.0` host interface, mirroring the Rust SDK's `Durability::new + is_live + persist + replay` triplet that every `golem-ai` library uses. The high-level entry point is `Durability.wrap` (and `Durability.wrapInfallible`):
+
+```ts
+import { Durability, defineAgent, method, Schema } from "effect-golem"
+import { Effect } from "effect"
+
+defineAgent({
+  // ...
+  methods: {
+    fetchQuote: method({
+      params: { symbol: Schema.String },
+      success: Schema.Struct({ symbol: Schema.String, price: Schema.Number }),
+    }),
+  },
+  impl: () =>
+    Effect.gen(function* () {
+      return {
+        fetchQuote: ({ symbol }) =>
+          Durability.wrap(
+            {
+              iface: "myapp",
+              function: "fetchQuote",
+              functionType: Durability.FunctionType.writeRemote,
+              requestSchema: Schema.Struct({ symbol: Schema.String }),
+              success: Schema.Struct({ symbol: Schema.String, price: Schema.Number }),
+              // optional: error: SomeErrorSchema
+            },
+            { symbol },
+            // body — runs once in live mode, skipped on replay
+            Effect.sync(() => fetchFromRemote(symbol)),
+          ),
+      }
+    }),
+})
+```
+
+Live vs replay protocol (matches Rust bit-for-bit):
+
+- **Live mode** (`is_live` true OR persistence-level is `persist-nothing`): runs `body` inside `withPersistenceLevel(persistNothing, …)` to suppress nested oplog writes, encodes `(request, Result.succeed(value) | Result.fail(error))` to a `ValueAndType`, calls `persistDurableFunctionInvocation(qualifiedName, requestVT, responseVT, functionType)`, then `endDurableFunction(...)`.
+- **Replay mode**: skips `body`, calls `readPersistedDurableFunctionInvocation()`, validates the entry's `functionName` AND `functionType`, decodes the recorded value through `Schema.Result(success, error)`, calls `endDurableFunction(...)`, returns the original value or fails with the recorded typed error.
+- **Defects / interruption**: skip BOTH `persist` and `endDurableFunction`. The bracket stays open, mirroring Rust's "panic = abnormal termination" behavior.
+
+Key guarantees:
+
+- **Bit-compat with `golem-rust`**: function names are emitted as `${iface}::${function}`; responses use WIT `result<ok, err>` (via `Schema.Result`), not `Either`. Verified via the `host-features::wrappedQuote` integration component — live oplog entries display as `CALL host-features::wrappedQuote / input: {symbol: "AAPL"} / result: {symbol, price}` (success) or `err({code, symbol})` (typed fail).
+- **Concurrency**: a module-level single-permit semaphore serializes `wrap` invocations across fibers (the host's replay cursor is sequential). Re-entrant calls from the same fiber tree fail fast with `NestedDurableFunctionError` rather than deadlocking.
+- **Error ergonomics**: SDK-internal failures (`DurabilityHostError`, `DurabilityReplayMismatchError`, `DurabilityDecodeError`, `NestedDurableFunctionError`, `UnsupportedSchemaError`) are routed into the **defect** channel, NOT the typed `E`. Method authors only declare their own typed errors; infrastructure errors propagate as panics through the dispatcher's normal failure path.
+- **Schema services**: `wit-codec` services (`EncodingServices` / `DecodingServices`) flow through `wrap`'s `R` channel, so schemas with services compose normally.
+
+`Durability.FunctionType.writeRemoteBatched(begin?)` and `writeRemoteTransaction(begin?)` are NOT accepted by `wrap` — they imply a multi-step lifecycle the unary combinator does not model. Use the lower-level escape hatches (`beginDurableFunction`, `endDurableFunction`, `persistDurableFunctionInvocation`, `readPersistedDurableFunctionInvocation`, `currentDurableExecutionState`, `isLive`, `observeFunctionCall`) to compose those flows manually.
+
+`Durability.wrapInfallible` is the same combinator for `Effect<A, never, R>` bodies; the response envelope is a bare `success` value (no `Result` wrapping), useful for stream "begin" markers and other never-failing durable points.
+
+## Sagas / multi-step transactions (`Saga.*`)
+
+`effect-golem` ships an Effect-idiomatic saga / compensating-transaction module on top of the Golem oplog primitives. The wire layout matches the official `golem-ts-sdk` / `golem-rust-sdk` saga implementation: each step runs in its own atomic region (`mark-begin-operation` / `mark-end-operation`); successful steps register a compensation effect that fires on transaction failure; the infallible variant additionally calls `set-oplog-index(checkpoint)` to ask the host to replay from the captured checkpoint.
+
+The API mirrors `@effect/workflow`'s `Workflow.withCompensation` shape — the canonical Effect-TS compensation combinator — with one Golem-specific extension (`withFallibleCompensation`) for surfacing partial-rollback failures.
+
+```ts
+import { Effect, Schema } from "effect"
+import { defineAgent, method, Saga } from "effect-golem"
+
+// Reusable execute+compensate pair (parity with official Golem SDKs).
+const bookFlight = Saga.operation({
+  execute: ({ flightId }: { flightId: string }) =>
+    Effect.gen(function* () {
+      /* ... */
+      return { ref: `FLT-${flightId}` }
+    }),
+  compensate: ({ flightId }, booking, _cause) => cancelFlight(booking.ref).pipe(Effect.ignore),
+})
+
+// fallible: returns Saga.TransactionFailure<E> on body failure.
+const result =
+  yield *
+  Saga.fallibleTransaction(
+    Effect.gen(function* () {
+      const flight = yield* bookFlight({ flightId: "AA1" })
+      const hotel = yield* bookHotel({ hotelId: "H7" })
+      return { flight, hotel }
+    }),
+  )
+// result : Effect<{ flight, hotel }, Saga.TransactionFailure<E> | DurabilityHostError | OplogHostError | NestedSagaError, R>
+
+// infallible: drains compensations + setOplogIndex(checkpoint) + Effect.never.
+const value = yield * Saga.infallibleTransaction(body) // body must be Effect<A, never, R>
+```
+
+Combinators (re-exported from the package barrel as `Saga`):
+
+- `Saga.withCompensation(effect, (value, cause) => Effect<void, never, R>)` — primary, idiomatic combinator. Compensation cannot fail. Mirrors `@effect/workflow.Workflow.withCompensation` exactly.
+- `Saga.withFallibleCompensation(effect, (value, cause) => Effect<void, E, R>)` — Golem-specific extension. The first compensation failure surfaces as `TransactionFailure.FailedAndRolledBackPartially { error, compensationError }`. Subsequent compensations still run on a best-effort basis.
+- `Saga.operation({ execute, compensate })` — paired-step factory. Returns a function `(input) => Effect<…>`; internally uses `withCompensation`. Matches the `Operation` type from the official Golem SDKs.
+- `Saga.fallibleTransaction(body)` — entry point. Body returns `Effect<A, E, R>`; failure becomes `TransactionFailure<E>`. Defects propagate unchanged. Interruption propagates unchanged (compensations still run via the surrounding scope).
+- `Saga.infallibleTransaction(body)` — entry point. Body returns `Effect<A, never, R>`; on operation-level failure or interruption, drains compensations in reverse order, calls `setOplogIndex(checkpoint)`, and parks the fiber via `Effect.never` until the host preempts. Defects propagate unchanged.
+
+Wire mechanics:
+
+- On entry the SDK captures `Oplog.currentIndex` as the checkpoint. NO outer atomic region is opened — each step runs in its own.
+- Each `Saga.operation` / `Saga.withCompensation` wraps the step body in `Durability.atomically(...)`, so the host oplog shows balanced `BeginAtomicRegion` / `EndAtomicRegion` markers per step.
+- Compensations are registered via `Scope.addFinalizer(scope, …)`. The transaction wrapper signals "now drain" by stashing the failure cause in a fiber-local `CauseStoreRef`; the finalizers read this and gate themselves on `cause !== null`.
+- Reverse-order drain is guaranteed by Scope's LIFO finalizer semantics. Drains run sequentially, uninterruptibly (Scope close is uninterruptible).
+- Infallible failure path: after the drain, `setIndex(checkpoint) >> Effect.never`. The host preempts and replays from the checkpoint. The fiber's `R` channel is `Exclude<R, Scope>` — Scope is internal.
+
+Failure-cause classification:
+
+| Cause class             | Fallible saga                             | Infallible saga                          |
+| ----------------------- | ----------------------------------------- | ---------------------------------------- |
+| `Effect.fail` (typed E) | compensate reverse → `TransactionFailure` | compensate reverse → `setIndex >> never` |
+| `Effect.interrupt`      | propagate unchanged (comps still run)     | compensate reverse → `setIndex >> never` |
+| `Effect.die` (defect)   | propagate unchanged (NO comps)            | propagate unchanged (NO rewind)          |
+
+Errors: `Saga.NestedSagaError` (raised when a saga is started inside an already-active saga in the same fiber tree — mirrors `NestedDurableFunctionError`); `TransactionFailure<E>` is a tagged union (`FailedAndRolledBackCompletely { error }` / `FailedAndRolledBackPartially { error, compensationError }`). Both are exported from the package barrel.
+
+Caveats:
+
+- `infallibleTransaction` only meaningfully retries when the oplog is being persisted. Calling it under `Durability.withPersistenceLevel(persistNothing, …)` weakens the rewind guarantee (there is nothing for the host to replay).
+- `Retry.withPolicy` / `withIdempotenceMode` / `withPersistenceLevel` should be composed externally — they are NOT bundled into the saga module.
+- Nested sagas raise `NestedSagaError` because the host's atomic-region bracketing and the in-fiber checkpoint stack are inherently sequential. The check uses `Context.Reference` (Effect 4's fiber-local primitive), so concurrent unrelated fibers correctly each get their own saga frame.
+
+The integration test suite includes `BookingSaga` (drives `fallibleTransaction` with happy-path, `FailedAndRolledBackCompletely`, and `FailedAndRolledBackPartially` outcomes) and `InventorySaga` (drives `infallibleTransaction` with a deliberate first-attempt failure that rewinds via `set-oplog-index`). Inspect the oplog with `golem -L agent oplog 'BookingSaga("demo")'` to see balanced `BeginAtomicRegion` / `EndAtomicRegion` per step plus a `Jump` entry on infallible retry.
+
+## Logging & Tracing
+
+`effect-golem` automatically wires Effect's `Logger` and `Tracer` to the Golem host:
+
+- `Effect.log*` calls flow into `wasi:logging/logging.log(level, "", "level=… ts=… trace_id=… span_id=… key=value :: message")`. Annotations (`Effect.annotateLogs`), log spans (`Effect.withLogSpan`), and the active host trace/span ids are folded into a single logfmt-style line. Zero trace/span ids are suppressed.
+- `Effect.withSpan` calls `golem:api/context.startSpan(name)` and chain under the host's invocation root (via `Tracer.externalSpan` injected by the dispatcher's `withInvocationParent` helper). `Effect.annotateCurrentSpan` / `attributes:` map to host `setAttribute`. On `Exit.failure` the SDK records `error="true"` + `error.message=Cause.pretty(...)` on the host span.
+- All host failures inside the logger / tracer are swallowed. Telemetry never breaks user code.
+
+The dispatcher applies the combined `Logging.layer + Tracing.layer + withInvocationParent` to: `impl` (constructor), every method handler in `dispatchInvoke`, and the user-managed snapshot save/load handlers. Auto snapshot save/load runs without it (no user-effect to instrument).
+
+The `Logging` and `Tracing` namespaces are re-exported from the package barrel for users who want to:
+
+- replace / augment the default loggers (`Logging.layer` to replace, `Logging.mergeLayer` to add alongside the defaults)
+- imperative log: `yield* Logging.log("warn", "context", "message")` returning `Effect<void, LoggingHostError>`
+- read host invocation context: `yield* Tracing.currentContext` returning `{ traceId, spanId, traceContextHeaders }`
+- toggle outgoing W3C header forwarding: imperative `Tracing.allowForwardingTraceContextHeaders(true)` or scoped `Tracing.withForwardedHeaders(true, body)`
+
+Limitations (intentional):
+
+- Effect span events (the implicit `Logger.tracerLogger` path) are NOT replayed as host span events — the host has no event API. Span-event state is kept locally on the `GolemSpan` so reading code keeps working; for delivery, log lines go through `wasi:logging` instead.
+- `Effect.withSpan` requests with an explicit `parent` whose `(traceId, spanId)` does NOT match `currentContext()` fall back to `Tracer.NativeSpan` (no host span emitted) — this is the cross-fiber / drift safety net; for the typical sequential `withSpan` nesting the host stack matches Effect's view exactly.
+- `Effect.withSpan(..., { root: true })` is treated as "child of current host invocation root" because Effect normalises every top-level span to `root: true` and Golem's invocation context is the canonical root. There is no way to detach in the Golem model.
+
+WIT / mocks: the integration imports `wasi:logging/logging` and `golem:api/context@1.5.0`. Both are listed in `rollup.config.mjs` as externals and aliased to `test/mocks/wasi-logging.ts` / `test/mocks/golem-api-context.ts` in `vitest.config.ts`.
+
 ## RDBMS clients (Postgres / MySQL / Ignite)
 
 `effect-golem` ships three sub-imports that wrap Golem's `golem:rdbms/*@1.5.0` host bindings as official `effect/unstable/sql/SqlClient` instances. Each adapter is a separate sub-import (NOT re-exported from `effect-golem`):

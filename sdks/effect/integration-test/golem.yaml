@@ -109,6 +109,10 @@ agents:
     config: {}
   HostFeatures:
     config: {}
+  BookingSaga:
+    config: {}
+  InventorySaga:
+    config: {}
 
 # Secret defaults applied automatically to the local environment at
 # deploy time. Production deployments would use

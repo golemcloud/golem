@@ -15,8 +15,17 @@ type NamedWitTypeNode = CoreTypes.NamedWitTypeNode
 type WitType = CoreTypes.WitType
 type WitValue = CoreTypes.WitValue
 
+// Branded so `Durability.wrap` (and any other downstream consumer
+// that uses nominal SDK-error detection) can route this into the
+// defect channel without `_tag`-string sniffing. Declared as a
+// `unique symbol` const because TypeScript requires class-property
+// computed names to have either a literal type or a `unique symbol`;
+// `Symbol.for(...)` guarantees the same runtime symbol across modules.
+const sdkErrorBrand: unique symbol = Symbol.for("effect-golem/durable-function/sdk-error")
+
 export class UnsupportedSchemaError {
   readonly _tag = "UnsupportedSchemaError"
+  readonly [sdkErrorBrand] = true
   constructor(readonly reason: string) {}
 }
 

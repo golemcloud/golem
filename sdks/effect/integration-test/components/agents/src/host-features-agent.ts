@@ -26,6 +26,17 @@
  * - `promiseRoundtrip({ payload })` — creates a host promise, completes
  *   it with the given payload, awaits it, and returns the round-tripped
  *   string. Exercises the full `Agents.Promises` API surface.
+ * - `wrappedQuote({ symbol })` — wraps a non-deterministic
+ *   `Math.random()` "price" in `Durability.wrap`. On the live first
+ *   call the persisted oplog entry encodes `Result.succeed({price})`
+ *   under function-name `host-features::wrappedQuote` and
+ *   function-type `write-remote`. On replay (e.g. after `agent
+ *   update --await ... manual`) the same `price` must come back
+ *   without re-running the random body — exactly the durability
+ *   round-trip.
+ * - `wrappedQuoteFailing({ symbol })` — same shape but the body
+ *   returns a typed `Effect.fail`; verifies typed-failure
+ *   round-tripping through the oplog.
  *
  * Snapshotting is enabled with a small Ref-backed counter so the
  * harness can also verify the auto-snapshot path lights up after 10
@@ -77,6 +88,15 @@ export const HostFeatures = defineAgent({
     promiseRoundtrip: method({
       params: { payload: Schema.String },
       success: Schema.String,
+    }),
+    wrappedQuote: method({
+      params: { symbol: Schema.String },
+      success: Schema.Struct({ symbol: Schema.String, price: Schema.Number }),
+    }),
+    wrappedQuoteFailing: method({
+      params: { symbol: Schema.String },
+      success: Schema.Struct({ symbol: Schema.String, price: Schema.Number }),
+      error: Schema.Struct({ code: Schema.String, symbol: Schema.String }),
     }),
   },
   impl: (_input, snap) =>
@@ -160,6 +180,50 @@ export const HostFeatures = defineAgent({
             const out = yield* Agents.Promises.await(id)
             return new TextDecoder().decode(out)
           }),
+
+        wrappedQuote: ({ symbol }) =>
+          // The body returns Math.random — a non-deterministic value
+          // that would diverge across replays without `Durability.wrap`.
+          // The first call persists `Result.succeed({symbol, price})`
+          // to the oplog; subsequent replays return that exact value
+          // without re-rolling the dice.
+          Durability.wrap(
+            {
+              iface: "host-features",
+              function: "wrappedQuote",
+              functionType: Durability.FunctionType.writeRemote,
+              requestSchema: Schema.Struct({ symbol: Schema.String }),
+              success: Schema.Struct({
+                symbol: Schema.String,
+                price: Schema.Number,
+              }),
+            },
+            { symbol },
+            Effect.sync(() => ({
+              symbol,
+              price: Math.round(Math.random() * 1_000_000) / 100,
+            })),
+          ),
+
+        wrappedQuoteFailing: ({ symbol }) =>
+          Durability.wrap(
+            {
+              iface: "host-features",
+              function: "wrappedQuoteFailing",
+              functionType: Durability.FunctionType.writeRemote,
+              requestSchema: Schema.Struct({ symbol: Schema.String }),
+              success: Schema.Struct({
+                symbol: Schema.String,
+                price: Schema.Number,
+              }),
+              error: Schema.Struct({
+                code: Schema.String,
+                symbol: Schema.String,
+              }),
+            },
+            { symbol },
+            Effect.fail({ code: "UNAVAILABLE", symbol }),
+          ),
       }
     }),
 })
