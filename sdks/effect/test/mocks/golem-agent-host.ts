@@ -19,8 +19,25 @@ export const parseAgentId = (): never => {
   throw new Error("parseAgentId not mocked")
 }
 
-export const createWebhook = (): string => {
+/**
+ * Settable mock for the host's `create-webhook`. Tests register a
+ * responder via {@link __setCreateWebhookImpl}; the default throws so
+ * forgetting to set it surfaces clearly.
+ */
+let createWebhookImpl: (id: any) => string = () => {
   throw new Error("createWebhook not mocked")
+}
+
+export const createWebhook = (id: any): string => createWebhookImpl(id)
+
+export const __setCreateWebhookImpl = (fn: (id: any) => string): void => {
+  createWebhookImpl = fn
+}
+
+export const __resetCreateWebhookImpl = (): void => {
+  createWebhookImpl = () => {
+    throw new Error("createWebhook not mocked")
+  }
 }
 
 /**
@@ -260,4 +277,6 @@ export class WasmRpc {
 export const __reset = (): void => {
   registered = []
   __resetRpc()
+  __resetCreateWebhookImpl()
+  __resetGetConfigValueImpl()
 }

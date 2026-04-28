@@ -101,6 +101,17 @@ export * as Agents from "./agents.js"
 export { AgentsHostError, AgentsValidationError, PromiseAlreadyCompletedError } from "./agents.js"
 
 /**
+ * Webhook namespace — Effect-typed wrapper around
+ * `golem:agent/host@1.5.0.create-webhook`. Bundles `Promises.create`
+ * with the host's URL minting and exposes a `Webhook` handle whose
+ * `await` Effect resumes when the URL is POSTed to. See
+ * {@link ./webhook} for the full API.
+ */
+export * as Webhook from "./webhook.js"
+export { WebhookDecodeError, WebhookHostError, WebhookPayload } from "./webhook.js"
+export type { WebhookHandle } from "./webhook.js"
+
+/**
  * Logging namespace — Effect `Logger` backed by `wasi:logging/logging`.
  * The agent dispatcher installs `Logging.layer` automatically so every
  * `Effect.log*` call is forwarded to the Golem host's structured log

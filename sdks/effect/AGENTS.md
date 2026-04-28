@@ -88,6 +88,83 @@ Auth & CORS: both `Http.mount(...)` and individual endpoints accept `auth?: bool
 
 Errors: validation failures surface as `HttpRouteError` Effect typed failures from `registerAgent` (alongside `UnsupportedSchemaError`); the synchronous `defineAgent` re-throws them at module-import time so misconfigurations fail fast.
 
+## Webhooks (`Webhook.*`)
+
+`effect-golem` exposes the host's webhook integration via a small `Webhook` namespace re-exported from the package barrel. Wire-compatible with `golem-ts-sdk.createWebhook()` / `golem-rust.create_webhook()`: both call `golem:api/host.create-promise` followed by `golem:agent/host.create-webhook(promise-id)` and return the host-minted URL verbatim.
+
+```ts
+import { Effect, Schema } from "effect"
+import { defineAgent, Http, method, Webhook } from "effect-golem"
+
+const PaymentEvent = Schema.Struct({ id: Schema.String, status: Schema.String })
+
+defineAgent({
+  name: "PaymentWatcher",
+  constructorParams: { name: Schema.String },
+  http: Http.mount("/watchers/{name}", { webhookSuffix: "/payments" }),
+  methods: {
+    waitForPayment: method({
+      params: {},
+      success: PaymentEvent,
+      http: [Http.post("/wait")],
+    }),
+  },
+  impl: () =>
+    Effect.gen(function* () {
+      return {
+        waitForPayment: () =>
+          Effect.gen(function* () {
+            const hook = yield* Webhook.create
+            // ... share `hook.url` with the payment provider via an outgoing API call ...
+            const payload = yield* hook.await
+            return yield* payload.decode(PaymentEvent)
+          }),
+      }
+    }),
+})
+```
+
+API:
+
+- `Webhook.create: Effect<WebhookHandle, AgentsHostError | WebhookHostError>` — allocates a fresh host promise, then mints a public POST URL bound to it. Two host calls under the hood (`create-promise` + `create-webhook`); failure between the two leaves an unused promise in the host's table — the SDK does NOT garbage-collect it.
+- `WebhookHandle` — `{ url, promiseId, await: Effect<WebhookPayload, AgentsHostError>, poll: Effect<WebhookPayload | undefined, AgentsHostError> }`. `await` durably suspends until the URL is POSTed to (visible in the oplog as `SUSPEND` between `pollable.ready` calls); `poll` is non-blocking.
+- `WebhookPayload` — wraps the raw POST body bytes. `bytes` (raw `Uint8Array`), `text()` (UTF-8), `json<T>()` (synchronous, throws on bad JSON), `decode(schema): Effect<A, WebhookDecodeError | Schema.SchemaError, R>` (recommended Effect-typed path).
+- `WebhookHostError` / `WebhookDecodeError` — exported from the package barrel.
+
+Constraints (host-enforced, surfaced as `WebhookHostError`):
+
+- The agent type must be currently deployed via an HTTP API at the moment of the call — i.e. the agent declares `Http.mount(...)` AND the deployment lists the agent under `httpApi.deployments.<env>.agents`. Calling `Webhook.create` from an agent that is not deployed via HTTP traps.
+- The promise must have been created by the same component as the one calling `create-webhook`. Cross-component promise reuse is rejected by the host.
+
+`webhookSuffix` syntax (in `Http.mount({ webhookSuffix })`):
+
+- Same parser as the mount path itself: literals + `{constructor-param}` + `{agent-type}` / `{agent-version}` system variables.
+- No `?key={var}` query bindings (parser rejects `?`).
+- No `{*rest}` catch-all (parser rejects).
+- Every `{var}` segment must reference a constructor parameter on the agent (validated at registration time inside `validateAgentHttp`); otherwise registration fails with `HttpRouteError`.
+- Falls back to the agent type name in kebab-case at deployment time when omitted.
+
+URL anatomy at deployment time (host-built, no SDK involvement):
+
+```
+https://<domain>/<webhooksPrefix>/<webhookSuffix>/<base64url(AgentWebhookId)>
+                  golem.yaml         Http.mount        signed by host
+```
+
+The trailing `<base64url(AgentWebhookId)>` is HMAC-SHA256-signed by the host on `create-webhook` and verified on inbound POST — the SDK never forges or verifies it. POSTing to the URL returns `204 No Content` on success and completes the underlying promise atomically with the request body bytes.
+
+The integration test ships a `WebhookAgent` (under `integration-test/components/agents/src/webhook-agent.ts`) deployed against `effect-golem.localhost:9006` with `webhookSuffix: "/inbox"`. Drive a round-trip with:
+
+```
+URL=$(golem -L agent invoke -n 'WebhookAgent("demo")' prime | grep -oE 'http://effect-golem[^"]+')
+golem -L agent invoke -n 'WebhookAgent("demo")' waitForEvent &
+sleep 2
+curl -X POST -H 'Content-Type: application/json' -d '{"hello":"world"}' "$URL"
+wait
+```
+
+The oplog (`golem -L agent oplog 'WebhookAgent("demo")'`) shows the canonical `CALL golem::api::create_promise` → `CALL golem::agent::create_webhook` pair on `prime`, then `INVOKE waitForEvent` → `CALL golem::api::get_promise_result` → `CALL io::poll::pollable::ready` → `SUSPEND` (durable wait) → wakeup → `INVOKE COMPLETED` on the wait side.
+
 ## Snapshotting
 
 Snapshotting is opt-in via a per-agent `snapshot` field on `defineAgent`. When set, the agent's WIT `snapshotting` metadata becomes `enabled(...)` (instead of the default `disabled`) and the SDK wires up `golem:api/save-snapshot.save` / `golem:api/load-snapshot.load`. The wire envelope is bit-for-bit compatible with the official `golem-ts-sdk` (so components can be cross-loaded).

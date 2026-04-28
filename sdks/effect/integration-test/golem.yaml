@@ -115,6 +115,8 @@ agents:
     config: {}
   QuotaTester:
     config: {}
+  WebhookAgent:
+    config: {}
 
 # Secret defaults applied automatically to the local environment at
 # deploy time. Production deployments would use
@@ -154,3 +156,4 @@ httpApi:
       - domain: effect-golem.localhost:9006
         agents:
           Counter: {}
+          WebhookAgent: {}
