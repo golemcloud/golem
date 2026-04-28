@@ -13,6 +13,11 @@ import {
 import { method } from "../src/method.js"
 import { guest } from "../src/exports.js"
 import * as Snapshot from "../src/snapshot.js"
+import {
+  __resetGetConfigValueForTest,
+  __setGetConfigValueForTest,
+  defineConfig,
+} from "../src/config.js"
 import { toWitCodec } from "../src/wit-codec.js"
 import {
   encodeBinaryEnvelope,
@@ -124,19 +129,90 @@ const ForgetfulSnapshotAgent = defineAgent({
     }),
 })
 
+// ---------------------------------------------------------------------------
+// Custom-snapshot agent that reads a config service inside its save/load
+// handlers — exercises the §E.2.a wiring in `dispatchSaveSnapshot` /
+// `dispatchLoadSnapshot` (see notes/config-audit-and-plan.md).
+// ---------------------------------------------------------------------------
+
+class ConfigCustomCfg extends defineConfig("ConfigCustomCfg", {
+  prefix: Schema.String,
+}) {}
+
+const configCustomStore: { saveCalls: number; loadCalls: number; lastBytes: Uint8Array | null } = {
+  saveCalls: 0,
+  loadCalls: 0,
+  lastBytes: null,
+}
+
+const ConfigCustomAgent = defineAgent({
+  name: "ConfigCustomAgent",
+  constructorParams: { name: Schema.String },
+  config: ConfigCustomCfg,
+  snapshot: Snapshot.custom({ policy: Snapshot.policy.default }),
+  methods: {
+    value: method({ params: {}, success: Schema.Number }),
+    add: method({ params: { by: Schema.Number }, success: Schema.Number }),
+  },
+  impl: ({ name }, snap) =>
+    Effect.gen(function* () {
+      const ref = yield* Ref.make({ count: 0, owner: name })
+      yield* snap.register({
+        save: Effect.gen(function* () {
+          configCustomStore.saveCalls++
+          // Read the config service from inside the save handler.
+          const cfg = yield* ConfigCustomCfg
+          const prefix = yield* cfg.prefix
+          const s = yield* Ref.get(ref)
+          return new TextEncoder().encode(`${prefix}:${JSON.stringify(s)}`)
+        }),
+        load: (bytes) =>
+          Effect.gen(function* () {
+            configCustomStore.loadCalls++
+            // Read the config service from inside the load handler too.
+            const cfg = yield* ConfigCustomCfg
+            const prefix = yield* cfg.prefix
+            const text = new TextDecoder().decode(bytes)
+            if (!text.startsWith(`${prefix}:`)) {
+              throw new Error(
+                `load handler: payload prefix '${text.slice(0, 20)}' does not match config prefix '${prefix}'`,
+              )
+            }
+            const decoded = JSON.parse(text.slice(prefix.length + 1)) as {
+              count: number
+              owner: string
+            }
+            yield* Ref.set(ref, decoded)
+          }),
+      })
+      return {
+        value: () => Ref.get(ref).pipe(Effect.map((s) => s.count)),
+        add: ({ by }) =>
+          Ref.updateAndGet(ref, (s) => ({ ...s, count: s.count + by })).pipe(
+            Effect.map((s) => s.count),
+          ),
+      }
+    }),
+})
+
 describe("snapshotting", () => {
   beforeEach(async () => {
     await __resetAgents()
     customStore.saveCalls = 0
     customStore.loadCalls = 0
+    configCustomStore.saveCalls = 0
+    configCustomStore.loadCalls = 0
+    configCustomStore.lastBytes = null
     void AutoSnapshotCounter
     void CustomSnapshotAgent
+    void ConfigCustomAgent
     void ForgetfulSnapshotAgent
   })
 
   afterEach(() => {
     __resetGetEnvironmentForTest()
     __resetParseAgentIdForTest()
+    __resetGetConfigValueForTest()
   })
 
   // -------------------------------------------------------------------------
@@ -313,6 +389,99 @@ describe("snapshotting", () => {
     if (out.tag !== "tuple" || out.val[0]?.tag !== "component-model") throw new Error()
     const value = await Effect.runPromise(Schema.decodeEffect(numberCodec.codec)(out.val[0].val))
     expect(value).toBe(6)
+  })
+
+  it("custom: save/load handlers can read the agent's config service", async () => {
+    const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
+    const numberCodec = await Effect.runPromise(toWitCodec(Schema.Number))
+    const danWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("dan"))
+    const fourWv = await Effect.runPromise(Schema.encodeEffect(numberCodec.codec)(4))
+
+    // Mock the host config so reads of `prefix` from inside the
+    // save/load handlers return a deterministic value.
+    const prefixWv = await Effect.runPromise(
+      Schema.encodeEffect(stringCodec.codec)("snapshot-prefix"),
+    )
+    __setGetConfigValueForTest((path) => {
+      if (path.length === 1 && path[0] === "prefix") return prefixWv
+      throw new Error(`unexpected config path: ${path.join(".")}`)
+    })
+
+    await guest.initialize(
+      "ConfigCustomAgent",
+      { tag: "tuple", val: [{ tag: "component-model", val: danWv }] },
+      oidcBob,
+    )
+    await guest.invoke(
+      "add",
+      { tag: "tuple", val: [{ tag: "component-model", val: fourWv }] },
+      oidcBob,
+    )
+
+    const snapshot = await dispatchSaveSnapshot()
+    expect(snapshot.mimeType).toBe("application/octet-stream")
+    expect(configCustomStore.saveCalls).toBe(1)
+
+    // The save handler embedded the config-derived prefix in the bytes;
+    // peel back the binary v2 envelope and confirm the payload starts
+    // with `snapshot-prefix:` (proves config flowed into save).
+    const headerLen = 1 + 4 + new TextEncoder().encode(JSON.stringify({ tag: "oidc" })).length
+    void headerLen // (real assertion below works against the round-trip)
+
+    await __resetAgents()
+    __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "ConfigCustomAgent:dan"]])
+    __setParseAgentIdForTest(() => [
+      "ConfigCustomAgent",
+      { tag: "tuple", val: [{ tag: "component-model", val: danWv }] },
+      undefined,
+    ])
+    // Re-stub for the load + post-load invocation paths (a fresh
+    // dispatcher state means the previous mock was reset by afterEach
+    // hooks would normally fire, but a same-test reset is explicit).
+    __setGetConfigValueForTest((path) => {
+      if (path.length === 1 && path[0] === "prefix") return prefixWv
+      throw new Error(`unexpected config path: ${path.join(".")}`)
+    })
+
+    await dispatchLoadSnapshot(snapshot)
+    expect(configCustomStore.loadCalls).toBe(1)
+
+    // Round-trip preserved the count and the post-load instance can
+    // still read config (the auto-instantiated ConfigCustomCfg shape
+    // is provided by the per-invocation dispatcher path).
+    const out = await guest.invoke("value", { tag: "tuple", val: [] }, oidcBob)
+    if (out.tag !== "tuple" || out.val[0]?.tag !== "component-model") throw new Error()
+    const value = await Effect.runPromise(Schema.decodeEffect(numberCodec.codec)(out.val[0].val))
+    expect(value).toBe(4)
+  })
+
+  it("custom: load handler that misuses config surfaces the failure as a thrown error", async () => {
+    const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
+    const danWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("dan"))
+
+    // First save with prefix=A, then load with prefix=B → load handler
+    // throws because the embedded bytes don't begin with "B:".
+    const prefixA = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("A"))
+    __setGetConfigValueForTest(() => prefixA)
+
+    await guest.initialize(
+      "ConfigCustomAgent",
+      { tag: "tuple", val: [{ tag: "component-model", val: danWv }] },
+      oidcBob,
+    )
+    const snapshot = await dispatchSaveSnapshot()
+
+    await __resetAgents()
+    __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "ConfigCustomAgent:dan"]])
+    __setParseAgentIdForTest(() => [
+      "ConfigCustomAgent",
+      { tag: "tuple", val: [{ tag: "component-model", val: danWv }] },
+      undefined,
+    ])
+    const prefixB = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("B"))
+    __setGetConfigValueForTest(() => prefixB)
+
+    await expect(dispatchLoadSnapshot(snapshot)).rejects.toThrow(/does not match config prefix/)
   })
 
   it("custom: load rejects an envelope whose mime type is JSON", async () => {

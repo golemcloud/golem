@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest"
-import { Effect, Redacted, Schema } from "effect"
+import { Effect, Option, Redacted, Schema } from "effect"
 import {
   __resetGetConfigValueForTest,
   __setGetConfigValueForTest,
@@ -263,6 +263,63 @@ describe("buildShape — empty struct branches", () => {
     expect(shape.empty).toBeDefined()
     expect(typeof shape.empty).toBe("object")
     expect(Object.keys(shape.empty).length).toBe(0)
+  })
+})
+
+describe("Schema.Option leaves", () => {
+  beforeEach(() => {
+    __resetGetConfigValueForTest()
+  })
+
+  it("a Schema.Option leaf round-trips Option.none() returned by the host", async () => {
+    const cc = await compile({ redisUrl: Schema.Option(Schema.String) })
+    // Pre-encode Option.none() through the same WitCodec the runtime
+    // uses, so the mock returns a WitValue the decoder will accept.
+    const noneWv = await encode(Schema.Option(Schema.String), Option.none())
+    __setGetConfigValueForTest(() => noneWv)
+
+    const shape = (await Effect.runPromise(cc.buildShape())) as {
+      redisUrl: Effect.Effect<Option.Option<string>, ConfigError>
+    }
+    const v = await Effect.runPromise(shape.redisUrl)
+    expect(Option.isNone(v)).toBe(true)
+  })
+
+  it("a Schema.Option leaf round-trips Option.some(x) returned by the host", async () => {
+    const cc = await compile({ redisUrl: Schema.Option(Schema.String) })
+    const someWv = await encode(Schema.Option(Schema.String), Option.some("redis://localhost"))
+    __setGetConfigValueForTest(() => someWv)
+
+    const shape = (await Effect.runPromise(cc.buildShape())) as {
+      redisUrl: Effect.Effect<Option.Option<string>, ConfigError>
+    }
+    const v = await Effect.runPromise(shape.redisUrl)
+    expect(Option.isSome(v)).toBe(true)
+    if (Option.isSome(v)) expect(v.value).toBe("redis://localhost")
+  })
+
+  it("emits an option-type WitType in the AgentConfigDeclaration valueType", async () => {
+    const cc = await compile({ redisUrl: Schema.Option(Schema.String) })
+    expect(cc.declarations.length).toBe(1)
+    expect(cc.declarations[0]!.valueType.nodes[0]!.type.tag).toBe("option-type")
+  })
+})
+
+describe("compileConfig — duplicate-path guard", () => {
+  beforeEach(() => {
+    __resetGetConfigValueForTest()
+  })
+
+  it("the schema walker cannot naturally produce duplicate paths", async () => {
+    // JS object semantics already guarantee unique keys at each level —
+    // this just sanity-checks that nested struct paths stay distinct.
+    const cc = await compile({
+      a: Schema.Struct({ x: Schema.String }),
+      b: Schema.Struct({ x: Schema.Number }),
+    })
+    const paths = cc.declarations.map((d) => d.path.join("/"))
+    expect(new Set(paths).size).toBe(paths.length)
+    expect(paths.sort()).toEqual(["a/x", "b/x"])
   })
 })
 

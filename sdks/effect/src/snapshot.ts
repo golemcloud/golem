@@ -1,7 +1,7 @@
 import { Duration, Effect, Ref, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type { DatabaseSync } from "node:sqlite"
-import { Principal } from "./principal.js"
+import type { Principal } from "./principal.js"
 import { __getUnderlyingDatabase, isSqliteClient, type SqliteClient } from "./sqlite.js"
 import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./wit-codec.js"
 
@@ -254,12 +254,20 @@ export type SnapshotDef = AutoSnapshotDef<Schema.Top, ReadonlyArray<string>> | C
  *
  * The shape depends on which definition variant was used: `init` +
  * `attachDatabase` for auto, `register` for custom.
+ *
+ * The optional `R` parameter widens the user-supplied custom-handler
+ * effects' R-channel — defaults to `Principal` (matching the original
+ * behaviour). The agent dispatcher specialises this to `Principal |
+ * CfgTagOf<F>` so user effects in `Snapshot.custom({...})`'s `save` /
+ * `load` may also yield from the agent's config `Context.Service`
+ * (when one is declared via `defineAgent({ config: ... })`). Auto
+ * bindings ignore `R` because they don't run user effects on save.
  */
-export type SnapshotBinding<S> =
+export type SnapshotBinding<S, R = Principal> =
   S extends AutoSnapshotDef<infer Sc, infer DBs>
     ? AutoSnapshotBinding<Sc, DBs>
     : S extends CustomSnapshotDef
-      ? CustomSnapshotBinding
+      ? CustomSnapshotBinding<R>
       : never
 
 /** Acceptable second argument to `attachDatabase`. */
@@ -288,8 +296,15 @@ export interface AutoSnapshotBinding<S extends Schema.Top, DBs extends ReadonlyA
   ) => Effect.Effect<void, SnapshotDatabaseDuplicateAttachError>
 }
 
-/** Custom-variant binding: lets the user provide save/load Effects. */
-export interface CustomSnapshotBinding {
+/**
+ * Custom-variant binding: lets the user provide save/load Effects.
+ *
+ * `R` defaults to `Principal` (the original behaviour). The agent
+ * dispatcher specialises this to `Principal | CfgTagOf<F>` when the
+ * surrounding agent declares a `config:` field, so user save/load
+ * effects can also yield from that config `Context.Service`.
+ */
+export interface CustomSnapshotBinding<R = Principal> {
   /**
    * Provide the per-instance `save` and `load` effects. Must be called
    * exactly once inside `impl`. `save` returns the raw user payload;
@@ -297,13 +312,27 @@ export interface CustomSnapshotBinding {
    * the inner user payload, post-envelope-decoding.
    */
   readonly register: (
-    handlers: CustomSnapshotHandlers,
+    handlers: CustomSnapshotHandlers<R>,
   ) => Effect.Effect<void, SnapshotAlreadyBoundError>
 }
 
-export interface CustomSnapshotHandlers {
-  readonly save: Effect.Effect<Uint8Array, unknown, Principal>
-  readonly load: (payload: Uint8Array) => Effect.Effect<void, unknown, Principal>
+/**
+ * User-supplied save/load handlers for {@link Snapshot.custom}.
+ *
+ * `R` defaults to {@link Principal} (the dispatcher always provides
+ * the snapshotted agent's principal before running the handler). When
+ * the agent also declares a `config:` field, the dispatcher additionally
+ * provides that config `Context.Service` and the agent's `impl`
+ * receives a `SnapshotBinding<S, Principal | CfgTagOf<F>>` whose
+ * `register(...)` accepts handlers parameterised on the same wider `R`.
+ *
+ * Any service NOT in this `R` (a user-defined service unknown to the
+ * dispatcher) must be supplied by the user with `Effect.provideService` /
+ * `Effect.provide` BEFORE the effect reaches `register({...})`.
+ */
+export interface CustomSnapshotHandlers<R = Principal> {
+  readonly save: Effect.Effect<Uint8Array, unknown, R>
+  readonly load: (payload: Uint8Array) => Effect.Effect<void, unknown, R>
 }
 
 // ---------------------------------------------------------------------------
@@ -447,7 +476,14 @@ export type BoundSnapshot =
     }
   | {
       readonly kind: "custom"
-      readonly handlers: CustomSnapshotHandlers
+      // Dispatcher-internal storage: the user's handlers were originally
+      // typed `CustomSnapshotHandlers<Principal>` (default) or
+      // `CustomSnapshotHandlers<Principal | CfgTagOf<F>>` (when the
+      // surrounding agent declares a `config:` field). The dispatcher
+      // erases the per-agent R here and re-provides each known service
+      // (Principal, plus the agent's optional config tag) at the call
+      // site, ending with a runtime cast through to `Effect<_,_,never>`.
+      readonly handlers: CustomSnapshotHandlers<any>
     }
 
 /**

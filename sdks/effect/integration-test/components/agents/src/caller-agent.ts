@@ -18,6 +18,14 @@ export const Caller = defineAgent({
     bump: method({ params: {}, success: Schema.Number }),
     /** Read the current value of the remote counter. */
     peek: method({ params: {}, success: Schema.Number }),
+    /**
+     * Construct a Counter client with an RPC config override for the
+     * `greeting` field, then read it back via `currentGreeting`. Proves
+     * the `{ overrides }` channel on `AgentClient.get` actually drives
+     * `golem:agent/host.WasmRpc(agent-config: list<typed-agent-config-value>)`
+     * and that the override wins over the `golem.yaml` default.
+     */
+    greetWithOverride: method({ params: { override: Schema.String }, success: Schema.String }),
   },
   impl: ({ counterName }) =>
     Effect.succeed({
@@ -31,5 +39,13 @@ export const Caller = defineAgent({
           const counter = yield* Counter.client.get({ name: counterName })
           return yield* counter.value({})
         }).pipe(Effect.catch(() => Effect.succeed(-1))),
+      greetWithOverride: ({ override }) =>
+        Effect.gen(function* () {
+          const counter = yield* Counter.client.get(
+            { name: counterName },
+            { overrides: { greeting: override } },
+          )
+          return yield* counter.currentGreeting({})
+        }).pipe(Effect.catch((e) => Effect.succeed(`error: ${String(e)}`))),
     }),
 })

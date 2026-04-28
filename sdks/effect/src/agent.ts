@@ -123,10 +123,16 @@ export type CfgTagOf<F> = [F] extends [never]
  * constructor input. When `S` is a {@link SnapshotDef}, `impl` takes a
  * second argument: the per-instance {@link SnapshotBinding} that
  * lets it `init` (auto) or `register` (custom) the snapshot source.
+ *
+ * The optional `CfgTag` parameter widens the `R` channel of the
+ * binding's user-supplied custom save/load effects to `Principal |
+ * CfgTag`. Defaults to `never`, so agents without a `config:` field
+ * keep the original `R = Principal` exactly. The dispatcher always
+ * provides the matching services at runtime.
  */
-export type ImplArgs<C extends MethodParams, S> = [S] extends [never]
+export type ImplArgs<C extends MethodParams, S, CfgTag = never> = [S] extends [never]
   ? readonly [input: MethodInput<C>]
-  : readonly [input: MethodInput<C>, snapshot: SnapshotBinding<S>]
+  : readonly [input: MethodInput<C>, snapshot: SnapshotBinding<S, Principal | CfgTag>]
 
 /**
  * A user-defined agent: a named bundle of method *specs* (no bodies) plus
@@ -190,7 +196,7 @@ export interface AgentDefinition<
    * a second `SnapshotBinding<S>` argument.
    */
   readonly impl: (
-    ...args: ImplArgs<C, S>
+    ...args: ImplArgs<C, S, CfgTagOf<F>>
   ) => Effect.Effect<Handlers<Methods, CfgTagOf<F>>, unknown, Scope.Scope | Principal | CfgTagOf<F>>
 }
 
@@ -801,15 +807,21 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
     }
     return encodeMultipartJsonEnvelope(agent.principal, encoded, dbParts)
   }
-  const bytes = await Effect.runPromise(
-    provideObservability(
-      snap.handlers.save.pipe(Effect.provideService(Principal, agent.principal)) as Effect.Effect<
-        Uint8Array,
-        unknown,
-        never
-      >,
-    ),
-  )
+  let saveProgram: Effect.Effect<Uint8Array, unknown, never> = snap.handlers.save.pipe(
+    Effect.provideService(Principal, agent.principal),
+  ) as Effect.Effect<Uint8Array, unknown, never>
+  // Mirror `dispatchInvoke`: when the agent declares a config service,
+  // make it available to the user's custom save handler too. Auto
+  // snapshots don't run user code here, so they don't need this branch.
+  if (compiled.compiledConfig !== null && compiled.definition.config !== undefined) {
+    const shape = await Effect.runPromise(
+      compiled.compiledConfig.buildShape() as Effect.Effect<unknown, never>,
+    )
+    saveProgram = saveProgram.pipe(
+      Effect.provideService(compiled.definition.config as never, shape as never),
+    ) as Effect.Effect<Uint8Array, unknown, never>
+  }
+  const bytes = await Effect.runPromise(provideObservability(saveProgram))
   return encodeBinaryEnvelope(agent.principal, bytes)
 }
 
@@ -953,17 +965,21 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
           `agent '${agentTypeName}' expects a binary envelope but received ${snapshot.mimeType}`,
         )
       }
-      await Effect.runPromise(
-        provideObservability(
-          bound.handlers
-            .load(decoded.userPayload)
-            .pipe(Effect.provideService(Principal, principal)) as Effect.Effect<
-            void,
-            unknown,
-            never
-          >,
-        ),
-      )
+      let loadProgram: Effect.Effect<void, unknown, never> = bound.handlers
+        .load(decoded.userPayload)
+        .pipe(Effect.provideService(Principal, principal)) as Effect.Effect<void, unknown, never>
+      // Mirror the save path + `dispatchInvoke`: when the agent declares
+      // a config service, make it available to the user's custom load
+      // handler too.
+      if (compiled.compiledConfig !== null && compiled.definition.config !== undefined) {
+        const shape = await Effect.runPromise(
+          compiled.compiledConfig.buildShape() as Effect.Effect<unknown, never>,
+        )
+        loadProgram = loadProgram.pipe(
+          Effect.provideService(compiled.definition.config as never, shape as never),
+        ) as Effect.Effect<void, unknown, never>
+      }
+      await Effect.runPromise(provideObservability(loadProgram))
     }
   } catch (e) {
     await Effect.runPromise(Scope.close(scope, Exit.void))

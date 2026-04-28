@@ -88,6 +88,88 @@ Auth & CORS: both `Http.mount(...)` and individual endpoints accept `auth?: bool
 
 Errors: validation failures surface as `HttpRouteError` Effect typed failures from `registerAgent` (alongside `UnsupportedSchemaError`); the synchronous `defineAgent` re-throws them at module-import time so misconfigurations fail fast.
 
+## Config (`defineConfig` / `Config.*`)
+
+Effect-typed wrapper around `golem:agent/host@1.5.0.get-config-value(name, expected-type) → wit-value` plus the `WasmRpc` constructor's 4th `agent-config: list<typed-agent-config-value>` argument. Wire-compatible with `golem-ts-sdk` `Config<T>` / `Secret<T>`, `golem-rust` `#[derive(ConfigSchema)]`, Scala's `ConfigLoader.createLazyConfig`, and MoonBit's `#derive.config` — same `AgentConfigDeclaration[]` is emitted into `AgentType.config[]` for `golem deploy` to render.
+
+Authoring uses `defineConfig(name, fields)` (a `Context.Service`-class) on the agent's `config:` field:
+
+```ts
+import { Effect, Redacted, Schema } from "effect"
+import { defineAgent, defineConfig, method } from "effect-golem"
+
+export class CounterConfig extends defineConfig("Counter.Config", {
+  greeting: Schema.String,
+  apiKey: Schema.Redacted(Schema.String), // → secret leaf
+  database: Schema.Struct({
+    // nested struct → multi-segment paths
+    host: Schema.String,
+    port: Schema.Number,
+  }),
+}) {}
+
+defineAgent({
+  name: "Counter",
+  constructorParams: { name: Schema.String },
+  config: CounterConfig,
+  methods: { greet: method({ params: {}, success: Schema.String }) },
+  impl: ({ name }) =>
+    Effect.gen(function* () {
+      const cfg = yield* CounterConfig // yield the Context.Service tag
+      const greeting = yield* cfg.greeting // Effect<string, ConfigError>
+      const apiKey = yield* cfg.apiKey.get // Effect<Redacted<string>, ConfigError>
+      const dbHost = yield* cfg.database.host // recursive struct
+      void apiKey
+      void dbHost
+      return {
+        greet: () => Effect.succeed(`${greeting}, ${name}`),
+      }
+    }),
+})
+```
+
+Field shape rules (compiled by `compileConfig` in `src/config.ts`):
+
+- A bare `Schema.Top` becomes a **local** leaf accessed as `Effect<T, ConfigError>`.
+- `Schema.Redacted(inner)` becomes a **secret** leaf accessed as `{ get: Effect<Redacted<T>, ConfigError> }`. Use `Redacted.value(r)` to extract the underlying string only at the moment you actually need it.
+- `Schema.Struct({...})` recurses into the children, prefixing each field's path with the parent's name. An empty `Schema.Struct({})` materialises as `{}` in the shape (no leaves declared).
+- `Schema.Option(inner)` is the canonical "soft-defaulting" pattern: when the host is given an undeclared key with an `option<T>` `valueType`, it returns `none` instead of trapping. Use this for keys that may be missing in some environments.
+- Anything `toWitCodec` can't represent (e.g. `Schema.Any`) is rejected at registration time with `UnsupportedSchemaError`.
+
+Caching:
+
+- Plain (non-secret) leaves are memoized via `Effect.cached` for the duration of **one host invocation only** (i.e. one call into `dispatchInitialize` or one call into `dispatchInvoke`). Two reads of the same field inside the same handler share a single host call.
+- Secret leaves are **never cached** — every read of `cfg.apiKey.get` issues a fresh `getConfigValue` call. This matches all four official SDKs (TS / Rust / Scala / MoonBit) and lets the Golem host rotate secrets between invocations.
+- Reads inside `impl` (the constructor) and reads inside method handlers each get their own `Effect.cached` cell; nothing crosses the impl ↔ handler boundary.
+
+`AgentType.config` propagation: `registerAgent` calls `def.config.__compile()` exactly once per agent type and copies the resulting `AgentConfigDeclaration[]` into `agentType.config`. `dispatchDiscoverAgentTypes` ships the unchanged metadata to the host. Each declaration carries `{ source: "local" | "secret"; path: string[]; valueType: WitType }`; the WIT ADT has no description / default-value field (the four official SDKs match this).
+
+RPC overrides (typed):
+
+```ts
+yield *
+  Counter.client.get(
+    { name: "alice" },
+    {
+      overrides: {
+        greeting: "rpc-override",
+        database: { host: "db.override" },
+        // apiKey is NOT in the type — Schema.Redacted leaves are stripped
+        // from `NonSecretOverride<F>` by both compile-time and runtime
+        // guards in `encodeOverrides`.
+      },
+    },
+  )
+```
+
+`encodeOverrides` walks the user-supplied object alongside the compiled leaf table, encodes each leaf's value through its `WitCodec`, and emits a `TypedAgentConfigValue[]` array. The result is concatenated to any explicit `opts.agentConfig` and passed to the `WasmRpc` constructor. Unknown override paths and overrides on secret leaves both fail with `ConfigError({_tag: "Unsupported"})`.
+
+Snapshot interaction: **config values are never embedded in the snapshot envelope.** Match all four official SDKs. After a snapshot load, `dispatchLoadSnapshot` re-runs the constructor (`impl`) and per-invocation reads pick up whatever the host currently returns — host-side rotation / overrides are visible immediately. The dispatcher provides the config service to user-managed `Snapshot.custom({ ... })` `save` and `load` handlers too, so they can read the current config when serialising / restoring.
+
+Errors: `ConfigError` carries a tagged `reason` (`HostTrap | DecodeFailure | WireMismatch | Unsupported`) and the failing path. Registration-time validation produces `UnsupportedSchemaError` (e.g. `Schema.Any` as a leaf, malformed `Schema.Redacted`, or — defence-in-depth — duplicate compiled paths). Both are exported from the package barrel.
+
+Test mocks: `test/mocks/golem-agent-host.ts` exposes a settable `getConfigValueImpl` plus `__set/__resetGetConfigValueForTest` hooks; `src/config.ts` mirrors this with module-local `getConfigValueImpl` indirection so unit tests can drive arbitrary `WitValue` returns without touching the real host.
+
 ## Webhooks (`Webhook.*`)
 
 `effect-golem` exposes the host's webhook integration via a small `Webhook` namespace re-exported from the package barrel. Wire-compatible with `golem-ts-sdk.createWebhook()` / `golem-rust.create_webhook()`: both call `golem:api/host.create-promise` followed by `golem:agent/host.create-webhook(promise-id)` and return the host-minted URL verbatim.

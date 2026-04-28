@@ -198,6 +198,26 @@ export const compileConfig = (
       yield* visit(field, [name])
     }
 
+    // Defence-in-depth: under JS object semantics each property name is
+    // unique, so the schema walker cannot produce two leaves with the
+    // identical path — but a future refactor (e.g. flattening across
+    // multiple roots, or accepting a list-shaped fields argument) could
+    // accidentally violate that. Fail loudly at registration time
+    // rather than silently dropping a leaf in the `leavesByPath` map
+    // built below.
+    const seenPaths = new Set<string>()
+    for (const leaf of leaves) {
+      const key = leaf.path.join("/")
+      if (seenPaths.has(key)) {
+        return yield* Effect.fail(
+          new UnsupportedSchemaError(
+            `${contextLabel}: duplicate config path '${leaf.path.join(".")}'`,
+          ),
+        )
+      }
+      seenPaths.add(key)
+    }
+
     const declarations: Array<AgentCommon.AgentConfigDeclaration> = leaves.map((leaf) => ({
       source: leaf.source,
       path: [...leaf.path],
