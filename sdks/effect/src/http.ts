@@ -1,5 +1,6 @@
-import { Effect, Schema, SchemaAST } from "effect"
+import { Effect, Pipeable, Schema, SchemaAST } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
+import { withPipe } from "./pipeable.js"
 
 /**
  * HTTP route metadata for Golem agents.
@@ -200,8 +201,13 @@ declare const endpointVarsBrand: unique symbol
  * `agent.ts` enforces `MountVars extends keyof ConstructorParams` to
  * give a compile-time signal when a `{var}` in the mount path doesn't
  * match a constructor param.
+ *
+ * Instances are {@link Pipeable.Pipeable}: the pipeable-builder
+ * combinators ({@link withAuth}, {@link withCors},
+ * {@link withPhantomAgent}, {@link withWebhookSuffix}) compose
+ * additively with the literal-options form accepted by {@link mount}.
  */
-export interface MountDef<MountVars extends string> {
+export interface MountDef<MountVars extends string> extends Pipeable.Pipeable {
   readonly [mountVarsBrand]?: MountVars
   readonly pathPrefix: ReadonlyArray<PathSegment>
   readonly authRequired: boolean
@@ -217,8 +223,13 @@ export interface MountDef<MountVars extends string> {
  *
  * `EndpointVars` collects all variable names referenced by the path,
  * query string, and header bindings of this single endpoint.
+ *
+ * Instances are {@link Pipeable.Pipeable}: the pipeable-builder
+ * combinators ({@link withAuth}, {@link withCors}, {@link withHeader},
+ * {@link withHeaders}) compose additively with the literal-options
+ * form accepted by {@link endpoint} and the verb shorthands.
  */
-export interface EndpointDef<EndpointVars extends string> {
+export interface EndpointDef<EndpointVars extends string> extends Pipeable.Pipeable {
   readonly [endpointVarsBrand]?: EndpointVars
   readonly verb: HttpVerb
   readonly pathSuffix: ReadonlyArray<PathSegment>
@@ -479,13 +490,13 @@ export const mount: <const Path extends string>(
 ) => {
   const segments = runParse(parseMountPath(path))
   const webhookSuffix = opts?.webhookSuffix ? runParse(parseMountPath(opts.webhookSuffix)) : []
-  return {
+  return withPipe({
     pathPrefix: segments,
     authRequired: opts?.auth ?? false,
     cors: opts?.cors ?? [],
     phantomAgent: opts?.phantomAgent ?? false,
     webhookSuffix,
-  } as MountDef<never>
+  }) as unknown as MountDef<never>
 }) as never
 
 /**
@@ -522,14 +533,14 @@ const buildEndpoint = <H extends Readonly<Record<string, string>>>(
       headerVars.push({ header, varName: String(varName) })
     }
   }
-  return {
+  return withPipe({
     verb,
     pathSuffix: parsed.path,
     queryVars: parsed.query,
     headerVars,
     authRequired: opts?.auth,
     cors: opts?.cors ?? [],
-  }
+  }) as unknown as EndpointDef<string>
 }
 
 /**
@@ -592,6 +603,108 @@ export const custom: <
 ) => EndpointDef<Exclude<PathVarsOf<Path> | QueryVarsOf<Path>, SystemVariableName> | ValuesOf<H>> =
   ((verb: string, path: string, opts?: EndpointOptions<NoHeaderBindings>) =>
     buildEndpoint({ custom: verb }, path, opts)) as never
+
+// ---------------------------------------------------------------------------
+// Pipeable combinators
+//
+// These layer cross-cutting facets onto a previously-built `MountDef` /
+// `EndpointDef` so users can compose them with the canonical Effect
+// `.pipe(...)` style, e.g.:
+//
+//   Http.mount("/c/{name}").pipe(
+//     Http.withAuth(true),
+//     Http.withCors("https://x.com"),
+//     Http.withWebhookSuffix("/inbox"),
+//   )
+//
+//   Http.get("/v").pipe(
+//     Http.withAuth(false),
+//     Http.withHeader("X-Idem", "key"),
+//   )
+//
+// Every combinator returns a fresh, pipeable record — input is never
+// mutated. The literal-options form passed to `mount(..., {...})` and
+// `endpoint(..., {...})` keeps working unchanged.
+// ---------------------------------------------------------------------------
+
+/**
+ * Override the `auth` flag on a mount or endpoint. Replaces any previous
+ * value (mount default `false`; endpoint default `undefined` =
+ * inherit-from-mount). Pipeable; `EndpointVars` / `MountVars` are
+ * preserved unchanged.
+ */
+export const withAuth =
+  (auth: boolean) =>
+  <T extends MountDef<string> | EndpointDef<string>>(t: T): T =>
+    withPipe({ ...t, authRequired: auth }) as unknown as T
+
+/**
+ * Replace the CORS `allowed-origin` pattern list on a mount or
+ * endpoint. Pipeable; `EndpointVars` / `MountVars` are preserved
+ * unchanged.
+ *
+ * Replaces (does not append) the previous list, matching the semantics
+ * of `HttpApiEndpoint.setCors` in `@effect/platform`. Use multiple
+ * `withCors(...)` calls if you want the last one to win, or pass all
+ * patterns to a single call.
+ */
+export const withCors =
+  (...patterns: ReadonlyArray<string>) =>
+  <T extends MountDef<string> | EndpointDef<string>>(t: T): T =>
+    withPipe({ ...t, cors: patterns }) as unknown as T
+
+/**
+ * Append a single header → method-parameter binding to an endpoint.
+ * Header names are case-insensitive at HTTP level; collisions after
+ * lower-casing are rejected at registration time. Widens the
+ * `EndpointVars` phantom to include the bound parameter name.
+ */
+export const withHeader =
+  <const Var extends string>(header: string, varName: Var) =>
+  <V extends string>(ep: EndpointDef<V>): EndpointDef<V | Var> =>
+    withPipe({
+      ...ep,
+      headerVars: [...ep.headerVars, { header, varName }],
+    }) as unknown as EndpointDef<V | Var>
+
+/**
+ * Append multiple header → method-parameter bindings to an endpoint.
+ * Equivalent to chaining a series of {@link withHeader} calls. Widens
+ * the `EndpointVars` phantom to include every bound parameter name.
+ */
+export const withHeaders =
+  <const H extends Readonly<Record<string, string>>>(headers: H) =>
+  <V extends string>(ep: EndpointDef<V>): EndpointDef<V | ValuesOf<H>> => {
+    const headerVars = [...ep.headerVars]
+    for (const [header, varName] of Object.entries(headers)) {
+      headerVars.push({ header, varName: String(varName) })
+    }
+    return withPipe({ ...ep, headerVars }) as unknown as EndpointDef<V | ValuesOf<H>>
+  }
+
+/**
+ * Set the `phantom-agent` flag on a mount (one fresh agent instance per
+ * HTTP request). Pipeable; `MountVars` is preserved unchanged.
+ */
+export const withPhantomAgent =
+  (phantom: boolean = true) =>
+  <V extends string>(m: MountDef<V>): MountDef<V> =>
+    withPipe({ ...m, phantomAgent: phantom }) as unknown as MountDef<V>
+
+/**
+ * Override the webhook-suffix path on a mount. Parsed with the same
+ * rules as the mount path itself — no query string and no catch-all
+ * (`{*rest}`) are allowed. Webhook-suffix path variables are validated
+ * against constructor-parameter names at registration time, so they
+ * are NOT folded into the `MountVars` phantom.
+ */
+export const withWebhookSuffix =
+  (suffix: string) =>
+  <V extends string>(m: MountDef<V>): MountDef<V> =>
+    withPipe({
+      ...m,
+      webhookSuffix: runParse(parseMountPath(suffix)),
+    }) as unknown as MountDef<V>
 
 // ---------------------------------------------------------------------------
 // Compilation: MountDef / EndpointDef → WIT records

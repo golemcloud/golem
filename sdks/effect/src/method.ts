@@ -1,9 +1,10 @@
-import { Effect, Schema } from "effect"
+import { Effect, Pipeable, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import { componentModelElement, ElementValueKindError, type ElementCodec } from "./element.js"
 import type { EndpointDef } from "./http.js"
 import { isMultimodal, type Multimodal, type MultimodalShape } from "./multimodal.js"
+import { withPipe } from "./pipeable.js"
 import { Principal } from "./principal.js"
 import { SelfAgentId } from "./self-agent-id.js"
 import { isElementSpec, type ElementSpec } from "./unstructured.js"
@@ -43,12 +44,18 @@ export type MethodInput<Params extends MethodParams> = {
  * Used inside `defineAgent({ methods })` so that the agent type can be
  * fully discovered (and its `WitCodec`s compiled) without instantiating
  * the agent. The implementation comes from the agent's `impl` block.
+ *
+ * Instances are {@link Pipeable.Pipeable}: the pipeable-builder
+ * combinators ({@link withHttp}, {@link withDescription},
+ * {@link withPromptHint}) compose additively with the literal-options
+ * form accepted by {@link method}.
  */
 export interface MethodSpec<
   in out Params extends MethodParams,
   in out Success extends Schema.Top,
   in out Error extends Schema.Top,
-> {
+>
+  extends Pipeable.Pipeable {
   readonly params: Params
   readonly success: Success
   readonly error: Error
@@ -72,6 +79,16 @@ export interface MethodSpec<
  * ```ts
  * const greet = method({ params: { name: Schema.String }, success: Schema.String })
  * ```
+ *
+ * The returned spec is {@link Pipeable.Pipeable}, so cross-cutting
+ * facets can be layered on with `.pipe(...)`:
+ *
+ * ```ts
+ * method({ params: { by: Schema.Number }, success: Schema.Number }).pipe(
+ *   withHttp(Http.post("/add"), Http.get("/add?by={by}")),
+ *   withDescription("Add `by` to the counter"),
+ * )
+ * ```
  */
 export const method: {
   <const Params extends MethodParams, Success extends Schema.Top, Error extends Schema.Top>(spec: {
@@ -89,7 +106,87 @@ export const method: {
     readonly promptHint?: string
     readonly http?: ReadonlyArray<EndpointDef<keyof Params & string>>
   }): MethodSpec<Params, Success, typeof Schema.Void>
-} = (spec: any): any => ({ error: Schema.Void, ...spec })
+} = (spec: any): any => withPipe({ error: Schema.Void, ...spec })
+
+// ---------------------------------------------------------------------------
+// Pipeable combinators for `MethodSpec`
+//
+// These layer cross-cutting facets onto a previously-built `MethodSpec`
+// so users can compose them with the canonical Effect `.pipe(...)`
+// style, e.g.:
+//
+//   method({ params: { by: Schema.Number }, success: Schema.Number }).pipe(
+//     Method.withHttp(Http.post("/add"), Http.get("/add?by={by}")),
+//     Method.withDescription("Add by to the counter"),
+//     Method.withPromptHint("Increment by `by`"),
+//   )
+//
+// Every combinator returns a fresh, pipeable spec — input is never
+// mutated. The literal-options form passed to `method({...})` keeps
+// working unchanged.
+// ---------------------------------------------------------------------------
+
+// `MethodSpec<Params, ...>` is `in out` invariant in its type
+// parameters, so `MethodSpec<{ by: Schema.Number }, ...>` is NOT
+// assignable to `MethodSpec<MethodParams, ...>` even though the
+// constituent types are subtypes. The combinators below therefore
+// constrain `T extends MethodSpec<any, any, any>` (which TS bypasses
+// for variance) and use a *separate* structural intersection on
+// `params` to enforce binding correctness for `withHttp`.
+
+/**
+ * Append HTTP endpoints to a `MethodSpec`. The endpoints' bindings —
+ * path variables, query variables, and headers — must reference the
+ * spec's existing parameter names; this is enforced by intersecting
+ * the input spec type with `{ params: Record<V, unknown> }`, which
+ * makes TypeScript reject specs whose params record is missing any
+ * binding. Endpoints already declared on the spec are preserved; the
+ * new ones are appended.
+ *
+ * Generic over the full input spec type, so when applied to a
+ * {@link Method} (which carries a `body` and a `name`) those extra
+ * fields are preserved in the returned value.
+ */
+export const withHttp =
+  <V extends string>(...endpoints: ReadonlyArray<EndpointDef<V>>) =>
+  <T extends MethodSpec<any, any, any>>(
+    spec: T & { readonly params: Readonly<Record<V, unknown>> },
+  ): T =>
+    withPipe({
+      ...spec,
+      http: [
+        ...(spec.http ?? []),
+        ...(endpoints as ReadonlyArray<EndpointDef<keyof T["params"] & string>>),
+      ],
+    }) as unknown as T
+
+/**
+ * Set the free-text description on a `MethodSpec`, surfaced as
+ * `agent-method.description` in the WIT metadata. Replaces any
+ * previous value.
+ *
+ * Generic over the full input spec type, so when applied to a
+ * {@link Method} (which carries a `body` and a `name`) those extra
+ * fields are preserved in the returned value.
+ */
+export const withDescription =
+  (description: string) =>
+  <T extends MethodSpec<any, any, any>>(spec: T): T =>
+    withPipe({ ...spec, description }) as unknown as T
+
+/**
+ * Set the prompt-hint on a `MethodSpec`, surfaced as
+ * `agent-method.prompt-hint` in the WIT metadata. Replaces any
+ * previous value.
+ *
+ * Generic over the full input spec type, so when applied to a
+ * {@link Method} (which carries a `body` and a `name`) those extra
+ * fields are preserved in the returned value.
+ */
+export const withPromptHint =
+  (promptHint: string) =>
+  <T extends MethodSpec<any, any, any>>(spec: T): T =>
+    withPipe({ ...spec, promptHint }) as unknown as T
 
 /**
  * A `Method` is a `MethodSpec` paired with a name and a body. Use
@@ -130,7 +227,7 @@ export const defineMethod: {
     readonly success: Success
     readonly body: (input: MethodInput<Params>) => Effect.Effect<Success["Type"], never, R>
   }): Method<Params, Success, typeof Schema.Void, R>
-} = (definition: any): any => ({ error: Schema.Void, ...definition })
+} = (definition: any): any => withPipe({ error: Schema.Void, ...definition })
 
 /**
  * A handler implementing a `MethodSpec`: takes the decoded input record,

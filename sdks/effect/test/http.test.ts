@@ -27,6 +27,12 @@ import {
   restVar,
   trace,
   connect,
+  withAuth,
+  withCors,
+  withHeader,
+  withHeaders,
+  withPhantomAgent,
+  withWebhookSuffix,
 } from "../src/http.js"
 import { multimodal } from "../src/multimodal.js"
 import { UnstructuredText } from "../src/unstructured.js"
@@ -611,5 +617,189 @@ describe("Http defineAgent integration", () => {
       { headerName: "X-Trace", variableName: "traceId" },
     ])
     expect(find.httpEndpoint[0]!.queryVars).toEqual([{ queryParamName: "q", variableName: "q" }])
+  })
+})
+
+describe("Http pipeable combinators — endpoints", () => {
+  it("Http.get(...) is pipeable (has a `.pipe` method)", () => {
+    const ep = get("/x")
+    expect(typeof ep.pipe).toBe("function")
+  })
+
+  it("`.pipe(withAuth(true))` overrides authRequired without mutating the input", () => {
+    const base = get("/x")
+    const withAuthEp = base.pipe(withAuth(true))
+    expect(base.authRequired).toBeUndefined()
+    expect(withAuthEp.authRequired).toBe(true)
+  })
+
+  it("`.pipe(withAuth(false))` matches `endpoint(verb, path, { auth: false })`", () => {
+    const piped = get("/x").pipe(withAuth(false))
+    const literal = get("/x", { auth: false })
+    expect(compileEndpoint(piped)).toEqual(compileEndpoint(literal))
+  })
+
+  it("`.pipe(withCors(...))` replaces (does not append) the cors list", () => {
+    const piped = get("/x", { cors: ["a"] }).pipe(withCors("b", "c"))
+    expect(piped.cors).toEqual(["b", "c"])
+    const literal = get("/x", { cors: ["b", "c"] })
+    expect(compileEndpoint(piped)).toEqual(compileEndpoint(literal))
+  })
+
+  it("`.pipe(withHeader(name, varName))` appends one header binding", () => {
+    const piped = get("/x").pipe(withHeader("X-Trace", "traceId"))
+    expect(piped.headerVars).toEqual([{ header: "X-Trace", varName: "traceId" }])
+  })
+
+  it("`.pipe(withHeader(...))` widens the EndpointVars phantom (compile-time check)", () => {
+    // Build with one path var and pipe in two extra header bindings;
+    // the resulting spec must accept all three names as `keyof Params`
+    // when wired into a method. This exercises the type-level union
+    // widening in `withHeader` / `withHeaders`.
+    method({
+      params: {
+        id: Schema.String,
+        traceId: Schema.String,
+        idempotencyKey: Schema.String,
+      },
+      success: Schema.String,
+      http: [
+        get("/items/{id}").pipe(
+          withHeader("X-Trace", "traceId"),
+          withHeader("X-Idem", "idempotencyKey"),
+        ),
+      ],
+    })
+  })
+
+  it("`.pipe(withHeaders({...}))` appends multiple header bindings", () => {
+    const piped = get("/x").pipe(
+      withHeaders({ "X-Trace": "traceId", "X-Idem": "idempotencyKey" } as const),
+    )
+    expect(piped.headerVars).toEqual([
+      { header: "X-Trace", varName: "traceId" },
+      { header: "X-Idem", varName: "idempotencyKey" },
+    ])
+  })
+
+  it("multiple combinators chain in `.pipe(...)` and produce the same WIT output as the literal form", () => {
+    const piped = post("/items/{id}").pipe(
+      withHeader("X-Trace", "traceId"),
+      withCors("https://x.com"),
+      withAuth(true),
+    )
+    const literal = post("/items/{id}", {
+      headers: { "X-Trace": "traceId" } as const,
+      cors: ["https://x.com"],
+      auth: true,
+    })
+    expect(compileEndpoint(piped)).toEqual(compileEndpoint(literal))
+  })
+
+  it("piped endpoints work end-to-end inside defineAgent.methods[].http", async () => {
+    defineAgent({
+      name: "PipedEndpoints",
+      constructorParams: { tenant: Schema.String },
+      http: mount("/api/{tenant}"),
+      methods: {
+        find: method({
+          params: { id: Schema.String, traceId: Schema.String },
+          success: Schema.String,
+          http: [get("/items/{id}").pipe(withHeader("X-Trace", "traceId"), withAuth(true))],
+        }),
+      },
+      impl: () =>
+        Effect.succeed({
+          find: ({ id, traceId }) => Effect.succeed(`${id}/${traceId}`),
+        }),
+    })
+    const types = await guest.discoverAgentTypes()
+    const a = types.find((t) => t.typeName === "PipedEndpoints")!
+    const find = a.methods[0]!
+    expect(find.httpEndpoint).toHaveLength(1)
+    expect(find.httpEndpoint[0]!.authDetails).toEqual({ required: true })
+    expect(find.httpEndpoint[0]!.headerVars).toEqual([
+      { headerName: "X-Trace", variableName: "traceId" },
+    ])
+  })
+})
+
+describe("Http pipeable combinators — mounts", () => {
+  it("Http.mount(...) is pipeable (has a `.pipe` method)", () => {
+    const m = mount("/api/{tenant}")
+    expect(typeof m.pipe).toBe("function")
+  })
+
+  it("`.pipe(withAuth(true))` overrides authRequired without mutating the input", () => {
+    const base = mount("/api/{tenant}")
+    const withAuthMount = base.pipe(withAuth(true))
+    expect(base.authRequired).toBe(false)
+    expect(withAuthMount.authRequired).toBe(true)
+  })
+
+  it("`.pipe(withCors(...))` replaces the cors list", () => {
+    const piped = mount("/api/{tenant}", { cors: ["a"] }).pipe(withCors("b", "c"))
+    expect(piped.cors).toEqual(["b", "c"])
+  })
+
+  it("`.pipe(withPhantomAgent(true))` flips the phantom-agent flag", () => {
+    const piped = mount("/api/{tenant}").pipe(withPhantomAgent(true))
+    expect(piped.phantomAgent).toBe(true)
+  })
+
+  it("`.pipe(withWebhookSuffix('/x'))` parses the suffix the same as the literal form", () => {
+    const piped = mount("/api/{tenant}").pipe(withWebhookSuffix("/inbox"))
+    const literal = mount("/api/{tenant}", { webhookSuffix: "/inbox" })
+    expect(compileMount(piped)).toEqual(compileMount(literal))
+  })
+
+  it("multi-combinator chain produces the same WIT output as the literal form", () => {
+    const piped = mount("/api/{tenant}").pipe(
+      withAuth(true),
+      withCors("https://x.com"),
+      withPhantomAgent(true),
+      withWebhookSuffix("/inbox"),
+    )
+    const literal = mount("/api/{tenant}", {
+      auth: true,
+      cors: ["https://x.com"],
+      phantomAgent: true,
+      webhookSuffix: "/inbox",
+    })
+    expect(compileMount(piped)).toEqual(compileMount(literal))
+  })
+
+  it("pipeable webhook-suffix path variables are still validated against constructor params", () => {
+    expectRouteError(
+      () =>
+        defineAgent({
+          name: "PipedBadWebhook",
+          constructorParams: { tenant: Schema.String },
+          http: mount("/api/{tenant}").pipe(withWebhookSuffix("/{nope}")),
+          methods: {},
+          impl: () => Effect.succeed({}),
+        }),
+      /webhook-suffix path variable 'nope'/,
+    )
+  })
+
+  it("piped mounts work end-to-end inside defineAgent.http", async () => {
+    defineAgent({
+      name: "PipedMount",
+      constructorParams: { tenant: Schema.String },
+      http: mount("/api/{tenant}").pipe(withAuth(true), withCors("https://x.com")),
+      methods: {
+        find: method({
+          params: {},
+          success: Schema.String,
+          http: [get("/items")],
+        }),
+      },
+      impl: () => Effect.succeed({ find: () => Effect.succeed("ok") }),
+    })
+    const types = await guest.discoverAgentTypes()
+    const a = types.find((t) => t.typeName === "PipedMount")!
+    expect(a.httpMount?.authDetails).toEqual({ required: true })
+    expect(a.httpMount?.corsOptions).toEqual({ allowedPatterns: ["https://x.com"] })
   })
 })
