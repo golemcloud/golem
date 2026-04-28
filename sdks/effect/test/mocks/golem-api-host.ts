@@ -338,17 +338,44 @@ export class GetPromiseResult {
   constructor(id: PromiseId) {
     this.id = id
   }
-  subscribe(): { promise(): Promise<void> } {
+  subscribe(): {
+    promise(): Promise<void>
+    abortablePromise(signal: AbortSignal): Promise<void>
+  } {
+    const promise = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        const entry = _promises.get(promiseKey(this.id))
+        if (entry === undefined || entry.payload !== undefined) {
+          resolve()
+          return
+        }
+        entry.subscribers.push(resolve)
+      })
     return {
-      promise: () =>
-        new Promise<void>((resolve) => {
-          const entry = _promises.get(promiseKey(this.id))
-          if (entry === undefined || entry.payload !== undefined) {
-            resolve()
-            return
+      promise,
+      abortablePromise: (signal: AbortSignal) => {
+        if (signal.aborted) {
+          return Promise.reject(new DOMException("aborted", "AbortError"))
+        }
+        const entry = _promises.get(promiseKey(this.id))
+        if (entry === undefined || entry.payload !== undefined) {
+          return Promise.resolve()
+        }
+        return new Promise<void>((resolve, reject) => {
+          const onAbort = (): void => {
+            const idx = entry.subscribers.indexOf(onReady)
+            if (idx >= 0) entry.subscribers.splice(idx, 1)
+            signal.removeEventListener("abort", onAbort)
+            reject(new DOMException("aborted", "AbortError"))
           }
-          entry.subscribers.push(resolve)
-        }),
+          const onReady = (): void => {
+            signal.removeEventListener("abort", onAbort)
+            resolve()
+          }
+          entry.subscribers.push(onReady)
+          signal.addEventListener("abort", onAbort, { once: true })
+        })
+      },
     }
   }
   get(): Uint8Array | undefined {

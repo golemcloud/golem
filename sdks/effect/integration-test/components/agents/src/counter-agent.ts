@@ -86,6 +86,17 @@ export const Counter = defineAgent({
       success: Schema.String,
       http: [Http.get("/key-tail")],
     }),
+    /**
+     * Sleeps for `seconds` then returns the current value. Driver for
+     * the abort-in-flight integration test: the caller forks a remote
+     * `slowValue` invocation and interrupts it before the sleep
+     * completes; the SDK must propagate the fiber-interrupt to
+     * `future-invoke-result.cancel()` on the host.
+     */
+    slowValue: method({
+      params: { seconds: Schema.Number },
+      success: Schema.Number,
+    }),
   },
   impl: ({ name }, snap) =>
     Effect.gen(function* () {
@@ -132,6 +143,13 @@ export const Counter = defineAgent({
             const r = yield* cfg.apiKey.get
             return Redacted.value(r).slice(-4)
           }),
+        slowValue: ({ seconds }) =>
+          Effect.gen(function* () {
+            yield* Effect.logInfo("slowValue: sleeping").pipe(Effect.annotateLogs({ seconds }))
+            yield* Effect.sleep(`${seconds} seconds`)
+            const s = yield* Ref.get(state)
+            return s.count
+          }).pipe(Effect.withSpan("Counter.slowValue", { attributes: { seconds } })),
       }
     }),
 })

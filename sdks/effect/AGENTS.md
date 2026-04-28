@@ -88,6 +88,32 @@ Auth & CORS: both `Http.mount(...)` and individual endpoints accept `auth?: bool
 
 Errors: validation failures surface as `HttpRouteError` Effect typed failures from `registerAgent` (alongside `UnsupportedSchemaError`); the synchronous `defineAgent` re-throws them at module-import time so misconfigurations fail fast.
 
+## RPC clients — cancellation
+
+Every `defineAgent` call attaches a typed `client` namespace whose generated proxy methods come in three call shapes:
+
+| Shape                                  | Host call                              | Cancel surface                                                                                         |
+| -------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `remote.method(input)` (function call) | `WasmRpc.asyncInvokeAndAwait`          | **Fiber-interrupt** is wired to `future-invoke-result.cancel()`. No explicit handle.                   |
+| `remote.method.trigger(input)`         | `WasmRpc.invoke`                       | Fire-and-forget; nothing to cancel after `invoke` returns.                                             |
+| `remote.method.schedule(at, input)`    | `WasmRpc.scheduleCancelableInvocation` | Returns `ScheduledInvocation.cancel: Effect<void>` backed by the host's `cancellation-token` resource. |
+
+The bare function-call shape is **fully interruptible**:
+
+```ts
+import { Effect, Fiber } from "effect"
+
+const fiber = yield * Effect.forkChild(remote.compute({ size: 10_000_000 }))
+yield * Effect.sleep("100 millis")
+yield * Fiber.interrupt(fiber) // → host receives `future-invoke-result.cancel()`
+```
+
+Composes naturally with `Effect.raceFirst`, `Effect.timeout`, etc. The SDK uses `Effect.acquireUseRelease` so `fut.cancel()` runs on **every** exit path (success, failure, defect, interrupt) — the WIT contract guarantees post-completion cancel is a no-op.
+
+**Best-effort caveat (must be respected by callers):** `future-invoke-result.cancel()` is best-effort by idempotency key — if the remote side has already started executing, the host removes the queued result but the remote work continues. **Treat the side effects of an interrupted remote call as possibly-already-applied.**
+
+The Scala-style "future + cancel" pattern is just the `forkChild` + `Fiber.interrupt` snippet above; no separate `invokeWithCancel` API is needed because fiber-interrupt already propagates to the host.
+
 ## Config (`defineConfig` / `Config.*`)
 
 Effect-typed wrapper around `golem:agent/host@1.5.0.get-config-value(name, expected-type) → wit-value` plus the `WasmRpc` constructor's 4th `agent-config: list<typed-agent-config-value>` argument. Wire-compatible with `golem-ts-sdk` `Config<T>` / `Secret<T>`, `golem-rust` `#[derive(ConfigSchema)]`, Scala's `ConfigLoader.createLazyConfig`, and MoonBit's `#derive.config` — same `AgentConfigDeclaration[]` is emitted into `AgentType.config[]` for `golem deploy` to render.

@@ -63,10 +63,35 @@ export interface ScheduledInvocation {
 /**
  * The remote counterpart of a single agent method.
  *
- * Calling the value as a function performs an awaited invocation. The
- * underlying host call (`asyncInvokeAndAwait` + `Pollable`) is integrated
- * with Effect interruption — interrupting the fiber best-effort cancels
- * the in-flight invocation on the remote side.
+ * Three call shapes per method:
+ *
+ * - **Calling the value as a function** performs an awaited
+ *   invocation. The underlying host call is `WasmRpc.asyncInvokeAndAwait`
+ *   awaited via `pollable.abortablePromise(signal)`. The returned
+ *   `Effect` is **fully interruptible**: interrupting the surrounding
+ *   fiber (`Fiber.interrupt`, `Effect.race`, `Effect.timeout`, etc.)
+ *   triggers `future-invoke-result.cancel()` on the host, releasing
+ *   the calling worker from waiting.
+ *
+ *   Cancellation is **best-effort by idempotency key**. If the remote
+ *   side has not yet started executing, the host removes the
+ *   invocation entry; if it has already started, the remote work
+ *   continues but its result is dropped on the calling side. Treat
+ *   the side effects of the remote call as possibly-already-applied.
+ *
+ * - **`.trigger(input)`** — fire-and-forget. Calls `WasmRpc.invoke` and
+ *   resolves to `void` once the host accepts the request. Nothing to
+ *   cancel on the caller side after that.
+ *
+ * - **`.schedule(scheduledAt, input)`** — schedules the invocation for
+ *   later. Returns a {@link ScheduledInvocation} whose `cancel` Effect
+ *   calls the host's `cancellation-token.cancel()` (a separate WIT
+ *   primitive from the in-flight `future-invoke-result.cancel`).
+ *
+ * The canonical "future + cancel" pattern — Scala-style
+ * `cancelableAwaitWith(...)` — is just `Effect.forkChild(method(input))`
+ * plus `Fiber.interrupt(fiber)`; no separate API is required because
+ * fiber-interrupt already chains to the host cancel.
  */
 export interface RemoteMethod<
   Params extends MethodParams,
@@ -285,50 +310,91 @@ const decodeMethodOutput = (
     )
   })
 
-/** Wrap `WasmRpc.asyncInvokeAndAwait` as an interruptible Effect. */
+/**
+ * Wrap `WasmRpc.asyncInvokeAndAwait` as a fully-interruptible Effect.
+ *
+ * Structure:
+ *
+ * - `acquire` opens the host `future-invoke-result` resource by
+ *   calling `asyncInvokeAndAwait`. Sync host throws are mapped through
+ *   {@link wrapHostThrow}.
+ * - `use` awaits completion via `pollable.abortablePromise(signal)`.
+ *   The signal comes straight from `Effect.callback`'s second
+ *   parameter; Effect 4 ties it to the surrounding fiber's interrupt
+ *   observer. When the fiber is interrupted, the abortable promise
+ *   rejects synchronously and the JS-side `.then(...)` chain is
+ *   dropped — no leak.
+ * - `release` ALWAYS calls `fut.cancel()` on every exit path
+ *   (success, failure, defect, interrupt). Per the WIT contract on
+ *   `future-invoke-result.cancel`:
+ *
+ *   > Best-effort attempt to cancel the remote invocation by
+ *   > idempotency key. If the invocation has already started or
+ *   > completed, this is a no-op.
+ *
+ *   So the post-success / post-failure cancel is harmless on the host
+ *   side. Putting `cancel()` in the uninterruptible `release` clause
+ *   guarantees the host is informed even if the user fiber is
+ *   interrupted in a strange place.
+ */
 const asyncInvoke = (
   rpc: WasmRpc,
   methodName: string,
   input: CoreTypes.DataValue,
 ): Effect.Effect<CoreTypes.DataValue, RemoteCallError> =>
-  Effect.flatMap(
+  Effect.acquireUseRelease(
     Effect.try({
       try: () => rpc.asyncInvokeAndAwait(methodName, input),
       catch: wrapHostThrow,
     }),
     (fut) =>
-      Effect.callback<CoreTypes.DataValue, RemoteCallError>((resume) => {
-        let cancelled = false
-        const pollable = fut.subscribe()
-        pollable
-          .promise()
-          .then(() => {
-            if (cancelled) return
-            const result = fut.get()
-            if (result === undefined) {
-              resume(
-                Effect.fail<RemoteCallError>({
-                  _tag: "RemoteResponseError",
-                  reason: `${methodName}: pollable signalled ready but result is missing`,
-                }),
-              )
-              return
-            }
-            if (result.tag === "ok") resume(Effect.succeed(result.val))
-            else resume(Effect.fail(rpcError(result.val)))
-          })
-          .catch((e: unknown) => {
-            if (cancelled) return
-            resume(Effect.fail(wrapHostThrow(e)))
-          })
-        return Effect.sync(() => {
-          cancelled = true
-          try {
-            fut.cancel()
-          } catch {
-            // best-effort
-          }
-        })
+      Effect.callback<CoreTypes.DataValue, RemoteCallError>((resume, signal) => {
+        // Guard the setup phase against synchronous throws from
+        // `fut.subscribe()` or `pollable.abortablePromise(...)` (a
+        // misbehaving host could throw before the promise chain even
+        // exists). Without this, the throw escapes the register
+        // function and Effect treats it as a defect rather than a
+        // typed `RemoteCallError`.
+        try {
+          const pollable = fut.subscribe()
+          pollable
+            .abortablePromise(signal)
+            .then(() => {
+              if (signal.aborted) return
+              const result = fut.get()
+              if (result === undefined) {
+                resume(
+                  Effect.fail<RemoteCallError>({
+                    _tag: "RemoteResponseError",
+                    reason: `${methodName}: pollable signalled ready but result is missing`,
+                  }),
+                )
+                return
+              }
+              if (result.tag === "ok") resume(Effect.succeed(result.val))
+              else resume(Effect.fail(rpcError(result.val)))
+            })
+            .catch((e: unknown) => {
+              // `abortablePromise` rejects with an `AbortError`-shaped
+              // DOMException when `signal` aborts; that path is the
+              // fiber-interrupt path and must NOT be reported as a
+              // RemoteCallError. Anything else is a host-side throw
+              // and is forwarded to the caller.
+              if (signal.aborted) return
+              resume(Effect.fail(wrapHostThrow(e)))
+            })
+        } catch (e) {
+          if (!signal.aborted) resume(Effect.fail(wrapHostThrow(e)))
+        }
+      }),
+    (fut) =>
+      Effect.sync(() => {
+        try {
+          fut.cancel()
+        } catch {
+          // best-effort: WIT contract says cancel is fire-and-forget,
+          // and any thrown error here is unrecoverable.
+        }
       }),
   )
 

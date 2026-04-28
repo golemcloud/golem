@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest"
-import { Effect, Schema } from "effect"
+import { Cause, Effect, Exit, Fiber, Schema } from "effect"
 import { defineAgent } from "../src/agent.js"
 import { method } from "../src/method.js"
 import { defineConfig } from "../src/config.js"
 import {
   __getCancellations,
+  __getProduceCallCount,
   __getRecordedRpcCalls,
   __reset,
+  __resolveRpcPending,
   __setRpcResponder,
   type RecordedRpcCall,
 } from "./mocks/golem-agent-host.js"
@@ -324,5 +326,212 @@ describe("AgentClient (ephemeral)", () => {
     expect(calls[0]!.agentTypeName).toBe("Worker")
     const decoded = await decodeWv(Schema.Number, calls[0]!.input.val[0].val)
     expect(decoded).toBe(3)
+  })
+})
+
+describe("AgentClient (interruptibility)", () => {
+  beforeEach(() => {
+    __reset()
+    __resetIdempotency()
+  })
+
+  it("fiber-interrupt during in-flight invoke triggers fut.cancel() on the host", async () => {
+    // Park the future without resolving it; the test will interrupt
+    // before any `__resolveRpcPending` is issued.
+    __setRpcResponder(({ methodName }) =>
+      methodName === "getValue" ? { tag: "pending" } : { tag: "throw", error: new Error("?") },
+    )
+
+    const exit = await Effect.runPromise(
+      Effect.gen(function* () {
+        const remote = yield* Counter.client.get({ initial: 0 })
+        const fiber = yield* Effect.forkChild(remote.getValue({}))
+        // Yield once so the fiber starts the invoke and parks on the
+        // pollable's abortable promise.
+        yield* Effect.sleep("1 millis")
+        yield* Fiber.interrupt(fiber)
+        return yield* Fiber.await(fiber)
+      }) as Effect.Effect<Exit.Exit<number, unknown>, never, never>,
+    )
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (!Exit.isFailure(exit)) return
+    expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+
+    const cancellations = __getCancellations()
+    expect(cancellations.length).toBe(1)
+    expect(cancellations[0]).toEqual({ kind: "async", methodName: "getValue" })
+
+    // The producer ran exactly once (the initial `ensureResolved`
+    // call); the post-interrupt no-op `__resolveRpcPending` was never
+    // issued, so no second resumption could leak through.
+    expect(__getProduceCallCount("getValue")).toBe(1)
+  })
+
+  it("Effect.raceFirst interrupting an invoke triggers fut.cancel() (timeout pattern)", async () => {
+    __setRpcResponder(({ methodName }) =>
+      methodName === "getValue" ? { tag: "pending" } : { tag: "throw", error: new Error("?") },
+    )
+
+    const exit = await Effect.runPromise(
+      Effect.exit(
+        Effect.gen(function* () {
+          const remote = yield* Counter.client.get({ initial: 0 })
+          // `raceFirst` returns the first effect to complete with ANY
+          // outcome; the loser (the invoke) is interrupted. That
+          // interrupt path MUST propagate to the host cancel via the
+          // acquireUseRelease `release` clause.
+          return yield* Effect.raceFirst(
+            remote.getValue({}),
+            Effect.sleep("5 millis").pipe(Effect.andThen(Effect.fail("timeout" as const))),
+          )
+        }) as Effect.Effect<number, "timeout" | unknown, never>,
+      ),
+    )
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (!Exit.isFailure(exit)) return
+    // The race produced a typed failure ("timeout") on the winning side.
+    expect(Cause.hasFails(exit.cause)).toBe(true)
+
+    const cancellations = __getCancellations()
+    expect(cancellations.length).toBe(1)
+    expect(cancellations[0]).toEqual({ kind: "async", methodName: "getValue" })
+  })
+
+  it("successful completion still calls fut.cancel() exactly once via release (WIT-contract no-op)", async () => {
+    const numWv = await encodeWv(Schema.Number, 99)
+    __setRpcResponder(({ methodName }) => {
+      if (methodName === "getValue") {
+        return {
+          tag: "ok",
+          val: { tag: "tuple", val: [{ tag: "component-model", val: numWv }] },
+        }
+      }
+      return { tag: "throw", error: new Error("unexpected method") }
+    })
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const remote = yield* Counter.client.get({ initial: 0 })
+        return yield* remote.getValue({})
+      }) as Effect.Effect<number, unknown, never>,
+    )
+    expect(result).toBe(99)
+
+    // The acquireUseRelease `release` clause runs on every exit
+    // including success. The host's WIT contract guarantees this is a
+    // no-op once the invocation has completed; if that ever changes,
+    // this test is the canary.
+    const cancellations = __getCancellations()
+    expect(cancellations.length).toBe(1)
+    expect(cancellations[0]).toEqual({ kind: "async", methodName: "getValue" })
+  })
+
+  it("error completion still calls fut.cancel() from release", async () => {
+    __setRpcResponder(() => ({
+      tag: "throw",
+      error: { tag: "remote-internal-error", val: "boom" },
+    }))
+
+    const result = await Effect.runPromise(
+      Effect.result(
+        Effect.gen(function* () {
+          const remote = yield* Counter.client.get({ initial: 0 })
+          return yield* remote.getValue({})
+        }) as Effect.Effect<number, unknown, never>,
+      ),
+    )
+    expect(result._tag).toBe("Failure")
+
+    const cancellations = __getCancellations()
+    expect(cancellations.length).toBe(1)
+    expect(cancellations[0]).toEqual({ kind: "async", methodName: "getValue" })
+  })
+
+  it("WasmRpc constructor throw short-circuits before any future is created (no release)", async () => {
+    // Constructor failure happens during `Counter.client.get(...)`,
+    // before `acquireUseRelease`'s acquire opens a future. Verifies
+    // the SDK doesn't fabricate a phantom cancel in this path.
+    const { __failConstructorOnce } = await import("./mocks/golem-agent-host.js")
+    __failConstructorOnce(() => ({ tag: "protocol-error", val: "no remote" }))
+
+    const result = await Effect.runPromise(
+      Effect.result(
+        Effect.gen(function* () {
+          const remote = yield* Counter.client.get({ initial: 0 })
+          return yield* remote.getValue({})
+        }) as Effect.Effect<number, unknown, never>,
+      ),
+    )
+    expect(result._tag).toBe("Failure")
+
+    // No future was created, so `release` had nothing to cancel.
+    expect(__getCancellations().length).toBe(0)
+  })
+
+  it("synchronous throw inside the Effect.callback register is converted to RemoteCallError", async () => {
+    // Drive the SDK's register-function-level try/catch by making
+    // `fut.subscribe()` throw on the next call. Without the guard,
+    // this would escape as an Effect defect.
+    const { __failSubscribeOnce } = await import("./mocks/golem-agent-host.js")
+    __failSubscribeOnce(() => ({ tag: "protocol-error", val: "subscribe boom" }))
+
+    const result = await Effect.runPromise(
+      Effect.result(
+        Effect.gen(function* () {
+          const remote = yield* Counter.client.get({ initial: 0 })
+          return yield* remote.getValue({})
+        }) as Effect.Effect<number, unknown, never>,
+      ),
+    )
+    expect(result._tag).toBe("Failure")
+    if (result._tag !== "Failure") return
+    const failure: any = result.failure
+    expect(failure._tag).toBe("RpcCallError")
+    expect(failure.cause).toEqual({ tag: "protocol-error", val: "subscribe boom" })
+
+    // The future WAS created by `acquireUseRelease`'s acquire (the
+    // throw happens inside `use`). So `release` runs `fut.cancel()`
+    // exactly once.
+    expect(__getCancellations().length).toBe(1)
+    expect(__getCancellations()[0]).toEqual({ kind: "async", methodName: "getValue" })
+  })
+
+  it("late __resolveRpcPending after interrupt does NOT leak a second resumption", async () => {
+    __setRpcResponder(({ methodName }) =>
+      methodName === "getValue" ? { tag: "pending" } : { tag: "throw", error: new Error("?") },
+    )
+
+    const exit = await Effect.runPromise(
+      Effect.gen(function* () {
+        const remote = yield* Counter.client.get({ initial: 0 })
+        const fiber = yield* Effect.forkChild(remote.getValue({}))
+        yield* Effect.sleep("1 millis")
+        yield* Fiber.interrupt(fiber)
+        return yield* Fiber.await(fiber)
+      }) as Effect.Effect<Exit.Exit<number, unknown>, never, never>,
+    )
+
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (!Exit.isFailure(exit)) return
+    expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+
+    // After interrupt, `fut.cancel()` already marked the future
+    // cancelled, so a late host resolution is silently dropped by the
+    // mock's `resolve` guard. The producer ran exactly once.
+    expect(__getProduceCallCount("getValue")).toBe(1)
+
+    // Drive the late resolution explicitly. It must not crash, and
+    // the producer count must NOT increment (the future is already
+    // cancelled). The cancellations list also stays at 1.
+    const numWv = await encodeWv(Schema.Number, 7)
+    __resolveRpcPending("getValue", {
+      tag: "ok",
+      val: { tag: "tuple", val: [{ tag: "component-model", val: numWv }] },
+    })
+
+    expect(__getProduceCallCount("getValue")).toBe(1)
+    expect(__getCancellations().length).toBe(1)
   })
 })

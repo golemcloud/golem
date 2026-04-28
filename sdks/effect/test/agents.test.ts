@@ -1,4 +1,4 @@
-import { Effect, Exit, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Stream } from "effect"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import * as Agents from "../src/agents.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
@@ -271,6 +271,23 @@ describe("Agents — Promises", () => {
     ApiHostMock.completePromise(id, new Uint8Array([42]))
     const payload = await runP(Agents.Promises.await(id))
     expect(Array.from(payload)).toEqual([42])
+  })
+
+  it("await is interruptible: fiber-interrupt unparks the abortable promise", async () => {
+    const id = await runP(Agents.Promises.create)
+    // The promise is never completed; the awaiting fiber is interrupted.
+    // Without `pollable.abortablePromise(signal)` this would hang the test.
+    const exit = await runP(
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(Agents.Promises.await(id))
+        yield* Effect.sleep("1 millis")
+        yield* Fiber.interrupt(fiber)
+        return yield* Fiber.await(fiber)
+      }) as Effect.Effect<Exit.Exit<Uint8Array, unknown>, never, never>,
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (!Exit.isFailure(exit)) return
+    expect(Cause.hasInterrupts(exit.cause)).toBe(true)
   })
 
   // Defensive sanity check: keep the unused import alive so a future refactor

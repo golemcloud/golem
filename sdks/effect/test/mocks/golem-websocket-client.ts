@@ -11,11 +11,15 @@
  *   `__deliverInbound` / `__deliverError` / `__signalClosed`.
  *
  * Inbound delivery is wired through a JS `Promise` queue so it
- * mirrors the real host's `subscribe()` -> `pollable.promise()` ->
- * `receive()` round-trip exactly: `subscribe()` returns an object
- * with a `.promise()` that resolves when the next inbound frame is
- * available, and `receive()` then returns the buffered message
- * (or throws the buffered error / `closed` envelope).
+ * mirrors the real host's `subscribe()` ->
+ * `pollable.abortablePromise(signal)` -> `receive()` round-trip
+ * exactly: `subscribe()` returns an object with both a plain
+ * `.promise()` and a signal-honouring `.abortablePromise(signal)`
+ * that resolve when the next inbound frame is available, and
+ * `receive()` then returns the buffered message (or throws the
+ * buffered error / `closed` envelope). Production code uses
+ * `abortablePromise(signal)` so fiber-interrupt promptly drops the
+ * pending JS-side resolution.
  *
  * State is reset via `__resetAll()`.
  */

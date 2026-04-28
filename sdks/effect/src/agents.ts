@@ -594,10 +594,19 @@ export const Promises = {
 
   /**
    * Await a promise's completion, returning the payload.
-   * Bridges the host's `Pollable.subscribe()` -> `.promise()` chain
-   * into Effect via `Effect.callback`. Best-effort interruption: when
-   * the surrounding fiber is interrupted, the JS-side resolution is
-   * dropped (the host pollable cannot be cancelled).
+   *
+   * Bridges the host's `Pollable.subscribe()` →
+   * `.abortablePromise(signal)` chain into Effect via `Effect.callback`.
+   * The returned Effect is **fully interruptible**: interrupting the
+   * surrounding fiber rejects the abortable promise synchronously
+   * via `signal.aborted` and the Effect resolves to interruption.
+   *
+   * Note: unlike `RemoteMethod` invocations, there is **no host-level
+   * cancel** for `golem:api/host` promises — `wasi:io/poll`'s
+   * `Pollable` resource exposes no `.cancel()` and `getPromise(...)`
+   * doesn't either. The interruption is therefore purely JS-side
+   * (the in-flight `.then(...)` chain is dropped), and the underlying
+   * host promise remains pending until some peer calls `complete`.
    */
   await: (id: ApiHost.PromiseId): Effect.Effect<Uint8Array, AgentsHostError> =>
     Effect.gen(function* () {
@@ -611,14 +620,18 @@ export const Promises = {
         catch: (e) => new AgentsHostError(e),
       })
       if (ready !== undefined) return ready
-      return yield* Effect.callback<Uint8Array, AgentsHostError>((resume) => {
-        let cancelled = false
+      return yield* Effect.callback<Uint8Array, AgentsHostError>((resume, signal) => {
+        // Guard the setup phase against synchronous throws from
+        // `handle.subscribe()` / `pollable.abortablePromise(...)`.
+        // Without this, a misbehaving host could escape the register
+        // function as an Effect defect rather than a typed
+        // `AgentsHostError`.
         try {
           const pollable = handle.subscribe()
           pollable
-            .promise()
+            .abortablePromise(signal)
             .then(() => {
-              if (cancelled) return
+              if (signal.aborted) return
               try {
                 const value = handle.get()
                 if (value === undefined) {
@@ -637,14 +650,16 @@ export const Promises = {
               }
             })
             .catch((e: unknown) => {
-              if (!cancelled) resume(Effect.fail(new AgentsHostError(e)))
+              // `abortablePromise` rejects with an `AbortError`-shaped
+              // DOMException when `signal` aborts; that path is the
+              // fiber-interrupt path and must NOT be reported as a
+              // typed `AgentsHostError`.
+              if (signal.aborted) return
+              resume(Effect.fail(new AgentsHostError(e)))
             })
         } catch (e) {
-          resume(Effect.fail(new AgentsHostError(e)))
+          if (!signal.aborted) resume(Effect.fail(new AgentsHostError(e)))
         }
-        return Effect.sync(() => {
-          cancelled = true
-        })
       })
     }),
 
