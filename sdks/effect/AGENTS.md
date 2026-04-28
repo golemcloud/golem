@@ -450,3 +450,57 @@ The shared classification logic lives in `src/rdbms-shared.ts` (`sqlErrorFor`, `
 ### Integration testing
 
 `integration-test/test-infra/compose.yaml` brings up Postgres + MySQL containers with healthchecks. Apache Ignite is intentionally omitted — the host binding may be missing in some Golem environments and the IgniteCounter component is shipped as a separately-deployable artifact under `integration-test/components/ignite-agent/`. After running `npm run infra:up` and `golem -L build && golem -L -Y deploy`, drive each agent through the standard invocation matrix + snapshot drill (see `integration-test/test-infra/run-rdbms-tests.mjs`).
+
+## Quotas / resource reservations (`Quota.*`)
+
+`effect-golem` ships an Effect-idiomatic façade over `golem:quota/types@1.5.0`, mirroring the `quota` surface of the official `golem-ts-sdk` / `golem-rust-sdk`. Authoring uses the `Quota` namespace re-exported from the package barrel:
+
+```ts
+import { Quota } from "effect-golem"
+import { Effect } from "effect"
+
+const useApi = Effect.gen(function* () {
+  const token = yield* Quota.acquireQuotaToken("api-calls", 1n)
+
+  // RAII-style — body returns { used, value }; on success commit `used`,
+  // on failure / interrupt commit 0 via the surrounding scope finalizer:
+  const response = yield* Quota.withReservation(token, 4000n, (_r) =>
+    Effect.gen(function* () {
+      const r = yield* callLlm(prompt, { maxTokens: 4000 })
+      return { used: BigInt(r.tokensUsed), value: r }
+    }),
+  )
+
+  // Manual reserve + commit (must run inside `Effect.scoped` so the
+  // reservation's drop-≡-commit(0) finalizer fires deterministically):
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const reservation = yield* Quota.reserve(token, 100n)
+      const result = yield* doWork()
+      yield* Quota.commit(reservation, BigInt(result.actualUsage))
+    }),
+  )
+
+  // Token combinators — split a child token to pass to an RPC peer,
+  // merge it back when the peer returns:
+  const child = yield* Quota.split(token, 300n)
+  // ...send `child` over RPC (auto-encoded via the QuotaToken schema codec)...
+  yield* Quota.merge(token, child)
+})
+```
+
+API:
+
+- `Quota.acquireQuotaToken(name, expectedUse): Effect<QuotaToken, QuotaHostError>` — manifests-declared resource name + per-reservation hint.
+- `Quota.reserve(token, amount): Effect<Reservation, FailedReservationError | QuotaHostError, Scope>` — scope-bound; drop-without-commit ≡ host `commit(0)` (per the WIT contract). Failure with `FailedReservationError.estimatedWaitNanos` is the typed `reject`-policy outcome; `throttle` / `terminate` policies are handled inside the host before `reserve` returns.
+- `Quota.commit(reservation, used): Effect<void, QuotaHostError>` — explicit commit. Calling twice fails with `QuotaHostError(commit, ...)`; the surrounding scope finalizer becomes a no-op.
+- `Quota.withReservation(token, amount, body): Effect<A, E | FailedReservationError | QuotaHostError, R>` — RAII helper. `body` returns `Effect<{ used: bigint; value: A }, E, R>`; on success the wrapper commits `used`, on failure / defect / interrupt it falls back to `commit(0)`.
+- `Quota.split(token, childExpectedUse): Effect<QuotaToken, QuotaHostError>` — split a child token off `token`. Host TRAPS surface as `QuotaHostError` (the WIT contract is not `Result`-returning here).
+- `Quota.merge(token, other): Effect<void, QuotaHostError>` — merge `other` back. Host TRAPS surface as `QuotaHostError`. After a successful merge, `other` is consumed.
+
+Schema codec for sending tokens across RPC stays unchanged: `QuotaToken` (the schema codec value, also `Quota.QuotaToken`) round-trips through `QuotaToken.toRecord()` / `fromRecord()`. The TypeScript value `QuotaToken` is the codec; the TypeScript type `QuotaToken` is the host-class instance handle returned by `acquireQuotaToken` — these coexist by name in the value/type namespaces.
+
+Errors (exported from the package barrel and from `Quota.*`):
+
+- `FailedReservationError` — typed domain failure for `reject`-policy reservations. `.estimatedWaitNanos` is `bigint | undefined` (only present for rate-limited resources). `toJSON()` is overridden to render the bigint as a string so a `Cause` containing this error is JSON-safe.
+- `QuotaHostError` — anything else thrown from `golem:quota/types@1.5.0` (split overflow, merge resource mismatch, host invariant violations, etc.). `.operation` records the originating host call.

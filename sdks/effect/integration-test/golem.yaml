@@ -113,11 +113,27 @@ agents:
     config: {}
   InventorySaga:
     config: {}
+  QuotaTester:
+    config: {}
 
 # Secret defaults applied automatically to the local environment at
 # deploy time. Production deployments would use
 # `golem agent-secret create apiKey --secret-type String --secret-value ...`
 # instead.
+resourceDefaults:
+  local:
+    # Quota resource consumed by the QuotaTester integration agent.
+    # Capacity = 10 tokens with `reject` enforcement so the
+    # `exhaustAndReject` probe deterministically observes a
+    # `FailedReservationError` when it asks for more than is left.
+    effect-golem-test-quota:
+      limit:
+        type: Capacity
+        value: 10
+      enforcementAction: reject
+      unit: token
+      units: tokens
+
 secretDefaults:
   local:
     apiKey: "sk-effect-golem-test-1234"

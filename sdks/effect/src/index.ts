@@ -7,8 +7,26 @@ export * from "./wit-types.js"
 export * from "./element.js"
 export * from "./unstructured.js"
 export * from "./multimodal.js"
-export * from "./quota.js"
 export * from "./principal.js"
+
+/**
+ * Quota namespace — Effect-typed wrappers around `golem:quota/types@1.5.0`
+ * (`acquireQuotaToken`, `reserve`, `commit`, `withReservation`,
+ * `split`, `merge`) plus the existing Schema codec for sending a
+ * `QuotaToken` across an RPC boundary. See {@link ./quota} for the
+ * full API.
+ */
+export * as Quota from "./quota.js"
+export {
+  Datetime,
+  EnvironmentId,
+  FailedReservationError,
+  QuotaHostError,
+  QuotaToken,
+  QuotaTokenRecord,
+  Uuid,
+} from "./quota.js"
+export type { Reservation } from "./quota.js"
 export * from "./self-agent-id.js"
 export * from "./config.js"
 
