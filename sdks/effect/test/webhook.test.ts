@@ -1,13 +1,9 @@
-import { Effect, Exit, Schema } from "effect"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
+import { Effect, Schema } from "effect"
 import * as Webhook from "../src/webhook.js"
 import * as Http from "../src/http.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 import * as AgentHostMock from "./mocks/golem-agent-host.js"
-
-const runP = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> => Effect.runPromise(eff)
-const runExit = <A, E>(eff: Effect.Effect<A, E, never>): Promise<Exit.Exit<A, E>> =>
-  Effect.runPromiseExit(eff)
 
 describe("Webhook.create", () => {
   beforeEach(() => {
@@ -19,35 +15,39 @@ describe("Webhook.create", () => {
     AgentHostMock.__resetCreateWebhookImpl()
   })
 
-  it("allocates a promise then mints a webhook URL bound to it", async () => {
-    let observedPromiseId: ApiHostMock.PromiseId | undefined
-    AgentHostMock.__setCreateWebhookImpl((id) => {
-      observedPromiseId = id
-      return "https://hooks.example/abc"
-    })
+  it.effect("allocates a promise then mints a webhook URL bound to it", () =>
+    Effect.gen(function* () {
+      let observedPromiseId: ApiHostMock.PromiseId | undefined
+      AgentHostMock.__setCreateWebhookImpl((id) => {
+        observedPromiseId = id
+        return "https://hooks.example/abc"
+      })
 
-    const hook = await runP(Webhook.create)
+      const hook = yield* Webhook.create
 
-    expect(hook.url).toBe("https://hooks.example/abc")
-    expect(observedPromiseId).toBeDefined()
-    expect(hook.promiseId).toEqual(observedPromiseId)
-  })
+      expect(hook.url).toBe("https://hooks.example/abc")
+      expect(observedPromiseId).toBeDefined()
+      expect(hook.promiseId).toEqual(observedPromiseId)
+    }),
+  )
 
-  it("surfaces a thrown create-webhook as WebhookHostError", async () => {
-    AgentHostMock.__setCreateWebhookImpl(() => {
-      throw new Error("agent not deployed via http api")
-    })
-    const exit = await runExit(Webhook.create)
-    expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") {
-      const failure = exit.cause as unknown as { _tag?: string }
-      // The cause should carry our typed error.
-      const json = JSON.stringify(exit.cause)
-      expect(json).toContain("WebhookHostError")
-      expect(json).toContain("agent not deployed via http api")
-      void failure
-    }
-  })
+  it.effect("surfaces a thrown create-webhook as WebhookHostError", () =>
+    Effect.gen(function* () {
+      AgentHostMock.__setCreateWebhookImpl(() => {
+        throw new Error("agent not deployed via http api")
+      })
+      const exit = yield* Effect.exit(Webhook.create)
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const failure = exit.cause as unknown as { _tag?: string }
+        // The cause should carry our typed error.
+        const json = JSON.stringify(exit.cause)
+        expect(json).toContain("WebhookHostError")
+        expect(json).toContain("agent not deployed via http api")
+        void failure
+      }
+    }),
+  )
 })
 
 describe("Webhook handle — await / poll", () => {
@@ -60,64 +60,74 @@ describe("Webhook handle — await / poll", () => {
     AgentHostMock.__resetCreateWebhookImpl()
   })
 
-  it("await resolves to a WebhookPayload once the underlying promise completes", async () => {
-    AgentHostMock.__setCreateWebhookImpl(() => "https://hooks.example/x")
-    const hook = await runP(Webhook.create)
+  it.effect("await resolves to a WebhookPayload once the underlying promise completes", () =>
+    Effect.gen(function* () {
+      AgentHostMock.__setCreateWebhookImpl(() => "https://hooks.example/x")
+      const hook = yield* Webhook.create
 
-    const polled1 = await runP(hook.poll)
-    expect(polled1).toBeUndefined()
+      const polled1 = yield* hook.poll
+      expect(polled1).toBeUndefined()
 
-    setTimeout(() => {
-      ApiHostMock.completePromise(hook.promiseId, new TextEncoder().encode("hello"))
-    }, 5)
+      setTimeout(() => {
+        ApiHostMock.completePromise(hook.promiseId, new TextEncoder().encode("hello"))
+      }, 5)
 
-    const payload = await runP(hook.await)
-    expect(payload).toBeInstanceOf(Webhook.WebhookPayload)
-    expect(payload.text()).toBe("hello")
+      const payload = yield* hook.await
+      expect(payload).toBeInstanceOf(Webhook.WebhookPayload)
+      expect(payload.text()).toBe("hello")
 
-    const polled2 = await runP(hook.poll)
-    expect(polled2).toBeInstanceOf(Webhook.WebhookPayload)
-  })
+      const polled2 = yield* hook.poll
+      expect(polled2).toBeInstanceOf(Webhook.WebhookPayload)
+    }),
+  )
 
-  it("await fast-paths when the promise is already completed", async () => {
-    AgentHostMock.__setCreateWebhookImpl(() => "https://hooks.example/y")
-    const hook = await runP(Webhook.create)
-    ApiHostMock.completePromise(hook.promiseId, new TextEncoder().encode("ready"))
-    const payload = await runP(hook.await)
-    expect(payload.text()).toBe("ready")
-  })
+  it.effect("await fast-paths when the promise is already completed", () =>
+    Effect.gen(function* () {
+      AgentHostMock.__setCreateWebhookImpl(() => "https://hooks.example/y")
+      const hook = yield* Webhook.create
+      ApiHostMock.completePromise(hook.promiseId, new TextEncoder().encode("ready"))
+      const payload = yield* hook.await
+      expect(payload.text()).toBe("ready")
+    }),
+  )
 })
 
 describe("WebhookPayload", () => {
-  it("text() / json() / decode(schema) round-trip", async () => {
-    const body = JSON.stringify({ id: "evt-1", status: "ok" })
-    const payload = new Webhook.WebhookPayload(new TextEncoder().encode(body))
+  it.effect("text() / json() / decode(schema) round-trip", () =>
+    Effect.gen(function* () {
+      const body = JSON.stringify({ id: "evt-1", status: "ok" })
+      const payload = new Webhook.WebhookPayload(new TextEncoder().encode(body))
 
-    expect(payload.text()).toBe(body)
-    expect(payload.json<{ id: string; status: string }>().id).toBe("evt-1")
+      expect(payload.text()).toBe(body)
+      expect(payload.json<{ id: string; status: string }>().id).toBe("evt-1")
 
-    const Event = Schema.Struct({ id: Schema.String, status: Schema.String })
-    const decoded = await runP(payload.decode(Event))
-    expect(decoded.status).toBe("ok")
-  })
+      const Event = Schema.Struct({ id: Schema.String, status: Schema.String })
+      const decoded = yield* payload.decode(Event)
+      expect(decoded.status).toBe("ok")
+    }),
+  )
 
-  it("decode surfaces invalid JSON as WebhookDecodeError", async () => {
-    const payload = new Webhook.WebhookPayload(new TextEncoder().encode("not json"))
-    const Event = Schema.Struct({ id: Schema.String })
-    const exit = await runExit(payload.decode(Event))
-    expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") {
-      const json = JSON.stringify(exit.cause)
-      expect(json).toContain("WebhookDecodeError")
-    }
-  })
+  it.effect("decode surfaces invalid JSON as WebhookDecodeError", () =>
+    Effect.gen(function* () {
+      const payload = new Webhook.WebhookPayload(new TextEncoder().encode("not json"))
+      const Event = Schema.Struct({ id: Schema.String })
+      const exit = yield* Effect.exit(payload.decode(Event))
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const json = JSON.stringify(exit.cause)
+        expect(json).toContain("WebhookDecodeError")
+      }
+    }),
+  )
 
-  it("decode surfaces schema mismatches as Schema.SchemaError", async () => {
-    const payload = new Webhook.WebhookPayload(new TextEncoder().encode(JSON.stringify({})))
-    const Event = Schema.Struct({ id: Schema.String })
-    const exit = await runExit(payload.decode(Event))
-    expect(exit._tag).toBe("Failure")
-  })
+  it.effect("decode surfaces schema mismatches as Schema.SchemaError", () =>
+    Effect.gen(function* () {
+      const payload = new Webhook.WebhookPayload(new TextEncoder().encode(JSON.stringify({})))
+      const Event = Schema.Struct({ id: Schema.String })
+      const exit = yield* Effect.exit(payload.decode(Event))
+      expect(exit._tag).toBe("Failure")
+    }),
+  )
 
   it("json() throws synchronously on invalid JSON", () => {
     const payload = new Webhook.WebhookPayload(new TextEncoder().encode("not json"))
@@ -150,21 +160,23 @@ describe("Http.mount({ webhookSuffix }) — validation", () => {
     )
   })
 
-  it("rejects a webhookSuffix path variable that is not a constructor param", async () => {
-    const m = Http.mount("/agents/{name}", { webhookSuffix: "/{unknown}/events" })
-    const exit = await runExit(
-      Http.validateAgentHttp({
-        agentName: "Test",
-        mount: m,
-        constructorParamNames: ["name"],
-        nonStringBindableConstructorParams: new Set(),
-        methods: [],
-      }),
-    )
-    expect(exit._tag).toBe("Failure")
-    if (exit._tag === "Failure") {
-      const json = JSON.stringify(exit.cause)
-      expect(json).toContain("webhook-suffix path variable 'unknown'")
-    }
-  })
+  it.effect("rejects a webhookSuffix path variable that is not a constructor param", () =>
+    Effect.gen(function* () {
+      const m = Http.mount("/agents/{name}", { webhookSuffix: "/{unknown}/events" })
+      const exit = yield* Effect.exit(
+        Http.validateAgentHttp({
+          agentName: "Test",
+          mount: m,
+          constructorParamNames: ["name"],
+          nonStringBindableConstructorParams: new Set(),
+          methods: [],
+        }),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const json = JSON.stringify(exit.cause)
+        expect(json).toContain("webhook-suffix path variable 'unknown'")
+      }
+    }),
+  )
 })

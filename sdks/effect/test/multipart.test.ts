@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
 import { decodeMultipart, encodeMultipart, extractBoundary } from "../src/multipart.js"
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s)

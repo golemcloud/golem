@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest"
+import { describe, it, expect, beforeEach } from "@effect/vitest"
 import { Cause, Effect, Option, Schema } from "effect"
 import { defineAgent, __resetAgents } from "../src/agent.js"
 import { method } from "../src/method.js"
@@ -37,20 +37,28 @@ import {
 import { multimodal } from "../src/multimodal.js"
 import { UnstructuredText } from "../src/unstructured.js"
 
-// Run an Effect to a sync result; throw on failure.
-const run = <A, E>(eff: Effect.Effect<A, E>) => Effect.runPromise(eff)
-
-const runFail = async <A, E>(eff: Effect.Effect<A, E>): Promise<E> => {
-  const exit = await Effect.runPromiseExit(eff)
-  if (exit._tag !== "Failure") {
-    throw new Error(`expected failure, got success: ${JSON.stringify(exit.value)}`)
-  }
-  const opt = Cause.findErrorOption(exit.cause)
-  if (Option.isNone(opt)) {
-    throw new Error(`failure cause without typed errors: ${JSON.stringify(exit.cause)}`)
-  }
-  return opt.value as E
-}
+/**
+ * Run an Effect that is expected to fail and extract its typed error from
+ * the cause. Misuse (success exit, or a cause without a typed failure)
+ * surfaces as an `Error` in the typed-failure channel so the surrounding
+ * `it.effect(...)` test fails cleanly.
+ */
+const runFail = <A, E>(eff: Effect.Effect<A, E>): Effect.Effect<E, Error> =>
+  Effect.gen(function* () {
+    const exit = yield* Effect.exit(eff)
+    if (exit._tag === "Success") {
+      return yield* Effect.fail(
+        new Error(`expected failure, got success: ${JSON.stringify(exit.value)}`),
+      )
+    }
+    const opt = Cause.findErrorOption(exit.cause)
+    if (Option.isNone(opt)) {
+      return yield* Effect.fail(
+        new Error(`failure cause without typed errors: ${JSON.stringify(exit.cause)}`),
+      )
+    }
+    return opt.value as E
+  })
 
 /**
  * Run `defineAgent` (which calls `Effect.runSync(registerAgent(...))`)
@@ -83,139 +91,183 @@ const expectRouteError = (thunk: () => unknown, pattern: RegExp): void => {
 }
 
 describe("Http parser — parseMountPath", () => {
-  it("accepts a single slash", async () => {
-    expect(await run(parseMountPath("/"))).toEqual([])
-  })
+  it.effect("accepts a single slash", () =>
+    Effect.gen(function* () {
+      expect(yield* parseMountPath("/")).toEqual([])
+    }),
+  )
 
-  it("parses literal segments", async () => {
-    expect(await run(parseMountPath("/api"))).toEqual([{ _tag: "Literal", value: "api" }])
-  })
+  it.effect("parses literal segments", () =>
+    Effect.gen(function* () {
+      expect(yield* parseMountPath("/api")).toEqual([{ _tag: "Literal", value: "api" }])
+    }),
+  )
 
-  it("parses literal + path-variable segments", async () => {
-    expect(await run(parseMountPath("/api/{tenant}"))).toEqual([
-      { _tag: "Literal", value: "api" },
-      { _tag: "PathVar", name: "tenant" },
-    ])
-  })
+  it.effect("parses literal + path-variable segments", () =>
+    Effect.gen(function* () {
+      expect(yield* parseMountPath("/api/{tenant}")).toEqual([
+        { _tag: "Literal", value: "api" },
+        { _tag: "PathVar", name: "tenant" },
+      ])
+    }),
+  )
 
-  it("parses system variables", async () => {
-    expect(await run(parseMountPath("/{agent-type}/x"))).toEqual([
-      { _tag: "SystemVar", name: "agent-type" },
-      { _tag: "Literal", value: "x" },
-    ])
-  })
+  it.effect("parses system variables", () =>
+    Effect.gen(function* () {
+      expect(yield* parseMountPath("/{agent-type}/x")).toEqual([
+        { _tag: "SystemVar", name: "agent-type" },
+        { _tag: "Literal", value: "x" },
+      ])
+    }),
+  )
 
-  it("parses multiple variables in order", async () => {
-    expect(await run(parseMountPath("/a/b/{c}/{agent-version}"))).toEqual([
-      { _tag: "Literal", value: "a" },
-      { _tag: "Literal", value: "b" },
-      { _tag: "PathVar", name: "c" },
-      { _tag: "SystemVar", name: "agent-version" },
-    ])
-  })
+  it.effect("parses multiple variables in order", () =>
+    Effect.gen(function* () {
+      expect(yield* parseMountPath("/a/b/{c}/{agent-version}")).toEqual([
+        { _tag: "Literal", value: "a" },
+        { _tag: "Literal", value: "b" },
+        { _tag: "PathVar", name: "c" },
+        { _tag: "SystemVar", name: "agent-version" },
+      ])
+    }),
+  )
 
-  it("rejects query strings in mount paths", async () => {
-    const err = await runFail(parseMountPath("/x?q={q}"))
-    expect((err as HttpRouteError).reason).toMatch(/may not include a query string/)
-  })
+  it.effect("rejects query strings in mount paths", () =>
+    Effect.gen(function* () {
+      const err = yield* runFail(parseMountPath("/x?q={q}"))
+      expect((err as HttpRouteError).reason).toMatch(/may not include a query string/)
+    }),
+  )
 
-  it("rejects catch-all segments in mount paths", async () => {
-    const err = await runFail(parseMountPath("/x/{*rest}"))
-    expect((err as HttpRouteError).reason).toMatch(/catch-all/)
-  })
+  it.effect("rejects catch-all segments in mount paths", () =>
+    Effect.gen(function* () {
+      const err = yield* runFail(parseMountPath("/x/{*rest}"))
+      expect((err as HttpRouteError).reason).toMatch(/catch-all/)
+    }),
+  )
 
-  it("rejects trailing slashes", async () => {
-    const err = await runFail(parseMountPath("/x/"))
-    expect((err as HttpRouteError).reason).toMatch(/must not end with '\/'/)
-  })
+  it.effect("rejects trailing slashes", () =>
+    Effect.gen(function* () {
+      const err = yield* runFail(parseMountPath("/x/"))
+      expect((err as HttpRouteError).reason).toMatch(/must not end with '\/'/)
+    }),
+  )
 
-  it("rejects paths without a leading slash", async () => {
-    const err = await runFail(parseMountPath("x"))
-    expect((err as HttpRouteError).reason).toMatch(/must start with '\/'/)
-  })
+  it.effect("rejects paths without a leading slash", () =>
+    Effect.gen(function* () {
+      const err = yield* runFail(parseMountPath("x"))
+      expect((err as HttpRouteError).reason).toMatch(/must start with '\/'/)
+    }),
+  )
 
-  it("rejects empty variable names", async () => {
-    const err = await runFail(parseMountPath("/{}"))
-    expect((err as HttpRouteError).reason).toMatch(/empty variable name/)
-  })
+  it.effect("rejects empty variable names", () =>
+    Effect.gen(function* () {
+      const err = yield* runFail(parseMountPath("/{}"))
+      expect((err as HttpRouteError).reason).toMatch(/empty variable name/)
+    }),
+  )
 
-  it("rejects mixed literal+var segments", async () => {
-    // `a-{b}` starts with 'a' and ends with '}' — the parser rejects
-    // it as "unbalanced" (which is the first symptom). Either label
-    // describes the same malformed segment.
-    const err = await runFail(parseMountPath("/a-{b}"))
-    expect((err as HttpRouteError).reason).toMatch(/unbalanced|mixes literal text with/)
-  })
+  it.effect("rejects mixed literal+var segments", () =>
+    Effect.gen(function* () {
+      // `a-{b}` starts with 'a' and ends with '}' — the parser rejects
+      // it as "unbalanced" (which is the first symptom). Either label
+      // describes the same malformed segment.
+      const err = yield* runFail(parseMountPath("/a-{b}"))
+      expect((err as HttpRouteError).reason).toMatch(/unbalanced|mixes literal text with/)
+    }),
+  )
 
-  it("rejects literal-prefixed-var segments after a brace open", async () => {
-    // A segment that *starts* with '{' but contains additional '{' or
-    // '}' chars hits the "mixes literal text with" rule.
-    const err = await runFail(parseMountPath("/{a}b"))
-    expect((err as HttpRouteError).reason).toMatch(/unbalanced|mixes literal text with/)
-  })
+  it.effect("rejects literal-prefixed-var segments after a brace open", () =>
+    Effect.gen(function* () {
+      // A segment that *starts* with '{' but contains additional '{' or
+      // '}' chars hits the "mixes literal text with" rule.
+      const err = yield* runFail(parseMountPath("/{a}b"))
+      expect((err as HttpRouteError).reason).toMatch(/unbalanced|mixes literal text with/)
+    }),
+  )
 
-  it("rejects unbalanced braces", async () => {
-    const err = await runFail(parseMountPath("/a/{b/c"))
-    expect((err as HttpRouteError).reason).toMatch(/unbalanced/)
-  })
+  it.effect("rejects unbalanced braces", () =>
+    Effect.gen(function* () {
+      const err = yield* runFail(parseMountPath("/a/{b/c"))
+      expect((err as HttpRouteError).reason).toMatch(/unbalanced/)
+    }),
+  )
 })
 
 describe("Http parser — parseEndpointPath", () => {
-  it("accepts a single slash", async () => {
-    expect(await run(parseEndpointPath("/"))).toEqual({ path: [], query: [] })
-  })
+  it.effect("accepts a single slash", () =>
+    Effect.gen(function* () {
+      expect(yield* parseEndpointPath("/")).toEqual({ path: [], query: [] })
+    }),
+  )
 
-  it("parses path variables", async () => {
-    const r = await run(parseEndpointPath("/items/{id}"))
-    expect(r.path).toEqual([
-      { _tag: "Literal", value: "items" },
-      { _tag: "PathVar", name: "id" },
-    ])
-    expect(r.query).toEqual([])
-  })
+  it.effect("parses path variables", () =>
+    Effect.gen(function* () {
+      const r = yield* parseEndpointPath("/items/{id}")
+      expect(r.path).toEqual([
+        { _tag: "Literal", value: "items" },
+        { _tag: "PathVar", name: "id" },
+      ])
+      expect(r.query).toEqual([])
+    }),
+  )
 
-  it("parses catch-all (last segment)", async () => {
-    const r = await run(parseEndpointPath("/items/{id}/{*sub}"))
-    expect(r.path).toEqual([
-      { _tag: "Literal", value: "items" },
-      { _tag: "PathVar", name: "id" },
-      { _tag: "RestVar", name: "sub" },
-    ])
-  })
+  it.effect("parses catch-all (last segment)", () =>
+    Effect.gen(function* () {
+      const r = yield* parseEndpointPath("/items/{id}/{*sub}")
+      expect(r.path).toEqual([
+        { _tag: "Literal", value: "items" },
+        { _tag: "PathVar", name: "id" },
+        { _tag: "RestVar", name: "sub" },
+      ])
+    }),
+  )
 
-  it("parses inline query bindings", async () => {
-    const r = await run(parseEndpointPath("/search?q={query}&n={n}"))
-    expect(r.path).toEqual([{ _tag: "Literal", value: "search" }])
-    expect(r.query).toEqual([
-      { queryParam: "q", varName: "query" },
-      { queryParam: "n", varName: "n" },
-    ])
-  })
+  it.effect("parses inline query bindings", () =>
+    Effect.gen(function* () {
+      const r = yield* parseEndpointPath("/search?q={query}&n={n}")
+      expect(r.path).toEqual([{ _tag: "Literal", value: "search" }])
+      expect(r.query).toEqual([
+        { queryParam: "q", varName: "query" },
+        { queryParam: "n", varName: "n" },
+      ])
+    }),
+  )
 
-  it("rejects catch-all in non-last position", async () => {
-    const err = await runFail(parseEndpointPath("/{*rest}/x"))
-    expect((err as HttpRouteError).reason).toMatch(/LAST path segment/)
-  })
+  it.effect("rejects catch-all in non-last position", () =>
+    Effect.gen(function* () {
+      const err = yield* runFail(parseEndpointPath("/{*rest}/x"))
+      expect((err as HttpRouteError).reason).toMatch(/LAST path segment/)
+    }),
+  )
 
-  it("rejects duplicate query keys", async () => {
-    const err = await runFail(parseEndpointPath("/x?a={x}&a={y}"))
-    expect((err as HttpRouteError).reason).toMatch(/duplicate query parameter/)
-  })
+  it.effect("rejects duplicate query keys", () =>
+    Effect.gen(function* () {
+      const err = yield* runFail(parseEndpointPath("/x?a={x}&a={y}"))
+      expect((err as HttpRouteError).reason).toMatch(/duplicate query parameter/)
+    }),
+  )
 
-  it("rejects malformed query (no braces around value)", async () => {
-    const err = await runFail(parseEndpointPath("/x?key=value"))
-    expect((err as HttpRouteError).reason).toMatch(/value must be '\{varName\}'/)
-  })
+  it.effect("rejects malformed query (no braces around value)", () =>
+    Effect.gen(function* () {
+      const err = yield* runFail(parseEndpointPath("/x?key=value"))
+      expect((err as HttpRouteError).reason).toMatch(/value must be '\{varName\}'/)
+    }),
+  )
 
-  it("rejects empty query parameter name", async () => {
-    const err = await runFail(parseEndpointPath("/x?={y}"))
-    expect((err as HttpRouteError).reason).toMatch(/empty query parameter name/)
-  })
+  it.effect("rejects empty query parameter name", () =>
+    Effect.gen(function* () {
+      const err = yield* runFail(parseEndpointPath("/x?={y}"))
+      expect((err as HttpRouteError).reason).toMatch(/empty query parameter name/)
+    }),
+  )
 
-  it("rejects multiple '?' separators", async () => {
-    const err = await runFail(parseEndpointPath("/x?a={b}?c={d}"))
-    expect((err as HttpRouteError).reason).toMatch(/more than one '\?'/)
-  })
+  it.effect("rejects multiple '?' separators", () =>
+    Effect.gen(function* () {
+      const err = yield* runFail(parseEndpointPath("/x?a={b}?c={d}"))
+      expect((err as HttpRouteError).reason).toMatch(/more than one '\?'/)
+    }),
+  )
 })
 
 describe("Http compileMount / compileEndpoint", () => {
@@ -341,75 +393,79 @@ describe("Http defineAgent integration", () => {
     await __resetAgents()
   })
 
-  it("populates httpMount and httpEndpoint on the registered AgentType", async () => {
-    defineAgent({
-      name: "Counter1",
-      description: "test counter",
-      promptHint: "use this counter",
-      constructorParams: { name: Schema.String },
-      http: mount("/counters/{name}", { cors: ["*"], auth: true }),
-      methods: {
-        value: method({
-          params: {},
-          success: Schema.Number,
-          description: "current value",
-          http: [get("/value")],
-        }),
-        add: method({
-          params: { by: Schema.Number },
-          success: Schema.Number,
-          http: [post("/add"), get("/add?by={by}")],
-        }),
-      },
-      impl: () =>
-        Effect.succeed({
-          value: () => Effect.succeed(0),
-          add: ({ by }) => Effect.succeed(by),
-        }),
-    })
+  it.effect("populates httpMount and httpEndpoint on the registered AgentType", () =>
+    Effect.gen(function* () {
+      defineAgent({
+        name: "Counter1",
+        description: "test counter",
+        promptHint: "use this counter",
+        constructorParams: { name: Schema.String },
+        http: mount("/counters/{name}", { cors: ["*"], auth: true }),
+        methods: {
+          value: method({
+            params: {},
+            success: Schema.Number,
+            description: "current value",
+            http: [get("/value")],
+          }),
+          add: method({
+            params: { by: Schema.Number },
+            success: Schema.Number,
+            http: [post("/add"), get("/add?by={by}")],
+          }),
+        },
+        impl: () =>
+          Effect.succeed({
+            value: () => Effect.succeed(0),
+            add: ({ by }) => Effect.succeed(by),
+          }),
+      })
 
-    const types = await guest.discoverAgentTypes()
-    const a = types.find((t) => t.typeName === "Counter1")!
-    expect(a.description).toBe("test counter")
-    expect(a.constructor.promptHint).toBe("use this counter")
-    expect(a.httpMount).toBeDefined()
-    expect(a.httpMount!.pathPrefix).toEqual([
-      { tag: "literal", val: "counters" },
-      { tag: "path-variable", val: { variableName: "name" } },
-    ])
-    expect(a.httpMount!.corsOptions.allowedPatterns).toEqual(["*"])
-    expect(a.httpMount!.authDetails).toEqual({ required: true })
+      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const a = types.find((t) => t.typeName === "Counter1")!
+      expect(a.description).toBe("test counter")
+      expect(a.constructor.promptHint).toBe("use this counter")
+      expect(a.httpMount).toBeDefined()
+      expect(a.httpMount!.pathPrefix).toEqual([
+        { tag: "literal", val: "counters" },
+        { tag: "path-variable", val: { variableName: "name" } },
+      ])
+      expect(a.httpMount!.corsOptions.allowedPatterns).toEqual(["*"])
+      expect(a.httpMount!.authDetails).toEqual({ required: true })
 
-    const valueMethod = a.methods.find((m) => m.name === "value")!
-    expect(valueMethod.description).toBe("current value")
-    expect(valueMethod.httpEndpoint).toHaveLength(1)
-    expect(valueMethod.httpEndpoint[0]!.httpMethod).toEqual({ tag: "get" })
-    expect(valueMethod.httpEndpoint[0]!.pathSuffix).toEqual([{ tag: "literal", val: "value" }])
+      const valueMethod = a.methods.find((m) => m.name === "value")!
+      expect(valueMethod.description).toBe("current value")
+      expect(valueMethod.httpEndpoint).toHaveLength(1)
+      expect(valueMethod.httpEndpoint[0]!.httpMethod).toEqual({ tag: "get" })
+      expect(valueMethod.httpEndpoint[0]!.pathSuffix).toEqual([{ tag: "literal", val: "value" }])
 
-    const addMethod = a.methods.find((m) => m.name === "add")!
-    expect(addMethod.httpEndpoint).toHaveLength(2)
-    expect(addMethod.httpEndpoint.map((e) => e.httpMethod.tag)).toEqual(["post", "get"])
-    expect(addMethod.httpEndpoint[1]!.queryVars).toEqual([
-      { queryParamName: "by", variableName: "by" },
-    ])
-  })
+      const addMethod = a.methods.find((m) => m.name === "add")!
+      expect(addMethod.httpEndpoint).toHaveLength(2)
+      expect(addMethod.httpEndpoint.map((e) => e.httpMethod.tag)).toEqual(["post", "get"])
+      expect(addMethod.httpEndpoint[1]!.queryVars).toEqual([
+        { queryParamName: "by", variableName: "by" },
+      ])
+    }),
+  )
 
-  it("agents without HTTP routes have httpMount: undefined and empty httpEndpoint", async () => {
-    defineAgent({
-      name: "NoHttp",
-      constructorParams: {},
-      methods: {
-        ping: method({ params: {}, success: Schema.Void }),
-      },
-      impl: () => Effect.succeed({ ping: () => Effect.void }),
-    })
-    const types = await guest.discoverAgentTypes()
-    const a = types.find((t) => t.typeName === "NoHttp")!
-    expect(a.httpMount).toBeUndefined()
-    expect(a.methods[0]!.httpEndpoint).toEqual([])
-  })
+  it.effect("agents without HTTP routes have httpMount: undefined and empty httpEndpoint", () =>
+    Effect.gen(function* () {
+      defineAgent({
+        name: "NoHttp",
+        constructorParams: {},
+        methods: {
+          ping: method({ params: {}, success: Schema.Void }),
+        },
+        impl: () => Effect.succeed({ ping: () => Effect.void }),
+      })
+      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const a = types.find((t) => t.typeName === "NoHttp")!
+      expect(a.httpMount).toBeUndefined()
+      expect(a.methods[0]!.httpEndpoint).toEqual([])
+    }),
+  )
 
-  it("rejects an agent that declares method endpoints without a mount", async () => {
+  it("rejects an agent that declares method endpoints without a mount", () => {
     expectRouteError(
       () =>
         defineAgent({
@@ -424,7 +480,7 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects a mount path-var that does not match a constructor param", async () => {
+  it("rejects a mount path-var that does not match a constructor param", () => {
     expectRouteError(
       () =>
         defineAgent({
@@ -438,7 +494,7 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects when a constructor param is not covered by the mount path", async () => {
+  it("rejects when a constructor param is not covered by the mount path", () => {
     expectRouteError(
       () =>
         defineAgent({
@@ -452,7 +508,7 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects an endpoint path-var that does not match a method param", async () => {
+  it("rejects an endpoint path-var that does not match a method param", () => {
     expectRouteError(
       () =>
         defineAgent({
@@ -472,7 +528,7 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects a parameter bound from BOTH path and query", async () => {
+  it("rejects a parameter bound from BOTH path and query", () => {
     expectRouteError(
       () =>
         defineAgent({
@@ -492,7 +548,7 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects duplicate headers (case-insensitive)", async () => {
+  it("rejects duplicate headers (case-insensitive)", () => {
     expectRouteError(
       () =>
         defineAgent({
@@ -512,7 +568,7 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects a GET endpoint with an unbound (body) parameter", async () => {
+  it("rejects a GET endpoint with an unbound (body) parameter", () => {
     expectRouteError(
       () =>
         defineAgent({
@@ -532,7 +588,7 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects a non-string-bindable param bound from a path variable", async () => {
+  it("rejects a non-string-bindable param bound from a path variable", () => {
     expectRouteError(
       () =>
         defineAgent({
@@ -552,7 +608,7 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects an unstructured param bound from a path variable", async () => {
+  it("rejects an unstructured param bound from a path variable", () => {
     expectRouteError(
       () =>
         defineAgent({
@@ -572,7 +628,7 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects a multimodal param bound from a path variable", async () => {
+  it("rejects a multimodal param bound from a path variable", () => {
     expectRouteError(
       () =>
         defineAgent({
@@ -592,32 +648,34 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("accepts string-bindable params bound from path / query / header", async () => {
-    defineAgent({
-      name: "GoodBindings",
-      constructorParams: { tenant: Schema.String },
-      http: mount("/api/{tenant}"),
-      methods: {
-        find: method({
-          params: { id: Schema.String, q: Schema.String, traceId: Schema.String },
-          success: Schema.String,
-          http: [get("/items/{id}?q={q}", { headers: { "X-Trace": "traceId" } as const })],
-        }),
-      },
-      impl: () =>
-        Effect.succeed({
-          find: ({ id, q, traceId }) => Effect.succeed(`${id}/${q}/${traceId}`),
-        }),
-    })
-    const types = await guest.discoverAgentTypes()
-    const a = types.find((t) => t.typeName === "GoodBindings")!
-    const find = a.methods[0]!
-    expect(find.httpEndpoint).toHaveLength(1)
-    expect(find.httpEndpoint[0]!.headerVars).toEqual([
-      { headerName: "X-Trace", variableName: "traceId" },
-    ])
-    expect(find.httpEndpoint[0]!.queryVars).toEqual([{ queryParamName: "q", variableName: "q" }])
-  })
+  it.effect("accepts string-bindable params bound from path / query / header", () =>
+    Effect.gen(function* () {
+      defineAgent({
+        name: "GoodBindings",
+        constructorParams: { tenant: Schema.String },
+        http: mount("/api/{tenant}"),
+        methods: {
+          find: method({
+            params: { id: Schema.String, q: Schema.String, traceId: Schema.String },
+            success: Schema.String,
+            http: [get("/items/{id}?q={q}", { headers: { "X-Trace": "traceId" } as const })],
+          }),
+        },
+        impl: () =>
+          Effect.succeed({
+            find: ({ id, q, traceId }) => Effect.succeed(`${id}/${q}/${traceId}`),
+          }),
+      })
+      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const a = types.find((t) => t.typeName === "GoodBindings")!
+      const find = a.methods[0]!
+      expect(find.httpEndpoint).toHaveLength(1)
+      expect(find.httpEndpoint[0]!.headerVars).toEqual([
+        { headerName: "X-Trace", variableName: "traceId" },
+      ])
+      expect(find.httpEndpoint[0]!.queryVars).toEqual([{ queryParamName: "q", variableName: "q" }])
+    }),
+  )
 })
 
 describe("Http pipeable combinators — endpoints", () => {
@@ -696,32 +754,34 @@ describe("Http pipeable combinators — endpoints", () => {
     expect(compileEndpoint(piped)).toEqual(compileEndpoint(literal))
   })
 
-  it("piped endpoints work end-to-end inside defineAgent.methods[].http", async () => {
-    defineAgent({
-      name: "PipedEndpoints",
-      constructorParams: { tenant: Schema.String },
-      http: mount("/api/{tenant}"),
-      methods: {
-        find: method({
-          params: { id: Schema.String, traceId: Schema.String },
-          success: Schema.String,
-          http: [get("/items/{id}").pipe(withHeader("X-Trace", "traceId"), withAuth(true))],
-        }),
-      },
-      impl: () =>
-        Effect.succeed({
-          find: ({ id, traceId }) => Effect.succeed(`${id}/${traceId}`),
-        }),
-    })
-    const types = await guest.discoverAgentTypes()
-    const a = types.find((t) => t.typeName === "PipedEndpoints")!
-    const find = a.methods[0]!
-    expect(find.httpEndpoint).toHaveLength(1)
-    expect(find.httpEndpoint[0]!.authDetails).toEqual({ required: true })
-    expect(find.httpEndpoint[0]!.headerVars).toEqual([
-      { headerName: "X-Trace", variableName: "traceId" },
-    ])
-  })
+  it.effect("piped endpoints work end-to-end inside defineAgent.methods[].http", () =>
+    Effect.gen(function* () {
+      defineAgent({
+        name: "PipedEndpoints",
+        constructorParams: { tenant: Schema.String },
+        http: mount("/api/{tenant}"),
+        methods: {
+          find: method({
+            params: { id: Schema.String, traceId: Schema.String },
+            success: Schema.String,
+            http: [get("/items/{id}").pipe(withHeader("X-Trace", "traceId"), withAuth(true))],
+          }),
+        },
+        impl: () =>
+          Effect.succeed({
+            find: ({ id, traceId }) => Effect.succeed(`${id}/${traceId}`),
+          }),
+      })
+      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const a = types.find((t) => t.typeName === "PipedEndpoints")!
+      const find = a.methods[0]!
+      expect(find.httpEndpoint).toHaveLength(1)
+      expect(find.httpEndpoint[0]!.authDetails).toEqual({ required: true })
+      expect(find.httpEndpoint[0]!.headerVars).toEqual([
+        { headerName: "X-Trace", variableName: "traceId" },
+      ])
+    }),
+  )
 })
 
 describe("Http pipeable combinators — mounts", () => {
@@ -783,23 +843,25 @@ describe("Http pipeable combinators — mounts", () => {
     )
   })
 
-  it("piped mounts work end-to-end inside defineAgent.http", async () => {
-    defineAgent({
-      name: "PipedMount",
-      constructorParams: { tenant: Schema.String },
-      http: mount("/api/{tenant}").pipe(withAuth(true), withCors("https://x.com")),
-      methods: {
-        find: method({
-          params: {},
-          success: Schema.String,
-          http: [get("/items")],
-        }),
-      },
-      impl: () => Effect.succeed({ find: () => Effect.succeed("ok") }),
-    })
-    const types = await guest.discoverAgentTypes()
-    const a = types.find((t) => t.typeName === "PipedMount")!
-    expect(a.httpMount?.authDetails).toEqual({ required: true })
-    expect(a.httpMount?.corsOptions).toEqual({ allowedPatterns: ["https://x.com"] })
-  })
+  it.effect("piped mounts work end-to-end inside defineAgent.http", () =>
+    Effect.gen(function* () {
+      defineAgent({
+        name: "PipedMount",
+        constructorParams: { tenant: Schema.String },
+        http: mount("/api/{tenant}").pipe(withAuth(true), withCors("https://x.com")),
+        methods: {
+          find: method({
+            params: {},
+            success: Schema.String,
+            http: [get("/items")],
+          }),
+        },
+        impl: () => Effect.succeed({ find: () => Effect.succeed("ok") }),
+      })
+      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const a = types.find((t) => t.typeName === "PipedMount")!
+      expect(a.httpMount?.authDetails).toEqual({ required: true })
+      expect(a.httpMount?.corsOptions).toEqual({ allowedPatterns: ["https://x.com"] })
+    }),
+  )
 })

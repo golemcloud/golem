@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect } from "@effect/vitest"
 import { Effect, HashMap, Option, Result, Schema } from "effect"
 import { toWitCodec } from "../src/wit-codec.js"
 import {
@@ -13,99 +13,109 @@ import {
   Uint64,
 } from "../src/wit-types.js"
 
-const roundtrip = async <S extends Schema.Codec<any, any, never, never>>(
-  s: S,
-  value: S["Type"],
-) => {
-  const wc = await Effect.runPromise(toWitCodec(s))
-  const wv = await Effect.runPromise(
-    Schema.encodeEffect(wc.codec as Schema.Codec<S["Type"], any, never, never>)(value),
-  )
-  const back = await Effect.runPromise(
-    Schema.decodeEffect(wc.codec as Schema.Codec<S["Type"], any, never, never>)(wv),
-  )
-  return { wc, wv, back }
-}
+const roundtrip = <S extends Schema.Codec<any, any, never, never>>(s: S, value: S["Type"]) =>
+  Effect.gen(function* () {
+    const wc = yield* toWitCodec(s)
+    const wv = yield* Schema.encodeEffect(wc.codec as Schema.Codec<S["Type"], any, never, never>)(
+      value,
+    )
+    const back = yield* Schema.decodeEffect(wc.codec as Schema.Codec<S["Type"], any, never, never>)(
+      wv,
+    )
+    return { wc, wv, back }
+  })
 
 describe("toWitCodec — option-shaped types", () => {
-  it("NullOr<string>: option<string> with null/value", async () => {
-    const S = Schema.NullOr(Schema.String)
-    const a = await roundtrip(S, "hi")
-    expect(a.back).toBe("hi")
-    expect(a.wc.witType.nodes[0]?.type.tag).toBe("option-type")
+  it.effect("NullOr<string>: option<string> with null/value", () =>
+    Effect.gen(function* () {
+      const S = Schema.NullOr(Schema.String)
+      const a = yield* roundtrip(S, "hi")
+      expect(a.back).toBe("hi")
+      expect(a.wc.witType.nodes[0]?.type.tag).toBe("option-type")
 
-    const b = await roundtrip(S, null)
-    expect(b.back).toBeNull()
-  })
+      const b = yield* roundtrip(S, null)
+      expect(b.back).toBeNull()
+    }),
+  )
 
-  it("UndefinedOr<number>: option<f64> with undefined/value", async () => {
-    const S = Schema.UndefinedOr(Schema.Number)
-    const a = await roundtrip(S, 42)
-    expect(a.back).toBe(42)
+  it.effect("UndefinedOr<number>: option<f64> with undefined/value", () =>
+    Effect.gen(function* () {
+      const S = Schema.UndefinedOr(Schema.Number)
+      const a = yield* roundtrip(S, 42)
+      expect(a.back).toBe(42)
 
-    const b = await roundtrip(S, undefined)
-    expect(b.back).toBeUndefined()
-  })
+      const b = yield* roundtrip(S, undefined)
+      expect(b.back).toBeUndefined()
+    }),
+  )
 
-  it("Schema.Option<string>: option<string> with Effect Option", async () => {
-    const S = Schema.Option(Schema.String)
-    const a = await roundtrip(S, Option.some("hi"))
-    expect(Option.isSome(a.back)).toBe(true)
-    expect((a.back as Option.Option<string>).pipe(Option.getOrThrow)).toBe("hi")
+  it.effect("Schema.Option<string>: option<string> with Effect Option", () =>
+    Effect.gen(function* () {
+      const S = Schema.Option(Schema.String)
+      const a = yield* roundtrip(S, Option.some("hi"))
+      expect(Option.isSome(a.back)).toBe(true)
+      expect((a.back as Option.Option<string>).pipe(Option.getOrThrow)).toBe("hi")
 
-    const b = await roundtrip(S, Option.none())
-    expect(Option.isNone(b.back)).toBe(true)
-    expect(b.wc.witType.nodes[0]?.type.tag).toBe("option-type")
-  })
+      const b = yield* roundtrip(S, Option.none())
+      expect(Option.isNone(b.back)).toBe(true)
+      expect(b.wc.witType.nodes[0]?.type.tag).toBe("option-type")
+    }),
+  )
 })
 
 describe("toWitCodec — Result", () => {
-  it("Result<number, string> as success and failure", async () => {
-    const S = Schema.Result(Schema.Number, Schema.String)
-    const ok = await roundtrip(S, Result.succeed(7))
-    expect(Result.isSuccess(ok.back)).toBe(true)
-    expect((ok.back as Result.Result<number, string>).pipe(Result.getOrThrow)).toBe(7)
-    expect(ok.wc.witType.nodes[0]?.type.tag).toBe("result-type")
+  it.effect("Result<number, string> as success and failure", () =>
+    Effect.gen(function* () {
+      const S = Schema.Result(Schema.Number, Schema.String)
+      const ok = yield* roundtrip(S, Result.succeed(7))
+      expect(Result.isSuccess(ok.back)).toBe(true)
+      expect((ok.back as Result.Result<number, string>).pipe(Result.getOrThrow)).toBe(7)
+      expect(ok.wc.witType.nodes[0]?.type.tag).toBe("result-type")
 
-    const err = await roundtrip(S, Result.fail("nope"))
-    expect(Result.isFailure(err.back)).toBe(true)
-    expect(err.back as Result.Result<number, string>).toMatchObject({
-      _tag: "Failure",
-      failure: "nope",
-    })
-  })
+      const err = yield* roundtrip(S, Result.fail("nope"))
+      expect(Result.isFailure(err.back)).toBe(true)
+      expect(err.back as Result.Result<number, string>).toMatchObject({
+        _tag: "Failure",
+        failure: "nope",
+      })
+    }),
+  )
 })
 
 describe("toWitCodec — Maps", () => {
-  it("ReadonlyMap<string, number> as list<tuple<string, f64>>", async () => {
-    const S = Schema.ReadonlyMap(Schema.String, Schema.Number)
-    const value = new Map<string, number>([
-      ["a", 1],
-      ["b", 2],
-    ])
-    const r = await roundtrip(S, value)
-    expect(r.back).toBeInstanceOf(Map)
-    expect(Array.from((r.back as Map<string, number>).entries())).toEqual([
-      ["a", 1],
-      ["b", 2],
-    ])
-    // Root is list<tuple<k, v>>
-    expect(r.wc.witType.nodes[0]?.type.tag).toBe("list-type")
-  })
+  it.effect("ReadonlyMap<string, number> as list<tuple<string, f64>>", () =>
+    Effect.gen(function* () {
+      const S = Schema.ReadonlyMap(Schema.String, Schema.Number)
+      const value = new Map<string, number>([
+        ["a", 1],
+        ["b", 2],
+      ])
+      const r = yield* roundtrip(S, value)
+      expect(r.back).toBeInstanceOf(Map)
+      expect(Array.from((r.back as Map<string, number>).entries())).toEqual([
+        ["a", 1],
+        ["b", 2],
+      ])
+      // Root is list<tuple<k, v>>
+      expect(r.wc.witType.nodes[0]?.type.tag).toBe("list-type")
+    }),
+  )
 
-  it("HashMap<string, number> round-trips and stays a HashMap", async () => {
-    const S = Schema.HashMap(Schema.String, Schema.Number)
-    const value: HashMap.HashMap<string, number> = HashMap.fromIterable([
-      ["a", 1] as const,
-      ["b", 2] as const,
-    ])
-    const r = await roundtrip(S, value)
-    expect(HashMap.isHashMap(r.back)).toBe(true)
-    expect(HashMap.size(r.back as HashMap.HashMap<string, number>)).toBe(2)
-    expect(HashMap.get(r.back as HashMap.HashMap<string, number>, "a").pipe(Option.getOrNull)).toBe(
-      1,
-    )
-  })
+  it.effect("HashMap<string, number> round-trips and stays a HashMap", () =>
+    Effect.gen(function* () {
+      const S = Schema.HashMap(Schema.String, Schema.Number)
+      const value: HashMap.HashMap<string, number> = HashMap.fromIterable([
+        ["a", 1] as const,
+        ["b", 2] as const,
+      ])
+      const r = yield* roundtrip(S, value)
+      expect(HashMap.isHashMap(r.back)).toBe(true)
+      expect(HashMap.size(r.back as HashMap.HashMap<string, number>)).toBe(2)
+      expect(
+        HashMap.get(r.back as HashMap.HashMap<string, number>, "a").pipe(Option.getOrNull),
+      ).toBe(1)
+    }),
+  )
 })
 
 describe("toWitCodec — sized integer schemas", () => {
@@ -164,47 +174,57 @@ describe("toWitCodec — sized integer schemas", () => {
   ]
 
   for (const c of cases) {
-    it(`${c.name} maps to ${c.typeTag} and round-trips`, async () => {
-      const wc = await Effect.runPromise(toWitCodec(c.schema as any))
-      expect(wc.witType.nodes[0]?.type.tag).toBe(c.typeTag)
-      const codec = wc.codec as Schema.Codec<any, any, never, never>
-      const wv = await Effect.runPromise(Schema.encodeEffect(codec)(c.value))
-      expect(wv.nodes[0]?.tag).toBe(c.valueTag)
-      const back = await Effect.runPromise(Schema.decodeEffect(codec)(wv))
-      expect(back).toEqual(c.value)
-    })
+    it.effect(`${c.name} maps to ${c.typeTag} and round-trips`, () =>
+      Effect.gen(function* () {
+        const wc = yield* toWitCodec(c.schema as any)
+        expect(wc.witType.nodes[0]?.type.tag).toBe(c.typeTag)
+        const codec = wc.codec as Schema.Codec<any, any, never, never>
+        const wv = yield* Schema.encodeEffect(codec)(c.value)
+        expect(wv.nodes[0]?.tag).toBe(c.valueTag)
+        const back = yield* Schema.decodeEffect(codec)(wv)
+        expect(back).toEqual(c.value)
+      }),
+    )
   }
 
-  it("default Schema.Number stays f64", async () => {
-    const wc = await Effect.runPromise(toWitCodec(Schema.Number))
-    expect(wc.witType.nodes[0]?.type.tag).toBe("prim-f64-type")
-  })
+  it.effect("default Schema.Number stays f64", () =>
+    Effect.gen(function* () {
+      const wc = yield* toWitCodec(Schema.Number)
+      expect(wc.witType.nodes[0]?.type.tag).toBe("prim-f64-type")
+    }),
+  )
 
-  it("default Schema.BigInt stays s64", async () => {
-    const wc = await Effect.runPromise(toWitCodec(Schema.BigInt))
-    expect(wc.witType.nodes[0]?.type.tag).toBe("prim-s64-type")
-  })
+  it.effect("default Schema.BigInt stays s64", () =>
+    Effect.gen(function* () {
+      const wc = yield* toWitCodec(Schema.BigInt)
+      expect(wc.witType.nodes[0]?.type.tag).toBe("prim-s64-type")
+    }),
+  )
 })
 
 describe("toWitCodec — composite uses of new types", () => {
-  it("Result<ReadonlyMap<string, Uint32>, string>", async () => {
-    const S = Schema.Result(Schema.ReadonlyMap(Schema.String, Uint32), Schema.String)
-    const value = Result.succeed(new Map([["x", 7]]))
-    const r = await roundtrip(S, value)
-    expect(Result.isSuccess(r.back)).toBe(true)
-    const m = (r.back as Result.Result<Map<string, number>, string>).pipe(Result.getOrThrow)
-    expect(Array.from(m.entries())).toEqual([["x", 7]])
-  })
+  it.effect("Result<ReadonlyMap<string, Uint32>, string>", () =>
+    Effect.gen(function* () {
+      const S = Schema.Result(Schema.ReadonlyMap(Schema.String, Uint32), Schema.String)
+      const value = Result.succeed(new Map([["x", 7]]))
+      const r = yield* roundtrip(S, value)
+      expect(Result.isSuccess(r.back)).toBe(true)
+      const m = (r.back as Result.Result<Map<string, number>, string>).pipe(Result.getOrThrow)
+      expect(Array.from(m.entries())).toEqual([["x", 7]])
+    }),
+  )
 
-  it("Struct with NullOr and Schema.Option fields", async () => {
-    const S = Schema.Struct({
-      name: Schema.String,
-      nick: Schema.NullOr(Schema.String),
-      age: Schema.Option(Uint8),
-    })
-    const v = { name: "Ada", nick: null, age: Option.some(36) }
-    const r = await roundtrip(S, v)
-    expect(r.back).toMatchObject({ name: "Ada", nick: null })
-    expect(Option.getOrNull((r.back as { age: Option.Option<number> }).age)).toBe(36)
-  })
+  it.effect("Struct with NullOr and Schema.Option fields", () =>
+    Effect.gen(function* () {
+      const S = Schema.Struct({
+        name: Schema.String,
+        nick: Schema.NullOr(Schema.String),
+        age: Schema.Option(Uint8),
+      })
+      const v = { name: "Ada", nick: null, age: Option.some(36) }
+      const r = yield* roundtrip(S, v)
+      expect(r.back).toMatchObject({ name: "Ada", nick: null })
+      expect(Option.getOrNull((r.back as { age: Option.Option<number> }).age)).toBe(36)
+    }),
+  )
 })

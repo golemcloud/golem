@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 import { toWitCodec } from "../src/wit-codec.js"
 import {
@@ -14,13 +14,14 @@ import {
   Uint32ArraySchema,
 } from "../src/wit-types.js"
 
-const roundtrip = async (s: Schema.Top, v: unknown) => {
-  const wc = await Effect.runPromise(toWitCodec(s as any))
-  const codec = wc.codec as Schema.Codec<any, any, never, never>
-  const wv = await Effect.runPromise(Schema.encodeEffect(codec)(v))
-  const back = await Effect.runPromise(Schema.decodeEffect(codec)(wv))
-  return { wc, wv, back }
-}
+const roundtrip = (s: Schema.Top, v: unknown) =>
+  Effect.gen(function* () {
+    const wc = yield* toWitCodec(s as any)
+    const codec = wc.codec as Schema.Codec<any, any, never, never>
+    const wv = yield* Schema.encodeEffect(codec)(v)
+    const back = yield* Schema.decodeEffect(codec)(wv)
+    return { wc, wv, back }
+  })
 
 describe("typed-array schemas → list<primN>", () => {
   const cases: ReadonlyArray<{
@@ -114,29 +115,33 @@ describe("typed-array schemas → list<primN>", () => {
   ]
 
   for (const c of cases) {
-    it(`${c.name} round-trips and emits list<${c.elemType}>`, async () => {
-      const r = await roundtrip(c.schema, c.value)
-      // Top-level WIT type: list<primN>.
-      expect(r.wc.witType.nodes[0]?.type.tag).toBe("list-type")
-      const inner = r.wc.witType.nodes[(r.wc.witType.nodes[0]?.type as any).val]
-      expect(inner?.type.tag).toBe(c.elemType)
-      // Decoded back into the right TypedArray subclass.
-      expect(r.back).toBeInstanceOf(c.ctor)
-      expect(Array.from(r.back as Iterable<unknown>)).toEqual(
-        Array.from(c.value as unknown as Iterable<unknown>),
-      )
-    })
+    it.effect(`${c.name} round-trips and emits list<${c.elemType}>`, () =>
+      Effect.gen(function* () {
+        const r = yield* roundtrip(c.schema, c.value)
+        // Top-level WIT type: list<primN>.
+        expect(r.wc.witType.nodes[0]?.type.tag).toBe("list-type")
+        const inner = r.wc.witType.nodes[(r.wc.witType.nodes[0]?.type as any).val]
+        expect(inner?.type.tag).toBe(c.elemType)
+        // Decoded back into the right TypedArray subclass.
+        expect(r.back).toBeInstanceOf(c.ctor)
+        expect(Array.from(r.back as Iterable<unknown>)).toEqual(
+          Array.from(c.value as unknown as Iterable<unknown>),
+        )
+      }),
+    )
   }
 
-  it("typed array nested inside a struct round-trips", async () => {
-    const S = Schema.Struct({
-      tag: Schema.String,
-      bytes: Uint8ArraySchema,
-    })
-    const v = { tag: "x", bytes: new Uint8Array([7, 8, 9]) }
-    const r = await roundtrip(S, v)
-    expect((r.back as any).tag).toBe("x")
-    expect(r.back).toMatchObject({ tag: "x" })
-    expect(Array.from((r.back as any).bytes as Uint8Array)).toEqual([7, 8, 9])
-  })
+  it.effect("typed array nested inside a struct round-trips", () =>
+    Effect.gen(function* () {
+      const S = Schema.Struct({
+        tag: Schema.String,
+        bytes: Uint8ArraySchema,
+      })
+      const v = { tag: "x", bytes: new Uint8Array([7, 8, 9]) }
+      const r = yield* roundtrip(S, v)
+      expect((r.back as any).tag).toBe("x")
+      expect(r.back).toMatchObject({ tag: "x" })
+      expect(Array.from((r.back as any).bytes as Uint8Array)).toEqual([7, 8, 9])
+    }),
+  )
 })

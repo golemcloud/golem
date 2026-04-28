@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Duration, Effect, Ref, Schema } from "effect"
 import {
   __resetAgents,
@@ -219,115 +219,126 @@ describe("snapshotting", () => {
   // Metadata
   // -------------------------------------------------------------------------
 
-  it("reflects auto snapshot policy in AgentType metadata", async () => {
-    const types = await guest.discoverAgentTypes()
-    const t = types.find((t) => t.typeName === "AutoSnapshotCounter")!
-    expect(t.snapshotting).toEqual({
-      tag: "enabled",
-      val: { tag: "every-n-invocation", val: 5 },
-    })
-  })
+  it.effect("reflects auto snapshot policy in AgentType metadata", () =>
+    Effect.gen(function* () {
+      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const t = types.find((t) => t.typeName === "AutoSnapshotCounter")!
+      expect(t.snapshotting).toEqual({
+        tag: "enabled",
+        val: { tag: "every-n-invocation", val: 5 },
+      })
+    }),
+  )
 
-  it("reflects custom snapshot policy in AgentType metadata", async () => {
-    const types = await guest.discoverAgentTypes()
-    const t = types.find((t) => t.typeName === "CustomSnapshotAgent")!
-    expect(t.snapshotting.tag).toBe("enabled")
-    if (t.snapshotting.tag !== "enabled") throw new Error()
-    expect(t.snapshotting.val.tag).toBe("periodic")
-    if (t.snapshotting.val.tag !== "periodic") throw new Error()
-    // 30 s in nanoseconds
-    expect(t.snapshotting.val.val).toBe(30_000_000_000n)
-  })
+  it.effect("reflects custom snapshot policy in AgentType metadata", () =>
+    Effect.gen(function* () {
+      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const t = types.find((t) => t.typeName === "CustomSnapshotAgent")!
+      expect(t.snapshotting.tag).toBe("enabled")
+      if (t.snapshotting.tag !== "enabled") throw new Error()
+      expect(t.snapshotting.val.tag).toBe("periodic")
+      if (t.snapshotting.val.tag !== "periodic") throw new Error()
+      // 30 s in nanoseconds
+      expect(t.snapshotting.val.val).toBe(30_000_000_000n)
+    }),
+  )
 
-  it("agents without `snapshot` keep snapshotting=disabled (regression)", async () => {
-    const NoSnapAgent = defineAgent({
-      name: "NoSnapAgent",
-      constructorParams: {},
-      methods: { ping: method({ params: {}, success: Schema.Void }) },
-      impl: () => Effect.succeed({ ping: () => Effect.void }),
-    })
-    void NoSnapAgent
-    const types = await guest.discoverAgentTypes()
-    const t = types.find((t) => t.typeName === "NoSnapAgent")!
-    expect(t.snapshotting).toEqual({ tag: "disabled" })
-  })
+  it.effect("agents without `snapshot` keep snapshotting=disabled (regression)", () =>
+    Effect.gen(function* () {
+      const NoSnapAgent = defineAgent({
+        name: "NoSnapAgent",
+        constructorParams: {},
+        methods: { ping: method({ params: {}, success: Schema.Void }) },
+        impl: () => Effect.succeed({ ping: () => Effect.void }),
+      })
+      void NoSnapAgent
+      const types = yield* Effect.promise(() => guest.discoverAgentTypes())
+      const t = types.find((t) => t.typeName === "NoSnapAgent")!
+      expect(t.snapshotting).toEqual({ tag: "disabled" })
+    }),
+  )
 
   // -------------------------------------------------------------------------
   // Auto round-trip
   // -------------------------------------------------------------------------
 
-  it("auto: save → load round-trips state and uses JSON envelope", async () => {
-    const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
-    const numberCodec = await Effect.runPromise(toWitCodec(Schema.Number))
-    const aliceWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("alice"))
-    const sevenWv = await Effect.runPromise(Schema.encodeEffect(numberCodec.codec)(7))
+  it.effect("auto: save → load round-trips state and uses JSON envelope", () =>
+    Effect.gen(function* () {
+      const stringCodec = yield* toWitCodec(Schema.String)
+      const numberCodec = yield* toWitCodec(Schema.Number)
+      const aliceWv = yield* Schema.encodeEffect(stringCodec.codec)("alice")
+      const sevenWv = yield* Schema.encodeEffect(numberCodec.codec)(7)
 
-    await guest.initialize(
-      "AutoSnapshotCounter",
-      { tag: "tuple", val: [{ tag: "component-model", val: aliceWv }] },
-      oidcBob,
-    )
-    await guest.invoke(
-      "add",
-      { tag: "tuple", val: [{ tag: "component-model", val: sevenWv }] },
-      oidcBob,
-    )
-    await guest.invoke(
-      "add",
-      { tag: "tuple", val: [{ tag: "component-model", val: sevenWv }] },
-      oidcBob,
-    )
+      yield* Effect.promise(() =>
+        guest.initialize(
+          "AutoSnapshotCounter",
+          { tag: "tuple", val: [{ tag: "component-model", val: aliceWv }] },
+          oidcBob,
+        ),
+      )
+      yield* Effect.promise(() =>
+        guest.invoke(
+          "add",
+          { tag: "tuple", val: [{ tag: "component-model", val: sevenWv }] },
+          oidcBob,
+        ),
+      )
+      yield* Effect.promise(() =>
+        guest.invoke(
+          "add",
+          { tag: "tuple", val: [{ tag: "component-model", val: sevenWv }] },
+          oidcBob,
+        ),
+      )
 
-    const snapshot = await dispatchSaveSnapshot()
-    expect(snapshot.mimeType).toBe("application/json")
-    const obj = JSON.parse(new TextDecoder().decode(snapshot.payload))
-    expect(obj.version).toBe(1)
-    // Principal in the envelope is the SDK's serialized shape: UUIDs as
-    // strings, OIDC optional fields filled with `null` (matches the
-    // official `golem-ts-sdk` envelope bit-for-bit).
-    expect(obj.principal).toEqual({
-      tag: "oidc",
-      val: {
-        sub: "bob",
-        issuer: "https://example.test",
-        email: null,
-        name: null,
-        emailVerified: null,
-        givenName: null,
-        familyName: null,
-        picture: null,
-        preferredUsername: null,
-        claims: "{}",
-      },
-    })
-    expect(obj.state).toEqual({ count: 14, owner: "alice" })
+      const snapshot = yield* Effect.promise(() => dispatchSaveSnapshot())
+      expect(snapshot.mimeType).toBe("application/json")
+      const obj = JSON.parse(new TextDecoder().decode(snapshot.payload))
+      expect(obj.version).toBe(1)
+      expect(obj.principal).toEqual({
+        tag: "oidc",
+        val: {
+          sub: "bob",
+          issuer: "https://example.test",
+          email: null,
+          name: null,
+          emailVerified: null,
+          givenName: null,
+          familyName: null,
+          picture: null,
+          preferredUsername: null,
+          claims: "{}",
+        },
+      })
+      expect(obj.state).toEqual({ count: 14, owner: "alice" })
 
-    // Reset (simulating new container) and load.
-    await __resetAgents()
+      // Reset (simulating new container) and load.
+      yield* Effect.promise(() => __resetAgents())
 
-    // Stub host env + parseAgentId so load() can recover ctor params.
-    __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "AutoSnapshotCounter:alice"]])
-    __setParseAgentIdForTest(() => [
-      "AutoSnapshotCounter",
-      { tag: "tuple", val: [{ tag: "component-model", val: aliceWv }] },
-      undefined,
-    ])
+      __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "AutoSnapshotCounter:alice"]])
+      __setParseAgentIdForTest(() => [
+        "AutoSnapshotCounter",
+        { tag: "tuple", val: [{ tag: "component-model", val: aliceWv }] },
+        undefined,
+      ])
 
-    await dispatchLoadSnapshot(snapshot)
+      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot))
 
-    // Subsequent invokes see restored state + restored owner.
-    const out = await guest.invoke("value", { tag: "tuple", val: [] }, oidcBob)
-    if (out.tag !== "tuple" || out.val[0]?.tag !== "component-model") throw new Error()
-    const value = await Effect.runPromise(Schema.decodeEffect(numberCodec.codec)(out.val[0].val))
-    expect(value).toBe(14)
+      const out = yield* Effect.promise(() =>
+        guest.invoke("value", { tag: "tuple", val: [] }, oidcBob),
+      )
+      if (out.tag !== "tuple" || out.val[0]?.tag !== "component-model") throw new Error()
+      const value = yield* Schema.decodeEffect(numberCodec.codec)(out.val[0].val)
+      expect(value).toBe(14)
 
-    const ownerOut = await guest.invoke("owner", { tag: "tuple", val: [] }, oidcBob)
-    if (ownerOut.tag !== "tuple" || ownerOut.val[0]?.tag !== "component-model") throw new Error()
-    const owner = await Effect.runPromise(
-      Schema.decodeEffect(stringCodec.codec)(ownerOut.val[0].val),
-    )
-    expect(owner).toBe("alice")
-  })
+      const ownerOut = yield* Effect.promise(() =>
+        guest.invoke("owner", { tag: "tuple", val: [] }, oidcBob),
+      )
+      if (ownerOut.tag !== "tuple" || ownerOut.val[0]?.tag !== "component-model") throw new Error()
+      const owner = yield* Schema.decodeEffect(stringCodec.codec)(ownerOut.val[0].val)
+      expect(owner).toBe("alice")
+    }),
+  )
 
   it("auto: load rejects an envelope whose mime type is binary", async () => {
     const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
@@ -348,112 +359,114 @@ describe("snapshotting", () => {
   // Custom round-trip
   // -------------------------------------------------------------------------
 
-  it("custom: save → load round-trips via user-supplied bytes", async () => {
-    const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
-    const numberCodec = await Effect.runPromise(toWitCodec(Schema.Number))
-    const carolWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("carol"))
-    const threeWv = await Effect.runPromise(Schema.encodeEffect(numberCodec.codec)(3))
+  it.effect("custom: save → load round-trips via user-supplied bytes", () =>
+    Effect.gen(function* () {
+      const stringCodec = yield* toWitCodec(Schema.String)
+      const numberCodec = yield* toWitCodec(Schema.Number)
+      const carolWv = yield* Schema.encodeEffect(stringCodec.codec)("carol")
+      const threeWv = yield* Schema.encodeEffect(numberCodec.codec)(3)
 
-    await guest.initialize(
-      "CustomSnapshotAgent",
-      { tag: "tuple", val: [{ tag: "component-model", val: carolWv }] },
-      oidcBob,
-    )
-    await guest.invoke(
-      "add",
-      { tag: "tuple", val: [{ tag: "component-model", val: threeWv }] },
-      oidcBob,
-    )
-    await guest.invoke(
-      "add",
-      { tag: "tuple", val: [{ tag: "component-model", val: threeWv }] },
-      oidcBob,
-    )
+      yield* Effect.promise(() =>
+        guest.initialize(
+          "CustomSnapshotAgent",
+          { tag: "tuple", val: [{ tag: "component-model", val: carolWv }] },
+          oidcBob,
+        ),
+      )
+      yield* Effect.promise(() =>
+        guest.invoke(
+          "add",
+          { tag: "tuple", val: [{ tag: "component-model", val: threeWv }] },
+          oidcBob,
+        ),
+      )
+      yield* Effect.promise(() =>
+        guest.invoke(
+          "add",
+          { tag: "tuple", val: [{ tag: "component-model", val: threeWv }] },
+          oidcBob,
+        ),
+      )
 
-    const snapshot = await dispatchSaveSnapshot()
-    expect(snapshot.mimeType).toBe("application/octet-stream")
-    expect(customStore.saveCalls).toBe(1)
+      const snapshot = yield* Effect.promise(() => dispatchSaveSnapshot())
+      expect(snapshot.mimeType).toBe("application/octet-stream")
+      expect(customStore.saveCalls).toBe(1)
 
-    await __resetAgents()
-    __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "CustomSnapshotAgent:carol"]])
-    __setParseAgentIdForTest(() => [
-      "CustomSnapshotAgent",
-      { tag: "tuple", val: [{ tag: "component-model", val: carolWv }] },
-      undefined,
-    ])
+      yield* Effect.promise(() => __resetAgents())
+      __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "CustomSnapshotAgent:carol"]])
+      __setParseAgentIdForTest(() => [
+        "CustomSnapshotAgent",
+        { tag: "tuple", val: [{ tag: "component-model", val: carolWv }] },
+        undefined,
+      ])
 
-    await dispatchLoadSnapshot(snapshot)
-    expect(customStore.loadCalls).toBe(1)
+      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot))
+      expect(customStore.loadCalls).toBe(1)
 
-    const out = await guest.invoke("value", { tag: "tuple", val: [] }, oidcBob)
-    if (out.tag !== "tuple" || out.val[0]?.tag !== "component-model") throw new Error()
-    const value = await Effect.runPromise(Schema.decodeEffect(numberCodec.codec)(out.val[0].val))
-    expect(value).toBe(6)
-  })
+      const out = yield* Effect.promise(() =>
+        guest.invoke("value", { tag: "tuple", val: [] }, oidcBob),
+      )
+      if (out.tag !== "tuple" || out.val[0]?.tag !== "component-model") throw new Error()
+      const value = yield* Schema.decodeEffect(numberCodec.codec)(out.val[0].val)
+      expect(value).toBe(6)
+    }),
+  )
 
-  it("custom: save/load handlers can read the agent's config service", async () => {
-    const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
-    const numberCodec = await Effect.runPromise(toWitCodec(Schema.Number))
-    const danWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("dan"))
-    const fourWv = await Effect.runPromise(Schema.encodeEffect(numberCodec.codec)(4))
+  it.effect("custom: save/load handlers can read the agent's config service", () =>
+    Effect.gen(function* () {
+      const stringCodec = yield* toWitCodec(Schema.String)
+      const numberCodec = yield* toWitCodec(Schema.Number)
+      const danWv = yield* Schema.encodeEffect(stringCodec.codec)("dan")
+      const fourWv = yield* Schema.encodeEffect(numberCodec.codec)(4)
 
-    // Mock the host config so reads of `prefix` from inside the
-    // save/load handlers return a deterministic value.
-    const prefixWv = await Effect.runPromise(
-      Schema.encodeEffect(stringCodec.codec)("snapshot-prefix"),
-    )
-    __setGetConfigValueForTest((path) => {
-      if (path.length === 1 && path[0] === "prefix") return prefixWv
-      throw new Error(`unexpected config path: ${path.join(".")}`)
-    })
+      const prefixWv = yield* Schema.encodeEffect(stringCodec.codec)("snapshot-prefix")
+      __setGetConfigValueForTest((path) => {
+        if (path.length === 1 && path[0] === "prefix") return prefixWv
+        throw new Error(`unexpected config path: ${path.join(".")}`)
+      })
 
-    await guest.initialize(
-      "ConfigCustomAgent",
-      { tag: "tuple", val: [{ tag: "component-model", val: danWv }] },
-      oidcBob,
-    )
-    await guest.invoke(
-      "add",
-      { tag: "tuple", val: [{ tag: "component-model", val: fourWv }] },
-      oidcBob,
-    )
+      yield* Effect.promise(() =>
+        guest.initialize(
+          "ConfigCustomAgent",
+          { tag: "tuple", val: [{ tag: "component-model", val: danWv }] },
+          oidcBob,
+        ),
+      )
+      yield* Effect.promise(() =>
+        guest.invoke(
+          "add",
+          { tag: "tuple", val: [{ tag: "component-model", val: fourWv }] },
+          oidcBob,
+        ),
+      )
 
-    const snapshot = await dispatchSaveSnapshot()
-    expect(snapshot.mimeType).toBe("application/octet-stream")
-    expect(configCustomStore.saveCalls).toBe(1)
+      const snapshot = yield* Effect.promise(() => dispatchSaveSnapshot())
+      expect(snapshot.mimeType).toBe("application/octet-stream")
+      expect(configCustomStore.saveCalls).toBe(1)
 
-    // The save handler embedded the config-derived prefix in the bytes;
-    // peel back the binary v2 envelope and confirm the payload starts
-    // with `snapshot-prefix:` (proves config flowed into save).
-    const headerLen = 1 + 4 + new TextEncoder().encode(JSON.stringify({ tag: "oidc" })).length
-    void headerLen // (real assertion below works against the round-trip)
+      yield* Effect.promise(() => __resetAgents())
+      __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "ConfigCustomAgent:dan"]])
+      __setParseAgentIdForTest(() => [
+        "ConfigCustomAgent",
+        { tag: "tuple", val: [{ tag: "component-model", val: danWv }] },
+        undefined,
+      ])
+      __setGetConfigValueForTest((path) => {
+        if (path.length === 1 && path[0] === "prefix") return prefixWv
+        throw new Error(`unexpected config path: ${path.join(".")}`)
+      })
 
-    await __resetAgents()
-    __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "ConfigCustomAgent:dan"]])
-    __setParseAgentIdForTest(() => [
-      "ConfigCustomAgent",
-      { tag: "tuple", val: [{ tag: "component-model", val: danWv }] },
-      undefined,
-    ])
-    // Re-stub for the load + post-load invocation paths (a fresh
-    // dispatcher state means the previous mock was reset by afterEach
-    // hooks would normally fire, but a same-test reset is explicit).
-    __setGetConfigValueForTest((path) => {
-      if (path.length === 1 && path[0] === "prefix") return prefixWv
-      throw new Error(`unexpected config path: ${path.join(".")}`)
-    })
+      yield* Effect.promise(() => dispatchLoadSnapshot(snapshot))
+      expect(configCustomStore.loadCalls).toBe(1)
 
-    await dispatchLoadSnapshot(snapshot)
-    expect(configCustomStore.loadCalls).toBe(1)
-
-    // Round-trip preserved the count and the post-load instance can
-    // still read config (the auto-instantiated ConfigCustomCfg shape
-    // is provided by the per-invocation dispatcher path).
-    const out = await guest.invoke("value", { tag: "tuple", val: [] }, oidcBob)
-    if (out.tag !== "tuple" || out.val[0]?.tag !== "component-model") throw new Error()
-    const value = await Effect.runPromise(Schema.decodeEffect(numberCodec.codec)(out.val[0].val))
-    expect(value).toBe(4)
-  })
+      const out = yield* Effect.promise(() =>
+        guest.invoke("value", { tag: "tuple", val: [] }, oidcBob),
+      )
+      if (out.tag !== "tuple" || out.val[0]?.tag !== "component-model") throw new Error()
+      const value = yield* Schema.decodeEffect(numberCodec.codec)(out.val[0].val)
+      expect(value).toBe(4)
+    }),
+  )
 
   it("custom: load handler that misuses config surfaces the failure as a thrown error", async () => {
     const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
@@ -508,8 +521,6 @@ describe("snapshotting", () => {
   })
 
   it("save fails for an active agent that did not declare a snapshot", async () => {
-    // Greeter from agent.test.ts is already registered at module load.
-    // We use a tiny throwaway here to keep this test self-contained.
     const NoSnap = defineAgent({
       name: "NoSnap",
       constructorParams: {},

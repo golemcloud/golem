@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, expect, it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 import { toWitCodec } from "../src/wit-codec.js"
 
@@ -17,47 +17,57 @@ const Storage = Schema.TaggedUnion({
 const Tags = Schema.Array(Schema.String)
 
 describe("toWitCodec", () => {
-  it("round-trips a record (Person) with an optional field present", async () => {
-    const wc = await Effect.runPromise(toWitCodec(Person))
-    const value = { name: "Ada", age: 36, alive: true }
-    const wv = await Effect.runPromise(Schema.encodeEffect(wc.codec)(value))
-    const back = await Effect.runPromise(Schema.decodeEffect(wc.codec)(wv))
-    expect(back).toEqual(value)
-  })
-
-  it("round-trips a record (Person) with the optional field absent", async () => {
-    const wc = await Effect.runPromise(toWitCodec(Person))
-    const value = { name: "Ada", alive: true }
-    const wv = await Effect.runPromise(Schema.encodeEffect(wc.codec)(value))
-    const back = await Effect.runPromise(Schema.decodeEffect(wc.codec)(wv))
-    expect(back).toEqual(value)
-  })
-
-  it("round-trips a tagged union (Storage), unit and payload cases", async () => {
-    const wc = await Effect.runPromise(toWitCodec(Storage))
-    for (const value of [
-      { _tag: "memory" as const },
-      { _tag: "local" as const, path: "/tmp" },
-      { _tag: "s3" as const, bucket: "b", key: "k" },
-    ]) {
-      const wv = await Effect.runPromise(Schema.encodeEffect(wc.codec)(value))
-      const back = await Effect.runPromise(Schema.decodeEffect(wc.codec)(wv))
+  it.effect("round-trips a record (Person) with an optional field present", () =>
+    Effect.gen(function* () {
+      const wc = yield* toWitCodec(Person)
+      const value = { name: "Ada", age: 36, alive: true }
+      const wv = yield* Schema.encodeEffect(wc.codec)(value)
+      const back = yield* Schema.decodeEffect(wc.codec)(wv)
       expect(back).toEqual(value)
-    }
-  })
+    }),
+  )
 
-  it("round-trips a list", async () => {
-    const wc = await Effect.runPromise(toWitCodec(Tags))
-    const value = ["a", "b", "c"]
-    const wv = await Effect.runPromise(Schema.encodeEffect(wc.codec)(value))
-    const back = await Effect.runPromise(Schema.decodeEffect(wc.codec)(wv))
-    expect(back).toEqual(value)
-  })
+  it.effect("round-trips a record (Person) with the optional field absent", () =>
+    Effect.gen(function* () {
+      const wc = yield* toWitCodec(Person)
+      const value = { name: "Ada", alive: true }
+      const wv = yield* Schema.encodeEffect(wc.codec)(value)
+      const back = yield* Schema.decodeEffect(wc.codec)(wv)
+      expect(back).toEqual(value)
+    }),
+  )
 
-  it("round-trips a primitive string", async () => {
-    const wc = await Effect.runPromise(toWitCodec(Schema.String))
-    const wv = await Effect.runPromise(Schema.encodeEffect(wc.codec)("hi"))
-    const back = await Effect.runPromise(Schema.decodeEffect(wc.codec)(wv))
-    expect(back).toBe("hi")
-  })
+  it.effect("round-trips a tagged union (Storage), unit and payload cases", () =>
+    Effect.gen(function* () {
+      const wc = yield* toWitCodec(Storage)
+      for (const value of [
+        { _tag: "memory" as const },
+        { _tag: "local" as const, path: "/tmp" },
+        { _tag: "s3" as const, bucket: "b", key: "k" },
+      ]) {
+        const wv = yield* Schema.encodeEffect(wc.codec)(value)
+        const back = yield* Schema.decodeEffect(wc.codec)(wv)
+        expect(back).toEqual(value)
+      }
+    }),
+  )
+
+  it.effect("round-trips a list", () =>
+    Effect.gen(function* () {
+      const wc = yield* toWitCodec(Tags)
+      const value = ["a", "b", "c"]
+      const wv = yield* Schema.encodeEffect(wc.codec)(value)
+      const back = yield* Schema.decodeEffect(wc.codec)(wv)
+      expect(back).toEqual(value)
+    }),
+  )
+
+  it.effect("round-trips a primitive string", () =>
+    Effect.gen(function* () {
+      const wc = yield* toWitCodec(Schema.String)
+      const wv = yield* Schema.encodeEffect(wc.codec)("hi")
+      const back = yield* Schema.decodeEffect(wc.codec)(wv)
+      expect(back).toBe("hi")
+    }),
+  )
 })

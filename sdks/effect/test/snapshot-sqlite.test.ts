@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Effect, Ref, Schema } from "effect"
 import {
   __resetAgents,

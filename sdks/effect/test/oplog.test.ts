@@ -1,12 +1,8 @@
+import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Effect, Exit, Stream } from "effect"
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import * as Oplog from "../src/oplog.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 import * as OplogMock from "./mocks/golem-api-oplog.js"
-
-const runP = <A, E>(eff: Effect.Effect<A, E, never>): Promise<A> => Effect.runPromise(eff)
-const runExit = <A, E>(eff: Effect.Effect<A, E, never>): Promise<Exit.Exit<A, E>> =>
-  Effect.runPromiseExit(eff)
 
 const mkEntry = (tag: string): Oplog.PublicOplogEntry =>
   ({ tag }) as unknown as Oplog.PublicOplogEntry
@@ -28,96 +24,110 @@ afterEach(() => {
 })
 
 describe("Oplog — currentIndex / setIndex", () => {
-  it("currentIndex returns the host's monotonic counter", async () => {
-    const a = await runP(Oplog.currentIndex)
-    const b = await runP(Oplog.currentIndex)
-    expect(b).toBeGreaterThan(a)
-  })
+  it.effect("currentIndex returns the host's monotonic counter", () =>
+    Effect.gen(function* () {
+      const a = yield* Oplog.currentIndex
+      const b = yield* Oplog.currentIndex
+      expect(b).toBeGreaterThan(a)
+    }),
+  )
 
-  it("setIndex forwards the requested index to the host", async () => {
-    await runP(Oplog.setIndex(42n))
-    expect(ApiHostMock.__getOplogIndex()).toBe(42n)
-  })
+  it.effect("setIndex forwards the requested index to the host", () =>
+    Effect.gen(function* () {
+      yield* Oplog.setIndex(42n)
+      expect(ApiHostMock.__getOplogIndex()).toBe(42n)
+    }),
+  )
 
-  it("wraps host throws as OplogHostError", async () => {
-    Oplog.__setGetOplogIndexForTest(() => {
-      throw new Error("nope")
-    })
-    try {
-      const exit = await runExit(Oplog.currentIndex)
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) {
-        expect(JSON.stringify(exit.cause)).toMatch(/OplogHostError/)
+  it.effect("wraps host throws as OplogHostError", () =>
+    Effect.gen(function* () {
+      Oplog.__setGetOplogIndexForTest(() => {
+        throw new Error("nope")
+      })
+      try {
+        const exit = yield* Effect.exit(Oplog.currentIndex)
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          expect(JSON.stringify(exit.cause)).toMatch(/OplogHostError/)
+        }
+      } finally {
+        Oplog.__resetGetOplogIndexForTest()
       }
-    } finally {
-      Oplog.__resetGetOplogIndexForTest()
-    }
-  })
+    }),
+  )
 })
 
 describe("Oplog — read stream", () => {
-  it("reads paged chunks until the host returns undefined", async () => {
-    OplogMock.__seedReadChunks(sampleAgent, 0n, [
-      [mkEntry("create"), mkEntry("host-call")],
-      [mkEntry("agent-invocation-started")],
-    ])
+  it.effect("reads paged chunks until the host returns undefined", () =>
+    Effect.gen(function* () {
+      OplogMock.__seedReadChunks(sampleAgent, 0n, [
+        [mkEntry("create"), mkEntry("host-call")],
+        [mkEntry("agent-invocation-started")],
+      ])
 
-    const arr = await runP(Stream.runCollect(Oplog.read({ agentId: sampleAgent, start: 0n })))
-    expect(arr.map((e) => (e as { tag: string }).tag)).toEqual([
-      "create",
-      "host-call",
-      "agent-invocation-started",
-    ])
-  })
+      const arr = yield* Stream.runCollect(Oplog.read({ agentId: sampleAgent, start: 0n }))
+      expect(arr.map((e) => (e as { tag: string }).tag)).toEqual([
+        "create",
+        "host-call",
+        "agent-invocation-started",
+      ])
+    }),
+  )
 
-  it("reader exposes manual paging", async () => {
-    OplogMock.__seedReadChunks(sampleAgent, 5n, [[mkEntry("log")], [mkEntry("no-op")]])
-    const r = await runP(Oplog.reader({ agentId: sampleAgent, start: 5n }))
-    const first = await runP(r.next)
-    const second = await runP(r.next)
-    const third = await runP(r.next)
-    expect(first?.map((e) => (e as { tag: string }).tag)).toEqual(["log"])
-    expect(second?.map((e) => (e as { tag: string }).tag)).toEqual(["no-op"])
-    expect(third).toBeUndefined()
-  })
+  it.effect("reader exposes manual paging", () =>
+    Effect.gen(function* () {
+      OplogMock.__seedReadChunks(sampleAgent, 5n, [[mkEntry("log")], [mkEntry("no-op")]])
+      const r = yield* Oplog.reader({ agentId: sampleAgent, start: 5n })
+      const first = yield* r.next
+      const second = yield* r.next
+      const third = yield* r.next
+      expect(first?.map((e) => (e as { tag: string }).tag)).toEqual(["log"])
+      expect(second?.map((e) => (e as { tag: string }).tag)).toEqual(["no-op"])
+      expect(third).toBeUndefined()
+    }),
+  )
 
-  it("returns an empty stream when no chunks are seeded", async () => {
-    const arr = await runP(Stream.runCollect(Oplog.read({ agentId: sampleAgent, start: 0n })))
-    expect(arr).toEqual([])
-  })
+  it.effect("returns an empty stream when no chunks are seeded", () =>
+    Effect.gen(function* () {
+      const arr = yield* Stream.runCollect(Oplog.read({ agentId: sampleAgent, start: 0n }))
+      expect(arr).toEqual([])
+    }),
+  )
 })
 
 describe("Oplog — search stream", () => {
-  it("yields tuples in chunk order", async () => {
-    OplogMock.__seedSearchChunks(sampleAgent, "boom", [
-      [
-        [10n, mkEntry("error")],
-        [11n, mkEntry("log")],
-      ],
-      [[20n, mkEntry("log")]],
-    ])
-    const arr = await runP(Stream.runCollect(Oplog.search({ agentId: sampleAgent, text: "boom" })))
-    expect(arr.map(([i, e]) => [i, (e as { tag: string }).tag])).toEqual([
-      [10n, "error"],
-      [11n, "log"],
-      [20n, "log"],
-    ])
-  })
+  it.effect("yields tuples in chunk order", () =>
+    Effect.gen(function* () {
+      OplogMock.__seedSearchChunks(sampleAgent, "boom", [
+        [
+          [10n, mkEntry("error")],
+          [11n, mkEntry("log")],
+        ],
+        [[20n, mkEntry("log")]],
+      ])
+      const arr = yield* Stream.runCollect(Oplog.search({ agentId: sampleAgent, text: "boom" }))
+      expect(arr.map(([i, e]) => [i, (e as { tag: string }).tag])).toEqual([
+        [10n, "error"],
+        [11n, "log"],
+        [20n, "log"],
+      ])
+    }),
+  )
 })
 
 describe("Oplog — enrich", () => {
-  it("delegates to the seeded enricher", async () => {
-    OplogMock.__setEnrichImpl((entries) =>
-      entries.map(
-        ([i, e]) =>
-          ({
-            tag: `enriched:${(e as { tag: string }).tag}`,
-            idx: i,
-          }) as unknown as Oplog.PublicOplogEntry,
-      ),
-    )
-    const out = await runP(
-      Oplog.enrich({
+  it.effect("delegates to the seeded enricher", () =>
+    Effect.gen(function* () {
+      OplogMock.__setEnrichImpl((entries) =>
+        entries.map(
+          ([i, e]) =>
+            ({
+              tag: `enriched:${(e as { tag: string }).tag}`,
+              idx: i,
+            }) as unknown as Oplog.PublicOplogEntry,
+        ),
+      )
+      const out = yield* Oplog.enrich({
         environmentId: sampleEnvironment,
         agentId: sampleAgent,
         entries: [
@@ -125,23 +135,28 @@ describe("Oplog — enrich", () => {
           [1n, mkRawEntry("log")],
         ],
         componentRevision: 0n,
-      }),
-    )
-    expect(out.map((e) => (e as { tag: string }).tag)).toEqual(["enriched:create", "enriched:log"])
-  })
+      })
+      expect(out.map((e) => (e as { tag: string }).tag)).toEqual([
+        "enriched:create",
+        "enriched:log",
+      ])
+    }),
+  )
 
-  it("surfaces host throws as OplogHostError", async () => {
-    const exit = await runExit(
-      Oplog.enrich({
-        environmentId: sampleEnvironment,
-        agentId: sampleAgent,
-        entries: [],
-        componentRevision: 0n,
-      }),
-    )
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) {
-      expect(JSON.stringify(exit.cause)).toMatch(/OplogHostError/)
-    }
-  })
+  it.effect("surfaces host throws as OplogHostError", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        Oplog.enrich({
+          environmentId: sampleEnvironment,
+          agentId: sampleAgent,
+          entries: [],
+          componentRevision: 0n,
+        }),
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(JSON.stringify(exit.cause)).toMatch(/OplogHostError/)
+      }
+    }),
+  )
 })

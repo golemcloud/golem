@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import { witGraphCodec, type WitValueTree } from "../src/wit-tree.js"
@@ -75,81 +75,87 @@ const expectedTree: WitValueTree = {
 }
 
 describe("witGraphCodec", () => {
-  it("inflates a WitValue graph into a WitValueTree", async () => {
-    const codec = witGraphCodec(recordType)
-    const tree = await Effect.runPromise(Schema.decodeEffect(codec)(recordValue))
-    expect(tree).toEqual(expectedTree)
-  })
+  it.effect("inflates a WitValue graph into a WitValueTree", () =>
+    Effect.gen(function* () {
+      const codec = witGraphCodec(recordType)
+      const tree = yield* Schema.decodeEffect(codec)(recordValue)
+      expect(tree).toEqual(expectedTree)
+    }),
+  )
 
-  it("flattens a WitValueTree back into a structurally-equivalent WitValue", async () => {
-    const codec = witGraphCodec(recordType)
-    const graph = await Effect.runPromise(Schema.encodeEffect(codec)(expectedTree))
+  it.effect("flattens a WitValueTree back into a structurally-equivalent WitValue", () =>
+    Effect.gen(function* () {
+      const codec = witGraphCodec(recordType)
+      const graph = yield* Schema.encodeEffect(codec)(expectedTree)
 
-    // Round-trip back to a tree to validate semantic equivalence (the
-    // concrete index assignment may differ because we always emit
-    // root-first depth-first).
-    const tree = await Effect.runPromise(Schema.decodeEffect(codec)(graph))
-    expect(tree).toEqual(expectedTree)
-  })
+      // Round-trip back to a tree to validate semantic equivalence (the
+      // concrete index assignment may differ because we always emit
+      // root-first depth-first).
+      const tree = yield* Schema.decodeEffect(codec)(graph)
+      expect(tree).toEqual(expectedTree)
+    }),
+  )
 
-  it("handles option, variant, tuple, and result", async () => {
-    /**
-     * Type:
-     *   0: variant Outcome { ok -> 1, err -> 4 }
-     *   1: tuple [2, 3]
-     *   2: option-type val:5  (option<string>)
-     *   3: prim-bool
-     *   4: prim-string
-     *   5: prim-string
-     */
-    const t: CoreTypes.WitType = {
-      nodes: [
-        {
-          name: "Outcome",
-          type: {
-            tag: "variant-type",
+  it.effect("handles option, variant, tuple, and result", () =>
+    Effect.gen(function* () {
+      /**
+       * Type:
+       *   0: variant Outcome { ok -> 1, err -> 4 }
+       *   1: tuple [2, 3]
+       *   2: option-type val:5  (option<string>)
+       *   3: prim-bool
+       *   4: prim-string
+       *   5: prim-string
+       */
+      const t: CoreTypes.WitType = {
+        nodes: [
+          {
+            name: "Outcome",
+            type: {
+              tag: "variant-type",
+              val: [
+                ["ok", 1],
+                ["err", 4],
+              ],
+            },
+          },
+          { type: { tag: "tuple-type", val: [2, 3] } },
+          { type: { tag: "option-type", val: 5 } },
+          { type: { tag: "prim-bool-type" } },
+          { type: { tag: "prim-string-type" } },
+          { type: { tag: "prim-string-type" } },
+        ],
+      }
+      /** value: ok((Some("hi"), false)) */
+      const v: CoreTypes.WitValue = {
+        nodes: [
+          { tag: "variant-value", val: [0, 1] },
+          { tag: "tuple-value", val: [2, 3] },
+          { tag: "option-value", val: 4 },
+          { tag: "prim-bool", val: false },
+          { tag: "prim-string", val: "hi" },
+        ],
+      }
+      const codec = witGraphCodec(t)
+      const tree = yield* Schema.decodeEffect(codec)(v)
+      expect(tree).toEqual({
+        tag: "variant-value",
+        val: [
+          0,
+          {
+            tag: "tuple-value",
             val: [
-              ["ok", 1],
-              ["err", 4],
+              { tag: "option-value", val: { tag: "prim-string", val: "hi" } },
+              { tag: "prim-bool", val: false },
             ],
           },
-        },
-        { type: { tag: "tuple-type", val: [2, 3] } },
-        { type: { tag: "option-type", val: 5 } },
-        { type: { tag: "prim-bool-type" } },
-        { type: { tag: "prim-string-type" } },
-        { type: { tag: "prim-string-type" } },
-      ],
-    }
-    /** value: ok((Some("hi"), false)) */
-    const v: CoreTypes.WitValue = {
-      nodes: [
-        { tag: "variant-value", val: [0, 1] },
-        { tag: "tuple-value", val: [2, 3] },
-        { tag: "option-value", val: 4 },
-        { tag: "prim-bool", val: false },
-        { tag: "prim-string", val: "hi" },
-      ],
-    }
-    const codec = witGraphCodec(t)
-    const tree = await Effect.runPromise(Schema.decodeEffect(codec)(v))
-    expect(tree).toEqual({
-      tag: "variant-value",
-      val: [
-        0,
-        {
-          tag: "tuple-value",
-          val: [
-            { tag: "option-value", val: { tag: "prim-string", val: "hi" } },
-            { tag: "prim-bool", val: false },
-          ],
-        },
-      ],
-    })
+        ],
+      })
 
-    // Round-trip.
-    const g2 = await Effect.runPromise(Schema.encodeEffect(codec)(tree))
-    const tree2 = await Effect.runPromise(Schema.decodeEffect(codec)(g2))
-    expect(tree2).toEqual(tree)
-  })
+      // Round-trip.
+      const g2 = yield* Schema.encodeEffect(codec)(tree)
+      const tree2 = yield* Schema.decodeEffect(codec)(g2)
+      expect(tree2).toEqual(tree)
+    }),
+  )
 })
