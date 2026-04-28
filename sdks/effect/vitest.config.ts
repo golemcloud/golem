@@ -43,6 +43,42 @@ const golemAliases = [
     find: "golem:rdbms/types@1.5.0",
     replacement: resolve(mockDir, "golem-rdbms-types.ts"),
   },
+  {
+    find: "golem:websocket/client@1.5.0",
+    replacement: resolve(mockDir, "golem-websocket-client.ts"),
+  },
+  {
+    find: "wasi:io/streams@0.2.3",
+    replacement: resolve(mockDir, "wasi-io-streams.ts"),
+  },
+  {
+    find: "wasi:keyvalue/types@0.1.0",
+    replacement: resolve(mockDir, "wasi-keyvalue-types.ts"),
+  },
+  {
+    find: "wasi:keyvalue/eventual@0.1.0",
+    replacement: resolve(mockDir, "wasi-keyvalue-eventual.ts"),
+  },
+  {
+    find: "wasi:keyvalue/eventual-batch@0.1.0",
+    replacement: resolve(mockDir, "wasi-keyvalue-eventual-batch.ts"),
+  },
+  {
+    find: "wasi:keyvalue/wasi-keyvalue-error@0.1.0",
+    replacement: resolve(mockDir, "wasi-keyvalue-error.ts"),
+  },
+  {
+    find: "wasi:blobstore/types",
+    replacement: resolve(mockDir, "wasi-blobstore-types.ts"),
+  },
+  {
+    find: "wasi:blobstore/container",
+    replacement: resolve(mockDir, "wasi-blobstore-container.ts"),
+  },
+  {
+    find: "wasi:blobstore/blobstore",
+    replacement: resolve(mockDir, "wasi-blobstore-blobstore.ts"),
+  },
 ]
 
 export default defineConfig({

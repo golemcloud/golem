@@ -40,6 +40,16 @@ const external = [
   "golem:rdbms/mysql@1.5.0",
   "golem:rdbms/ignite2@1.5.0",
   "golem:rdbms/types@1.5.0",
+  "golem:websocket/client@1.5.0",
+  "wasi:io/poll@0.2.3",
+  "wasi:io/streams@0.2.3",
+  "wasi:keyvalue/types@0.1.0",
+  "wasi:keyvalue/eventual@0.1.0",
+  "wasi:keyvalue/eventual-batch@0.1.0",
+  "wasi:keyvalue/wasi-keyvalue-error@0.1.0",
+  "wasi:blobstore/blobstore",
+  "wasi:blobstore/container",
+  "wasi:blobstore/types",
 ]
 
 export default defineConfig([

@@ -581,3 +581,118 @@ Errors (exported from the package barrel and from `Quota.*`):
 
 - `FailedReservationError` — typed domain failure for `reject`-policy reservations. `.estimatedWaitNanos` is `bigint | undefined` (only present for rate-limited resources). `toJSON()` is overridden to render the bigint as a string so a `Cause` containing this error is JSON-safe.
 - `QuotaHostError` — anything else thrown from `golem:quota/types@1.5.0` (split overflow, merge resource mismatch, host invariant violations, etc.). `.operation` records the originating host call.
+
+## KeyValue store (`KeyValue.*`)
+
+`effect-golem` ships an Effect-typed wrapper around the eventually-consistent subset of `wasi:keyvalue@0.1.0` (`eventual` + `eventual-batch`). The `atomic` (`increment` / `compare-and-swap`) and `cache` interfaces are intentionally NOT wrapped — they are currently `unimplemented!` in the Golem host and would trap the worker on call. They will be added when the host gains support.
+
+```ts
+import { defineAgent, KeyValue, method, Schema } from "effect-golem"
+import { Effect } from "effect"
+
+const User = Schema.Struct({ id: Schema.String, name: Schema.String })
+
+defineAgent({
+  name: "Users",
+  constructorParams: { name: Schema.String },
+  methods: {
+    put: method({
+      params: { id: Schema.String, name: Schema.String },
+      success: Schema.Void,
+    }),
+    get: method({ params: { id: Schema.String }, success: Schema.Option(User) }),
+  },
+  impl: ({ name }) =>
+    Effect.gen(function* () {
+      const bucket = yield* KeyValue.openBucket(name) // scoped resource
+      const users = bucket.forSchema(User)
+      return {
+        put: ({ id, name }) => users.set(id, { id, name }),
+        get: ({ id }) => users.get(id),
+      }
+    }),
+})
+```
+
+API (re-exported from the package barrel as `KeyValue`):
+
+- `KeyValue.openBucket(name): Effect<Bucket, KeyValueHostError, Scope>` — scoped acquire. The WIT bucket resource has no `.close()`; releasing the scope drops the JS handle and lets GC reclaim it.
+- `Bucket` — `get` / `set` / `delete` / `exists` (single-key, `wasi:keyvalue/eventual`), `getMany` / `setMany` / `deleteMany` / `keys` (`wasi:keyvalue/eventual-batch`), plus `forSchema(schema)` for a typed view. Single-key get returns `Option.Option<Uint8Array>`; batch get returns `ReadonlyArray<Option.Option<Uint8Array>>` with positional alignment to the request keys (host contract).
+- `Bucket.forSchema(schema)` returns `SchemaBucket<S>` — same shape, but values are JSON-encoded via `Schema.fromJsonString(schema)` (UTF-8 bytes ↔ JSON string ↔ schema). Decode failures surface as typed `Schema.SchemaError` (parse + validation) or `KeyValueDecodeError` (invalid UTF-8 only).
+
+Errors (exported from the package barrel):
+
+- `KeyValueHostError` — any host-side trap from `wasi:keyvalue/*`. `.operation` records the originating host call (`eventual.get`, `eventual-batch.set-many`, `openBucket`, etc.); `.trace` is the host's driver-supplied opaque error trace (Redis / SQLite / Postgres / in-memory all produce different formats — do not parse).
+- `KeyValueDecodeError` — only raised by `SchemaBucket` when the stored bytes are not valid UTF-8. JSON syntax + schema validation failures bubble out as `Schema.SchemaError`.
+
+Identity: `KeyValue.BucketTypeId` is a `Symbol.for(...)`-keyed stamp; `KeyValue.isBucket(u)` reliably checks cross-bundle.
+
+Caveats:
+
+- Batch operations are all-or-nothing at the host level: a storage-layer error fails the whole call, not individual entries.
+- Method authors who use `forSchema` MUST handle the `Schema.SchemaError` typed channel (e.g. via `Effect.catchTag`) — undeclared typed errors bubble up to the dispatcher and become host traps. The SDK does not silently swallow schema mismatches.
+
+The integration test suite ships a `KvAgent` (`integration-test/components/agents/src/kv-agent.ts`) that exercises the full surface — bytes round-trips, schema-typed values, batch ops, and key listing — against the live Golem `wasi:keyvalue` backend.
+
+## Blob store (`Blobstore.*`)
+
+`effect-golem` ships an Effect-typed wrapper around `wasi:blobstore/{blobstore,container,types}`. Container CRUD, object I/O (sync `Uint8Array`), object listing as a `Stream`, and a `forSchema(schema)` typed view per container are exposed. Object writes chunk into 4096-byte segments via `wasi:io/streams.blocking-write-and-flush`.
+
+```ts
+import { Blobstore, defineAgent, method, Schema } from "effect-golem"
+import { Effect, Stream } from "effect"
+
+const Photo = Schema.Struct({ filename: Schema.String, takenAtMillis: Schema.Number })
+
+defineAgent({
+  name: "Photos",
+  constructorParams: { name: Schema.String },
+  methods: {
+    upload: method({
+      params: { key: Schema.String, body: Schema.Uint8Array },
+      success: Schema.Void,
+    }),
+    list: method({ params: {}, success: Schema.Array(Schema.String) }),
+    putMeta: method({
+      params: { key: Schema.String, filename: Schema.String, takenAtMillis: Schema.Number },
+      success: Schema.Void,
+    }),
+  },
+  impl: ({ name }) =>
+    Effect.gen(function* () {
+      const photos = yield* Blobstore.getOrCreateContainer(name) // scoped
+      const meta = photos.forSchema(Photo)
+      return {
+        upload: ({ key, body }) => photos.writeData(key, body),
+        list: () => Stream.runCollect(photos.listObjects).pipe(Effect.map((c) => c.slice())),
+        putMeta: ({ key, filename, takenAtMillis }) =>
+          meta.writeData(key, { filename, takenAtMillis }),
+      }
+    }),
+})
+```
+
+API (re-exported from the package barrel as `Blobstore`):
+
+- `Blobstore.createContainer(name): Effect<Container, BlobstoreHostError, Scope>` — fresh container; fails if the name exists.
+- `Blobstore.getContainer(name): Effect<Container, BlobstoreHostError, Scope>` — open existing; fails if absent.
+- `Blobstore.getOrCreateContainer(name): Effect<Container, BlobstoreHostError, Scope>` — idempotent (safe to call from `impl` after a snapshot load).
+- `Blobstore.containerExists(name) / deleteContainer(name) / copyObject(src, dest) / moveObject(src, dest)` — top-level helpers.
+- `Container` — `info`, `clear`, `getData(name)` / `getData(name, range)`, `writeData(name, bytes)`, `hasObject` / `objectInfo` / `deleteObject` / `deleteObjects`, `listObjects: Stream.Stream<string, BlobstoreHostError>`, plus `forSchema(schema)` for a typed view.
+
+Identity: `Blobstore.ContainerTypeId` is a `Symbol.for(...)`-keyed stamp; `Blobstore.isContainer(u)` reliably checks cross-bundle.
+
+Errors:
+
+- `BlobstoreHostError` — any host-side trap from `wasi:blobstore/*`. `.operation` records the originating host call; `.trace` is the host's `string` error verbatim (the WIT error type is `string`, unlike keyvalue's resource).
+- `BlobstoreDecodeError` — only raised by `SchemaContainer` when the stored bytes are not valid UTF-8. JSON syntax + schema validation failures bubble out as `Schema.SchemaError`.
+
+Caveats (host-side, NOT fixable in the SDK):
+
+- **Backend divergence on `getData(name, range)`.** The WIT spec says `start..=end` is inclusive on both ends. Golem's in-memory + filesystem backends implement it as Rust-exclusive (`start..end`); the S3 backend follows the WIT spec (inclusive). Whole-object reads (`getData(name)` without a range) work around this by first trying inclusive end (`size - 1`) and replaying with `end = size` if the backend short-changed by one byte — so whole-object reads are portable. **Explicit ranged reads are not portable** until the host fixes the in-mem/fs implementations.
+- **`created-at` is actually `last-modified-at`.** The WIT field name is misleading: object storage backends (S3 `LastModified`, filesystem `mtime`) have no separate creation timestamp, and the Golem host populates `created-at` from `last-modified-at`. Both `ContainerMetadata.createdAt` and `ObjectMetadata.createdAt` reflect last-modified time.
+- **`container.clear()` on the filesystem backend.** Calling `clear()` on a filesystem-backed container deletes the underlying directory; subsequent `listObjects()` calls trap with "Backend error: No such file or directory". Upstream bug — workaround is to `deleteContainer + createContainer` instead. Not surfaced by the in-memory or S3 backends.
+- `listObjects` is eager: the host fetches the full object name list at the moment `list-objects` is called and pins it to the oplog. The returned `Stream` only consumes from that in-memory snapshot. Order is undefined (host pops from the tail of its internal `Vec`). Page size: 256.
+- Method authors who use `forSchema` MUST handle the `Schema.SchemaError` typed channel — same caveat as `KeyValue.SchemaBucket`.
+
+The integration test suite ships a `BlobAgent` (`integration-test/components/agents/src/blob-agent.ts`) that exercises the full surface — small/large writes (10 000-byte payload to verify the > 4096 chunking), schema-typed objects, listing, deletion, and the exclusive-end recovery path — against the live Golem `wasi:blobstore` backend.

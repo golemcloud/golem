@@ -117,6 +117,12 @@ agents:
     config: {}
   WebhookAgent:
     config: {}
+  WebSocketAgent:
+    config: {}
+  KvAgent:
+    config: {}
+  BlobAgent:
+    config: {}
 
 # Secret defaults applied automatically to the local environment at
 # deploy time. Production deployments would use

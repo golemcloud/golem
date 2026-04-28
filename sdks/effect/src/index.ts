@@ -112,6 +112,44 @@ export { WebhookDecodeError, WebhookHostError, WebhookPayload } from "./webhook.
 export type { WebhookHandle } from "./webhook.js"
 
 /**
+ * Websocket namespace — Effect-typed bridge from the host
+ * `golem:websocket/client@1.5.0` resource to the canonical
+ * `effect/unstable/socket` `Socket` abstraction. Provides
+ * `connect` (scoped Effect), `fromConnection` (lower-level adapter
+ * over a custom acquire), `layer` (Layer) and `makeChannel` (duplex
+ * Channel). See {@link ./websocket} for the full API.
+ */
+export * as Websocket from "./websocket.js"
+
+/**
+ * KeyValue namespace — Effect-typed wrappers around the eventually
+ * consistent subset of `wasi:keyvalue@0.1.0` (`eventual` +
+ * `eventual-batch`). The host's `atomic` and `cache` interfaces are
+ * NOT exposed because they are currently `unimplemented!` in Golem.
+ * See {@link ./keyvalue} for the full API.
+ */
+export * as KeyValue from "./keyvalue.js"
+export { KeyValueDecodeError, KeyValueHostError } from "./keyvalue.js"
+export type { Bucket, SchemaBucket } from "./keyvalue.js"
+
+/**
+ * Blobstore namespace — Effect-typed wrappers around
+ * `wasi:blobstore/*`. Exposes container CRUD, object I/O (sync byte
+ * arrays), object listing as a `Stream`, and a `forSchema` typed
+ * view per container. See {@link ./blobstore} for the full API.
+ */
+export * as Blobstore from "./blobstore.js"
+export { BlobstoreDecodeError, BlobstoreHostError } from "./blobstore.js"
+export type {
+  ByteRange,
+  Container,
+  ContainerMetadata,
+  ObjectId,
+  ObjectMetadata,
+  SchemaContainer,
+} from "./blobstore.js"
+
+/**
  * Logging namespace — Effect `Logger` backed by `wasi:logging/logging`.
  * The agent dispatcher installs `Logging.layer` automatically so every
  * `Effect.log*` call is forwarded to the Golem host's structured log
