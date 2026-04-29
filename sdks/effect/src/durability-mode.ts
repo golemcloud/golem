@@ -94,6 +94,19 @@ export const PersistenceLevel = {
   smart: { tag: "smart" } as const,
 } as const
 
+/**
+ * Local WIT-drift exhaustiveness witness for {@link PersistenceLevel}:
+ * every tag in `golem:api/host@1.5.0.persistence-level` must have a
+ * corresponding constructor here. If `golem-types/*.d.ts` is regenerated
+ * with a new variant, this `satisfies` clause fails to compile and points
+ * directly at the wrapper that needs updating.
+ */
+void ({
+  "persist-nothing": PersistenceLevel.persistNothing,
+  "persist-remote-side-effects": PersistenceLevel.persistRemoteSideEffects,
+  smart: PersistenceLevel.smart,
+} satisfies Record<RawPersistenceLevel["tag"], unknown>)
+
 // ---------------------------------------------------------------------------
 // Effect-typed host calls
 // ---------------------------------------------------------------------------

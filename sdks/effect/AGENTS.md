@@ -43,6 +43,61 @@ When adding a new host-binding wrapper:
 3. Consume the service via `yield* Xxx` in the SDK module — let the tag flow into `R`. Do NOT add a module-level `let xxxImpl = ...` indirection or `__setXxxForTest` export.
 4. Tests substitute via `Effect.provide(Layer.succeed(Xxx, fake))` (or a shared `test/host/<XxxFake>.ts` factory) — never via mutation of a module-level `__setX/__resetX` hook.
 
+## WIT-drift detection
+
+When a `src/<feature>.ts` module introduces a richer JS / Effect / Schema surface that mirrors a WIT-originated d.ts type, add an assertion that ties the wrapper's actual code to the WIT type — so that WIT regeneration fails the build only when the wrapper diverges from what WIT now says, never as a "the d.ts changed, please mirror it again" snapshot exercise.
+
+Three complementary patterns are in use; pick the one whose value-side actually carries weight, and DO NOT add `null`-keyed witnesses (a `Record<TagUnion, unknown>` whose values are all `null` is just a type-level comment that says "we believe the union is X" — it has no link back to wrapper code, so it does not prove the wrapper handles each tag):
+
+1. **Local `satisfies Record<TagUnion, unknown>` exhaustiveness witness, alongside the wrapper.** Variant constructor namespaces (`PersistenceLevel`, `FunctionType`, `RevertTarget`, `Filter`, …) emit values tagged with a discriminating literal (`{ tag: "..." }`). Add a `void (... satisfies Record<<RawWitType>["tag"], unknown>)` clause directly under the wrapper that maps each WIT tag to its constructor. If WIT regeneration adds a new variant, the `satisfies` clause fails to compile at the wrapper file, naming the missing tag.
+
+   ```ts
+   export const PersistenceLevel = {
+     persistNothing: { tag: "persist-nothing" } as const,
+     persistRemoteSideEffects: { tag: "persist-remote-side-effects" } as const,
+     smart: { tag: "smart" } as const,
+   } as const
+
+   void ({
+     "persist-nothing": PersistenceLevel.persistNothing,
+     "persist-remote-side-effects": PersistenceLevel.persistRemoteSideEffects,
+     smart: PersistenceLevel.smart,
+   } satisfies Record<RawPersistenceLevel["tag"], unknown>)
+   ```
+
+   Use `void (… satisfies …)` (not `const _name = … satisfies …`) — the `_`-prefix exemption from `noUnusedLocals` does not apply inside ES modules, so the `void` form is the cleanest way to keep the witness as a pure type-level check.
+
+2. **Switch-internal exhaustiveness** (no separate witness). When a wrapper does `switch (x.tag) { case "a": ... }` and `x` is typed directly as the WIT discriminated union (e.g. `DbValue` from `golem:rdbms/postgres@1.5.0`), the switch itself is the proof: under `noImplicitReturns` (enabled in `tsconfig.json`) a missing case fails compilation with `TS7030: Not all code paths return a value` — pointing directly at the function that needs updating. If the function returns `void` / `undefined` (so `noImplicitReturns` doesn't fire), add an explicit `default: { const _exhaustive: never = x.tag; ... }` arm to force the same check.
+
+   ```ts
+   const decodeDbValue = (value: DbValue, ...): unknown => {
+     switch (value.tag) {
+       case "null": return null
+       case "int4": return value.val
+       // ... every WIT tag handled ...
+     }
+     // No `default:` needed — `noImplicitReturns` catches a missing
+     // case as soon as a new tag is added on the WIT side.
+   }
+   ```
+
+   This is preferred over a separate witness for any case where the wrapper is a single switch on a WIT-typed discriminator: there is exactly one place to update, and the type system already knows about it. Don't duplicate that with a `Record<Tag, null>` shadow.
+
+3. **`StructEqual<typeof X.Type, WitType>` pin in `test/wit-drift.ts`.** Schema codecs (`Schema.Struct({...})` / `Schema.Union(...)`) mirroring a WIT `record` are pinned by deriving _both_ sides from real code: the SDK side from `typeof Codec.Type`, the WIT side from the imported d.ts type. The `StructEqual` helper folds away the `readonly` modifier difference between `Schema`'s output and the WIT bindings.
+
+   ```ts
+   "Quota.QuotaTokenRecord": StructEqual<
+     typeof Quota.QuotaTokenRecord.Type,
+     QuotaHost.QuotaTokenRecord
+   >
+   ```
+
+   `test/wit-drift.ts` is type-only (consumed via `tsc --noEmit`; vitest skips it because the name does not end in `.test.ts`).
+
+Wrappers whose drift is caught by any of these mechanisms do **not** also need a hand-written shape mirror — that is just a host-API snapshot under another name, which this convention explicitly rejects.
+
+Direct host-call signatures (raw `(a, b) => Host.fn(a, b)` wrappers in `src/host/*Client.ts`) are not pinned anywhere — drift in those is caught at the `XxxLive` factory's call site (the call to `Host.fn(a, b)` no longer type-checks), and pinning them defensively would slide the suite into the host-API snapshot it must not become.
+
 ## Conventions
 
 - Strict TS (`noUnusedLocals`/`Parameters`, `noImplicitReturns`); ESM (`"type": "module"`); imports must end in `.js` (NodeNext); 2-space indent, no semicolons, double quotes, trailing commas (Prettier).

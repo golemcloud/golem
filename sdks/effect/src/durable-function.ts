@@ -192,6 +192,23 @@ export const FunctionType = {
   writeRemoteTransaction: (val?: OplogIndex) => ({ tag: "write-remote-transaction", val }) as const,
 } as const
 
+/**
+ * Local WIT-drift exhaustiveness witness for {@link FunctionType}: every
+ * tag in `golem:api/oplog@1.5.0.wrapped-function-type` (re-exported as
+ * `golem:durability/durability@1.5.0.durable-function-type`) must have a
+ * corresponding constructor here. If `golem-types/*.d.ts` is regenerated
+ * with a new variant, this `satisfies` clause fails to compile and points
+ * directly at the wrapper that needs updating.
+ */
+void ({
+  "read-local": FunctionType.readLocal,
+  "write-local": FunctionType.writeLocal,
+  "read-remote": FunctionType.readRemote,
+  "write-remote": FunctionType.writeRemote,
+  "write-remote-batched": FunctionType.writeRemoteBatched,
+  "write-remote-transaction": FunctionType.writeRemoteTransaction,
+} satisfies Record<DurableFunctionType["tag"], unknown>)
+
 /** Subset of {@link DurableFunctionType} accepted by {@link wrap}. */
 export type UnaryDurableFunctionType =
   | { tag: "read-local" }

@@ -209,8 +209,26 @@ const flatten = (tree: WitValueTree): WitValue => {
           return { tag: "result-value", val: { tag: "err", val: child } }
         }
       }
-      // Leaves.
-      default:
+      // Leaves: enumerated explicitly so a new `WitNode` variant added
+      // upstream lands as a non-exhaustive switch (caught by
+      // `noImplicitReturns`) rather than silently slipping through a
+      // `default` cast.
+      case "enum-value":
+      case "flags-value":
+      case "prim-u8":
+      case "prim-u16":
+      case "prim-u32":
+      case "prim-u64":
+      case "prim-s8":
+      case "prim-s16":
+      case "prim-s32":
+      case "prim-s64":
+      case "prim-float32":
+      case "prim-float64":
+      case "prim-char":
+      case "prim-bool":
+      case "prim-string":
+      case "handle":
         return t as WitNode
     }
   }

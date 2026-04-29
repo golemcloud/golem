@@ -63,6 +63,20 @@ export const policy = {
   everyN: policyEveryN,
 } as const
 
+/**
+ * Local WIT-drift exhaustiveness witness for {@link policy} +
+ * {@link policyToWit}: every tag in
+ * `golem:agent/common@1.5.0.snapshotting-config` must have a corresponding
+ * SDK constructor. If `golem-types/*.d.ts` is regenerated with a new
+ * variant, this `satisfies` clause fails to compile and points directly
+ * at the wrapper that needs updating.
+ */
+void ({
+  default: policyDefault,
+  periodic: policyPeriodic,
+  "every-n-invocation": policyEveryN,
+} satisfies Record<AgentCommon.SnapshottingConfig["tag"], unknown>)
+
 const isFiniteInteger = (n: number): boolean => Number.isInteger(n) && Number.isFinite(n)
 
 const policyToWit = (

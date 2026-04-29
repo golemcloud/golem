@@ -123,6 +123,18 @@ export const RevertTarget = {
     ),
 } as const
 
+/**
+ * Local WIT-drift exhaustiveness witness for {@link RevertTarget}: every
+ * tag in `golem:api/host@1.5.0.revert-agent-target` must have a
+ * corresponding constructor here. If `golem-types/*.d.ts` is regenerated
+ * with a new variant, this `satisfies` clause fails to compile and points
+ * directly at the wrapper that needs updating.
+ */
+void ({
+  "revert-to-oplog-index": RevertTarget.toOplogIndex,
+  "revert-last-invocations": RevertTarget.lastInvocations,
+} satisfies Record<RawRevertAgentTarget["tag"], unknown>)
+
 // ---------------------------------------------------------------------------
 // Filter DSL
 // ---------------------------------------------------------------------------
@@ -198,6 +210,22 @@ export class Filter {
     return this.node
   }
 }
+
+/**
+ * Local WIT-drift exhaustiveness witness for {@link Filter}: every tag
+ * in `golem:api/host@1.5.0.agent-property-filter` must have a corresponding
+ * static constructor on {@link Filter}. If `golem-types/*.d.ts` is
+ * regenerated with a new variant, this `satisfies` clause fails to compile
+ * and points directly at the wrapper that needs updating.
+ */
+void ({
+  name: Filter.name,
+  status: Filter.status,
+  version: Filter.version,
+  "created-at": Filter.createdAt,
+  env: Filter.env,
+  config: Filter.config,
+} satisfies Record<ApiHost.AgentPropertyFilter["tag"], unknown>)
 
 /**
  * Convert a {@link FilterNode} to its **disjunctive normal form** —

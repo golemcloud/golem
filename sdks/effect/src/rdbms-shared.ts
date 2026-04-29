@@ -14,6 +14,9 @@ import {
   SqlSyntaxError,
   UnknownError,
 } from "effect/unstable/sql/SqlError"
+import type * as PostgresHost from "golem:rdbms/postgres@1.5.0"
+import type * as MysqlHost from "golem:rdbms/mysql@1.5.0"
+import type * as IgniteHost from "golem:rdbms/ignite2@1.5.0"
 
 // ---------------------------------------------------------------------------
 // Read-vs-write SQL classification
@@ -75,8 +78,19 @@ export const toBigIntChecked = (value: number | bigint, label: string): bigint =
 // Error classification
 // ---------------------------------------------------------------------------
 
+/**
+ * Tag union of every RDBMS host's `Error` variant. The three WIT
+ * packages (postgres / mysql / ignite2) are kept in lock-step, so this
+ * union is in practice identical for all three — but we derive it
+ * from all three to catch lock-step breaks.
+ */
+type RdbmsHostErrorTag =
+  | PostgresHost.Error["tag"]
+  | MysqlHost.Error["tag"]
+  | IgniteHost.Error["tag"]
+
 /** Canonical set of `Error.tag` values used by every RDBMS WIT package. */
-export const RDBMS_ERROR_TAGS = new Set([
+export const RDBMS_ERROR_TAGS: ReadonlySet<RdbmsHostErrorTag> = new Set<RdbmsHostErrorTag>([
   "connection-failure",
   "query-parameter-failure",
   "query-execution-failure",
@@ -85,19 +99,14 @@ export const RDBMS_ERROR_TAGS = new Set([
 ])
 
 export interface RdbmsHostError {
-  readonly tag:
-    | "connection-failure"
-    | "query-parameter-failure"
-    | "query-execution-failure"
-    | "query-response-failure"
-    | "other"
+  readonly tag: RdbmsHostErrorTag
   readonly val?: string
 }
 
 const isRdbmsHostError = (e: unknown): e is RdbmsHostError => {
   if (e === null || typeof e !== "object") return false
   const obj = e as { tag?: unknown }
-  return typeof obj.tag === "string" && RDBMS_ERROR_TAGS.has(obj.tag)
+  return typeof obj.tag === "string" && RDBMS_ERROR_TAGS.has(obj.tag as RdbmsHostErrorTag)
 }
 
 /**
@@ -152,9 +161,20 @@ export const sqlErrorFor =
           reason = new SqlSyntaxError({ cause, message: detail, operation })
           break
         case "other":
-        default:
           reason = new UnknownError({ cause, message: detail, operation })
           break
+        default: {
+          // Exhaustiveness pin: a new variant on any of the three RDBMS
+          // host bindings (postgres / mysql / ignite2) breaks compilation
+          // here, naming the missing tag.
+          const _exhaustive: never = tagged.tag
+          reason = new UnknownError({
+            cause,
+            message: `unhandled rdbms error tag: ${String(_exhaustive)}`,
+            operation,
+          })
+          break
+        }
       }
     } else if (
       cause instanceof Error &&

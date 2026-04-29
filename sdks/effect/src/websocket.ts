@@ -81,18 +81,18 @@ import { WebsocketClient } from "./host/WebsocketClient.js"
 // Error mapping (golem:websocket error → Socket.SocketError)
 // ---------------------------------------------------------------------------
 
+/**
+ * Local shadow of `golem:websocket/client@1.5.0.error`. Tag union is
+ * derived from the WIT type, so a new variant in the regenerated d.ts
+ * shows up here as a missing case in {@link mapToSocketError}'s switch
+ * (caught by `noImplicitReturns`).
+ */
 interface TaggedWsError {
-  readonly tag:
-    | "connection-failure"
-    | "send-failure"
-    | "receive-failure"
-    | "protocol-error"
-    | "closed"
-    | "other"
+  readonly tag: WsClient.Error["tag"]
   readonly val?: unknown
 }
 
-const WS_TAGS = new Set<TaggedWsError["tag"]>([
+const WS_TAGS = new Set<WsClient.Error["tag"]>([
   "connection-failure",
   "send-failure",
   "receive-failure",
