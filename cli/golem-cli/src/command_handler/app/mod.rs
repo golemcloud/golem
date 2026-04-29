@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::build::check::plan_dependency_fixes;
+use crate::app::build::check::{
+    create_claude_symlink_if_needed, plan_dependency_fixes, resolve_claude_skills_context,
+};
 use crate::app::context::BuildContext;
 use crate::app::error::CustomCommandError;
 use crate::app::template::AppTemplateName;
@@ -26,7 +28,7 @@ use crate::command_handler::app::deploy_diff::{
     DeployDetails, DeployDiff, DeployDiffKind, DeployQuickDiff, RollbackDetails, RollbackDiff,
     RollbackEntityDetails, RollbackQuickDiff,
 };
-use crate::command_handler::app::template::{TemplateHandler, create_claude_symlink};
+use crate::command_handler::app::template::TemplateHandler;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit};
@@ -1711,7 +1713,8 @@ impl AppCommandHandler {
     }
 
     fn plan_and_apply_dependency_fixes(&self, build_ctx: &BuildContext<'_>) -> anyhow::Result<()> {
-        let plan = plan_dependency_fixes(build_ctx)?;
+        let claude_skills_ctx = resolve_claude_skills_context(build_ctx.application().app_root_dir())?;
+        let plan = plan_dependency_fixes(build_ctx, &claude_skills_ctx)?;
 
         for warning in &plan.warnings {
             logln("");
@@ -1720,7 +1723,10 @@ impl AppCommandHandler {
         }
 
         if plan.is_empty() {
-            create_claude_symlink(build_ctx.application().app_root_dir())?;
+            create_claude_symlink_if_needed(
+                build_ctx.application().app_root_dir(),
+                &claude_skills_ctx,
+            )?;
             return Ok(());
         }
 
@@ -1774,7 +1780,7 @@ impl AppCommandHandler {
             }
         }
 
-        create_claude_symlink(build_ctx.application().app_root_dir())?;
+        create_claude_symlink_if_needed(build_ctx.application().app_root_dir(), &claude_skills_ctx)?;
 
         Ok(())
     }
@@ -1965,96 +1971,6 @@ impl AppCommandHandler {
         }
         Ok(true)
     }
-
-    // TODO: FCL
-    /*
-    pub fn get_templates(
-        &self,
-        requested_template_name: &str,
-    ) -> anyhow::Result<(Option<&AppTemplateCommon>, &AppTemplateComponent)> {
-        let segments = requested_template_name.split("/").collect::<Vec<_>>();
-        let (language, template_name): (String, Option<String>) = match segments.len() {
-            1 => (segments[0].to_string(), None),
-            2 => (segments[0].to_string(), {
-                let template_name = segments[1].to_string();
-                if template_name.is_empty() {
-                    None
-                } else {
-                    Some(template_name)
-                }
-            }),
-            _ => {
-                log_error("Failed to parse template name");
-                self.log_templates_help(None, None)?;
-                bail!(NonSuccessfulExit);
-            }
-        };
-
-        let language = match GuestLanguage::from_string(language) {
-            Some(language) => language,
-            None => {
-                log_error("Failed to parse language part of the template!");
-                self.log_templates_help(None, None)?;
-                bail!(NonSuccessfulExit);
-            }
-        };
-
-        let template_name = template_name
-            .map(AppTemplateName::from)
-            .unwrap_or_else(|| AppTemplateName::from("default"));
-
-        let app_template_repo = self.ctx.app_template_repo()?;
-
-        let common_template = match app_template_repo.common_template(language) {
-            Ok(common_template) => common_template.as_ref(),
-            Err(err) => {
-                log_anyhow_error(&err);
-                self.log_templates_help(None, None)?;
-                bail!(NonSuccessfulExit);
-            }
-        };
-
-        let component_template =
-            match app_template_repo.component_template(language, &template_name) {
-                Ok(component_template) => component_template,
-                Err(err) => {
-                    log_anyhow_error(&err);
-                    self.log_templates_help(None, None)?;
-                    bail!(NonSuccessfulExit);
-                }
-            };
-
-        Ok((common_template, component_template))
-    }
-
-    pub fn generate_component(
-        &self,
-        template_apply_plan: &mut TemplateApplyPlan,
-        application_name: &ApplicationName,
-        component_name: &ComponentName,
-        app_dir: &Path,
-        template_name: &str,
-    ) -> anyhow::Result<()> {
-        let (common_template, component_template) = self.get_templates(template_name)?;
-
-        if let Some(common_template) = common_template {
-            template_apply_plan.add(
-                common_template.0.name.as_str(),
-                &common_template.generate(application_name, app_dir)?,
-            )?;
-        }
-
-        template_apply_plan.add(
-            component_template.0.name.as_str(),
-            &component_template.generate(
-                application_name,
-                component_name,
-                app_dir
-            )?,
-        )?;
-
-        Ok(())
-    }*/
 
     pub fn log_languages_help(&self) {
         logln(format!("\n{}", "Available languages:".underline().bold(),));

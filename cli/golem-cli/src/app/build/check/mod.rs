@@ -18,6 +18,10 @@ mod rust;
 mod skills;
 mod ts;
 
+pub(crate) use skills::{
+    ClaudeSkillsContext, create_claude_symlink_if_needed, resolve_claude_skills_context,
+};
+
 use crate::app::build::check::requirements::{
     ToolRequirement, ToolRequirementCheck, VersionRange, tool_requirements_for_language,
 };
@@ -110,7 +114,10 @@ pub async fn check_build_tool_requirements(ctx: &BuildContext<'_>) -> anyhow::Re
     )
 }
 
-pub fn plan_dependency_fixes(ctx: &BuildContext<'_>) -> anyhow::Result<DependencyFixPlan> {
+pub(crate) fn plan_dependency_fixes(
+    ctx: &BuildContext<'_>,
+    claude_skills_ctx: &ClaudeSkillsContext,
+) -> anyhow::Result<DependencyFixPlan> {
     let selected_languages = selected_component_languages(ctx);
     if selected_languages.is_empty() {
         return Ok(DependencyFixPlan::default());
@@ -139,8 +146,11 @@ pub fn plan_dependency_fixes(ctx: &BuildContext<'_>) -> anyhow::Result<Dependenc
         plan.steps.push(step);
     }
 
-    plan.steps
-        .extend(skills::plan_skill_fix_steps(ctx, &selected_languages)?);
+    plan.steps.extend(skills::plan_skill_fix_steps(
+        ctx,
+        &selected_languages,
+        claude_skills_ctx,
+    )?);
 
     Ok(plan)
 }
