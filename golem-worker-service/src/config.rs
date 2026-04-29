@@ -180,6 +180,12 @@ impl HasConfigExamples<WorkerServiceConfig> for WorkerServiceConfig {
 pub struct GrpcApiConfig {
     pub port: u16,
     pub tls: GrpcServerTlsConfig,
+    #[serde(default = "default_grpc_max_message_size")]
+    pub max_message_size: usize,
+}
+
+fn default_grpc_max_message_size() -> usize {
+    32 * 1024 * 1024
 }
 
 impl SafeDisplay for GrpcApiConfig {
@@ -187,6 +193,7 @@ impl SafeDisplay for GrpcApiConfig {
         let mut result = String::new();
 
         let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
 
         let _ = writeln!(&mut result, "tls:");
         let _ = writeln!(&mut result, "{}", self.tls.to_safe_string_indented());
@@ -200,6 +207,7 @@ impl Default for GrpcApiConfig {
         Self {
             port: 9094,
             tls: GrpcServerTlsConfig::disabled(),
+            max_message_size: default_grpc_max_message_size(),
         }
     }
 }

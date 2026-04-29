@@ -10,7 +10,7 @@ root = "../data/blob_storage"
 
 [compile_worker]
 connect_timeout = "10s"
-max_message_size = 1000000
+max_message_size = 33554432
 
 [compile_worker.retries_on_unavailable]
 max_attempts = 3
@@ -125,7 +125,7 @@ without_time = false
 # 
 # [compile_worker]
 # connect_timeout = "10s"
-# max_message_size = 1000000
+# max_message_size = 33554432
 # 
 # [compile_worker.retries_on_unavailable]
 # max_attempts = 3

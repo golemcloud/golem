@@ -82,10 +82,12 @@ impl Services {
 
         let worker_executor_clients = MultiTargetGrpcClient::new(
             "worker_executor",
-            |channel| {
+            |channel, max_message_size| {
                 WorkerExecutorClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
+                    .max_decoding_message_size(max_message_size)
+                    .max_encoding_message_size(max_message_size)
             },
             config.worker_executor.client.clone(),
         );
