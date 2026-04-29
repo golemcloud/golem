@@ -69,19 +69,25 @@ object Guards {
    * Executes a block atomically.
    *
    * On success the atomic region is committed via `markEndOperation`. On
-   * failure the region is intentionally left open so the executor sees the trap
-   * as occurring *inside* the atomic region and can retry from the
-   * begin-operation marker (matching the Rust SDK behaviour where `Drop` is
-   * never called on panic because WASM panics don't unwind).
+   * failure the SDK calls the host `trap` function, which surfaces as an
+   * uncatchable wasm trap so user code cannot observe the failure with a
+   * `try/catch` or `recover`. The atomic region is intentionally left open
+   * so the existing replay-time fallback in `markBeginOperation` deletes the
+   * partial inner side effects via a `Jump` and re-executes the block.
    */
   def atomically[A](block: => Future[A]): Future[A] = {
     val guard = markAtomicOperation()
     block.transform(
       result => { guard.drop(); result },
-      error => { /* Do NOT drop — leave the atomic region open for retry */
-        error
-      }
+      error => HostApi.trap(s"atomic block failed: ${formatErrorForTrap(error)}")
     )
+  }
+
+  private def formatErrorForTrap(error: Throwable): String = {
+    val sw = new java.io.StringWriter
+    val pw = new java.io.PrintWriter(sw)
+    error.printStackTrace(pw)
+    sw.toString
   }
 
   def markAtomicOperation(): AtomicOperationGuard = {

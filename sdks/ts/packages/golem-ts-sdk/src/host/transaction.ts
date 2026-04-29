@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { markAtomicOperation } from './guard';
-import { type OplogIndex, getOplogIndex, setOplogIndex } from './hostapi';
+import { type OplogIndex, getOplogIndex, setOplogIndex, trap } from './hostapi';
 import { Result } from './result';
 
 /**
@@ -187,8 +187,11 @@ export async function infallibleTransaction<Out>(
     guard.drop();
     return result;
   } catch (e) {
-    // Do NOT drop the guard — leave the atomic region open so the executor
-    // sees the trap inside the region and can retry from the begin marker.
+    // Force an uncatchable trap so user code cannot observe the failure with
+    // a `try/catch`. The atomic region is intentionally left open; the
+    // existing replay-time fallback in `mark_begin_operation` deletes the
+    // partial inner side effects and re-executes the block.
+    trap(`infallibleTransaction failed: ${formatErrorForTrap(e)}`);
     throw e;
   }
 }
@@ -222,9 +225,22 @@ export async function fallibleTransaction<Out, Err>(
     guard.drop();
     return out;
   } catch (e) {
-    // Do NOT drop the guard — leave the atomic region open so the executor
-    // sees the trap inside the region and can retry from the begin marker.
+    // Force an uncatchable trap. Note: this only fires for *thrown* errors,
+    // which are unexpected. Expected failures are returned via Result.err
+    // and processed by `tx.onFailure` above without trapping.
+    trap(`fallibleTransaction failed: ${formatErrorForTrap(e)}`);
     throw e;
+  }
+}
+
+function formatErrorForTrap(err: unknown): string {
+  if (err instanceof Error) {
+    return err.stack ?? `${err.name}: ${err.message}`;
+  }
+  try {
+    return String(err);
+  } catch {
+    return '<unprintable error>';
   }
 }
 

@@ -25,6 +25,10 @@ pub fn register_agent(RegisteredAgent) -> Unit
 
 pub fn set_agent_instance(AgentInstance) -> Unit
 
+pub fn uuid_from_standard_string(String) -> @types.Uuid raise JsonCodecError
+
+pub fn uuid_to_standard_string(@types.Uuid) -> String
+
 // Errors
 pub suberror JsonCodecError {
   JsonCodecError(String)
