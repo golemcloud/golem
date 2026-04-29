@@ -1,17 +1,12 @@
-import { describe, expect, it, beforeEach } from "@effect/vitest"
-import { Effect, Option, Redacted, Schema } from "effect"
-import {
-  __resetGetConfigValueForTest,
-  __setGetConfigValueForTest,
-  ConfigError,
-  compileConfig,
-  defineConfig,
-  encodeOverrides,
-} from "../src/config.js"
+import { describe, expect, it } from "@effect/vitest"
+import { Effect, Layer, Option, Redacted, Schema } from "effect"
+import { ConfigError, compileConfig, defineConfig, encodeOverrides } from "../src/config.js"
 import type { CompiledConfig } from "../src/config.js"
+import { ConfigClient } from "../src/host/ConfigClient.js"
 import { toWitCodec } from "../src/wit-codec.js"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 
+type WitType = CoreTypes.WitType
 type WitValue = CoreTypes.WitValue
 
 const encode = <S extends Schema.Top>(
@@ -27,11 +22,29 @@ const compile = <F extends Record<string, Schema.Top>>(
   fields: F,
 ): Effect.Effect<CompiledConfig, unknown> => compileConfig(fields, "test")
 
-describe("compileConfig", () => {
-  beforeEach(() => {
-    __resetGetConfigValueForTest()
-  })
+/**
+ * Build a `ConfigClient` test layer over a synchronous responder. The
+ * layer is local to each `it.effect` body so per-test state never
+ * leaks across tests (replaces the previous module-level
+ * `__setGetConfigValueForTest` / `__resetGetConfigValueForTest`
+ * indirection).
+ */
+const ConfigStub = (
+  responder: (key: ReadonlyArray<string>, expectedType: WitType) => WitValue,
+): Layer.Layer<ConfigClient> =>
+  Layer.succeed(
+    ConfigClient,
+    ConfigClient.of({
+      getConfigValue: responder,
+    }),
+  )
 
+/** Default stub — fails any unexpected call (used when a test never reads a leaf). */
+const ConfigStubFail: Layer.Layer<ConfigClient> = ConfigStub(() => {
+  throw new Error("ConfigClient: unexpected getConfigValue call in test")
+})
+
+describe("compileConfig", () => {
   it.effect("emits one local declaration per primitive field", () =>
     Effect.gen(function* () {
       const cc = yield* compile({
@@ -84,13 +97,13 @@ describe("compileConfig", () => {
       const cc = yield* compile({ greeting: Schema.String })
       const greetingWv = yield* encode(Schema.String, "hi")
       let calls = 0
-      __setGetConfigValueForTest((_path, _type) => {
+      const stub = ConfigStub((_path, _type) => {
         calls++
         return greetingWv
       })
 
       // One invocation: build shape, read field twice → 1 host call.
-      const shape1 = (yield* cc.buildShape()) as {
+      const shape1 = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
         greeting: Effect.Effect<string, ConfigError>
       }
       const v1 = yield* shape1.greeting
@@ -100,7 +113,7 @@ describe("compileConfig", () => {
       expect(calls).toBe(1)
 
       // A *different* shape (next invocation) re-fetches.
-      const shape2 = (yield* cc.buildShape()) as {
+      const shape2 = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
         greeting: Effect.Effect<string, ConfigError>
       }
       yield* shape2.greeting
@@ -113,11 +126,11 @@ describe("compileConfig", () => {
       const cc = yield* compile({ apiKey: Schema.Redacted(Schema.String) })
       const wv = yield* encode(Schema.String, "sk-1234")
       let calls = 0
-      __setGetConfigValueForTest(() => {
+      const stub = ConfigStub(() => {
         calls++
         return wv
       })
-      const shape = (yield* cc.buildShape()) as {
+      const shape = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
         apiKey: { get: Effect.Effect<Redacted.Redacted<string>, ConfigError> }
       }
       const r1 = yield* shape.apiKey.get
@@ -132,10 +145,10 @@ describe("compileConfig", () => {
   it.effect("surfaces host traps as ConfigError(_, HostTrap)", () =>
     Effect.gen(function* () {
       const cc = yield* compile({ greeting: Schema.String })
-      __setGetConfigValueForTest(() => {
+      const stub = ConfigStub(() => {
         throw new Error("nope")
       })
-      const shape = (yield* cc.buildShape()) as {
+      const shape = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
         greeting: Effect.Effect<string, ConfigError>
       }
       const result = yield* Effect.result(shape.greeting)
@@ -153,9 +166,9 @@ describe("compileConfig", () => {
       const cc = yield* compile({ port: Schema.Number })
       // Return a string WitValue when a number is expected.
       const stringWv = yield* encode(Schema.String, "not a number")
-      __setGetConfigValueForTest(() => stringWv)
+      const stub = ConfigStub(() => stringWv)
 
-      const shape = (yield* cc.buildShape()) as {
+      const shape = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
         port: Effect.Effect<number, ConfigError>
       }
       const result = yield* Effect.result(shape.port)
@@ -178,10 +191,6 @@ describe("compileConfig", () => {
 })
 
 describe("encodeOverrides", () => {
-  beforeEach(() => {
-    __resetGetConfigValueForTest()
-  })
-
   it.effect("encodes simple non-secret leaves", () =>
     Effect.gen(function* () {
       const cc = yield* compile({ greeting: Schema.String, port: Schema.Number })
@@ -268,14 +277,10 @@ describe("encodeOverrides", () => {
 })
 
 describe("buildShape — empty struct branches", () => {
-  beforeEach(() => {
-    __resetGetConfigValueForTest()
-  })
-
   it.effect("materialises an empty Schema.Struct({}) as `{}` in the shape", () =>
     Effect.gen(function* () {
       const cc = yield* compile({ empty: Schema.Struct({}) })
-      const shape = (yield* cc.buildShape()) as {
+      const shape = (yield* cc.buildShape().pipe(Effect.provide(ConfigStubFail))) as {
         empty: Record<string, unknown>
       }
       expect(shape.empty).toBeDefined()
@@ -286,19 +291,15 @@ describe("buildShape — empty struct branches", () => {
 })
 
 describe("Schema.Option leaves", () => {
-  beforeEach(() => {
-    __resetGetConfigValueForTest()
-  })
-
   it.effect("a Schema.Option leaf round-trips Option.none() returned by the host", () =>
     Effect.gen(function* () {
       const cc = yield* compile({ redisUrl: Schema.Option(Schema.String) })
       // Pre-encode Option.none() through the same WitCodec the runtime
       // uses, so the mock returns a WitValue the decoder will accept.
       const noneWv = yield* encode(Schema.Option(Schema.String), Option.none())
-      __setGetConfigValueForTest(() => noneWv)
+      const stub = ConfigStub(() => noneWv)
 
-      const shape = (yield* cc.buildShape()) as {
+      const shape = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
         redisUrl: Effect.Effect<Option.Option<string>, ConfigError>
       }
       const v = yield* shape.redisUrl
@@ -310,9 +311,9 @@ describe("Schema.Option leaves", () => {
     Effect.gen(function* () {
       const cc = yield* compile({ redisUrl: Schema.Option(Schema.String) })
       const someWv = yield* encode(Schema.Option(Schema.String), Option.some("redis://localhost"))
-      __setGetConfigValueForTest(() => someWv)
+      const stub = ConfigStub(() => someWv)
 
-      const shape = (yield* cc.buildShape()) as {
+      const shape = (yield* cc.buildShape().pipe(Effect.provide(stub))) as {
         redisUrl: Effect.Effect<Option.Option<string>, ConfigError>
       }
       const v = yield* shape.redisUrl
@@ -331,10 +332,6 @@ describe("Schema.Option leaves", () => {
 })
 
 describe("compileConfig — duplicate-path guard", () => {
-  beforeEach(() => {
-    __resetGetConfigValueForTest()
-  })
-
   it.effect("the schema walker cannot naturally produce duplicate paths", () =>
     Effect.gen(function* () {
       // JS object semantics already guarantee unique keys at each level —
@@ -351,10 +348,6 @@ describe("compileConfig — duplicate-path guard", () => {
 })
 
 describe("defineConfig", () => {
-  beforeEach(() => {
-    __resetGetConfigValueForTest()
-  })
-
   it("returns a Context.Service-compatible class with static fields", () => {
     const MyConfig = defineConfig("MyConfig", {
       greeting: Schema.String,

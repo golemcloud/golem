@@ -1,5 +1,6 @@
 import { Duration, Effect, Scope } from "effect"
-import * as RetryHost from "golem:api/retry@1.5.0"
+import type * as RetryHost from "golem:api/retry@1.5.0"
+import { RetryClient } from "./host/RetryClient.js"
 
 /**
  * Effect-idiomatic façade over `golem:api/retry@1.5.0`.
@@ -746,100 +747,34 @@ export const toRawNamedPolicy = (
 }
 
 // ---------------------------------------------------------------------------
-// Host-binding indirections (so tests can swap them out)
-// ---------------------------------------------------------------------------
-
-let getRetryPoliciesImpl: () => ReadonlyArray<RetryHost.NamedRetryPolicy> = () =>
-  RetryHost.getRetryPolicies()
-let getRetryPolicyByNameImpl: (name: string) => RetryHost.NamedRetryPolicy | undefined = (name) =>
-  RetryHost.getRetryPolicyByName(name)
-let resolveRetryPolicyImpl: (
-  verb: string,
-  nounUri: string,
-  properties: ReadonlyArray<readonly [string, RetryHost.PredicateValue]>,
-) => RetryHost.RetryPolicy | undefined = (verb, nounUri, properties) =>
-  RetryHost.resolveRetryPolicy(
-    verb,
-    nounUri,
-    properties.map(([k, v]) => [k, v]) as Array<[string, RetryHost.PredicateValue]>,
-  )
-let setRetryPolicyImpl: (policy: RetryHost.NamedRetryPolicy) => void = (policy) =>
-  RetryHost.setRetryPolicy(policy)
-let removeRetryPolicyImpl: (name: string) => void = (name) => RetryHost.removeRetryPolicy(name)
-
-/** @internal — replace the host shim used for `getRetryPolicies` in tests. */
-export const __setGetRetryPoliciesForTest = (
-  fn: () => ReadonlyArray<RetryHost.NamedRetryPolicy>,
-): void => {
-  getRetryPoliciesImpl = fn
-}
-/** @internal — restore the real binding. */
-export const __resetGetRetryPoliciesForTest = (): void => {
-  getRetryPoliciesImpl = () => RetryHost.getRetryPolicies()
-}
-/** @internal */
-export const __setGetRetryPolicyByNameForTest = (
-  fn: (name: string) => RetryHost.NamedRetryPolicy | undefined,
-): void => {
-  getRetryPolicyByNameImpl = fn
-}
-/** @internal */
-export const __resetGetRetryPolicyByNameForTest = (): void => {
-  getRetryPolicyByNameImpl = (name) => RetryHost.getRetryPolicyByName(name)
-}
-/** @internal */
-export const __setResolveRetryPolicyForTest = (
-  fn: (
-    verb: string,
-    nounUri: string,
-    properties: ReadonlyArray<readonly [string, RetryHost.PredicateValue]>,
-  ) => RetryHost.RetryPolicy | undefined,
-): void => {
-  resolveRetryPolicyImpl = fn
-}
-/** @internal */
-export const __resetResolveRetryPolicyForTest = (): void => {
-  resolveRetryPolicyImpl = (verb, nounUri, properties) =>
-    RetryHost.resolveRetryPolicy(
-      verb,
-      nounUri,
-      properties.map(([k, v]) => [k, v]) as Array<[string, RetryHost.PredicateValue]>,
-    )
-}
-/** @internal */
-export const __setSetRetryPolicyForTest = (
-  fn: (policy: RetryHost.NamedRetryPolicy) => void,
-): void => {
-  setRetryPolicyImpl = fn
-}
-/** @internal */
-export const __resetSetRetryPolicyForTest = (): void => {
-  setRetryPolicyImpl = (policy) => RetryHost.setRetryPolicy(policy)
-}
-/** @internal */
-export const __setRemoveRetryPolicyForTest = (fn: (name: string) => void): void => {
-  removeRetryPolicyImpl = fn
-}
-/** @internal */
-export const __resetRemoveRetryPolicyForTest = (): void => {
-  removeRetryPolicyImpl = (name) => RetryHost.removeRetryPolicy(name)
-}
-
-// ---------------------------------------------------------------------------
 // Effect-typed host calls
 // ---------------------------------------------------------------------------
 
 /** Get all named retry policies currently active on this agent. */
 export const getPolicies = (): Effect.Effect<
   ReadonlyArray<RetryHost.NamedRetryPolicy>,
-  RetryHostError
-> => Effect.try({ try: () => getRetryPoliciesImpl(), catch: (e) => new RetryHostError(e) })
+  RetryHostError,
+  RetryClient
+> =>
+  Effect.gen(function* () {
+    const client = yield* RetryClient
+    return yield* Effect.try({
+      try: () => client.getRetryPolicies(),
+      catch: (e) => new RetryHostError(e),
+    })
+  })
 
 /** Look up a single named policy. Resolves to `undefined` when no rule with that name exists. */
 export const getPolicyByName = (
   name: string,
-): Effect.Effect<RetryHost.NamedRetryPolicy | undefined, RetryHostError> =>
-  Effect.try({ try: () => getRetryPolicyByNameImpl(name), catch: (e) => new RetryHostError(e) })
+): Effect.Effect<RetryHost.NamedRetryPolicy | undefined, RetryHostError, RetryClient> =>
+  Effect.gen(function* () {
+    const client = yield* RetryClient
+    return yield* Effect.try({
+      try: () => client.getRetryPolicyByName(name),
+      catch: (e) => new RetryHostError(e),
+    })
+  })
 
 /**
  * Resolve the matching retry policy for a given operation context. The
@@ -854,8 +789,13 @@ export const resolvePolicy = (
   verb: string,
   nounUri: string,
   properties: ReadonlyArray<readonly [string, PredicateValueInput]>,
-): Effect.Effect<RetryHost.RetryPolicy | undefined, RetryHostError | RetryPolicyValidationError> =>
+): Effect.Effect<
+  RetryHost.RetryPolicy | undefined,
+  RetryHostError | RetryPolicyValidationError,
+  RetryClient
+> =>
   Effect.gen(function* () {
+    const client = yield* RetryClient
     const encoded: Array<readonly [string, RetryHost.PredicateValue]> = []
     for (let i = 0; i < properties.length; i++) {
       const [k, v] = properties[i]
@@ -863,7 +803,7 @@ export const resolvePolicy = (
       encoded.push([k, val])
     }
     return yield* Effect.try({
-      try: () => resolveRetryPolicyImpl(verb, nounUri, encoded),
+      try: () => client.resolveRetryPolicy(verb, nounUri, encoded),
       catch: (e) => new RetryHostError(e),
     })
   })
@@ -874,18 +814,25 @@ export const resolvePolicy = (
  */
 export const setPolicy = (
   policy: NamedPolicyInput,
-): Effect.Effect<void, RetryPolicyValidationError | RetryHostError> =>
+): Effect.Effect<void, RetryPolicyValidationError | RetryHostError, RetryClient> =>
   Effect.gen(function* () {
+    const client = yield* RetryClient
     const raw = yield* toRawNamedPolicy(policy)
     yield* Effect.try({
-      try: () => setRetryPolicyImpl(raw),
+      try: () => client.setRetryPolicy(raw),
       catch: (e) => new RetryHostError(e),
     })
   })
 
 /** Remove a named retry policy. Mirrors the host's `remove-retry-policy`. */
-export const removePolicy = (name: string): Effect.Effect<void, RetryHostError> =>
-  Effect.try({ try: () => removeRetryPolicyImpl(name), catch: (e) => new RetryHostError(e) })
+export const removePolicy = (name: string): Effect.Effect<void, RetryHostError, RetryClient> =>
+  Effect.gen(function* () {
+    const client = yield* RetryClient
+    return yield* Effect.try({
+      try: () => client.removeRetryPolicy(name),
+      catch: (e) => new RetryHostError(e),
+    })
+  })
 
 // ---------------------------------------------------------------------------
 // Scoped activation
@@ -901,19 +848,22 @@ export const removePolicy = (name: string): Effect.Effect<void, RetryHostError> 
  */
 export const useScoped = (
   policy: NamedPolicyInput,
-): Effect.Effect<void, RetryPolicyValidationError | RetryHostError, Scope.Scope> =>
+): Effect.Effect<void, RetryPolicyValidationError | RetryHostError, Scope.Scope | RetryClient> =>
   Effect.gen(function* () {
+    const client = yield* RetryClient
     const raw = yield* toRawNamedPolicy(policy)
     const previous = yield* Effect.try({
-      try: () => getRetryPolicyByNameImpl(raw.name),
+      try: () => client.getRetryPolicyByName(raw.name),
       catch: (e) => new RetryHostError(e),
     })
     yield* Effect.acquireRelease(
-      Effect.try({ try: () => setRetryPolicyImpl(raw), catch: (e) => new RetryHostError(e) }),
+      Effect.try({ try: () => client.setRetryPolicy(raw), catch: (e) => new RetryHostError(e) }),
       () =>
         Effect.try({
           try: () =>
-            previous !== undefined ? setRetryPolicyImpl(previous) : removeRetryPolicyImpl(raw.name),
+            previous !== undefined
+              ? client.setRetryPolicy(previous)
+              : client.removeRetryPolicy(raw.name),
           catch: () => undefined,
         }).pipe(Effect.ignore),
     )
@@ -928,8 +878,11 @@ export const useScoped = (
 export const withPolicy = <A, E, R>(
   policy: NamedPolicyInput,
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | RetryPolicyValidationError | RetryHostError, Exclude<R, Scope.Scope>> =>
-  Effect.scoped(useScoped(policy).pipe(Effect.andThen(effect)))
+): Effect.Effect<
+  A,
+  E | RetryPolicyValidationError | RetryHostError,
+  Exclude<R, Scope.Scope> | RetryClient
+> => Effect.scoped(useScoped(policy).pipe(Effect.andThen(effect)))
 
 // ---------------------------------------------------------------------------
 // Re-exports of raw WIT types (no re-export of the host functions; use

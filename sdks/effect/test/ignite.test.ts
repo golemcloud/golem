@@ -4,15 +4,17 @@
  * decoding, transactions, streaming, error classification, and the
  * Ignite-specific rejection of nested `withTransaction` calls.
  */
-import { beforeEach, describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Stream } from "effect"
+import { beforeEach, expect, layer } from "@effect/vitest"
+import { Cause, Effect, Exit, Layer, Stream } from "effect"
 import {
   ConnectionError,
   SqlError,
   SqlSyntaxError,
   UnknownError,
 } from "effect/unstable/sql/SqlError"
+import { IgniteHostClient } from "../src/host/IgniteHostClient.js"
 import { Ignite, IgniteClient } from "../src/ignite.js"
+import * as MockIg from "./mocks/golem-rdbms-ignite2.js"
 import {
   __getExecuteLog,
   __resetIgniteMock,
@@ -33,13 +35,26 @@ const failureValue = <E>(exit: Exit.Exit<unknown, E>): E => {
   return fails[0]!.error
 }
 
+/**
+ * Layer-based test stub for {@link IgniteHostClient}. Routes
+ * `open(address)` through the in-memory `golem:rdbms/ignite2@1.5.0`
+ * mock module so each test can drive behaviour via the existing
+ * mock-module setters under a per-test reset cycle.
+ */
+const IgniteStub = Layer.succeed(
+  IgniteHostClient,
+  IgniteHostClient.of({
+    open: (address) => MockIg.DbConnection.open(address),
+  }),
+)
+
 beforeEach(() => {
   __resetIgniteMock()
 })
 
 const ADDR = "ignite://localhost:10800"
 
-describe("IgniteClient (mocked golem:rdbms/ignite2@1.5.0)", () => {
+layer(IgniteStub)("IgniteClient (mocked golem:rdbms/ignite2@1.5.0)", (it) => {
   it.effect("opens a connection and runs DDL via execute", () =>
     Effect.gen(function* () {
       const sql = yield* IgniteClient.make({ connectionAddress: ADDR })

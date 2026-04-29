@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Fiber } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer } from "effect"
+import { DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
+import { OplogLive } from "../src/host/OplogClient.js"
 import * as Saga from "../src/saga.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
+
+const hostLayer = Layer.mergeAll(OplogLive, DurabilityModeLive)
 
 beforeEach(() => {
   ApiHostMock.__resetAll()
@@ -34,7 +38,7 @@ describe("Saga.fallibleTransaction — happy path", () => {
       )
       expect(result).toEqual(["A", "B"])
       expect(trace).toEqual(["exec:a", "exec:b"])
-    }),
+    }).pipe(Effect.provide(hostLayer)),
   )
 
   it.effect("opens an atomic region around each step (begin+end balanced)", () =>
@@ -54,7 +58,7 @@ describe("Saga.fallibleTransaction — happy path", () => {
       // observe the host state — `__getAtomicMarks` returns the *open*
       // marks; if every step balances begin/end it must be empty.
       expect(ApiHostMock.__getAtomicMarks()).toEqual([])
-    }),
+    }).pipe(Effect.provide(hostLayer)),
   )
 })
 
@@ -99,7 +103,7 @@ describe("Saga.fallibleTransaction — failure paths", () => {
       // exec:a, exec:b, exec:c (failed — c never registers a comp);
       // comps run in reverse: comp:b, comp:a
       expect(trace).toEqual(["exec:a", "exec:b", "exec:c", "comp:b", "comp:a"])
-    }),
+    }).pipe(Effect.provide(hostLayer)),
   )
 
   it.effect("returns FailedAndRolledBackPartially when a fallible compensation fails", () =>
@@ -152,7 +156,7 @@ describe("Saga.fallibleTransaction — failure paths", () => {
       }
       // All compensations must still have run in reverse order.
       expect(trace).toEqual(["exec:a", "exec:b", "exec:c", "comp:c", "comp:b", "comp:a"])
-    }),
+    }).pipe(Effect.provide(hostLayer)),
   )
 
   it.effect(
@@ -187,7 +191,7 @@ describe("Saga.fallibleTransaction — failure paths", () => {
           expect(dies.length).toBeGreaterThan(0)
         }
         expect(trace).toEqual([])
-      }),
+      }).pipe(Effect.provide(hostLayer)),
   )
 })
 
@@ -196,7 +200,7 @@ describe("Saga.infallibleTransaction", () => {
     Effect.gen(function* () {
       const value = yield* Saga.infallibleTransaction(Effect.succeed(42))
       expect(value).toBe(42)
-    }),
+    }).pipe(Effect.provide(hostLayer)),
   )
 
   it.live("on typed failure: drains comps in reverse, calls setIndex(checkpoint), parks", () =>
@@ -250,7 +254,7 @@ describe("Saga.infallibleTransaction", () => {
       // exec ran a, b, c (failing); comp ran b, a (c never registered)
       expect(trace).toEqual(["exec:a", "exec:b", "exec:c", "comp:b", "comp:a"])
       yield* Fiber.interrupt(fiber)
-    }),
+    }).pipe(Effect.provide(hostLayer)),
   )
 
   it.effect("propagates defects without rewinding", () =>
@@ -262,7 +266,7 @@ describe("Saga.infallibleTransaction", () => {
       expect(Exit.isFailure(exit)).toBe(true)
       // currentIndex bumped once on entry → 51n. setIndex was NOT called.
       expect(ApiHostMock.__getOplogIndex()).toBe(51n)
-    }),
+    }).pipe(Effect.provide(hostLayer)),
   )
 })
 
@@ -287,7 +291,7 @@ describe("Saga — nesting", () => {
           expect((wrapper.error as Saga.NestedSagaError).outerMode).toBe("fallible")
         }
       }
-    }),
+    }).pipe(Effect.provide(hostLayer)),
   )
 
   it.effect("rejects nested infallible inside fallible", () =>
@@ -307,7 +311,7 @@ describe("Saga — nesting", () => {
           expect((wrapper.error as Saga.NestedSagaError).outerMode).toBe("fallible")
         }
       }
-    }),
+    }).pipe(Effect.provide(hostLayer)),
   )
 
   it.effect(
@@ -322,7 +326,7 @@ describe("Saga — nesting", () => {
         // documents that a top-level saga succeeds.
         const result = yield* Saga.fallibleTransaction(Effect.succeed("ok"))
         expect(result).toBe("ok")
-      }),
+      }).pipe(Effect.provide(hostLayer)),
   )
 })
 
@@ -337,6 +341,6 @@ describe("Saga.withCompensation — outside-saga safety", () => {
       ).pipe(Effect.scoped)
       expect(value).toBe("hi")
       expect(compensated).toBe(false)
-    }),
+    }).pipe(Effect.provide(hostLayer)),
   )
 })

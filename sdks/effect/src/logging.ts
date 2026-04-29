@@ -1,6 +1,7 @@
 import { Cause, Effect, Layer, Logger, type LogLevel, References } from "effect"
-import * as ContextHost from "golem:api/context@1.5.0"
-import * as WasiLogging from "wasi:logging/logging"
+import type * as WasiLogging from "wasi:logging/logging"
+import { LoggingHost, type LoggingHostShape } from "./host/LoggingHost.js"
+import { TracingHost, type TracingHostShape } from "./host/TracingHost.js"
 
 /**
  * Effect-idiomatic façade over `wasi:logging/logging`.
@@ -12,12 +13,12 @@ import * as WasiLogging from "wasi:logging/logging"
  * - {@link layer} — replaces Effect's default logger set with a logger
  *   that forwards every `Effect.log*` call to `wasi:logging.log`. This
  *   is the layer wired in by the agent dispatcher; user code does not
- *   need to provide it explicitly.
+ *   need to provide it explicitly. Requires the
+ *   {@link LoggingHost} and {@link TracingHost} services (provided by
+ *   `HostLive`).
  * - {@link mergeLayer} — same logger, but added alongside Effect's
  *   default loggers (useful in dev/CI where you also want console output).
  * - {@link log} — direct, imperative logging at a chosen level.
- * - {@link golemLogger} — the underlying `Logger.Logger<unknown, void>`,
- *   exposed for users who want to assemble their own logger set.
  *
  * Log lines are emitted as `key=value` `logfmt`-style strings:
  *
@@ -42,37 +43,6 @@ export class LoggingHostError {
   constructor(readonly cause: unknown) {
     this.message = `LoggingHostError: ${cause instanceof Error ? cause.message : String(cause)}`
   }
-}
-
-// ---------------------------------------------------------------------------
-// Host-binding indirections
-// ---------------------------------------------------------------------------
-
-let logImpl: (level: WasiLogging.Level, context: string, message: string) => void = (
-  level,
-  context,
-  message,
-) => WasiLogging.log(level, context, message)
-
-let currentContextImpl: () => ContextHost.InvocationContext = () => ContextHost.currentContext()
-
-/** @internal */
-export const __setLogImplForTest = (
-  fn: (level: WasiLogging.Level, context: string, message: string) => void,
-): void => {
-  logImpl = fn
-}
-/** @internal */
-export const __resetLogImplForTest = (): void => {
-  logImpl = (level, context, message) => WasiLogging.log(level, context, message)
-}
-/** @internal */
-export const __setCurrentContextImplForTest = (fn: () => ContextHost.InvocationContext): void => {
-  currentContextImpl = fn
-}
-/** @internal */
-export const __resetCurrentContextImplForTest = (): void => {
-  currentContextImpl = () => ContextHost.currentContext()
 }
 
 // ---------------------------------------------------------------------------
@@ -160,6 +130,28 @@ const renderMessage = (message: unknown): string => {
   return safeStringify(message)
 }
 
+type ReadonlyRecord<K extends string, V> = { readonly [P in K]: V }
+
+const ZERO_TRACE_ID = "00000000000000000000000000000000"
+const ZERO_SPAN_ID = "0000000000000000"
+
+/**
+ * Read the current host invocation context's trace + span ids via the
+ * provided {@link TracingHost} service. All-zero ids are treated as
+ * "no active host span" and elided from the rendered log line.
+ */
+const safeCurrentSpanIds = (tracing: TracingHostShape): { traceId?: string; spanId?: string } => {
+  try {
+    const ctx = tracing.currentContext()
+    const traceId = ctx.traceId()
+    const spanId = ctx.spanId()
+    if (traceId === ZERO_TRACE_ID || spanId === ZERO_SPAN_ID) return {}
+    return { traceId, spanId }
+  } catch {
+    return {}
+  }
+}
+
 /**
  * Render the per-call log line. Best-effort and non-throwing — used
  * inside the synchronous logger callback.
@@ -198,54 +190,56 @@ const formatLine = (
   return `${parts.join(" ")} :: ${renderMessage(message)}`
 }
 
-type ReadonlyRecord<K extends string, V> = { readonly [P in K]: V }
-
-const ZERO_TRACE_ID = "00000000000000000000000000000000"
-const ZERO_SPAN_ID = "0000000000000000"
-
-const safeCurrentSpanIds = (): { traceId?: string; spanId?: string } => {
-  try {
-    const ctx = currentContextImpl()
-    const traceId = ctx.traceId()
-    const spanId = ctx.spanId()
-    if (traceId === ZERO_TRACE_ID || spanId === ZERO_SPAN_ID) return {}
-    return { traceId, spanId }
-  } catch {
-    return {}
-  }
-}
-
 // ---------------------------------------------------------------------------
-// Logger
+// Logger factory
 // ---------------------------------------------------------------------------
 
 /**
- * The Effect `Logger` that forwards every log call to
- * `wasi:logging.log`. Best-effort and non-throwing: a host failure or
- * stringification error never propagates back into user code.
+ * Build the Effect `Logger` that forwards every log call to the host's
+ * `wasi:logging.log`. The logger closes over the {@link LoggingHost}
+ * and {@link TracingHost} services captured at layer-construction
+ * time, so the synchronous logger callback can read the current host
+ * context without re-yielding from the service tags.
+ *
+ * Best-effort and non-throwing: a host failure or stringification
+ * error never propagates back into user code.
  */
-export const golemLogger: Logger.Logger<unknown, void> = Logger.make((options) => {
-  try {
-    const annotations = options.fiber.getRef(References.CurrentLogAnnotations)
-    const spans = options.fiber.getRef(References.CurrentLogSpans)
-    const ids = safeCurrentSpanIds()
-    const fiberId =
-      typeof options.fiber.id === "string" ? options.fiber.id : `#${String(options.fiber.id)}`
-    const line = formatLine(
-      options.logLevel,
-      fiberId,
-      options.message,
-      options.cause,
-      annotations,
-      spans,
-      options.date,
-      ids.traceId,
-      ids.spanId,
-    )
-    logImpl(wasiLevelOf(options.logLevel), "", line)
-  } catch {
-    // Telemetry must never break business logic.
-  }
+const makeGolemLogger = (
+  logging: LoggingHostShape,
+  tracing: TracingHostShape,
+): Logger.Logger<unknown, void> =>
+  Logger.make((options) => {
+    try {
+      const annotations = options.fiber.getRef(References.CurrentLogAnnotations)
+      const spans = options.fiber.getRef(References.CurrentLogSpans)
+      const ids = safeCurrentSpanIds(tracing)
+      const fiberId =
+        typeof options.fiber.id === "string" ? options.fiber.id : `#${String(options.fiber.id)}`
+      const line = formatLine(
+        options.logLevel,
+        fiberId,
+        options.message,
+        options.cause,
+        annotations,
+        spans,
+        options.date,
+        ids.traceId,
+        ids.spanId,
+      )
+      logging.log(wasiLevelOf(options.logLevel), "", line)
+    } catch {
+      // Telemetry must never break business logic.
+    }
+  })
+
+const golemLoggerEffect: Effect.Effect<
+  Logger.Logger<unknown, void>,
+  never,
+  LoggingHost | TracingHost
+> = Effect.gen(function* () {
+  const logging = yield* LoggingHost
+  const tracing = yield* TracingHost
+  return makeGolemLogger(logging, tracing)
 })
 
 // ---------------------------------------------------------------------------
@@ -255,17 +249,21 @@ export const golemLogger: Logger.Logger<unknown, void> = Logger.make((options) =
 /**
  * Replace Effect's default logger set with the Golem host logger. This
  * is the production wiring: every `Effect.log*` call in user code lands
- * in `wasi:logging` and nothing else.
+ * in `wasi:logging` and nothing else. Requires `LoggingHost` and
+ * `TracingHost` (provided by `HostLive`).
  */
-export const layer: Layer.Layer<never> = Logger.layer([golemLogger])
+export const layer: Layer.Layer<never, never, LoggingHost | TracingHost> = Logger.layer([
+  golemLoggerEffect,
+])
 
 /**
  * Add the Golem host logger alongside Effect's default loggers.
  * Convenient for dev / vitest where console output is also helpful.
  */
-export const mergeLayer: Layer.Layer<never> = Logger.layer([golemLogger], {
-  mergeWithExisting: true,
-})
+export const mergeLayer: Layer.Layer<never, never, LoggingHost | TracingHost> = Logger.layer(
+  [golemLoggerEffect],
+  { mergeWithExisting: true },
+)
 
 // ---------------------------------------------------------------------------
 // Imperative log helper
@@ -274,19 +272,23 @@ export const mergeLayer: Layer.Layer<never> = Logger.layer([golemLogger], {
 /**
  * Effect-idiomatic imperative `wasi:logging.log` wrapper. Prefer the
  * regular `Effect.log*` family in application code — those flow through
- * the {@link golemLogger} and get fiber/annotation/span context for
- * free. This helper exists for callers that need to emit log lines
- * outside of the standard Effect logger pipeline (e.g. inside a
- * synchronous host shim or a test harness).
+ * the Golem logger installed by {@link layer} and pick up
+ * fiber/annotation/span context for free. This helper exists for
+ * callers that need to emit log lines outside of the standard Effect
+ * logger pipeline (e.g. inside a synchronous host shim or a test
+ * harness).
  */
 export const log = (
   level: WasiLogging.Level,
   context: string,
   message: string,
-): Effect.Effect<void, LoggingHostError> =>
-  Effect.try({
-    try: () => logImpl(level, context, message),
-    catch: (e) => new LoggingHostError(e),
+): Effect.Effect<void, LoggingHostError, LoggingHost> =>
+  Effect.gen(function* () {
+    const host = yield* LoggingHost
+    return yield* Effect.try({
+      try: () => host.log(level, context, message),
+      catch: (e) => new LoggingHostError(e),
+    })
   })
 
 // ---------------------------------------------------------------------------

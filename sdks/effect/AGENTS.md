@@ -30,6 +30,19 @@ After **every** non-trivial change you must run a full local-deploy + invoke loo
 6. For snapshotting changes specifically: drive enough invocations to trigger a save (the integration-test Counter uses `everyN(10)`), inspect with `golem -L agent oplog 'Counter("x")'` (look for a `SNAPSHOT` entry containing principal + state JSON, **no** `Exception during awaiting call result for saveSnapshot.save`), then exercise the load path with `golem -L -Y agent update --await 'Counter("x")' manual` and re-`invoke` to confirm state was preserved.
 7. If anything fails inside the runtime, treat it as a real bug and fix the SDK — do **not** ship green unit tests + red integration runs.
 
+## Host injection seam (`src/host/`)
+
+All access to the WIT host bindings (`golem:*`, `wasi:*`, `node:sqlite` host extensions, etc.) flows through tagged `Context.Service`-class wrappers under `src/host/`. Each service is a thin 1:1 mirror of a single WIT interface (sometimes split by concern within an interface — e.g. `golem:agent/host` is split into `AgentHostClient` for parse/metadata/webhook and `RpcClient` for the RPC subset). Every service has a `XxxLive` Layer that calls the real WIT specifier; tests provide alternative Layers (Layer.succeed, Layer.scoped, or shared fakes under `test/host/`) instead of mutating module-level `__setX/__resetX` indirection.
+
+The complete bundle is composed in `src/host/HostLive.ts` as a single `Layer.mergeAll(...)`. The dispatcher in `src/agent.ts` builds this once at module load (see `userRuntimeLayer`) and provides it to every user-effect path: `dispatchInitialize`, `dispatchInvoke`, `dispatchSaveSnapshot`, and `dispatchLoadSnapshot`. **This is the dispatcher-erasure pattern**: SDK combinators are free to thread host-service tags through their `R` channel (e.g. `Durability.checkpoint` requires `OplogClient | AgentHostClient | SelfAgentId`), and the dispatcher's `Effect.provide(userRuntimeLayer)` strips them all before user code observes its own `R`. Consequence: **never** put `Effect.provide(layer)` inside a user-facing combinator — that defeats the seam (it forces a Layer rebuild per call and shadows any test-side override). Always let the host-service tag bubble out to the dispatcher.
+
+When adding a new host-binding wrapper:
+
+1. Drop a new `Xxx{Client,Host}.ts` under `src/host/` exporting a `Context.Service` tag plus a `XxxLive` Layer that calls the real WIT specifier.
+2. Add `XxxLive` to `Layer.mergeAll(...)` in `src/host/HostLive.ts`.
+3. Consume the service via `yield* Xxx` in the SDK module — let the tag flow into `R`. Do NOT add a module-level `let xxxImpl = ...` indirection or `__setXxxForTest` export.
+4. Tests substitute via `Effect.provide(Layer.succeed(Xxx, fake))` (or a shared `test/host/<XxxFake>.ts` factory) — never via mutation of a module-level `__setX/__resetX` hook.
+
 ## Conventions
 
 - Strict TS (`noUnusedLocals`/`Parameters`, `noImplicitReturns`); ESM (`"type": "module"`); imports must end in `.js` (NodeNext); 2-space indent, no semicolons, double quotes, trailing commas (Prettier).

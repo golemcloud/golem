@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Duration, Effect, Exit } from "effect"
+import { Duration, Effect, Exit, Layer } from "effect"
+import { RetryClient } from "../src/host/RetryClient.js"
 import * as Retry from "../src/retry.js"
 import * as RetryMock from "./mocks/golem-api-retry.js"
 
@@ -9,6 +10,28 @@ beforeEach(() => {
 afterEach(() => {
   RetryMock.__reset()
 })
+
+/**
+ * Default `RetryClient` Live layer used by tests that exercise the host
+ * wrappers end-to-end. It binds each method to the `RetryMock` module
+ * (the same module aliased to `golem:api/retry@1.5.0` in
+ * `vitest.config.ts`), so test bodies can inspect / seed state via
+ * `RetryMock.*` and observe the wrappers' effect on it. Replaces the
+ * legacy `__setX/__resetX` indirection on `src/retry.ts`.
+ */
+const RetryStub = Layer.succeed(
+  RetryClient,
+  RetryClient.of({
+    getRetryPolicies: () => RetryMock.getRetryPolicies(),
+    getRetryPolicyByName: (name) => RetryMock.getRetryPolicyByName(name),
+    resolveRetryPolicy: (verb, nounUri, properties) =>
+      RetryMock.resolveRetryPolicy(verb, nounUri, [...properties] as Array<
+        [string, RetryMock.PredicateValue]
+      >),
+    setRetryPolicy: (policy) => RetryMock.setRetryPolicy(policy),
+    removeRetryPolicy: (name) => RetryMock.removeRetryPolicy(name),
+  }),
+)
 
 describe("Retry — predicate builder", () => {
   it.effect("compiles primitive predicates to flat node arrays", () =>
@@ -251,14 +274,14 @@ describe("Retry — host wrappers (set/remove/get)", () => {
       yield* Retry.setPolicy(named)
       const all = yield* Retry.getPolicies()
       expect(all.map((p) => p.name)).toEqual(["p"])
-    }),
+    }).pipe(Effect.provide(RetryStub)),
   )
 
   it.effect("getPolicyByName returns undefined when unknown", () =>
     Effect.gen(function* () {
       const out = yield* Retry.getPolicyByName("missing")
       expect(out).toBeUndefined()
-    }),
+    }).pipe(Effect.provide(RetryStub)),
   )
 
   it.effect("removePolicy clears the entry", () =>
@@ -267,7 +290,7 @@ describe("Retry — host wrappers (set/remove/get)", () => {
       yield* Retry.removePolicy("x")
       const out = yield* Retry.getPolicyByName("x")
       expect(out).toBeUndefined()
-    }),
+    }).pipe(Effect.provide(RetryStub)),
   )
 
   it.effect("setPolicy fails with RetryPolicyValidationError on bad inputs", () =>
@@ -275,24 +298,31 @@ describe("Retry — host wrappers (set/remove/get)", () => {
       const bad = Retry.NamedPolicy.named("nope", Retry.Policy.exponential(Duration.seconds(1), -1))
       const exit = yield* Effect.exit(Retry.setPolicy(bad))
       expect(Exit.isFailure(exit)).toBe(true)
-    }),
+    }).pipe(Effect.provide(RetryStub)),
   )
 
   it.effect("setPolicy wraps host throws as RetryHostError", () =>
     Effect.gen(function* () {
-      Retry.__setSetRetryPolicyForTest(() => {
-        throw new Error("boom")
-      })
-      try {
-        const exit = yield* Effect.exit(
-          Retry.setPolicy(Retry.NamedPolicy.named("p", Retry.Policy.immediate())),
-        )
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit)) {
-          expect(JSON.stringify(exit.cause)).toMatch(/RetryHostError/)
-        }
-      } finally {
-        Retry.__resetSetRetryPolicyForTest()
+      const FailingSet = Layer.succeed(
+        RetryClient,
+        RetryClient.of({
+          getRetryPolicies: () => RetryMock.getRetryPolicies(),
+          getRetryPolicyByName: (name) => RetryMock.getRetryPolicyByName(name),
+          resolveRetryPolicy: () => undefined,
+          setRetryPolicy: () => {
+            throw new Error("boom")
+          },
+          removeRetryPolicy: (name) => RetryMock.removeRetryPolicy(name),
+        }),
+      )
+      const exit = yield* Effect.exit(
+        Retry.setPolicy(Retry.NamedPolicy.named("p", Retry.Policy.immediate())).pipe(
+          Effect.provide(FailingSet),
+        ),
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(JSON.stringify(exit.cause)).toMatch(/RetryHostError/)
       }
     }),
   )
@@ -300,24 +330,29 @@ describe("Retry — host wrappers (set/remove/get)", () => {
   it.effect("resolvePolicy encodes properties via predicate-value", () =>
     Effect.gen(function* () {
       let observed: Array<readonly [string, unknown]> | null = null
-      Retry.__setResolveRetryPolicyForTest((_v, _n, props) => {
-        observed = props.map(([k, v]) => [k, v])
-        return undefined
-      })
-      try {
-        yield* Retry.resolvePolicy("GET", "https://example.com", [
-          ["status-code", 503],
-          ["verb", "GET"],
-          ["debug", true],
-        ])
-        expect(observed).toEqual([
-          ["status-code", { tag: "integer", val: 503n }],
-          ["verb", { tag: "text", val: "GET" }],
-          ["debug", { tag: "boolean", val: true }],
-        ])
-      } finally {
-        Retry.__resetResolveRetryPolicyForTest()
-      }
+      const ObservingResolve = Layer.succeed(
+        RetryClient,
+        RetryClient.of({
+          getRetryPolicies: () => RetryMock.getRetryPolicies(),
+          getRetryPolicyByName: (name) => RetryMock.getRetryPolicyByName(name),
+          resolveRetryPolicy: (_verb, _noun, props) => {
+            observed = props.map(([k, v]) => [k, v])
+            return undefined
+          },
+          setRetryPolicy: (policy) => RetryMock.setRetryPolicy(policy),
+          removeRetryPolicy: (name) => RetryMock.removeRetryPolicy(name),
+        }),
+      )
+      yield* Retry.resolvePolicy("GET", "https://example.com", [
+        ["status-code", 503],
+        ["verb", "GET"],
+        ["debug", true],
+      ]).pipe(Effect.provide(ObservingResolve))
+      expect(observed).toEqual([
+        ["status-code", { tag: "integer", val: 503n }],
+        ["verb", { tag: "text", val: "GET" }],
+        ["debug", { tag: "boolean", val: true }],
+      ])
     }),
   )
 })
@@ -335,7 +370,7 @@ describe("Retry — scoped helpers", () => {
       )
       expect(snapshotInside.map((p) => p.name)).toEqual(["scoped"])
       expect(RetryMock.getRetryPolicies().map((p) => p.name)).toEqual([])
-    }),
+    }).pipe(Effect.provide(RetryStub)),
   )
 
   it.effect("withPolicy restores a previously-existing policy on exit", () =>
@@ -363,7 +398,7 @@ describe("Retry — scoped helpers", () => {
       // After the scope closes, the original policy is restored.
       const after = RetryMock.getRetryPolicyByName("scoped")
       expect(after?.policy.nodes[0]?.tag).toBe("immediate")
-    }),
+    }).pipe(Effect.provide(RetryStub)),
   )
 
   it.effect("withPolicy restores on failure too", () =>
@@ -372,6 +407,6 @@ describe("Retry — scoped helpers", () => {
       const exit = yield* Effect.exit(Retry.withPolicy(named, Effect.fail("boom" as const)))
       expect(Exit.isFailure(exit)).toBe(true)
       expect(RetryMock.getRetryPolicies()).toEqual([])
-    }),
+    }).pipe(Effect.provide(RetryStub)),
   )
 })

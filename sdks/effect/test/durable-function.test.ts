@@ -1,19 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Result, Schema } from "effect"
+import { Cause, Effect, Exit, Layer, Result, Schema } from "effect"
 import * as Durability from "../src/durability.js"
+import { WrapSemaphore, WrapSemaphoreLive } from "../src/durable-function.js"
+import { DurabilityClient, DurabilityLive } from "../src/host/DurabilityClient.js"
+import { DurabilityModeClient, DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import { toWitCodec } from "../src/wit-codec.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 import * as DurabilityMock from "./mocks/golem-durability.js"
 
+/**
+ * Per-test layer that wires the mock-backed `DurabilityHost`
+ * implementations up as a fresh `DurabilityClient` instance plus a
+ * fresh `WrapSemaphore`. The vitest alias on
+ * `golem:durability/durability@1.5.0` already points at
+ * `test/mocks/golem-durability.ts`, so `DurabilityLive` (which
+ * delegates straight to that import) reads/writes the mock module's
+ * state. `WrapSemaphoreLive` is `Layer.effect` so each `Effect.provide`
+ * call allocates a fresh single-permit semaphore — replacing the old
+ * `Durability.__resetWrapStateForTest()` reset hook.
+ */
+const TestLayer: Layer.Layer<DurabilityClient | DurabilityModeClient | WrapSemaphore> =
+  Layer.mergeAll(DurabilityLive, DurabilityModeLive, WrapSemaphoreLive)
+
 beforeEach(() => {
   ApiHostMock.__resetAll()
   DurabilityMock.__resetAll()
-  Durability.__resetWrapStateForTest()
 })
 afterEach(() => {
   ApiHostMock.__resetAll()
   DurabilityMock.__resetAll()
-  Durability.__resetWrapStateForTest()
 })
 
 const Req = Schema.Struct({ symbol: Schema.String })
@@ -37,7 +52,7 @@ describe("Durability.wrap — observation + bracketing", () => {
         Effect.succeed({ price: 1 }),
       )
       expect(DurabilityMock.__getObservedCalls()).toEqual([["myapp", "fetchQuote"]])
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 
   it.effect("opens and closes exactly one durable bracket on success", () =>
@@ -63,7 +78,7 @@ describe("Durability.wrap — observation + bracketing", () => {
       expect(ends[0]!.functionType.tag).toBe("write-remote")
       expect(ends[0]!.forcedCommit).toBe(false)
       expect(DurabilityMock.__getOpenBrackets()).toEqual([])
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 
   it.effect("forwards forcedCommit=true to end-durable-function", () =>
@@ -83,7 +98,7 @@ describe("Durability.wrap — observation + bracketing", () => {
         Effect.succeed({ price: 0 }),
       )
       expect(DurabilityMock.__getEndCalls()[0]!.forcedCommit).toBe(true)
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 })
 
@@ -109,7 +124,7 @@ describe("Durability.wrap — live mode", () => {
       expect(persisted).toHaveLength(1)
       expect(persisted[0]!.functionName).toBe("i::f")
       expect(persisted[0]!.functionType.tag).toBe("write-remote")
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 
   it.effect("re-raises typed failures and persists Result.fail(error)", () =>
@@ -136,7 +151,7 @@ describe("Durability.wrap — live mode", () => {
       }
       expect(DurabilityMock.__getPersistedCalls()).toHaveLength(1)
       expect(DurabilityMock.__getEndCalls()).toHaveLength(1)
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 
   it.effect("does NOT persist or end on defect", () =>
@@ -161,7 +176,7 @@ describe("Durability.wrap — live mode", () => {
       expect(DurabilityMock.__getEndCalls()).toHaveLength(0)
       // The bracket stays open, mirroring Rust on panic.
       expect(DurabilityMock.__getOpenBrackets()).toHaveLength(1)
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 
   it.effect("does NOT persist or end on interruption", () =>
@@ -184,7 +199,7 @@ describe("Durability.wrap — live mode", () => {
       expect(Exit.isFailure(ex)).toBe(true)
       expect(DurabilityMock.__getPersistedCalls()).toHaveLength(0)
       expect(DurabilityMock.__getEndCalls()).toHaveLength(0)
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 
   it.effect("temporarily installs persist-nothing while body runs and restores it", () =>
@@ -209,7 +224,7 @@ describe("Durability.wrap — live mode", () => {
       expect(observed).toEqual({ tag: "persist-nothing" })
       // Restored afterwards.
       expect(ApiHostMock.getOplogPersistenceLevel()).toEqual({ tag: "smart" })
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 
   it.effect("does NOT push persist-nothing when already in persist-nothing", () =>
@@ -235,7 +250,7 @@ describe("Durability.wrap — live mode", () => {
       expect(levelDuringBody).toEqual({ tag: "persist-nothing" })
       // Still persist-nothing afterward — the wrap did not toggle.
       expect(ApiHostMock.getOplogPersistenceLevel()).toEqual({ tag: "persist-nothing" })
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 })
 
@@ -294,7 +309,7 @@ describe("Durability.wrap — replay mode", () => {
       expect(DurabilityMock.__getEndCalls()).toHaveLength(1)
       // No new persist call during replay.
       expect(DurabilityMock.__getPersistedCalls()).toHaveLength(0)
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 
   it.effect("re-raises a typed failure recorded in the oplog", () =>
@@ -334,7 +349,7 @@ describe("Durability.wrap — replay mode", () => {
         const fr = ex.cause.reasons.find(Cause.isFailReason)
         expect(fr?.error).toEqual({ code: "BOOM" })
       }
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 
   it.effect("fails with DurabilityReplayMismatchError when functionName differs", () =>
@@ -371,7 +386,7 @@ describe("Durability.wrap — replay mode", () => {
       if (Exit.isFailure(ex)) {
         expect(JSON.stringify(ex.cause)).toMatch(/DurabilityReplayMismatchError/)
       }
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 
   it.effect("fails with DurabilityReplayMismatchError when functionType differs", () =>
@@ -408,7 +423,7 @@ describe("Durability.wrap — replay mode", () => {
       if (Exit.isFailure(ex)) {
         expect(JSON.stringify(ex.cause)).toMatch(/DurabilityReplayMismatchError/)
       }
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 })
 
@@ -447,7 +462,7 @@ describe("Durability.wrap — concurrency / nesting", () => {
       // The nested call must NOT begin a bracket or persist anything.
       expect(DurabilityMock.__getBeginCalls()).toHaveLength(0)
       expect(DurabilityMock.__getPersistedCalls()).toHaveLength(0)
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 
   it.effect("serialises concurrent wraps via the module-level semaphore", () =>
@@ -472,7 +487,7 @@ describe("Durability.wrap — concurrency / nesting", () => {
       expect(DurabilityMock.__getPersistedCalls()).toHaveLength(3)
       // Brackets all closed.
       expect(DurabilityMock.__getOpenBrackets()).toEqual([])
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 })
 
@@ -493,7 +508,7 @@ describe("Durability.wrapInfallible", () => {
       )
       expect(out).toEqual({ price: 7 })
       expect(DurabilityMock.__getPersistedCalls()).toHaveLength(1)
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 
   it.effect("decodes the bare success value on replay", () =>
@@ -523,7 +538,7 @@ describe("Durability.wrapInfallible", () => {
         Effect.succeed({ price: 0 }),
       )
       expect(out).toEqual({ price: 13 })
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 })
 
@@ -537,7 +552,7 @@ describe("Durability — escape hatches", () => {
       // persist-nothing forces live regardless of the flag.
       ApiHostMock.setOplogPersistenceLevel({ tag: "persist-nothing" })
       expect(yield* Durability.isLive).toBe(true)
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 
   it("FunctionType constructors emit the WIT-shape variants", () => {
@@ -571,6 +586,6 @@ describe("Durability — escape hatches", () => {
       )
       expect(DurabilityMock.__getEndCalls()).toHaveLength(1)
       expect(DurabilityMock.__getEndCalls()[0]!.forcedCommit).toBe(true)
-    }),
+    }).pipe(Effect.provide(TestLayer)),
   )
 })

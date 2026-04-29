@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Effect, Exit } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import * as Durability from "../src/durability.js"
+import { DurabilityModeClient, DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 
 beforeEach(() => {
@@ -15,14 +16,14 @@ describe("Durability — persistence level", () => {
     Effect.gen(function* () {
       const out = yield* Durability.getPersistenceLevel
       expect(out).toEqual({ tag: "smart" })
-    }),
+    }).pipe(Effect.provide(DurabilityModeLive)),
   )
 
   it.effect("set persists into host state", () =>
     Effect.gen(function* () {
       yield* Durability.setPersistenceLevel(Durability.PersistenceLevel.persistNothing)
       expect(ApiHostMock.getOplogPersistenceLevel()).toEqual({ tag: "persist-nothing" })
-    }),
+    }).pipe(Effect.provide(DurabilityModeLive)),
   )
 
   it.effect("withPersistenceLevel restores the previous value on success", () =>
@@ -36,7 +37,7 @@ describe("Durability — persistence level", () => {
       )
       expect(inside).toEqual({ tag: "persist-nothing" })
       expect(ApiHostMock.getOplogPersistenceLevel()).toEqual({ tag: "smart" })
-    }),
+    }).pipe(Effect.provide(DurabilityModeLive)),
   )
 
   it.effect("withPersistenceLevel restores on failure too", () =>
@@ -49,27 +50,32 @@ describe("Durability — persistence level", () => {
       )
       expect(Exit.isFailure(exit)).toBe(true)
       expect(ApiHostMock.getOplogPersistenceLevel()).toEqual({ tag: "smart" })
-    }),
+    }).pipe(Effect.provide(DurabilityModeLive)),
   )
 
-  it.effect("wraps host throws as DurabilityHostError", () =>
-    Effect.gen(function* () {
-      Durability.__setSetOplogPersistenceLevelForTest(() => {
+  it.effect("wraps host throws as DurabilityHostError", () => {
+    const live = DurabilityModeClient.of({
+      getOplogPersistenceLevel: () => ApiHostMock.getOplogPersistenceLevel(),
+      setOplogPersistenceLevel: () => {
         throw new Error("nope")
-      })
-      try {
-        const exit = yield* Effect.exit(
-          Durability.setPersistenceLevel(Durability.PersistenceLevel.smart),
-        )
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit)) {
-          expect(JSON.stringify(exit.cause)).toMatch(/DurabilityHostError/)
-        }
-      } finally {
-        Durability.__resetSetOplogPersistenceLevelForTest()
+      },
+      getIdempotenceMode: () => ApiHostMock.getIdempotenceMode(),
+      setIdempotenceMode: (v) => ApiHostMock.setIdempotenceMode(v),
+      markBeginOperation: () => ApiHostMock.markBeginOperation(),
+      markEndOperation: (b) => ApiHostMock.markEndOperation(b),
+      oplogCommit: (n) => ApiHostMock.oplogCommit(n),
+      generateIdempotencyKey: () => ApiHostMock.generateIdempotencyKey(),
+    })
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        Durability.setPersistenceLevel(Durability.PersistenceLevel.smart),
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(JSON.stringify(exit.cause)).toMatch(/DurabilityHostError/)
       }
-    }),
-  )
+    }).pipe(Effect.provide(Layer.succeed(DurabilityModeClient, live)))
+  })
 })
 
 describe("Durability — idempotence mode", () => {
@@ -78,7 +84,7 @@ describe("Durability — idempotence mode", () => {
       expect(yield* Durability.getIdempotenceMode).toBe(true)
       yield* Durability.setIdempotenceMode(false)
       expect(yield* Durability.getIdempotenceMode).toBe(false)
-    }),
+    }).pipe(Effect.provide(DurabilityModeLive)),
   )
 
   it.effect("withIdempotenceMode restores previous value on interrupt", () =>
@@ -86,7 +92,7 @@ describe("Durability — idempotence mode", () => {
       const exit = yield* Effect.exit(Durability.withIdempotenceMode(false, Effect.interrupt))
       expect(Exit.isFailure(exit)).toBe(true)
       expect(ApiHostMock.getIdempotenceMode()).toBe(true)
-    }),
+    }).pipe(Effect.provide(DurabilityModeLive)),
   )
 })
 
@@ -102,7 +108,7 @@ describe("Durability — atomic region", () => {
       expect(observed.length).toBe(1)
       // After scope close the mark must be gone.
       expect(ApiHostMock.__getAtomicMarks()).toEqual([])
-    }),
+    }).pipe(Effect.provide(DurabilityModeLive)),
   )
 
   it.effect("clears the mark on failure", () =>
@@ -110,7 +116,7 @@ describe("Durability — atomic region", () => {
       const exit = yield* Effect.exit(Durability.atomically(Effect.fail("boom" as const)))
       expect(Exit.isFailure(exit)).toBe(true)
       expect(ApiHostMock.__getAtomicMarks()).toEqual([])
-    }),
+    }).pipe(Effect.provide(DurabilityModeLive)),
   )
 
   it.effect("supports manual begin/end", () =>
@@ -120,7 +126,7 @@ describe("Durability — atomic region", () => {
       expect(ApiHostMock.__getAtomicMarks()).toContain(begin)
       yield* Durability.endOperation(begin)
       expect(ApiHostMock.__getAtomicMarks()).not.toContain(begin)
-    }),
+    }).pipe(Effect.provide(DurabilityModeLive)),
   )
 })
 
@@ -129,7 +135,7 @@ describe("Durability — oplog commit", () => {
     Effect.gen(function* () {
       yield* Durability.oplogCommit(3)
       expect(ApiHostMock.__getOplogCommits()).toEqual([3])
-    }),
+    }).pipe(Effect.provide(DurabilityModeLive)),
   )
 
   it.effect("rejects out-of-range replica counts", () =>
@@ -139,14 +145,14 @@ describe("Durability — oplog commit", () => {
       if (Exit.isFailure(exit)) {
         expect(JSON.stringify(exit.cause)).toMatch(/DurabilityValidationError/)
       }
-    }),
+    }).pipe(Effect.provide(DurabilityModeLive)),
   )
 
   it.effect("rejects non-integer replica counts", () =>
     Effect.gen(function* () {
       const exit = yield* Effect.exit(Durability.oplogCommit(1.5))
       expect(Exit.isFailure(exit)).toBe(true)
-    }),
+    }).pipe(Effect.provide(DurabilityModeLive)),
   )
 })
 
@@ -157,23 +163,28 @@ describe("Durability — idempotency key", () => {
       const b = yield* Durability.generateIdempotencyKey
       expect(a.lowBits).toBe(1n)
       expect(b.lowBits).toBe(2n)
-    }),
+    }).pipe(Effect.provide(DurabilityModeLive)),
   )
 
-  it.effect("wraps host throws as DurabilityHostError", () =>
-    Effect.gen(function* () {
-      Durability.__setGenerateIdempotencyKeyForTest(() => {
+  it.effect("wraps host throws as DurabilityHostError", () => {
+    const live = DurabilityModeClient.of({
+      getOplogPersistenceLevel: () => ApiHostMock.getOplogPersistenceLevel(),
+      setOplogPersistenceLevel: (v) => ApiHostMock.setOplogPersistenceLevel(v),
+      getIdempotenceMode: () => ApiHostMock.getIdempotenceMode(),
+      setIdempotenceMode: (v) => ApiHostMock.setIdempotenceMode(v),
+      markBeginOperation: () => ApiHostMock.markBeginOperation(),
+      markEndOperation: (b) => ApiHostMock.markEndOperation(b),
+      oplogCommit: (n) => ApiHostMock.oplogCommit(n),
+      generateIdempotencyKey: () => {
         throw new Error("boom")
-      })
-      try {
-        const exit = yield* Effect.exit(Durability.generateIdempotencyKey)
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit)) {
-          expect(JSON.stringify(exit.cause)).toMatch(/DurabilityHostError/)
-        }
-      } finally {
-        Durability.__resetGenerateIdempotencyKeyForTest()
+      },
+    })
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(Durability.generateIdempotencyKey)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(JSON.stringify(exit.cause)).toMatch(/DurabilityHostError/)
       }
-    }),
-  )
+    }).pipe(Effect.provide(Layer.succeed(DurabilityModeClient, live)))
+  })
 })

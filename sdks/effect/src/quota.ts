@@ -1,5 +1,6 @@
 import { Cause, Effect, Exit, Schema, SchemaGetter, Scope } from "effect"
 import * as QuotaHost from "golem:quota/types@1.5.0"
+import { QuotaClient } from "./host/QuotaClient.js"
 import { Int64, Uint32, Uint64 } from "./wit-types.js"
 
 /**
@@ -206,80 +207,6 @@ export const QuotaToken: Schema.Codec<
 )
 
 // ---------------------------------------------------------------------------
-// Host-binding indirections (so tests can swap them out)
-// ---------------------------------------------------------------------------
-
-let acquireQuotaTokenImpl: (resourceName: string, expectedUse: bigint) => QuotaHost.QuotaToken = (
-  name,
-  expected,
-) => new QuotaHost.QuotaToken(name, expected)
-let reserveImpl: (token: QuotaHost.QuotaToken, amount: bigint) => QuotaHost.Reservation = (
-  token,
-  amount,
-) => token.reserve(amount)
-let commitImpl: (reservation: QuotaHost.Reservation, used: bigint) => void = (reservation, used) =>
-  QuotaHost.Reservation.commit(reservation, used)
-let splitImpl: (token: QuotaHost.QuotaToken, childExpectedUse: bigint) => QuotaHost.QuotaToken = (
-  token,
-  childExpectedUse,
-) => token.split(childExpectedUse)
-let mergeImpl: (token: QuotaHost.QuotaToken, other: QuotaHost.QuotaToken) => void = (
-  token,
-  other,
-) => token.merge(other)
-
-/** @internal — replace the `acquireQuotaToken` host shim used in tests. */
-export const __setAcquireQuotaTokenForTest = (
-  fn: (resourceName: string, expectedUse: bigint) => QuotaHost.QuotaToken,
-): void => {
-  acquireQuotaTokenImpl = fn
-}
-/** @internal — restore the real `acquireQuotaToken` binding. */
-export const __resetAcquireQuotaTokenForTest = (): void => {
-  acquireQuotaTokenImpl = (name, expected) => new QuotaHost.QuotaToken(name, expected)
-}
-/** @internal */
-export const __setReserveForTest = (
-  fn: (token: QuotaHost.QuotaToken, amount: bigint) => QuotaHost.Reservation,
-): void => {
-  reserveImpl = fn
-}
-/** @internal */
-export const __resetReserveForTest = (): void => {
-  reserveImpl = (token, amount) => token.reserve(amount)
-}
-/** @internal */
-export const __setCommitForTest = (
-  fn: (reservation: QuotaHost.Reservation, used: bigint) => void,
-): void => {
-  commitImpl = fn
-}
-/** @internal */
-export const __resetCommitForTest = (): void => {
-  commitImpl = (reservation, used) => QuotaHost.Reservation.commit(reservation, used)
-}
-/** @internal */
-export const __setSplitForTest = (
-  fn: (token: QuotaHost.QuotaToken, childExpectedUse: bigint) => QuotaHost.QuotaToken,
-): void => {
-  splitImpl = fn
-}
-/** @internal */
-export const __resetSplitForTest = (): void => {
-  splitImpl = (token, childExpectedUse) => token.split(childExpectedUse)
-}
-/** @internal */
-export const __setMergeForTest = (
-  fn: (token: QuotaHost.QuotaToken, other: QuotaHost.QuotaToken) => void,
-): void => {
-  mergeImpl = fn
-}
-/** @internal */
-export const __resetMergeForTest = (): void => {
-  mergeImpl = (token, other) => token.merge(other)
-}
-
-// ---------------------------------------------------------------------------
 // Effect-typed host calls
 // ---------------------------------------------------------------------------
 
@@ -305,10 +232,13 @@ const isFailedReservation = (e: unknown): e is QuotaHost.FailedReservation =>
 export const acquireQuotaToken = (
   resourceName: string,
   expectedUse: bigint,
-): Effect.Effect<QuotaToken, QuotaHostError> =>
-  Effect.try({
-    try: () => acquireQuotaTokenImpl(resourceName, expectedUse),
-    catch: (cause) => new QuotaHostError("acquireQuotaToken", cause),
+): Effect.Effect<QuotaToken, QuotaHostError, QuotaClient> =>
+  Effect.gen(function* () {
+    const client = yield* QuotaClient
+    return yield* Effect.try({
+      try: () => client.acquireQuotaToken(resourceName, expectedUse),
+      catch: (cause) => new QuotaHostError("acquireQuotaToken", cause),
+    })
   })
 
 /**
@@ -324,32 +254,35 @@ export const acquireQuotaToken = (
 export const reserve = (
   token: QuotaToken,
   amount: bigint,
-): Effect.Effect<Reservation, FailedReservationError | QuotaHostError, Scope.Scope> =>
-  Effect.acquireRelease(
-    Effect.try({
-      try: () => makeReservation(reserveImpl(token, amount)),
-      catch: (cause) => {
-        if (isFailedReservation(cause)) {
-          return new FailedReservationError(cause)
-        }
-        return new QuotaHostError("reserve", cause)
-      },
-    }),
-    (reservation) =>
-      Effect.sync(() => {
-        const r = reservation as ReservationImpl
-        if (!r.committed) {
-          try {
-            commitImpl(r.raw, 0n)
-          } catch {
-            // Scope finalizers must not throw; absorb host errors during
-            // best-effort cleanup. An explicit `commit` would have
-            // surfaced this as `QuotaHostError`.
+): Effect.Effect<Reservation, FailedReservationError | QuotaHostError, Scope.Scope | QuotaClient> =>
+  Effect.gen(function* () {
+    const client = yield* QuotaClient
+    return yield* Effect.acquireRelease(
+      Effect.try({
+        try: () => makeReservation(client.reserve(token, amount)),
+        catch: (cause) => {
+          if (isFailedReservation(cause)) {
+            return new FailedReservationError(cause)
           }
-          r.committed = true
-        }
+          return new QuotaHostError("reserve", cause)
+        },
       }),
-  )
+      (reservation) =>
+        Effect.sync(() => {
+          const r = reservation as ReservationImpl
+          if (!r.committed) {
+            try {
+              client.commit(r.raw, 0n)
+            } catch {
+              // Scope finalizers must not throw; absorb host errors
+              // during best-effort cleanup. An explicit `commit` would
+              // have surfaced this as `QuotaHostError`.
+            }
+            r.committed = true
+          }
+        }),
+    )
+  })
 
 /**
  * Commit actual usage. Mirrors WIT `reservation.commit(used)`:
@@ -365,15 +298,18 @@ export const reserve = (
 export const commit = (
   reservation: Reservation,
   used: bigint,
-): Effect.Effect<void, QuotaHostError> =>
-  Effect.suspend(() => {
+): Effect.Effect<void, QuotaHostError, QuotaClient> =>
+  Effect.gen(function* () {
     const r = reservation as ReservationImpl
     if (r.committed) {
-      return Effect.fail(new QuotaHostError("commit", new Error("Reservation already committed")))
+      return yield* Effect.fail(
+        new QuotaHostError("commit", new Error("Reservation already committed")),
+      )
     }
-    return Effect.try({
+    const client = yield* QuotaClient
+    return yield* Effect.try({
       try: () => {
-        commitImpl(r.raw, used)
+        client.commit(r.raw, used)
         r.committed = true
       },
       catch: (cause) => new QuotaHostError("commit", cause),
@@ -390,10 +326,13 @@ export const commit = (
 export const split = (
   token: QuotaToken,
   childExpectedUse: bigint,
-): Effect.Effect<QuotaToken, QuotaHostError> =>
-  Effect.try({
-    try: () => splitImpl(token, childExpectedUse),
-    catch: (cause) => new QuotaHostError("split", cause),
+): Effect.Effect<QuotaToken, QuotaHostError, QuotaClient> =>
+  Effect.gen(function* () {
+    const client = yield* QuotaClient
+    return yield* Effect.try({
+      try: () => client.split(token, childExpectedUse),
+      catch: (cause) => new QuotaHostError("split", cause),
+    })
   })
 
 /**
@@ -402,10 +341,16 @@ export const split = (
  * {@link QuotaHostError}. After a successful merge, `other` is
  * consumed and must not be used again.
  */
-export const merge = (token: QuotaToken, other: QuotaToken): Effect.Effect<void, QuotaHostError> =>
-  Effect.try({
-    try: () => mergeImpl(token, other),
-    catch: (cause) => new QuotaHostError("merge", cause),
+export const merge = (
+  token: QuotaToken,
+  other: QuotaToken,
+): Effect.Effect<void, QuotaHostError, QuotaClient> =>
+  Effect.gen(function* () {
+    const client = yield* QuotaClient
+    return yield* Effect.try({
+      try: () => client.merge(token, other),
+      catch: (cause) => new QuotaHostError("merge", cause),
+    })
   })
 
 /**
@@ -433,7 +378,7 @@ export const withReservation = <A, E, R>(
   token: QuotaToken,
   amount: bigint,
   body: (reservation: Reservation) => Effect.Effect<{ used: bigint; value: A }, E, R>,
-): Effect.Effect<A, E | FailedReservationError | QuotaHostError, R> =>
+): Effect.Effect<A, E | FailedReservationError | QuotaHostError, R | QuotaClient> =>
   Effect.scoped(
     Effect.gen(function* () {
       const reservation = yield* reserve(token, amount)

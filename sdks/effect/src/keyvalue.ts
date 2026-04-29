@@ -38,9 +38,7 @@
  */
 
 import { Effect, Option, Scope, Schema } from "effect"
-import * as KvTypes from "wasi:keyvalue/types@0.1.0"
-import * as KvEventual from "wasi:keyvalue/eventual@0.1.0"
-import * as KvBatch from "wasi:keyvalue/eventual-batch@0.1.0"
+import { KeyValueClient, type HostBucket } from "./host/KeyValueClient.js"
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -214,28 +212,6 @@ export interface SchemaBucket<S extends Schema.Top> {
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-const writeOutgoing = (
-  bytes: Uint8Array,
-): Effect.Effect<KvTypes.OutgoingValue, KeyValueHostError> =>
-  Effect.try({
-    try: () => {
-      const ov = KvTypes.OutgoingValue.newOutgoingValue()
-      ov.outgoingValueWriteBodySync(bytes)
-      return ov
-    },
-    catch: (cause) => new KeyValueHostError(cause, "outgoingValueWriteBodySync"),
-  })
-
-const consumeIncoming = (iv: KvTypes.IncomingValue): Effect.Effect<Uint8Array, KeyValueHostError> =>
-  Effect.try({
-    try: () => iv.incomingValueConsumeSync(),
-    catch: (cause) => new KeyValueHostError(cause, "incomingValueConsumeSync"),
-  })
-
-// ---------------------------------------------------------------------------
 // Schema codec — UTF-8 JSON over `Schema`
 // ---------------------------------------------------------------------------
 //
@@ -327,92 +303,19 @@ const makeSchemaBucket = <S extends Schema.Top>(bucket: Bucket, schema: S): Sche
   }
 }
 
-const makeBucket = (name: string, handle: KvTypes.Bucket): Bucket => {
-  const get: Bucket["get"] = (key) =>
-    Effect.gen(function* () {
-      const iv = yield* Effect.try({
-        try: () => KvEventual.get(handle, key),
-        catch: (cause) => new KeyValueHostError(cause, "eventual.get"),
-      })
-      if (iv === undefined || iv === null) return Option.none<Uint8Array>()
-      const bytes = yield* consumeIncoming(iv)
-      return Option.some(bytes)
-    })
-
-  const set: Bucket["set"] = (key, value) =>
-    Effect.gen(function* () {
-      const ov = yield* writeOutgoing(value)
-      yield* Effect.try({
-        try: () => KvEventual.set(handle, key, ov),
-        catch: (cause) => new KeyValueHostError(cause, "eventual.set"),
-      })
-    })
-
-  const del: Bucket["delete"] = (key) =>
-    Effect.try({
-      try: () => KvEventual.delete_(handle, key),
-      catch: (cause) => new KeyValueHostError(cause, "eventual.delete"),
-    })
-
-  const exists: Bucket["exists"] = (key) =>
-    Effect.try({
-      try: () => KvEventual.exists(handle, key),
-      catch: (cause) => new KeyValueHostError(cause, "eventual.exists"),
-    })
-
-  const getMany: Bucket["getMany"] = (keys) =>
-    Effect.gen(function* () {
-      const raw = yield* Effect.try({
-        try: () =>
-          KvBatch.getMany(handle, [...keys]) as ReadonlyArray<KvTypes.IncomingValue | undefined>,
-        catch: (cause) => new KeyValueHostError(cause, "eventual-batch.get-many"),
-      })
-      const out: Array<Option.Option<Uint8Array>> = []
-      for (const iv of raw) {
-        if (iv === undefined || iv === null) {
-          out.push(Option.none<Uint8Array>())
-        } else {
-          const bytes = yield* consumeIncoming(iv)
-          out.push(Option.some(bytes))
-        }
-      }
-      return out as ReadonlyArray<Option.Option<Uint8Array>>
-    })
-
-  const setMany: Bucket["setMany"] = (entries) =>
-    Effect.gen(function* () {
-      const pairs: Array<[string, KvTypes.OutgoingValue]> = []
-      for (const [k, v] of entries) {
-        const ov = yield* writeOutgoing(v)
-        pairs.push([k, ov])
-      }
-      yield* Effect.try({
-        try: () => KvBatch.setMany(handle, pairs),
-        catch: (cause) => new KeyValueHostError(cause, "eventual-batch.set-many"),
-      })
-    })
-
-  const deleteMany: Bucket["deleteMany"] = (keys) =>
-    Effect.try({
-      try: () => KvBatch.deleteMany(handle, [...keys]),
-      catch: (cause) => new KeyValueHostError(cause, "eventual-batch.delete-many"),
-    })
-
+const makeBucket = (host: HostBucket): Bucket => {
   const self: Bucket = {
     [BucketTypeId]: BucketTypeId,
-    name,
-    get,
-    set,
-    delete: del,
-    exists,
-    getMany,
-    setMany,
-    deleteMany,
+    name: host.name,
+    get: (key) => host.get(key),
+    set: (key, value) => host.set(key, value),
+    delete: (key) => host.delete(key),
+    exists: (key) => host.exists(key),
+    getMany: (keys) => host.getMany(keys),
+    setMany: (entries) => host.setMany(entries),
+    deleteMany: (keys) => host.deleteMany(keys),
     get keys() {
-      return Effect.try({
-        try: () => KvBatch.keys(handle),
-        catch: (cause) => new KeyValueHostError(cause, "eventual-batch.keys"),
-      })
+      return host.keys
     },
     forSchema<S extends Schema.Top>(schema: S) {
       return makeSchemaBucket(self, schema)
@@ -433,16 +336,11 @@ const makeBucket = (name: string, handle: KvTypes.Bucket): Bucket => {
  * malformed name or backend rejection) surface as
  * {@link KeyValueHostError}.
  */
-export const openBucket = (name: string): Effect.Effect<Bucket, KeyValueHostError, Scope.Scope> =>
+export const openBucket = (
+  name: string,
+): Effect.Effect<Bucket, KeyValueHostError, Scope.Scope | KeyValueClient> =>
   Effect.gen(function* () {
-    const handle = yield* Effect.acquireRelease(
-      Effect.try({
-        try: () => KvTypes.Bucket.openBucket(name),
-        catch: (cause) => new KeyValueHostError(cause, "openBucket"),
-      }),
-      // The WIT bucket resource has no .close() method; rely on JS GC
-      // when the scope's reference is dropped.
-      () => Effect.void,
-    )
-    return makeBucket(name, handle)
+    const client = yield* KeyValueClient
+    const host = yield* client.openBucket(name)
+    return makeBucket(host)
   })

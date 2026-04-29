@@ -2,10 +2,15 @@ import { Effect, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import type * as AgentHost from "golem:agent/host@1.5.0"
-import { CancellationToken as HostCancellationToken, WasmRpc } from "golem:agent/host@1.5.0"
-import { generateIdempotencyKey } from "golem:api/host@1.5.0"
 import { parseUuid, uuidToString } from "golem:core/types@1.5.0"
 import type { AgentDefinition } from "./agent.js"
+import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
+import {
+  RpcClient,
+  type RpcCancellationToken,
+  type RpcConnection,
+  type RpcHostError,
+} from "./host/RpcClient.js"
 import {
   compileMethodSpec,
   compileParamBindings,
@@ -338,7 +343,7 @@ const decodeMethodOutput = (
  *   interrupted in a strange place.
  */
 const asyncInvoke = (
-  rpc: WasmRpc,
+  rpc: RpcConnection,
   methodName: string,
   input: CoreTypes.DataValue,
 ): Effect.Effect<CoreTypes.DataValue, RemoteCallError> =>
@@ -398,9 +403,9 @@ const asyncInvoke = (
       }),
   )
 
-/** Build a single `RemoteMethod` bound to an open `WasmRpc` handle. */
+/** Build a single `RemoteMethod` bound to an open {@link RpcConnection}. */
 const buildRemoteMethod = (
-  rpc: WasmRpc,
+  rpc: RpcConnection,
   mc: MethodCodec<MethodParams, Schema.Top, Schema.Top>,
 ): RemoteMethod<MethodParams, Schema.Top, Schema.Top> => {
   const call = (input: Record<string, unknown>) =>
@@ -421,7 +426,7 @@ const buildRemoteMethod = (
           try: () => rpc.scheduleCancelableInvocation(scheduledAt, mc.name, dv),
           catch: wrapHostThrow,
         }),
-        (token: HostCancellationToken): ScheduledInvocation => ({
+        (token: RpcCancellationToken): ScheduledInvocation => ({
           cancel: () =>
             Effect.sync(() => {
               try {
@@ -445,7 +450,7 @@ const buildRemoteMethod = (
 
 /** Build the full `RemoteAgent` surface for the given compiled methods. */
 const buildRemoteAgent = (
-  rpc: WasmRpc,
+  rpc: RpcConnection,
   compiled: CompiledClient,
 ): Record<string, RemoteMethod<MethodParams, Schema.Top, Schema.Top>> => {
   const out: Record<string, RemoteMethod<MethodParams, Schema.Top, Schema.Top>> = {}
@@ -460,16 +465,13 @@ const constructRpc = (
   ctorValue: CoreTypes.DataValue,
   phantomId: CoreTypes.Uuid | undefined,
   agentConfig: ReadonlyArray<AgentCommon.TypedAgentConfigValue>,
-): Effect.Effect<WasmRpc, RemoteCallError> =>
-  Effect.try({
-    try: () =>
-      new WasmRpc(
-        agentTypeName,
-        ctorValue,
-        phantomId,
-        agentConfig as Array<AgentCommon.TypedAgentConfigValue>,
-      ),
-    catch: wrapHostThrow,
+): Effect.Effect<RpcConnection, RemoteCallError, RpcClient> =>
+  Effect.gen(function* () {
+    const rpc = yield* RpcClient
+    return yield* Effect.mapError(
+      rpc.connect(agentTypeName, ctorValue, phantomId, agentConfig),
+      (e: RpcHostError): RemoteCallError => wrapHostThrow(e.cause),
+    )
   })
 
 const parsePhantomId = (id: string): Effect.Effect<CoreTypes.Uuid, RemoteCallError> =>
@@ -544,8 +546,9 @@ export const clientFor = <
     phantomId: CoreTypes.Uuid | undefined,
     opts: GetOptions<F> | undefined,
   ): Effect.Effect<
-    { rpc: WasmRpc; compiled: CompiledClient },
-    RemoteCallError | UnsupportedSchemaError | ConfigError
+    { rpc: RpcConnection; compiled: CompiledClient },
+    RemoteCallError | UnsupportedSchemaError | ConfigError,
+    RpcClient
   > =>
     Effect.gen(function* () {
       const compiled = yield* compile
@@ -554,6 +557,14 @@ export const clientFor = <
       const rpc = yield* constructRpc(def.name, ctorValue, phantomId, agentConfig)
       return { rpc, compiled }
     })
+
+  // Internally `get` / `getPhantom` / `newPhantom` widen `R` to include
+  // `RpcClient` (constructor) and additionally `DurabilityModeClient`
+  // (idempotency-key generation, only used by `newPhantom`). The public
+  // `AgentClient` surface keeps `R = never`; the dispatcher's
+  // `provideUserRuntime` (`src/agent.ts`) provides both services via
+  // `HostLive`. The cast at the return statement of `clientFor` is the
+  // erasure boundary.
 
   const get = (input: MethodInput<C>, opts?: GetOptions<F>) =>
     Effect.map(
@@ -570,8 +581,9 @@ export const clientFor = <
 
   const newPhantom = (input: MethodInput<C>, opts?: GetOptions<F>) =>
     Effect.gen(function* () {
+      const dm = yield* DurabilityModeClient
       const uuid = yield* Effect.try({
-        try: () => generateIdempotencyKey(),
+        try: () => dm.generateIdempotencyKey(),
         catch: wrapHostThrow,
       })
       const { rpc, compiled } = yield* construct(input as Record<string, unknown>, uuid, opts)

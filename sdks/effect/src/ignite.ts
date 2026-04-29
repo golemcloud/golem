@@ -65,13 +65,14 @@ import type { Acquirer, Connection } from "effect/unstable/sql/SqlConnection"
 import { SqlError, SqlSyntaxError } from "effect/unstable/sql/SqlError"
 import * as Statement from "effect/unstable/sql/Statement"
 import {
-  DbConnection,
   type DbColumn,
+  type DbConnection,
   type DbResultStream,
   type DbRow,
   type DbTransaction,
   type DbValue,
 } from "golem:rdbms/ignite2@1.5.0"
+import { IgniteHostClient } from "./host/IgniteHostClient.js"
 import { ParamEncodingError, READ_PREFIX_RE, sqlErrorFor, toBigIntChecked } from "./rdbms-shared.js"
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name"
@@ -634,7 +635,7 @@ let igniteClientIdCounter = 0
 
 const makeImpl = (
   config: IgniteClientConfig,
-): Effect.Effect<IgniteClient, SqlError, Scope.Scope | Reactivity.Reactivity> =>
+): Effect.Effect<IgniteClient, SqlError, Scope.Scope | Reactivity.Reactivity | IgniteHostClient> =>
   Effect.gen(function* () {
     const decodeTemporal = config.decodeTemporal ?? "raw"
 
@@ -657,8 +658,9 @@ const makeImpl = (
       ? Statement.defaultTransforms(config.transformResultNames).array
       : undefined
 
+    const host = yield* IgniteHostClient
     const db = yield* Effect.try({
-      try: () => DbConnection.open(config.connectionAddress),
+      try: () => host.open(config.connectionAddress),
       catch: (cause) =>
         sqlError(cause, `Failed to open Ignite connection at ${config.connectionAddress}`, "open"),
     })
@@ -793,12 +795,14 @@ const escapeIgnite = (value: string): string => `"${value.replace(/"/g, '""')}"`
 // Public factories
 // ---------------------------------------------------------------------------
 
-const make = (config: IgniteClientConfig): Effect.Effect<IgniteClient, SqlError, Scope.Scope> =>
+const make = (
+  config: IgniteClientConfig,
+): Effect.Effect<IgniteClient, SqlError, Scope.Scope | IgniteHostClient> =>
   Effect.provide(makeImpl(config), Reactivity.layer)
 
 const layer = (
   config: IgniteClientConfig,
-): Layer.Layer<IgniteClientService | Client.SqlClient, SqlError> =>
+): Layer.Layer<IgniteClientService | Client.SqlClient, SqlError, IgniteHostClient> =>
   Layer.effectContext(
     Effect.map(makeImpl(config), (client) =>
       Context.make(IgniteClientService, client).pipe(Context.add(Client.SqlClient, client)),

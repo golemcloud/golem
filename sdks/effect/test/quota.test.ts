@@ -1,10 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Effect, Exit, Fiber, Schema } from "effect"
+import { Effect, Exit, Fiber, Layer, Schema } from "effect"
 import * as Quota from "../src/quota.js"
 import { QuotaToken as QuotaTokenSchema, QuotaTokenRecord } from "../src/quota.js"
+import { QuotaClient, QuotaLive } from "../src/host/QuotaClient.js"
 import { toWitCodec } from "../src/wit-codec.js"
+import * as QuotaHost from "golem:quota/types@1.5.0"
 import { QuotaToken } from "golem:quota/types@1.5.0"
 import * as QuotaMock from "./mocks/golem-quota-types.js"
+
+/**
+ * Default Layer-based stub for {@link QuotaClient} used by the
+ * operational tests below. Production resolution is unchanged: the
+ * `QuotaLive` layer delegates to `golem:quota/types@1.5.0`, which
+ * vitest aliases to {@link QuotaMock} — so invocations here exercise
+ * the same in-memory mock as before, just plumbed through the layer
+ * boundary instead of the legacy `__setX/__resetX` indirection.
+ */
+const QuotaTestLive: Layer.Layer<QuotaClient> = QuotaLive
 
 const sample = {
   environmentId: { uuid: { highBits: 1n, lowBits: 2n } },
@@ -87,22 +99,32 @@ describe("Quota — operational API", () => {
       expect(QuotaMock.events).toEqual([
         { tag: "construct", resourceName: "api-calls", expectedUse: 100n },
       ])
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 
   it.effect("acquireQuotaToken surfaces host failures as QuotaHostError", () =>
     Effect.gen(function* () {
-      Quota.__setAcquireQuotaTokenForTest(() => {
-        throw new Error("manifest does not declare resource")
-      })
-      try {
-        const exit = yield* Effect.exit(Quota.acquireQuotaToken("missing", 1n))
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit)) {
-          expect(JSON.stringify(exit.cause)).toMatch(/QuotaHostError/)
-        }
-      } finally {
-        Quota.__resetAcquireQuotaTokenForTest()
+      // Per-test override: `acquireQuotaToken` throws; the other
+      // methods stay at their live (mock-routed) impls. Replaces the
+      // legacy `__setAcquireQuotaTokenForTest` indirection.
+      const failingAcquireLayer = Layer.succeed(
+        QuotaClient,
+        QuotaClient.of({
+          acquireQuotaToken: () => {
+            throw new Error("manifest does not declare resource")
+          },
+          reserve: (t, a) => t.reserve(a),
+          commit: (r, u) => QuotaHost.Reservation.commit(r, u),
+          split: (t, c) => t.split(c),
+          merge: (t, o) => t.merge(o),
+        }),
+      )
+      const exit = yield* Effect.exit(
+        Quota.acquireQuotaToken("missing", 1n).pipe(Effect.provide(failingAcquireLayer)),
+      )
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(JSON.stringify(exit.cause)).toMatch(/QuotaHostError/)
       }
     }),
   )
@@ -121,7 +143,7 @@ describe("Quota — operational API", () => {
       if (commitEv.tag !== "commit") throw new Error("unreachable")
       expect(commitEv.used).toBe(42n)
       expect(commitEv.reservedAmount).toBe(100n)
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 
   it.effect("withReservation commits 0 on body failure (drop semantics)", () =>
@@ -143,7 +165,7 @@ describe("Quota — operational API", () => {
       expect(commitEv).toBeDefined()
       if (commitEv?.tag !== "commit") throw new Error("unreachable")
       expect(commitEv.used).toBe(0n)
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 
   it.live("withReservation commits 0 on body interruption", () =>
@@ -168,7 +190,7 @@ describe("Quota — operational API", () => {
       expect(commitEv).toBeDefined()
       if (commitEv?.tag !== "commit") throw new Error("unreachable")
       expect(commitEv.used).toBe(0n)
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 
   it.effect("withReservation surfaces failed-reservation as FailedReservationError", () =>
@@ -189,7 +211,7 @@ describe("Quota — operational API", () => {
         expect(text).toMatch(/5000/)
       }
       expect(QuotaMock.events.find((e) => e.tag === "commit")).toBeUndefined()
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 
   it.effect("manual reserve + commit emits the expected event sequence", () =>
@@ -206,7 +228,7 @@ describe("Quota — operational API", () => {
       const commitEv = QuotaMock.events[2]
       if (commitEv.tag !== "commit") throw new Error("unreachable")
       expect(commitEv.used).toBe(7n)
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 
   it.effect("reserve auto-commits 0 on scope close when not explicitly committed", () =>
@@ -222,7 +244,7 @@ describe("Quota — operational API", () => {
       expect(commits).toHaveLength(1)
       if (commits[0].tag !== "commit") throw new Error("unreachable")
       expect(commits[0].used).toBe(0n)
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 
   it.effect("commit twice on the same reservation fails with QuotaHostError", () =>
@@ -241,7 +263,7 @@ describe("Quota — operational API", () => {
       if (Exit.isFailure(exit)) {
         expect(JSON.stringify(exit.cause)).toMatch(/already committed/)
       }
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 
   it.effect("manual reserve surfaces failed-reservation typed error", () =>
@@ -259,7 +281,7 @@ describe("Quota — operational API", () => {
       if (Exit.isFailure(exit)) {
         expect(JSON.stringify(exit.cause)).toMatch(/FailedReservationError/)
       }
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 
   it.effect("manual reserve surfaces non-failed-reservation throws as QuotaHostError", () =>
@@ -279,7 +301,7 @@ describe("Quota — operational API", () => {
         expect(text).toMatch(/QuotaHostError/)
         expect(text).not.toMatch(/FailedReservationError/)
       }
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 
   it.effect("split delegates to the host and returns a child token", () =>
@@ -291,7 +313,7 @@ describe("Quota — operational API", () => {
       expect(splits).toHaveLength(1)
       if (splits[0].tag !== "split") throw new Error("unreachable")
       expect(splits[0].childExpectedUse).toBe(300n)
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 
   it.effect("split overflow surfaces as QuotaHostError", () =>
@@ -306,7 +328,7 @@ describe("Quota — operational API", () => {
       if (Exit.isFailure(exit)) {
         expect(JSON.stringify(exit.cause)).toMatch(/QuotaHostError/)
       }
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 
   it.effect("merge delegates to the host", () =>
@@ -316,7 +338,7 @@ describe("Quota — operational API", () => {
       yield* Quota.merge(a, b)
       const merges = QuotaMock.events.filter((e) => e.tag === "merge")
       expect(merges).toHaveLength(1)
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 
   it.effect("merge of mismatched resources surfaces as QuotaHostError", () =>
@@ -332,6 +354,6 @@ describe("Quota — operational API", () => {
       if (Exit.isFailure(exit)) {
         expect(JSON.stringify(exit.cause)).toMatch(/QuotaHostError/)
       }
-    }),
+    }).pipe(Effect.provide(QuotaTestLive)),
   )
 })

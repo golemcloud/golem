@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Effect, Exit, Stream } from "effect"
+import { Effect, Exit, Layer, Stream } from "effect"
+import { OplogClient, OplogLive } from "../src/host/OplogClient.js"
 import * as Oplog from "../src/oplog.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 import * as OplogMock from "./mocks/golem-api-oplog.js"
@@ -29,32 +30,40 @@ describe("Oplog — currentIndex / setIndex", () => {
       const a = yield* Oplog.currentIndex
       const b = yield* Oplog.currentIndex
       expect(b).toBeGreaterThan(a)
-    }),
+    }).pipe(Effect.provide(OplogLive)),
   )
 
   it.effect("setIndex forwards the requested index to the host", () =>
     Effect.gen(function* () {
       yield* Oplog.setIndex(42n)
       expect(ApiHostMock.__getOplogIndex()).toBe(42n)
-    }),
+    }).pipe(Effect.provide(OplogLive)),
   )
 
-  it.effect("wraps host throws as OplogHostError", () =>
-    Effect.gen(function* () {
-      Oplog.__setGetOplogIndexForTest(() => {
+  it.effect("wraps host throws as OplogHostError", () => {
+    const live = OplogClient.of({
+      getOplogIndex: () => {
         throw new Error("nope")
-      })
-      try {
-        const exit = yield* Effect.exit(Oplog.currentIndex)
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit)) {
-          expect(JSON.stringify(exit.cause)).toMatch(/OplogHostError/)
-        }
-      } finally {
-        Oplog.__resetGetOplogIndexForTest()
+      },
+      setOplogIndex: (idx) => ApiHostMock.setOplogIndex(idx),
+      enrichOplogEntries: (e, a, entries, cr) =>
+        OplogMock.enrichOplogEntries(
+          e as never,
+          a as never,
+          entries.map(([i, x]) => [i, x] as [bigint, OplogMock.OplogEntry]),
+          cr,
+        ) as never,
+      newGetOplog: (agentId, start) => new OplogMock.GetOplog(agentId as never, start) as never,
+      newSearchOplog: (agentId, text) => new OplogMock.SearchOplog(agentId as never, text) as never,
+    })
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(Oplog.currentIndex)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(JSON.stringify(exit.cause)).toMatch(/OplogHostError/)
       }
-    }),
-  )
+    }).pipe(Effect.provide(Layer.succeed(OplogClient, live)))
+  })
 })
 
 describe("Oplog — read stream", () => {
@@ -71,7 +80,7 @@ describe("Oplog — read stream", () => {
         "host-call",
         "agent-invocation-started",
       ])
-    }),
+    }).pipe(Effect.provide(OplogLive)),
   )
 
   it.effect("reader exposes manual paging", () =>
@@ -84,14 +93,14 @@ describe("Oplog — read stream", () => {
       expect(first?.map((e) => (e as { tag: string }).tag)).toEqual(["log"])
       expect(second?.map((e) => (e as { tag: string }).tag)).toEqual(["no-op"])
       expect(third).toBeUndefined()
-    }),
+    }).pipe(Effect.provide(OplogLive)),
   )
 
   it.effect("returns an empty stream when no chunks are seeded", () =>
     Effect.gen(function* () {
       const arr = yield* Stream.runCollect(Oplog.read({ agentId: sampleAgent, start: 0n }))
       expect(arr).toEqual([])
-    }),
+    }).pipe(Effect.provide(OplogLive)),
   )
 })
 
@@ -111,7 +120,7 @@ describe("Oplog — search stream", () => {
         [11n, "log"],
         [20n, "log"],
       ])
-    }),
+    }).pipe(Effect.provide(OplogLive)),
   )
 })
 
@@ -140,7 +149,7 @@ describe("Oplog — enrich", () => {
         "enriched:create",
         "enriched:log",
       ])
-    }),
+    }).pipe(Effect.provide(OplogLive)),
   )
 
   it.effect("surfaces host throws as OplogHostError", () =>
@@ -157,6 +166,6 @@ describe("Oplog — enrich", () => {
       if (Exit.isFailure(exit)) {
         expect(JSON.stringify(exit.cause)).toMatch(/OplogHostError/)
       }
-    }),
+    }).pipe(Effect.provide(OplogLive)),
   )
 })

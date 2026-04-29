@@ -27,10 +27,6 @@ interface ContainerEntry {
 
 const __containers: Map<string, ContainerEntry> = new Map()
 
-export const __resetBlobstoreMock = (): void => {
-  __containers.clear()
-}
-
 export const __ensureContainer = (name: string): ContainerEntry => {
   let entry = __containers.get(name)
   if (!entry) {

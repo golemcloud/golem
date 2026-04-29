@@ -1,8 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Fiber, Stream } from "effect"
+import { Cause, Effect, Layer, Exit, Fiber, Stream } from "effect"
 import * as Agents from "../src/agents.js"
+import { AgentHostClient, AgentHostLive } from "../src/host/AgentHostClient.js"
+import { PromiseLive } from "../src/host/PromiseClient.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 import { uuidToString } from "./mocks/golem-core-types.js"
+
+/**
+ * Layer-based replacement for the deleted `__setX/__resetX`
+ * indirection in `src/agents.ts`. Production layers go through the
+ * vitest-aliased mock modules, so seeded state in `ApiHostMock` is
+ * visible to any effect that resolves these services.
+ */
+const HostLayer = Layer.mergeAll(AgentHostLive, PromiseLive)
 
 const makeAgentId = (label: string): Agents.AgentId => ({
   componentId: { uuid: { highBits: 0n, lowBits: 1n } },
@@ -21,14 +31,14 @@ describe("Agents — metadata", () => {
     Effect.gen(function* () {
       const out = yield* Agents.getSelfMetadata
       expect(out.agentId.agentId).toBe("Test()")
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("getAgentMetadata returns undefined for an unknown agent", () =>
     Effect.gen(function* () {
       const out = yield* Agents.getAgentMetadata(makeAgentId("Other()"))
       expect(out).toBeUndefined()
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("getAgentMetadata returns seeded metadata", () =>
@@ -47,25 +57,62 @@ describe("Agents — metadata", () => {
       const out = yield* Agents.getAgentMetadata(id)
       expect(out?.componentRevision).toBe(5n)
       expect(out?.status).toBe("idle")
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
-  it.effect("wraps host throws as AgentsHostError", () =>
-    Effect.gen(function* () {
-      Agents.__setGetSelfMetadataForTest(() => {
-        throw new Error("nope")
-      })
-      try {
-        const exit = yield* Effect.exit(Agents.getSelfMetadata)
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit)) {
-          expect(JSON.stringify(exit.cause)).toMatch(/AgentsHostError/)
-        }
-      } finally {
-        Agents.__resetGetSelfMetadataForTest()
+  it.effect("wraps host throws as AgentsHostError", () => {
+    // Replaces the deleted `__setGetSelfMetadataForTest` indirection
+    // with a Layer-level override of `AgentHostClient.getSelfMetadata`
+    // that throws on call.
+    const ThrowingAgentHost = Layer.succeed(
+      AgentHostClient,
+      AgentHostClient.of({
+        parseAgentId: (() => {
+          throw new Error("not used by this test")
+        }) as never,
+        getSelfMetadata: () => {
+          throw new Error("nope")
+        },
+        createWebhook: (() => {
+          throw new Error("not used by this test")
+        }) as never,
+        getAgentMetadata: (() => {
+          throw new Error("not used by this test")
+        }) as never,
+        updateAgent: (() => {
+          throw new Error("not used by this test")
+        }) as never,
+        forkAgent: (() => {
+          throw new Error("not used by this test")
+        }) as never,
+        revertAgent: (() => {
+          throw new Error("not used by this test")
+        }) as never,
+        fork: (() => {
+          throw new Error("not used by this test")
+        }) as never,
+        resolveComponentId: (() => {
+          throw new Error("not used by this test")
+        }) as never,
+        resolveAgentId: (() => {
+          throw new Error("not used by this test")
+        }) as never,
+        resolveAgentIdStrict: (() => {
+          throw new Error("not used by this test")
+        }) as never,
+        getAgentsCtor: (() => {
+          throw new Error("not used by this test")
+        }) as never,
+      }),
+    )
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(Agents.getSelfMetadata)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(JSON.stringify(exit.cause)).toMatch(/AgentsHostError/)
       }
-    }),
-  )
+    }).pipe(Effect.provide(ThrowingAgentHost))
+  })
 })
 
 describe("Agents — lifecycle", () => {
@@ -76,7 +123,7 @@ describe("Agents — lifecycle", () => {
       expect(ApiHostMock.__getUpdateCalls()).toEqual([
         { agentId: id, targetRevision: 7n, mode: "automatic" },
       ])
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("updateAgent rejects negative revisions", () =>
@@ -92,7 +139,7 @@ describe("Agents — lifecycle", () => {
       if (Exit.isFailure(exit)) {
         expect(JSON.stringify(exit.cause)).toMatch(/AgentsValidationError/)
       }
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("forkAgent records the call", () =>
@@ -101,7 +148,7 @@ describe("Agents — lifecycle", () => {
       const target = makeAgentId("B()")
       yield* Agents.forkAgent({ source, target, oplogIdxCutOff: 42n })
       expect(ApiHostMock.__getForkCalls()).toEqual([{ source, target, oplogIdxCutOff: 42n }])
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("revertAgent supports both target variants", () =>
@@ -115,7 +162,7 @@ describe("Agents — lifecycle", () => {
         { agentId: id, target: { tag: "revert-to-oplog-index", val: 99n } },
         { agentId: id, target: { tag: "revert-last-invocations", val: 3n } },
       ])
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("RevertTarget.lastInvocations rejects non-uint64 inputs", () =>
@@ -136,7 +183,7 @@ describe("Agents — lifecycle", () => {
       if (out.tag === "forked") {
         expect(out.val.forkedPhantomId.lowBits).toBe(99n)
       }
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 })
 
@@ -146,14 +193,14 @@ describe("Agents — resolution helpers", () => {
       ApiHostMock.__seedComponentId("acct/proj/comp", { uuid: { highBits: 0n, lowBits: 7n } })
       const out = yield* Agents.resolveComponentId("acct/proj/comp")
       expect(out?.uuid.lowBits).toBe(7n)
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("resolveAgentId returns undefined for unknown refs", () =>
     Effect.gen(function* () {
       const out = yield* Agents.resolveAgentId("missing", "X()")
       expect(out).toBeUndefined()
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("resolveAgentIdStrict mirrors resolveAgentId via separate seed map", () =>
@@ -162,7 +209,7 @@ describe("Agents — resolution helpers", () => {
       ApiHostMock.__seedStrictAgentId("acct/proj/comp", "Y()", id)
       const out = yield* Agents.resolveAgentIdStrict("acct/proj/comp", "Y()")
       expect(out).toEqual(id)
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 })
 
@@ -251,7 +298,7 @@ describe("Agents — getAgents stream", () => {
 
       const out = yield* Stream.runCollect(Agents.getAgents({ componentId }))
       expect(out.map((m) => m.agentId.agentId)).toEqual(["A()", "B()", "C()"])
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 })
 
@@ -266,7 +313,7 @@ describe("Agents — Promises", () => {
 
       const polled2 = yield* Agents.Promises.poll(id)
       expect(Array.from(polled2!)).toEqual([1, 2, 3])
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("complete fails with PromiseAlreadyCompletedError on a second call", () =>
@@ -281,7 +328,7 @@ describe("Agents — Promises", () => {
           /PromiseAlreadyCompletedError/,
         )
       }
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("await resolves once the promise is completed", () =>
@@ -293,7 +340,7 @@ describe("Agents — Promises", () => {
       })
       const payload = yield* Agents.Promises.await(id)
       expect(Array.from(payload)).toEqual([7])
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("await returns immediately when already completed", () =>
@@ -302,7 +349,7 @@ describe("Agents — Promises", () => {
       ApiHostMock.completePromise(id, new Uint8Array([42]))
       const payload = yield* Agents.Promises.await(id)
       expect(Array.from(payload)).toEqual([42])
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.live("await is interruptible: fiber-interrupt unparks the abortable promise", () =>
@@ -317,7 +364,7 @@ describe("Agents — Promises", () => {
       expect(Exit.isFailure(exit)).toBe(true)
       if (!Exit.isFailure(exit)) return
       expect(Cause.hasInterrupts(exit.cause)).toBe(true)
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   // Defensive sanity check: keep the unused import alive so a future refactor

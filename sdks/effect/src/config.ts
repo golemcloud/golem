@@ -1,10 +1,9 @@
 import { Context, Effect, Redacted, Schema, SchemaAST } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
-import * as AgentHost from "golem:agent/host@1.5.0"
+import { ConfigClient } from "./host/ConfigClient.js"
 import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./wit-codec.js"
 
-type WitType = CoreTypes.WitType
 type WitValue = CoreTypes.WitValue
 
 /**
@@ -71,27 +70,6 @@ export type NonSecretOverride<F extends ConfigFields> = {
       : never
 }
 
-/**
- * Module-level indirection so tests can swap the host's `getConfigValue`
- * binding without monkey-patching the imported namespace.
- */
-let getConfigValueImpl: (key: Array<string>, expectedType: WitType) => WitValue = (
-  key,
-  expectedType,
-) => AgentHost.getConfigValue(key, expectedType)
-
-/** Test-only hook: replace the host `getConfigValue` shim. */
-export const __setGetConfigValueForTest = (
-  fn: (key: Array<string>, expectedType: WitType) => WitValue,
-): void => {
-  getConfigValueImpl = fn
-}
-
-/** Reset the host shim back to the real `golem:agent/host@1.5.0` binding. */
-export const __resetGetConfigValueForTest = (): void => {
-  getConfigValueImpl = (key, expectedType) => AgentHost.getConfigValue(key, expectedType)
-}
-
 /** A single compiled leaf inside a config schema. */
 interface ConfigLeaf {
   readonly source: AgentCommon.AgentConfigSource
@@ -112,7 +90,15 @@ export interface CompiledConfig {
    * intermediate objects.
    */
   readonly branches: ReadonlySet<string>
-  readonly buildShape: () => Effect.Effect<unknown>
+  /**
+   * Build a fresh per-invocation config shape. The shape's leaves close
+   * over the {@link ConfigClient} service available at the time
+   * `buildShape` is run, so the returned shape's `Effect`s require no
+   * further service plumbing — call sites should run `buildShape`
+   * inside a context where `ConfigClient` is provided (the dispatcher
+   * runtime layer satisfies this).
+   */
+  readonly buildShape: () => Effect.Effect<unknown, never, ConfigClient>
 }
 
 /** Detect `Schema.Redacted(inner)` by walking down to the underlying AST. */
@@ -250,8 +236,14 @@ export const compileConfig = (
       return cursor
     }
 
-    const buildShape: () => Effect.Effect<unknown> = () =>
+    const buildShape: () => Effect.Effect<unknown, never, ConfigClient> = () =>
       Effect.gen(function* () {
+        // Capture the active `ConfigClient` once per invocation so the
+        // per-leaf `fetch` Effects below close over a concrete impl
+        // (yielding R = never on every leaf, matching the user-facing
+        // {@link ConfigShape} type which advertises no host services).
+        const cfg = yield* ConfigClient
+
         const root: Record<string, unknown> = {}
 
         // Materialise empty struct branches first so a `database:
@@ -267,7 +259,7 @@ export const compileConfig = (
         for (const leaf of leaves) {
           const fetch: Effect.Effect<unknown, ConfigError> = Effect.gen(function* () {
             const wv = yield* Effect.try({
-              try: () => getConfigValueImpl([...leaf.path], leaf.witCodec.witType),
+              try: () => cfg.getConfigValue(leaf.path, leaf.witCodec.witType),
               catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),
             })
             const decoded = yield* Effect.mapError(

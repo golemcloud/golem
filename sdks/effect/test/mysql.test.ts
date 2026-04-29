@@ -3,15 +3,17 @@
  * mock. Mirrors the postgres test suite — covers param encoding, row
  * decoding, transactions, streaming, and error classification.
  */
-import { beforeEach, describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Stream } from "effect"
+import { beforeEach, expect, layer } from "@effect/vitest"
+import { Cause, Effect, Exit, Layer, Stream } from "effect"
 import {
   ConnectionError,
   SqlError,
   SqlSyntaxError,
   UnknownError,
 } from "effect/unstable/sql/SqlError"
+import { MysqlHostClient } from "../src/host/MysqlHostClient.js"
 import { MySql, MySqlClient } from "../src/mysql.js"
+import * as MockMy from "./mocks/golem-rdbms-mysql.js"
 import {
   __getExecuteLog,
   __getQueryLog,
@@ -33,13 +35,26 @@ const failureValue = <E>(exit: Exit.Exit<unknown, E>): E => {
   return fails[0]!.error
 }
 
+/**
+ * Layer-based test stub for {@link MysqlHostClient}. Routes
+ * `open(address)` through the in-memory `golem:rdbms/mysql@1.5.0`
+ * mock module so each test can drive behaviour via the existing
+ * mock-module setters under a per-test reset cycle.
+ */
+const MySqlStub = Layer.succeed(
+  MysqlHostClient,
+  MysqlHostClient.of({
+    open: (address) => MockMy.DbConnection.open(address),
+  }),
+)
+
 beforeEach(() => {
   __resetMySqlMock()
 })
 
 const ADDR = "mysql://localhost/test"
 
-describe("MySqlClient (mocked golem:rdbms/mysql@1.5.0)", () => {
+layer(MySqlStub)("MySqlClient (mocked golem:rdbms/mysql@1.5.0)", (it) => {
   it.effect("opens a connection and runs DDL via execute", () =>
     Effect.gen(function* () {
       const sql = yield* MySqlClient.make({ connectionAddress: ADDR })

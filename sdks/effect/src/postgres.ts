@@ -72,8 +72,8 @@ import type { Acquirer, Connection } from "effect/unstable/sql/SqlConnection"
 import { SqlError } from "effect/unstable/sql/SqlError"
 import * as Statement from "effect/unstable/sql/Statement"
 import {
-  DbConnection,
   type DbColumn,
+  type DbConnection,
   type DbResultStream,
   type DbRow,
   type DbTransaction,
@@ -87,6 +87,7 @@ import {
   type ValuesRange,
 } from "golem:rdbms/postgres@1.5.0"
 import type { IpAddress, MacAddress } from "golem:rdbms/types@1.5.0"
+import { PostgresHostClient } from "./host/PostgresHostClient.js"
 import {
   ParamEncodingError,
   READ_PREFIX_RE,
@@ -960,7 +961,7 @@ let pgClientIdCounter = 0
 
 const makeImpl = (
   config: PgClientConfig,
-): Effect.Effect<PgClient, SqlError, Scope.Scope | Reactivity.Reactivity> =>
+): Effect.Effect<PgClient, SqlError, Scope.Scope | Reactivity.Reactivity | PostgresHostClient> =>
   Effect.gen(function* () {
     const decodeTemporal = config.decodeTemporal ?? "raw"
 
@@ -984,8 +985,9 @@ const makeImpl = (
       ? Statement.defaultTransforms(config.transformResultNames).array
       : undefined
 
+    const host = yield* PostgresHostClient
     const db = yield* Effect.try({
-      try: () => DbConnection.open(config.connectionAddress),
+      try: () => host.open(config.connectionAddress),
       catch: (cause) =>
         sqlError(
           cause,
@@ -1132,10 +1134,14 @@ const escapePg = (value: string): string => `"${value.replace(/"/g, '""')}"`
 // Public factories
 // ---------------------------------------------------------------------------
 
-const make = (config: PgClientConfig): Effect.Effect<PgClient, SqlError, Scope.Scope> =>
+const make = (
+  config: PgClientConfig,
+): Effect.Effect<PgClient, SqlError, Scope.Scope | PostgresHostClient> =>
   Effect.provide(makeImpl(config), Reactivity.layer)
 
-const layer = (config: PgClientConfig): Layer.Layer<PgClientService | Client.SqlClient, SqlError> =>
+const layer = (
+  config: PgClientConfig,
+): Layer.Layer<PgClientService | Client.SqlClient, SqlError, PostgresHostClient> =>
   Layer.effectContext(
     Effect.map(makeImpl(config), (client) =>
       Context.make(PgClientService, client).pipe(Context.add(Client.SqlClient, client)),

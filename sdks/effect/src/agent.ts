@@ -1,12 +1,13 @@
-import { Effect, Exit, Layer, Ref, Schema, Scope } from "effect"
+import { Effect, Exit, Layer, ManagedRuntime, Ref, Schema, Scope } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
-import * as ApiHost from "golem:api/host@1.5.0"
-import * as AgentHost from "golem:agent/host@1.5.0"
+import type * as ApiHost from "golem:api/host@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import type { DatabaseSync } from "node:sqlite"
-import * as NodeSqlite from "node:sqlite"
-import * as WasiEnv from "wasi:cli/environment@0.2.3"
 import { ElementValueKindError } from "./element.js"
+import { AgentHostClient } from "./host/AgentHostClient.js"
+import { EnvironmentClient } from "./host/EnvironmentClient.js"
+import { HostLive } from "./host/HostLive.js"
+import { SqliteHostExtClient } from "./host/SqliteHostExtClient.js"
 import {
   HttpRouteError,
   isStringBindableSchema,
@@ -67,12 +68,49 @@ import * as GolemTracing from "./tracing.js"
 const observabilityLayer = Layer.mergeAll(GolemLogging.layer, GolemTracing.layer)
 
 /**
- * Provide the host-backed Logger + Tracer to a user effect, then chain
- * its span tree under the live host invocation context. Best-effort;
- * never affects business logic on host failure.
+ * The runtime layer applied to every piece of user code the dispatcher
+ * runs. Provides:
+ * - All host services (env, config, …) via {@link HostLive} so user
+ *   effects that yield from a host-service tag (e.g. `ConfigClient`)
+ *   resolve against the real WIT specifier in production and against
+ *   test fakes in tests.
+ * - {@link observabilityLayer} on top, so `Effect.log*` /
+ *   `Effect.withSpan` route through the host bindings.
+ *
+ * `Layer.provideMerge` is used (not `Layer.mergeAll`) so that
+ * {@link observabilityLayer}'s dependency on `LoggingHost` and
+ * `TracingHost` is satisfied by `HostLive`. The result also re-merges
+ * `HostLive` into its output, so user code that yields a host-service
+ * tag directly resolves the same way.
+ *
+ * Built once at module load (matches the previous `observabilityLayer`
+ * pattern); per-invocation cost is zero allocations.
  */
-const provideObservability = <A, E, R>(eff: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
-  GolemTracing.withInvocationParent(Effect.provide(eff, observabilityLayer))
+const userRuntimeLayer = Layer.provideMerge(observabilityLayer, HostLive)
+
+/**
+ * Module-level `ManagedRuntime` backed by {@link userRuntimeLayer}.
+ * Built lazily on first use; reused across every `dispatch*` entry
+ * point (`initialize`, `invoke`, `save-snapshot`, `load-snapshot`).
+ * This is what makes the "host services constructed once per process"
+ * claim mechanically true: `Layer.scoped` acquire-counters fire
+ * exactly once across multiple invocations.
+ */
+const userRuntime = ManagedRuntime.make(userRuntimeLayer)
+
+/**
+ * Run a user effect on the cached {@link userRuntime}. Reuses the
+ * pre-built layer context across every `dispatch*` entry point, so
+ * host services aren't reconstructed per dispatch.
+ *
+ * `withInvocationParent` is applied *first* (widening the inner
+ * effect's `R` channel with `TracingHost`); the runtime then
+ * fulfills `TracingHost` via `HostLive`. This is required because
+ * `withInvocationParent` reads the host's invocation context via the
+ * `TracingHost` service.
+ */
+const runUserPromise = <A, E, R>(eff: Effect.Effect<A, E, R>): Promise<A> =>
+  userRuntime.runPromise(GolemTracing.withInvocationParent(eff) as Effect.Effect<A, E, never>)
 
 type AnyMethodSpec = MethodSpec<any, any, any>
 
@@ -511,9 +549,16 @@ const initAgentInstance = async (
 
   // Capture the structured AgentId once at agent-init time. Subsequent
   // user-side reads via the `SelfAgentId` Context service are free.
+  // Read via the `AgentHostClient` host service so tests can substitute
+  // a fake without monkey-patching the real specifier.
   let selfAgentId: CoreTypes.AgentId
   try {
-    selfAgentId = getSelfMetadataImpl().agentId
+    selfAgentId = await runUserPromise(
+      Effect.gen(function* () {
+        const c = yield* AgentHostClient
+        return c.getSelfMetadata().agentId
+      }),
+    )
   } catch (e) {
     throw new Error(
       `failed to fetch self metadata while initializing agent '${agentTypeName}': ${
@@ -540,9 +585,7 @@ const initAgentInstance = async (
       Effect.provideService(SelfAgentId, selfAgentId),
     )
     if (compiled.compiledConfig !== null && compiled.definition.config !== undefined) {
-      const shape = await Effect.runPromise(
-        compiled.compiledConfig.buildShape() as Effect.Effect<unknown, never>,
-      )
+      const shape = await runUserPromise(compiled.compiledConfig.buildShape())
       program = (program as Effect.Effect<unknown, unknown, never>).pipe(
         // The config class is a Context.Service tag (Self/Identifier
         // resolved via the user's `defineConfig`-class declaration). We
@@ -555,9 +598,10 @@ const initAgentInstance = async (
     // the scope when `program` finishes, which would tear down any
     // resources `impl` opened (e.g. SqliteClient handles) before the
     // agent's first method invocation.
-    handlers = (await Effect.runPromise(
-      provideObservability(Scope.provide(program, scope)),
-    )) as Record<string, Handler<AnyMethodSpec>>
+    handlers = (await runUserPromise(Scope.provide(program, scope))) as Record<
+      string,
+      Handler<AnyMethodSpec>
+    >
   } catch (e) {
     // Initialization failed; close the scope to release anything that
     // managed to be acquired before the failure.
@@ -642,14 +686,12 @@ export const dispatchInvoke = async (
     Effect.provideService(SelfAgentId, activeAgent.selfAgentId),
   ) as Effect.Effect<CoreTypes.DataValue, unknown, never>
   if (compiled.compiledConfig !== null && compiled.definition.config !== undefined) {
-    const shape = await Effect.runPromise(
-      compiled.compiledConfig.buildShape() as Effect.Effect<unknown, never>,
-    )
+    const shape = await runUserPromise(compiled.compiledConfig.buildShape())
     program = program.pipe(
       Effect.provideService(compiled.definition.config as never, shape as never),
     ) as typeof program
   }
-  return await Effect.runPromise(provideObservability(program))
+  return await runUserPromise(program)
 }
 
 /** Implementation of `agent-guest.guest.discoverAgentTypes`. */
@@ -669,97 +711,28 @@ export const dispatchGetDefinition = async (): Promise<AgentCommon.AgentType> =>
 // ---------------------------------------------------------------------------
 
 /**
- * Module-level indirection so tests can swap the host's
- * `wasi:cli/environment.getEnvironment` binding without monkey-patching
- * the imported namespace. Used by `load-snapshot.load` to read
- * `GOLEM_AGENT_ID` from the process environment.
+ * Resolve the `SqliteHostExtClient` impl out of the production
+ * {@link userRuntimeLayer} once and return its three sync methods so
+ * the snapshot dispatcher's imperative `for ... of` loops can keep
+ * their structure. Mirrors the same pattern used for the
+ * {@link EnvironmentClient} / {@link AgentHostClient} lookup at the
+ * top of {@link dispatchLoadSnapshot}.
  */
-let getEnvironmentImpl: () => Array<[string, string]> = () => WasiEnv.getEnvironment()
-
-/** Test-only hook: replace the host `getEnvironment` shim. */
-export const __setGetEnvironmentForTest = (fn: () => Array<[string, string]>): void => {
-  getEnvironmentImpl = fn
-}
-
-/** Reset the env shim back to the real `wasi:cli/environment` binding. */
-export const __resetGetEnvironmentForTest = (): void => {
-  getEnvironmentImpl = () => WasiEnv.getEnvironment()
-}
-
-/**
- * Module-level indirection so tests can swap the host's
- * `golem:agent/host.parseAgentId` binding.
- */
-let parseAgentIdImpl: (
-  agentId: string,
-) => [string, AgentCommon.DataValue, CoreTypes.Uuid | undefined] = (id) =>
-  AgentHost.parseAgentId(id)
-
-/** Test-only hook: replace the host `parseAgentId` shim. */
-export const __setParseAgentIdForTest = (
-  fn: (agentId: string) => [string, AgentCommon.DataValue, CoreTypes.Uuid | undefined],
-): void => {
-  parseAgentIdImpl = fn
-}
-
-/** Reset the parse-agent-id shim back to the real binding. */
-export const __resetParseAgentIdForTest = (): void => {
-  parseAgentIdImpl = (id) => AgentHost.parseAgentId(id)
-}
-
-/**
- * Module-level indirection for the host's `getSelfMetadata` binding,
- * used at agent-init time to capture the structured `SelfAgentId`
- * service value. Tests can swap this out via
- * `__setGetSelfMetadataForTest` to avoid pulling in the real host
- * import.
- */
-let getSelfMetadataImpl: () => ApiHost.AgentMetadata = () => ApiHost.getSelfMetadata()
-
-/** Test-only hook: replace the host `getSelfMetadata` shim. */
-export const __setGetSelfMetadataForTest = (fn: () => ApiHost.AgentMetadata): void => {
-  getSelfMetadataImpl = fn
-}
-
-/** Reset the `getSelfMetadata` shim back to the real binding. */
-export const __resetGetSelfMetadataForTest = (): void => {
-  getSelfMetadataImpl = () => ApiHost.getSelfMetadata()
-}
-
-/**
- * Module-level indirections for the three wasm-rquickjs extensions to
- * `node:sqlite` (`serializeDatabaseSync` / `restoreDatabaseSync` /
- * `isAutocommitDatabaseSync`). Tests can swap these out via
- * `__setSerializeDatabaseSyncForTest` etc., mirroring the pattern used
- * for `getEnvironment` / `parseAgentId`.
- */
-let serializeDatabaseSyncImpl: (db: DatabaseSync) => Uint8Array = (db) =>
-  NodeSqlite.serializeDatabaseSync(db)
-let restoreDatabaseSyncImpl: (db: DatabaseSync, bytes: Uint8Array) => void = (db, bytes) =>
-  NodeSqlite.restoreDatabaseSync(db, bytes)
-let isAutocommitDatabaseSyncImpl: (db: DatabaseSync) => boolean = (db) =>
-  NodeSqlite.isAutocommitDatabaseSync(db)
-
-export const __setSerializeDatabaseSyncForTest = (fn: (db: DatabaseSync) => Uint8Array): void => {
-  serializeDatabaseSyncImpl = fn
-}
-export const __resetSerializeDatabaseSyncForTest = (): void => {
-  serializeDatabaseSyncImpl = (db) => NodeSqlite.serializeDatabaseSync(db)
-}
-export const __setRestoreDatabaseSyncForTest = (
-  fn: (db: DatabaseSync, bytes: Uint8Array) => void,
-): void => {
-  restoreDatabaseSyncImpl = fn
-}
-export const __resetRestoreDatabaseSyncForTest = (): void => {
-  restoreDatabaseSyncImpl = (db, bytes) => NodeSqlite.restoreDatabaseSync(db, bytes)
-}
-export const __setIsAutocommitDatabaseSyncForTest = (fn: (db: DatabaseSync) => boolean): void => {
-  isAutocommitDatabaseSyncImpl = fn
-}
-export const __resetIsAutocommitDatabaseSyncForTest = (): void => {
-  isAutocommitDatabaseSyncImpl = (db) => NodeSqlite.isAutocommitDatabaseSync(db)
-}
+const resolveSqliteHostExt = async (): Promise<{
+  serializeDatabaseSync: (db: DatabaseSync) => Uint8Array
+  restoreDatabaseSync: (db: DatabaseSync, bytes: Uint8Array) => void
+  isAutocommitDatabaseSync: (db: DatabaseSync) => boolean
+}> =>
+  await runUserPromise(
+    Effect.gen(function* () {
+      const ext = yield* SqliteHostExtClient
+      return {
+        serializeDatabaseSync: ext.serializeDatabaseSync,
+        restoreDatabaseSync: ext.restoreDatabaseSync,
+        isAutocommitDatabaseSync: ext.isAutocommitDatabaseSync,
+      }
+    }),
+  )
 
 /**
  * Implementation of `golem:api/save-snapshot.save`. Reads the active
@@ -787,13 +760,14 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
     if (snap.declaredDatabases.length === 0) {
       return encodeJsonEnvelope(agent.principal, encoded)
     }
+    const sqliteExt = await resolveSqliteHostExt()
     const dbParts: Array<{ name: string; bytes: Uint8Array }> = []
     for (const dbName of snap.declaredDatabases) {
       const handle = snap.databases.get(dbName)
       if (handle === undefined) {
         throw new SnapshotDatabaseMissingPartError(agent.name, dbName, "save")
       }
-      if (!isAutocommitDatabaseSyncImpl(handle)) {
+      if (!sqliteExt.isAutocommitDatabaseSync(handle)) {
         throw new SnapshotDatabaseNotInAutocommitError(agent.name, dbName)
       }
       const rows = handle.prepare("PRAGMA database_list").all() as Array<{ name?: string }>
@@ -803,7 +777,7 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
       if (extra.length > 0) {
         throw new SnapshotDatabaseHasAttachmentsError(agent.name, dbName, extra)
       }
-      dbParts.push({ name: dbName, bytes: serializeDatabaseSyncImpl(handle) })
+      dbParts.push({ name: dbName, bytes: sqliteExt.serializeDatabaseSync(handle) })
     }
     return encodeMultipartJsonEnvelope(agent.principal, encoded, dbParts)
   }
@@ -814,14 +788,12 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
   // make it available to the user's custom save handler too. Auto
   // snapshots don't run user code here, so they don't need this branch.
   if (compiled.compiledConfig !== null && compiled.definition.config !== undefined) {
-    const shape = await Effect.runPromise(
-      compiled.compiledConfig.buildShape() as Effect.Effect<unknown, never>,
-    )
+    const shape = await runUserPromise(compiled.compiledConfig.buildShape())
     saveProgram = saveProgram.pipe(
       Effect.provideService(compiled.definition.config as never, shape as never),
     ) as Effect.Effect<Uint8Array, unknown, never>
   }
-  const bytes = await Effect.runPromise(provideObservability(saveProgram))
+  const bytes = await runUserPromise(saveProgram)
   return encodeBinaryEnvelope(agent.principal, bytes)
 }
 
@@ -844,14 +816,24 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
     throw new Error(`agent already initialized in this container: ${activeAgent.name}`)
   }
 
-  // 1. Recover the agent ID + parse it.
-  const env = getEnvironmentImpl()
+  // 1. Recover the agent ID + parse it. Reading the WASI process env
+  //    via the `EnvironmentClient` host service and parsing it via
+  //    `AgentHostClient.parseAgentId` lets tests substitute fakes
+  //    without monkey-patching the real specifier.
+  const { env, parseAgentId } = await runUserPromise(
+    Effect.gen(function* () {
+      const ec = yield* EnvironmentClient
+      const ah = yield* AgentHostClient
+      const env = yield* ec.getEnvironment
+      return { env, parseAgentId: ah.parseAgentId }
+    }),
+  )
   const agentIdEntry = env.find(([k]) => k === "GOLEM_AGENT_ID")
   if (agentIdEntry === undefined) {
     throw new Error("load-snapshot: GOLEM_AGENT_ID is not set in the process environment")
   }
   const agentIdString = agentIdEntry[1]
-  const [agentTypeName, ctorDataValue] = parseAgentIdImpl(agentIdString)
+  const [agentTypeName, ctorDataValue] = parseAgentId(agentIdString)
 
   const compiled = registry.get(agentTypeName)
   if (!compiled) {
@@ -947,9 +929,10 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
           }
         }
         // Restore each DB in place via the wasm-rquickjs extension.
+        const sqliteExt = await resolveSqliteHostExt()
         for (const part of decoded.databases) {
           const handle = bound.databases.get(part.name)!
-          restoreDatabaseSyncImpl(handle, part.bytes)
+          sqliteExt.restoreDatabaseSync(handle, part.bytes)
         }
         const decodedState = await Effect.runPromise(
           Schema.decodeUnknownEffect(bound.schema)(decoded.state) as Effect.Effect<
@@ -972,14 +955,12 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
       // a config service, make it available to the user's custom load
       // handler too.
       if (compiled.compiledConfig !== null && compiled.definition.config !== undefined) {
-        const shape = await Effect.runPromise(
-          compiled.compiledConfig.buildShape() as Effect.Effect<unknown, never>,
-        )
+        const shape = await runUserPromise(compiled.compiledConfig.buildShape())
         loadProgram = loadProgram.pipe(
           Effect.provideService(compiled.definition.config as never, shape as never),
         ) as Effect.Effect<void, unknown, never>
       }
-      await Effect.runPromise(provideObservability(loadProgram))
+      await runUserPromise(loadProgram)
     }
   } catch (e) {
     await Effect.runPromise(Scope.close(scope, Exit.void))

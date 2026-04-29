@@ -1,7 +1,8 @@
 import { Effect, Schema } from "effect"
-import * as AgentHost from "golem:agent/host@1.5.0"
 import { AgentsHostError, Promises } from "./agents.js"
 import type { PromiseId } from "./agents.js"
+import { AgentHostClient } from "./host/AgentHostClient.js"
+import { PromiseClient } from "./host/PromiseClient.js"
 
 /**
  * Webhook integration on top of `golem:agent/host@1.5.0.create-webhook`.
@@ -179,21 +180,6 @@ export interface WebhookHandle {
 }
 
 // ---------------------------------------------------------------------------
-// Host wiring (with vitest-only swap helpers, mirroring src/agents.ts)
-// ---------------------------------------------------------------------------
-
-let createWebhookImpl: (id: PromiseId) => string = (id) => AgentHost.createWebhook(id)
-
-/** @internal */
-export const __setCreateWebhookForTest = (fn: (id: PromiseId) => string): void => {
-  createWebhookImpl = fn
-}
-/** @internal */
-export const __resetCreateWebhookForTest = (): void => {
-  createWebhookImpl = (id) => AgentHost.createWebhook(id)
-}
-
-// ---------------------------------------------------------------------------
 // Public factory
 // ---------------------------------------------------------------------------
 
@@ -222,17 +208,28 @@ export const __resetCreateWebhookForTest = (): void => {
  * Wire-compatible with `golem-ts-sdk.createWebhook()` /
  * `golem-rust.create_webhook()`.
  */
-export const create: Effect.Effect<WebhookHandle, AgentsHostError | WebhookHostError> = Effect.gen(
-  function* () {
-    const promiseId = yield* Promises.create
-    const url = yield* Effect.try({
-      try: () => createWebhookImpl(promiseId),
-      catch: (e) => new WebhookHostError(e),
-    })
-    const await_ = Promises.await(promiseId).pipe(Effect.map((bytes) => new WebhookPayload(bytes)))
-    const poll_ = Promises.poll(promiseId).pipe(
-      Effect.map((bytes) => (bytes === undefined ? undefined : new WebhookPayload(bytes))),
-    )
-    return { url, promiseId, await: await_, poll: poll_ }
-  },
-)
+export const create: Effect.Effect<
+  WebhookHandle,
+  AgentsHostError | WebhookHostError,
+  AgentHostClient | PromiseClient
+> = Effect.gen(function* () {
+  const ah = yield* AgentHostClient
+  const pc = yield* PromiseClient
+  const promiseId: PromiseId = yield* Promises.create.pipe(Effect.provideService(PromiseClient, pc))
+  const url = yield* Effect.try({
+    try: () => ah.createWebhook(promiseId),
+    catch: (e) => new WebhookHostError(e),
+  })
+  // Pre-bind the PromiseClient resolved here so the returned
+  // `await`/`poll` Effects don't propagate `PromiseClient` into the
+  // user-visible `WebhookHandle` shape.
+  const await_ = Promises.await(promiseId).pipe(
+    Effect.map((bytes) => new WebhookPayload(bytes)),
+    Effect.provideService(PromiseClient, pc),
+  )
+  const poll_ = Promises.poll(promiseId).pipe(
+    Effect.map((bytes) => (bytes === undefined ? undefined : new WebhookPayload(bytes))),
+    Effect.provideService(PromiseClient, pc),
+  )
+  return { url, promiseId, await: await_, poll: poll_ }
+})

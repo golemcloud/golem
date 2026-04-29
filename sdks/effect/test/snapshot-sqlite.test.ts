@@ -2,20 +2,24 @@ import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Effect, Ref, Schema } from "effect"
 import {
   __resetAgents,
-  __resetGetEnvironmentForTest,
-  __resetIsAutocommitDatabaseSyncForTest,
-  __resetParseAgentIdForTest,
-  __resetRestoreDatabaseSyncForTest,
-  __resetSerializeDatabaseSyncForTest,
-  __setGetEnvironmentForTest,
-  __setIsAutocommitDatabaseSyncForTest,
-  __setParseAgentIdForTest,
-  __setRestoreDatabaseSyncForTest,
-  __setSerializeDatabaseSyncForTest,
   defineAgent,
   dispatchLoadSnapshot,
   dispatchSaveSnapshot,
 } from "../src/agent.js"
+import {
+  __resetParseAgentIdImpl as __resetParseAgentIdForTest,
+  __setParseAgentIdImpl as __setParseAgentIdForTest,
+} from "./mocks/golem-agent-host.js"
+import {
+  __resetSqliteExtensions,
+  __setIsAutocommitDatabaseSync as __setIsAutocommitDatabaseSyncForTest,
+  __setRestoreDatabaseSync as __setRestoreDatabaseSyncForTest,
+  __setSerializeDatabaseSync as __setSerializeDatabaseSyncForTest,
+} from "./mocks/node-sqlite.js"
+import {
+  __resetEnvironment as __resetGetEnvironmentForTest,
+  __setEnvironment,
+} from "./mocks/wasi-cli-environment.js"
 import { method } from "../src/method.js"
 import { guest } from "../src/exports.js"
 import * as Snapshot from "../src/snapshot.js"
@@ -88,9 +92,7 @@ describe("snapshot + sqlite databases", () => {
   afterEach(() => {
     __resetGetEnvironmentForTest()
     __resetParseAgentIdForTest()
-    __resetSerializeDatabaseSyncForTest()
-    __resetRestoreDatabaseSyncForTest()
-    __resetIsAutocommitDatabaseSyncForTest()
+    __resetSqliteExtensions()
   })
 
   it("declares enabled snapshotting in agent metadata", async () => {
@@ -134,7 +136,7 @@ describe("snapshot + sqlite databases", () => {
     expect(captured).toHaveLength(1)
 
     await __resetAgents()
-    __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "SqliteCounterTest:zoe"]])
+    __setEnvironment([["GOLEM_AGENT_ID", "SqliteCounterTest:zoe"]])
     __setParseAgentIdForTest(() => [
       "SqliteCounterTest",
       { tag: "tuple", val: [{ tag: "component-model", val: xWv }] },
@@ -190,7 +192,7 @@ describe("snapshot + sqlite databases", () => {
     ])
 
     await __resetAgents()
-    __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "SqliteCounterTest:zoe"]])
+    __setEnvironment([["GOLEM_AGENT_ID", "SqliteCounterTest:zoe"]])
     __setParseAgentIdForTest(() => [
       "SqliteCounterTest",
       { tag: "tuple", val: [{ tag: "component-model", val: xWv }] },
@@ -207,7 +209,7 @@ describe("snapshot + sqlite databases", () => {
     __setRestoreDatabaseSyncForTest(() => {})
     const { encodeMultipartJsonEnvelope } = await import("../src/snapshot-envelope.js")
     const tampered = encodeMultipartJsonEnvelope({ tag: "anonymous" }, { note: "zoe" }, [])
-    __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "SqliteCounterTest:zoe"]])
+    __setEnvironment([["GOLEM_AGENT_ID", "SqliteCounterTest:zoe"]])
     __setParseAgentIdForTest(() => [
       "SqliteCounterTest",
       { tag: "tuple", val: [{ tag: "component-model", val: xWv }] },

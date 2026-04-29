@@ -70,8 +70,8 @@ import { SqlError } from "effect/unstable/sql/SqlError"
 import * as Statement from "effect/unstable/sql/Statement"
 import {
   type Date as MyDate,
-  DbConnection,
   type DbColumn,
+  type DbConnection,
   type DbResultStream,
   type DbRow,
   type DbTransaction,
@@ -79,6 +79,7 @@ import {
   type Time,
   type Timestamp,
 } from "golem:rdbms/mysql@1.5.0"
+import { MysqlHostClient } from "./host/MysqlHostClient.js"
 import {
   ParamEncodingError,
   READ_PREFIX_RE,
@@ -716,7 +717,7 @@ let mysqlClientIdCounter = 0
 
 const makeImpl = (
   config: MySqlClientConfig,
-): Effect.Effect<MySqlClient, SqlError, Scope.Scope | Reactivity.Reactivity> =>
+): Effect.Effect<MySqlClient, SqlError, Scope.Scope | Reactivity.Reactivity | MysqlHostClient> =>
   Effect.gen(function* () {
     const decodeTemporal = config.decodeTemporal ?? "raw"
 
@@ -740,8 +741,9 @@ const makeImpl = (
       ? Statement.defaultTransforms(config.transformResultNames).array
       : undefined
 
+    const host = yield* MysqlHostClient
     const db = yield* Effect.try({
-      try: () => DbConnection.open(config.connectionAddress),
+      try: () => host.open(config.connectionAddress),
       catch: (cause) =>
         sqlError(cause, `Failed to open MySQL connection at ${config.connectionAddress}`, "open"),
     })
@@ -876,12 +878,14 @@ const escapeMySql = (value: string): string => `\`${value.replace(/`/g, "``")}\`
 // Public factories
 // ---------------------------------------------------------------------------
 
-const make = (config: MySqlClientConfig): Effect.Effect<MySqlClient, SqlError, Scope.Scope> =>
+const make = (
+  config: MySqlClientConfig,
+): Effect.Effect<MySqlClient, SqlError, Scope.Scope | MysqlHostClient> =>
   Effect.provide(makeImpl(config), Reactivity.layer)
 
 const layer = (
   config: MySqlClientConfig,
-): Layer.Layer<MySqlClientService | Client.SqlClient, SqlError> =>
+): Layer.Layer<MySqlClientService | Client.SqlClient, SqlError, MysqlHostClient> =>
   Layer.effectContext(
     Effect.map(makeImpl(config), (client) =>
       Context.make(MySqlClientService, client).pipe(Context.add(Client.SqlClient, client)),

@@ -5,11 +5,11 @@ import { method } from "../src/method.js"
 import { guest } from "../src/exports.js"
 import { Principal, type PrincipalValue } from "../src/principal.js"
 import { toWitCodec } from "../src/wit-codec.js"
+import { defineConfig } from "../src/config.js"
 import {
-  __resetGetConfigValueForTest,
-  __setGetConfigValueForTest,
-  defineConfig,
-} from "../src/config.js"
+  __resetGetConfigValueImpl as __resetGetConfigValueForTest,
+  __setGetConfigValueImpl as __setGetConfigValueForTest,
+} from "./mocks/golem-agent-host.js"
 
 const Person = Schema.Struct({
   name: Schema.String,
@@ -454,7 +454,7 @@ describe("agent-guest exports", () => {
         let greeting = "hello"
         let apiKey = "sk-abcd1234"
         const callLog: Array<string> = []
-        __setGetConfigValueForTest((path) => {
+        __setGetConfigValueForTest((path: Array<string>) => {
           callLog.push(path.join("/"))
           if (path.join("/") === "greeting") return wv(greeting) as never
           if (path.join("/") === "apiKey") return wv(apiKey) as never

@@ -29,11 +29,8 @@
  * ```
  */
 
-import { Effect, Option, Schema, Scope, Stream } from "effect"
-import * as Blob from "wasi:blobstore/blobstore"
-import * as ContainerNS from "wasi:blobstore/container"
-import * as Types from "wasi:blobstore/types"
-import * as Streams from "wasi:io/streams@0.2.3"
+import { Effect, Schema, Scope, Stream } from "effect"
+import { BlobstoreClient, type HostContainer } from "./host/BlobstoreClient.js"
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -217,75 +214,27 @@ export interface SchemaContainer<S extends Schema.Top> {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-const consumeIncomingSync = (
-  iv: Types.IncomingValue,
-): Effect.Effect<Uint8Array, BlobstoreHostError> =>
-  Effect.try({
-    try: () => iv.incomingValueConsumeSync(),
-    catch: (cause) => new BlobstoreHostError(cause, "incomingValueConsumeSync"),
-  })
+const decodeContainerMetadata = (m: {
+  readonly name: string
+  readonly createdAtMillis: bigint
+}): ContainerMetadata => ({
+  name: m.name,
+  createdAt: new Date(Number(m.createdAtMillis)),
+  createdAtMillis: m.createdAtMillis,
+})
 
-/**
- * Push `bytes` into a wasi:io output-stream in 4096-byte chunks.
- * Mirrors the pseudo-code from the wasi:io spec for
- * `blocking-write-and-flush`.
- */
-const writeAllToOutputStream = (
-  stream: Streams.OutputStream,
-  bytes: Uint8Array,
-): Effect.Effect<void, BlobstoreHostError> =>
-  Effect.try({
-    try: () => {
-      const total = bytes.length
-      let offset = 0
-      while (offset < total) {
-        const remaining = total - offset
-        const chunkLen = remaining > 4096 ? 4096 : remaining
-        const chunk = bytes.subarray(offset, offset + chunkLen)
-        stream.blockingWriteAndFlush(chunk)
-        offset += chunkLen
-      }
-    },
-    catch: (cause) => new BlobstoreHostError(cause, "outputStream.blockingWriteAndFlush"),
-  })
-
-const buildOutgoingValue = (
-  bytes: Uint8Array,
-): Effect.Effect<Types.OutgoingValue, BlobstoreHostError> =>
-  Effect.gen(function* () {
-    const ov = yield* Effect.try({
-      try: () => Types.OutgoingValue.newOutgoingValue(),
-      catch: (cause) => new BlobstoreHostError(cause, "newOutgoingValue"),
-    })
-    const stream = yield* Effect.try({
-      try: () => ov.outgoingValueWriteBody(),
-      catch: (cause) => new BlobstoreHostError(cause, "outgoingValueWriteBody"),
-    })
-    yield* writeAllToOutputStream(stream, bytes)
-    return ov
-  })
-
-const decodeMetadata = (
-  m: ContainerNS.ContainerMetadata | Types.ContainerMetadata,
-): ContainerMetadata => {
-  const ms = m.createdAt
-  return {
-    name: m.name,
-    createdAt: new Date(Number(ms)),
-    createdAtMillis: ms,
-  }
-}
-
-const decodeObjectMetadata = (m: Types.ObjectMetadata): ObjectMetadata => {
-  const ms = m.createdAt
-  return {
-    name: m.name,
-    container: m.container,
-    createdAt: new Date(Number(ms)),
-    createdAtMillis: ms,
-    size: m.size,
-  }
-}
+const decodeObjectMetadata = (m: {
+  readonly name: string
+  readonly container: string
+  readonly createdAtMillis: bigint
+  readonly size: bigint
+}): ObjectMetadata => ({
+  name: m.name,
+  container: m.container,
+  createdAt: new Date(Number(m.createdAtMillis)),
+  createdAtMillis: m.createdAtMillis,
+  size: m.size,
+})
 
 // ---------------------------------------------------------------------------
 // Schema codec — UTF-8 JSON over `Schema`
@@ -306,41 +255,6 @@ const decodeUtf8 = (bytes: Uint8Array): Effect.Effect<string, BlobstoreDecodeErr
     try: () => strictDecoder.decode(bytes),
     catch: (cause) => new BlobstoreDecodeError(cause),
   })
-
-// ---------------------------------------------------------------------------
-// listObjects — Stream over the host's stream-object-names resource
-// ---------------------------------------------------------------------------
-
-const LIST_PAGE_SIZE = 256n
-
-const listObjectsStream = (
-  handle: ContainerNS.Container,
-): Stream.Stream<string, BlobstoreHostError> =>
-  Stream.unwrap(
-    Effect.gen(function* () {
-      const iter = yield* Effect.try({
-        try: () => handle.listObjects(),
-        catch: (cause) => new BlobstoreHostError(cause, "container.listObjects"),
-      })
-      return Stream.paginate(false as boolean, (done) => {
-        if (done) {
-          return Effect.succeed([[] as ReadonlyArray<string>, Option.none<boolean>()] as const)
-        }
-        return Effect.try({
-          try: () => iter.readStreamObjectNames(LIST_PAGE_SIZE),
-          catch: (cause) => new BlobstoreHostError(cause, "streamObjectNames.read"),
-        }).pipe(
-          Effect.map(
-            ([names, end]) =>
-              [
-                names as ReadonlyArray<string>,
-                end ? Option.none<boolean>() : Option.some(false),
-              ] as const,
-          ),
-        )
-      })
-    }),
-  )
 
 // ---------------------------------------------------------------------------
 // SchemaContainer factory
@@ -378,42 +292,21 @@ const makeSchemaContainer = <S extends Schema.Top>(
 }
 
 // ---------------------------------------------------------------------------
-// Container factory
+// Container factory — wraps a HostContainer with the public surface.
 // ---------------------------------------------------------------------------
 
-const makeContainer = (name: string, handle: ContainerNS.Container): Container => {
-  const info: Container["info"] = Effect.gen(function* () {
-    const m = yield* Effect.try({
-      try: () => handle.info(),
-      catch: (cause) => new BlobstoreHostError(cause, "container.info"),
-    })
-    return decodeMetadata(m)
-  })
+const makeContainer = (host: HostContainer): Container => {
+  const info: Container["info"] = host.info.pipe(Effect.map(decodeContainerMetadata))
 
-  const clear: Container["clear"] = Effect.try({
-    try: () => handle.clear(),
-    catch: (cause) => new BlobstoreHostError(cause, "container.clear"),
-  })
-
-  const readRange = (
-    name: string,
-    start: bigint,
-    end: bigint,
-  ): Effect.Effect<Uint8Array, BlobstoreHostError> =>
-    Effect.gen(function* () {
-      const iv = yield* Effect.try({
-        try: () => handle.getData(name, start, end),
-        catch: (cause) => new BlobstoreHostError(cause, "container.getData"),
-      })
-      return yield* consumeIncomingSync(iv)
-    })
+  const objectInfo: Container["objectInfo"] = (name) =>
+    host.objectInfo(name).pipe(Effect.map(decodeObjectMetadata))
 
   const getData: Container["getData"] = (name: string, range?: ByteRange) =>
     Effect.gen(function* () {
       // Explicit user range — pass through verbatim. Backend semantics
       // diverge (see ByteRange JSDoc); the SDK does NOT massage them.
       if (range !== undefined) {
-        return yield* readRange(name, range.start, range.end)
+        return yield* host.getData(name, range)
       }
 
       // Whole-object read. The WIT spec says `end` is inclusive,
@@ -423,71 +316,32 @@ const makeContainer = (name: string, handle: ContainerNS.Container): Container =
       //   - try inclusive  end = size - 1
       //   - if backend returned size - 1 bytes (the in-mem/fs bug),
       //     retry with end = size to recover the last byte.
-      const meta = yield* Effect.try({
-        try: () => handle.objectInfo(name),
-        catch: (cause) => new BlobstoreHostError(cause, "container.objectInfo"),
-      })
+      const meta = yield* host.objectInfo(name)
       const size = meta.size
       if (size === 0n) {
         return new Uint8Array(0)
       }
-      const firstAttempt = yield* readRange(name, 0n, size - 1n)
+      const firstAttempt = yield* host.getData(name, { start: 0n, end: size - 1n })
       if (BigInt(firstAttempt.length) === size) {
         return firstAttempt
       }
       // Backend treats `end` as exclusive — replay with end = size.
-      return yield* readRange(name, 0n, size)
-    })
-
-  const writeData: Container["writeData"] = (name, data) =>
-    Effect.gen(function* () {
-      const ov = yield* buildOutgoingValue(data)
-      yield* Effect.try({
-        try: () => handle.writeData(name, ov),
-        catch: (cause) => new BlobstoreHostError(cause, "container.writeData"),
-      })
-    })
-
-  const hasObject: Container["hasObject"] = (name) =>
-    Effect.try({
-      try: () => handle.hasObject(name),
-      catch: (cause) => new BlobstoreHostError(cause, "container.hasObject"),
-    })
-
-  const objectInfo: Container["objectInfo"] = (name) =>
-    Effect.gen(function* () {
-      const m = yield* Effect.try({
-        try: () => handle.objectInfo(name),
-        catch: (cause) => new BlobstoreHostError(cause, "container.objectInfo"),
-      })
-      return decodeObjectMetadata(m)
-    })
-
-  const deleteObject: Container["deleteObject"] = (name) =>
-    Effect.try({
-      try: () => handle.deleteObject(name),
-      catch: (cause) => new BlobstoreHostError(cause, "container.deleteObject"),
-    })
-
-  const deleteObjects: Container["deleteObjects"] = (names) =>
-    Effect.try({
-      try: () => handle.deleteObjects([...names]),
-      catch: (cause) => new BlobstoreHostError(cause, "container.deleteObjects"),
+      return yield* host.getData(name, { start: 0n, end: size })
     })
 
   const self: Container = {
     [ContainerTypeId]: ContainerTypeId,
-    name,
+    name: host.name,
     info,
-    clear,
+    clear: host.clear,
     getData: getData as Container["getData"],
-    writeData,
-    hasObject,
+    writeData: (name, data) => host.writeData(name, data),
+    hasObject: (name) => host.hasObject(name),
     objectInfo,
-    deleteObject,
-    deleteObjects,
+    deleteObject: (name) => host.deleteObject(name),
+    deleteObjects: (names) => host.deleteObjects(names),
     get listObjects() {
-      return listObjectsStream(handle)
+      return host.listObjects
     },
     forSchema<S extends Schema.Top>(schema: S) {
       return makeSchemaContainer(self, schema)
@@ -500,25 +354,17 @@ const makeContainer = (name: string, handle: ContainerNS.Container): Container =
 // Public API
 // ---------------------------------------------------------------------------
 
-const acquireContainer = (
-  name: string,
-  handle: ContainerNS.Container,
-): Effect.Effect<Container, never, Scope.Scope> =>
-  Effect.acquireRelease(Effect.succeed(makeContainer(name, handle)), () => Effect.void)
-
 /**
  * Create a new empty container. Fails with {@link BlobstoreHostError}
  * if a container with the same name already exists.
  */
 export const createContainer = (
   name: string,
-): Effect.Effect<Container, BlobstoreHostError, Scope.Scope> =>
+): Effect.Effect<Container, BlobstoreHostError, Scope.Scope | BlobstoreClient> =>
   Effect.gen(function* () {
-    const handle = yield* Effect.try({
-      try: () => Blob.createContainer(name),
-      catch: (cause) => new BlobstoreHostError(cause, "createContainer"),
-    })
-    return yield* acquireContainer(name, handle)
+    const client = yield* BlobstoreClient
+    const host = yield* client.createContainer(name)
+    return makeContainer(host)
   })
 
 /**
@@ -527,13 +373,11 @@ export const createContainer = (
  */
 export const getContainer = (
   name: string,
-): Effect.Effect<Container, BlobstoreHostError, Scope.Scope> =>
+): Effect.Effect<Container, BlobstoreHostError, Scope.Scope | BlobstoreClient> =>
   Effect.gen(function* () {
-    const handle = yield* Effect.try({
-      try: () => Blob.getContainer(name),
-      catch: (cause) => new BlobstoreHostError(cause, "getContainer"),
-    })
-    return yield* acquireContainer(name, handle)
+    const client = yield* BlobstoreClient
+    const host = yield* client.getContainer(name)
+    return makeContainer(host)
   })
 
 /**
@@ -545,43 +389,47 @@ export const getContainer = (
  */
 export const getOrCreateContainer = (
   name: string,
-): Effect.Effect<Container, BlobstoreHostError, Scope.Scope> =>
+): Effect.Effect<Container, BlobstoreHostError, Scope.Scope | BlobstoreClient> =>
   Effect.gen(function* () {
-    const exists = yield* containerExists(name)
-    if (exists) return yield* getContainer(name)
-    return yield* createContainer(name)
+    const client = yield* BlobstoreClient
+    const host = yield* client.getOrCreateContainer(name)
+    return makeContainer(host)
   })
 
 /** True if a container with the given name exists. */
-export const containerExists = (name: string): Effect.Effect<boolean, BlobstoreHostError> =>
-  Effect.try({
-    try: () => Blob.containerExists(name),
-    catch: (cause) => new BlobstoreHostError(cause, "containerExists"),
+export const containerExists = (
+  name: string,
+): Effect.Effect<boolean, BlobstoreHostError, BlobstoreClient> =>
+  Effect.gen(function* () {
+    const client = yield* BlobstoreClient
+    return yield* client.containerExists(name)
   })
 
 /** Delete a container and all of its objects. */
-export const deleteContainer = (name: string): Effect.Effect<void, BlobstoreHostError> =>
-  Effect.try({
-    try: () => Blob.deleteContainer(name),
-    catch: (cause) => new BlobstoreHostError(cause, "deleteContainer"),
+export const deleteContainer = (
+  name: string,
+): Effect.Effect<void, BlobstoreHostError, BlobstoreClient> =>
+  Effect.gen(function* () {
+    const client = yield* BlobstoreClient
+    return yield* client.deleteContainer(name)
   })
 
 /** Copy an object to the same or a different container. Overwrites the destination. */
 export const copyObject = (
   src: ObjectId,
   dest: ObjectId,
-): Effect.Effect<void, BlobstoreHostError> =>
-  Effect.try({
-    try: () => Blob.copyObject(src, dest),
-    catch: (cause) => new BlobstoreHostError(cause, "copyObject"),
+): Effect.Effect<void, BlobstoreHostError, BlobstoreClient> =>
+  Effect.gen(function* () {
+    const client = yield* BlobstoreClient
+    return yield* client.copyObject(src, dest)
   })
 
 /** Move (rename) an object to the same or a different container. Overwrites the destination. */
 export const moveObject = (
   src: ObjectId,
   dest: ObjectId,
-): Effect.Effect<void, BlobstoreHostError> =>
-  Effect.try({
-    try: () => Blob.moveObject(src, dest),
-    catch: (cause) => new BlobstoreHostError(cause, "moveObject"),
+): Effect.Effect<void, BlobstoreHostError, BlobstoreClient> =>
+  Effect.gen(function* () {
+    const client = yield* BlobstoreClient
+    return yield* client.moveObject(src, dest)
   })

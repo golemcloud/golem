@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Fiber } from "effect"
+import { Cause, Effect, Fiber, Layer } from "effect"
 import * as Agents from "../src/agents.js"
 import * as Durability from "../src/durability.js"
+import { AgentHostLive } from "../src/host/AgentHostClient.js"
+import { DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
+import { OplogLive } from "../src/host/OplogClient.js"
 import { SelfAgentId } from "../src/self-agent-id.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 
@@ -10,10 +13,13 @@ const self: Agents.AgentId = {
   agentId: 'Counter("x")',
 }
 
-const provideSelf = <A, E, R>(
-  eff: Effect.Effect<A, E, R | SelfAgentId>,
-): Effect.Effect<A, E, Exclude<R, SelfAgentId>> =>
-  Effect.provideService(eff, SelfAgentId, self) as Effect.Effect<A, E, Exclude<R, SelfAgentId>>
+const hostLayer = Layer.mergeAll(OplogLive, DurabilityModeLive, AgentHostLive)
+
+const provideSelf = <A, E, R>(eff: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
+  Effect.provide(
+    Effect.provideService(eff as Effect.Effect<A, E, R | SelfAgentId>, SelfAgentId, self),
+    hostLayer,
+  ) as Effect.Effect<A, E, never>
 
 beforeEach(() => {
   ApiHostMock.__resetAll()

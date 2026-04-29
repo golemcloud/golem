@@ -1,14 +1,17 @@
 /**
  * Runtime mock for `golem:websocket/client@1.5.0`. Implements the
  * slice of the host API actually exercised by `src/websocket.ts` and
- * its unit tests:
+ * its unit tests.
  *
- * - `WebsocketConnection.connect(url, headers)` — by default fails
- *   with the `connection-failure` tagged error so tests have to opt
- *   in to a mock connection via `__setConnectImpl(...)`.
- * - The returned mock connection serializes outbound messages via
- *   `__pushOutbound` / `__takeOutbound` and inbound messages via
- *   `__deliverInbound` / `__deliverError` / `__signalClosed`.
+ * Tests inject mock connections via the `WebsocketClient` layer fake
+ * (see `test/host/WsFake.ts`); this module's `WebsocketConnection`
+ * class is simply a data-carrying test fixture — construct one via
+ * `new WebsocketConnection(url, headers)` and surface it from the
+ * fake's responder.
+ *
+ * Per-instance state — outbound / inbound queues, close history — is
+ * owned by each `WebsocketConnection` instance, so a fresh instance
+ * per test is sufficient; no global reset is needed.
  *
  * Inbound delivery is wired through a JS `Promise` queue so it
  * mirrors the real host's `subscribe()` ->
@@ -20,8 +23,6 @@
  * buffered error / `closed` envelope). Production code uses
  * `abortablePromise(signal)` so fiber-interrupt promptly drops the
  * pending JS-side resolution.
- *
- * State is reset via `__resetAll()`.
  */
 
 export type Message = { tag: "text"; val: string } | { tag: "binary"; val: Uint8Array }
@@ -68,8 +69,19 @@ export class WebsocketConnection {
     this._headers = headers
   }
 
-  static connect(url: string, headers: [string, string][] | undefined): WebsocketConnection {
-    return _connectImpl(url, headers)
+  /**
+   * Default `connect` shim retained for compatibility with the WIT
+   * specifier shape — production code reaches the host through the
+   * `WebsocketClient` Layer service, so tests don't drive this path
+   * directly. If the WebsocketLive Live layer ever ends up running
+   * inside a unit test (i.e. someone forgot to provide a fake
+   * `WebsocketClient`), the trap below makes the mistake visible.
+   */
+  static connect(_url: string, _headers: [string, string][] | undefined): WebsocketConnection {
+    throw {
+      tag: "connection-failure",
+      val: "WebsocketConnection.connect (mock): tests must provide a WebsocketClient layer fake",
+    }
   }
 
   send(message: Message): void {
@@ -170,34 +182,6 @@ export class WebsocketConnection {
   }
 }
 
-let _connectImpl: (url: string, headers: [string, string][] | undefined) => WebsocketConnection = (
-  _url,
-  _headers,
-) => {
-  // Default: simulate a connection failure if the test hasn't set up
-  // a stub. This catches "I forgot to mock the host" footguns early.
-  throw {
-    tag: "connection-failure",
-    val: "test default: __setConnectImpl was not called",
-  } as WsError
-}
-
-/**
- * Override `WebsocketConnection.connect` for the duration of a test.
- * Most tests will return a fresh `WebsocketConnection(url, headers)`.
- */
-export const __setConnectImpl = (
-  fn: (url: string, headers: [string, string][] | undefined) => WebsocketConnection,
-): void => {
-  _connectImpl = fn
-}
-
-/** Default connect impl: returns a fresh, unwired WebsocketConnection. */
-export const __defaultConnect = (
-  url: string,
-  headers: [string, string][] | undefined,
-): WebsocketConnection => new WebsocketConnection(url, headers ?? undefined)
-
 /**
  * Push a text/binary message into the connection's inbound queue. The
  * read loop (subscribe -> receive) will see it on its next pass.
@@ -225,14 +209,3 @@ export const __outbound = (conn: WebsocketConnection): ReadonlyArray<Message> =>
 export const __outboundCloses = (
   conn: WebsocketConnection,
 ): ReadonlyArray<{ code?: number; reason?: string }> => [...conn._outboundCloses]
-
-export const __resetAll = (): void => {
-  _connectImpl = (_url, _headers) => {
-    throw {
-      tag: "connection-failure",
-      val: "test default: __setConnectImpl was not called",
-    } as WsError
-  }
-}
-
-export const __reset = __resetAll

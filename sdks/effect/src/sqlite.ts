@@ -38,8 +38,9 @@ import * as Client from "effect/unstable/sql/SqlClient"
 import type { Connection } from "effect/unstable/sql/SqlConnection"
 import { classifySqliteError, SqlError } from "effect/unstable/sql/SqlError"
 import * as Statement from "effect/unstable/sql/Statement"
-import type { SQLInputValue } from "node:sqlite"
-import { DatabaseSync, serializeDatabaseSync } from "node:sqlite"
+import type { DatabaseSync, SQLInputValue } from "node:sqlite"
+import { serializeDatabaseSync } from "node:sqlite"
+import { NodeSqliteClient, NodeSqliteLive } from "./host/NodeSqliteClient.js"
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name"
 
@@ -174,7 +175,7 @@ interface PreparedLike {
 const makeImpl = (
   config: SqliteClientConfig,
   underlying: { readonly db: DatabaseSync; readonly closeOnFinalize: boolean } | undefined,
-): Effect.Effect<SqliteClient, SqlError, Scope.Scope | Reactivity.Reactivity> =>
+): Effect.Effect<SqliteClient, SqlError, Scope.Scope | Reactivity.Reactivity | NodeSqliteClient> =>
   Effect.gen(function* () {
     const compiler = Statement.makeCompilerSqlite(config.transformQueryNames)
     const transformRows = config.transformResultNames
@@ -182,28 +183,30 @@ const makeImpl = (
       : undefined
 
     let db: DatabaseSync
-    let closeOnFinalize: boolean
     if (underlying !== undefined) {
       db = underlying.db
-      closeOnFinalize = underlying.closeOnFinalize
+      if (underlying.closeOnFinalize) {
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            try {
+              db.close()
+            } catch {
+              /* idempotent — close() throws if already closed */
+            }
+          }),
+        )
+      }
     } else {
-      db = yield* Effect.try({
-        try: () => new DatabaseSync(config.filename, { readOnly: config.readonly ?? false }),
-        catch: (cause) => sqlError(cause, `Failed to open ${config.filename}`, "open"),
-      })
-      closeOnFinalize = true
-    }
-
-    if (closeOnFinalize) {
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          try {
-            db.close()
-          } catch {
-            /* idempotent — close() throws if already closed */
-          }
-        }),
-      )
+      // NodeSqliteClient.open already registers a Scope finalizer that
+      // calls `db.close()` (idempotent), so no additional finalizer is
+      // needed on this branch. The host service abstraction lets tests
+      // substitute a fake `DatabaseSync` factory via Layer DI.
+      const nodeSqlite = yield* NodeSqliteClient
+      db = yield* nodeSqlite
+        .open(config.filename, { readOnly: config.readonly ?? false })
+        .pipe(
+          Effect.mapError((cause) => sqlError(cause, `Failed to open ${config.filename}`, "open")),
+        )
     }
 
     const prepareCache = yield* Cache.make({
@@ -342,16 +345,22 @@ const makeImpl = (
 /**
  * Open a fresh `DatabaseSync` and wrap it in a {@link SqliteClient}.
  * Registers a Scope finalizer that closes the underlying handle when
- * the surrounding scope is released. Reactivity is provided
- * automatically so user-facing `make` doesn't leak that requirement.
+ * the surrounding scope is released. Reactivity and the
+ * {@link NodeSqliteClient} host service are provided automatically so
+ * user-facing `make` keeps its compact `Effect<…, SqlError, Scope>`
+ * signature.
  */
 const make = (config: SqliteClientConfig): Effect.Effect<SqliteClient, SqlError, Scope.Scope> =>
-  Effect.provide(makeImpl(config, undefined), Reactivity.layer)
+  Effect.provide(makeImpl(config, undefined), [Reactivity.layer, NodeSqliteLive])
 
 /**
  * Wrap an externally-owned `DatabaseSync` in a {@link SqliteClient}.
  * By default the underlying handle is **not** closed when the scope
  * ends — pass `closeOnScopeClose: true` to enable that.
+ *
+ * The {@link NodeSqliteClient} layer is supplied for type-uniformity
+ * with {@link make} even though this branch never yields it (the
+ * `underlying` path bypasses the constructor service).
  */
 const fromDatabase = (
   db: DatabaseSync,
@@ -369,7 +378,7 @@ const fromDatabase = (
       },
       { db, closeOnFinalize: options.closeOnScopeClose ?? false },
     ),
-    Reactivity.layer,
+    [Reactivity.layer, NodeSqliteLive],
   )
 
 /**
@@ -386,7 +395,7 @@ const layer = (
     Effect.map(makeImpl(config, undefined), (client) =>
       Context.make(SqliteClientService, client).pipe(Context.add(Client.SqlClient, client)),
     ),
-  ).pipe(Layer.provide(Reactivity.layer))
+  ).pipe(Layer.provide([Reactivity.layer, NodeSqliteLive]))
 
 /** Public namespace mirror used by `import { SqliteClient } from "effect-golem/sqlite"`. */
 export const SqliteClient = {

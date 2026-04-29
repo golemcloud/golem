@@ -15,8 +15,25 @@ export const makeAgentId = (): string => {
   throw new Error("makeAgentId not mocked")
 }
 
-export const parseAgentId = (): never => {
+/**
+ * Settable mock for the host's `parseAgentId`. Tests register a
+ * responder via {@link __setParseAgentIdImpl}; the default throws so
+ * forgetting to set it surfaces clearly.
+ */
+let parseAgentIdImpl: (agentId: string) => [string, any, any] = () => {
   throw new Error("parseAgentId not mocked")
+}
+
+export const parseAgentId = (agentId: string): [string, any, any] => parseAgentIdImpl(agentId)
+
+export const __setParseAgentIdImpl = (fn: (agentId: string) => [string, any, any]): void => {
+  parseAgentIdImpl = fn
+}
+
+export const __resetParseAgentIdImpl = (): void => {
+  parseAgentIdImpl = () => {
+    throw new Error("parseAgentId not mocked")
+  }
 }
 
 /**

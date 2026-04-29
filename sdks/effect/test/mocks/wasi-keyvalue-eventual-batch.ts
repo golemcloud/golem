@@ -1,42 +1,17 @@
 /**
- * Vitest mock for `wasi:keyvalue/eventual-batch@0.1.0`.
+ * Vitest stub for `wasi:keyvalue/eventual-batch@0.1.0`.
+ *
+ * Required only for `KeyValueLive` import resolution. Tests use
+ * `test/host/KeyValueFake.ts` directly — these functions are not
+ * exercised at runtime by any current test.
  */
 
 import { Bucket, IncomingValue, OutgoingValue, __getBackingMap } from "./wasi-keyvalue-types.js"
-
-let __nextError: { op: "get-many" | "set-many" | "delete-many" | "keys"; trace: string } | undefined
-
-export const __setNextBatchError = (
-  op: "get-many" | "set-many" | "delete-many" | "keys",
-  trace: string,
-): void => {
-  __nextError = { op, trace }
-}
-export const __resetNextBatchError = (): void => {
-  __nextError = undefined
-}
-
-const maybeThrow = (op: "get-many" | "set-many" | "delete-many" | "keys"): void => {
-  if (__nextError && __nextError.op === op) {
-    const trace = __nextError.trace
-    __nextError = undefined
-    const err = {
-      _hostErr: true,
-      _trace: trace,
-      trace() {
-        return trace
-      },
-      message: trace,
-    }
-    throw err
-  }
-}
 
 export const getMany = (
   bucket: Bucket,
   keys: ReadonlyArray<string>,
 ): Array<IncomingValue | undefined> => {
-  maybeThrow("get-many")
   const map = __getBackingMap(bucket)
   return keys.map((k) => {
     const bytes = map.get(k)
@@ -48,7 +23,6 @@ export const setMany = (
   bucket: Bucket,
   pairs: ReadonlyArray<readonly [string, OutgoingValue]>,
 ): void => {
-  maybeThrow("set-many")
   const map = __getBackingMap(bucket)
   for (const [k, ov] of pairs) {
     const bytes = (ov as { __bytes?: Uint8Array }).__bytes
@@ -60,12 +34,8 @@ export const setMany = (
 }
 
 export const deleteMany = (bucket: Bucket, keys: ReadonlyArray<string>): void => {
-  maybeThrow("delete-many")
   const map = __getBackingMap(bucket)
   for (const k of keys) map.delete(k)
 }
 
-export const keys = (bucket: Bucket): Array<string> => {
-  maybeThrow("keys")
-  return Array.from(__getBackingMap(bucket).keys())
-}
+export const keys = (bucket: Bucket): Array<string> => Array.from(__getBackingMap(bucket).keys())

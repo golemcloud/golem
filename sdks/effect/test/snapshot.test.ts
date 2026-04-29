@@ -2,22 +2,26 @@ import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Duration, Effect, Ref, Schema } from "effect"
 import {
   __resetAgents,
-  __resetGetEnvironmentForTest,
-  __resetParseAgentIdForTest,
-  __setGetEnvironmentForTest,
-  __setParseAgentIdForTest,
   defineAgent,
   dispatchLoadSnapshot,
   dispatchSaveSnapshot,
 } from "../src/agent.js"
+import {
+  __resetParseAgentIdImpl as __resetParseAgentIdForTest,
+  __setParseAgentIdImpl as __setParseAgentIdForTest,
+} from "./mocks/golem-agent-host.js"
 import { method } from "../src/method.js"
 import { guest } from "../src/exports.js"
 import * as Snapshot from "../src/snapshot.js"
+import { defineConfig } from "../src/config.js"
 import {
-  __resetGetConfigValueForTest,
-  __setGetConfigValueForTest,
-  defineConfig,
-} from "../src/config.js"
+  __resetEnvironment as __resetGetEnvironmentForTest,
+  __setEnvironment as __setGetEnvironmentForTest,
+} from "./mocks/wasi-cli-environment.js"
+import {
+  __resetGetConfigValueImpl as __resetGetConfigValueForTest,
+  __setGetConfigValueImpl as __setGetConfigValueForTest,
+} from "./mocks/golem-agent-host.js"
 import { toWitCodec } from "../src/wit-codec.js"
 import {
   encodeBinaryEnvelope,
@@ -315,7 +319,7 @@ describe("snapshotting", () => {
       // Reset (simulating new container) and load.
       yield* Effect.promise(() => __resetAgents())
 
-      __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "AutoSnapshotCounter:alice"]])
+      __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "AutoSnapshotCounter:alice"]])
       __setParseAgentIdForTest(() => [
         "AutoSnapshotCounter",
         { tag: "tuple", val: [{ tag: "component-model", val: aliceWv }] },
@@ -344,7 +348,7 @@ describe("snapshotting", () => {
     const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
     const aliceWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("alice"))
 
-    __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "AutoSnapshotCounter:alice"]])
+    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "AutoSnapshotCounter:alice"]])
     __setParseAgentIdForTest(() => [
       "AutoSnapshotCounter",
       { tag: "tuple", val: [{ tag: "component-model", val: aliceWv }] },
@@ -393,7 +397,7 @@ describe("snapshotting", () => {
       expect(customStore.saveCalls).toBe(1)
 
       yield* Effect.promise(() => __resetAgents())
-      __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "CustomSnapshotAgent:carol"]])
+      __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "CustomSnapshotAgent:carol"]])
       __setParseAgentIdForTest(() => [
         "CustomSnapshotAgent",
         { tag: "tuple", val: [{ tag: "component-model", val: carolWv }] },
@@ -445,7 +449,7 @@ describe("snapshotting", () => {
       expect(configCustomStore.saveCalls).toBe(1)
 
       yield* Effect.promise(() => __resetAgents())
-      __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "ConfigCustomAgent:dan"]])
+      __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "ConfigCustomAgent:dan"]])
       __setParseAgentIdForTest(() => [
         "ConfigCustomAgent",
         { tag: "tuple", val: [{ tag: "component-model", val: danWv }] },
@@ -485,7 +489,7 @@ describe("snapshotting", () => {
     const snapshot = await dispatchSaveSnapshot()
 
     await __resetAgents()
-    __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "ConfigCustomAgent:dan"]])
+    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "ConfigCustomAgent:dan"]])
     __setParseAgentIdForTest(() => [
       "ConfigCustomAgent",
       { tag: "tuple", val: [{ tag: "component-model", val: danWv }] },
@@ -501,7 +505,7 @@ describe("snapshotting", () => {
     const stringCodec = await Effect.runPromise(toWitCodec(Schema.String))
     const carolWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("carol"))
 
-    __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "CustomSnapshotAgent:carol"]])
+    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "CustomSnapshotAgent:carol"]])
     __setParseAgentIdForTest(() => [
       "CustomSnapshotAgent",
       { tag: "tuple", val: [{ tag: "component-model", val: carolWv }] },
@@ -545,13 +549,13 @@ describe("snapshotting", () => {
   })
 
   it("load fails when GOLEM_AGENT_ID is missing", async () => {
-    __setGetEnvironmentForTest(() => [])
+    __setGetEnvironmentForTest([])
     const fake = encodeJsonEnvelope(anonymous, { count: 0, owner: "x" })
     await expect(dispatchLoadSnapshot(fake)).rejects.toThrow(/GOLEM_AGENT_ID/)
   })
 
   it("load rejects malformed multipart/mixed envelopes (no body)", async () => {
-    __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "AutoSnapshotCounter:x"]])
+    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "AutoSnapshotCounter:x"]])
     __setParseAgentIdForTest(() => ["AutoSnapshotCounter", { tag: "tuple", val: [] }, undefined])
     await expect(
       dispatchLoadSnapshot({
@@ -562,7 +566,7 @@ describe("snapshotting", () => {
   })
 
   it("load rejects multipart/mixed without a boundary parameter", async () => {
-    __setGetEnvironmentForTest(() => [["GOLEM_AGENT_ID", "AutoSnapshotCounter:x"]])
+    __setGetEnvironmentForTest([["GOLEM_AGENT_ID", "AutoSnapshotCounter:x"]])
     __setParseAgentIdForTest(() => ["AutoSnapshotCounter", { tag: "tuple", val: [] }, undefined])
     await expect(
       dispatchLoadSnapshot({

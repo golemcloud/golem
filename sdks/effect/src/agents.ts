@@ -1,5 +1,7 @@
 import { Effect, Option, Stream } from "effect"
-import * as ApiHost from "golem:api/host@1.5.0"
+import type * as ApiHost from "golem:api/host@1.5.0"
+import { AgentHostClient } from "./host/AgentHostClient.js"
+import { PromiseClient } from "./host/PromiseClient.js"
 
 /**
  * Effect-idiomatic façade over the agent-management subset of
@@ -59,7 +61,6 @@ type RawRevertAgentTarget = ApiHost.RevertAgentTarget
 type RawForkResult = ApiHost.ForkResult
 type RawUpdateMode = ApiHost.UpdateMode
 type RawOplogIndex = ApiHost.OplogIndex
-type RawComponentRevision = ApiHost.ComponentRevision
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -248,140 +249,6 @@ export const toRawFilter = (filter: Filter): RawAgentAnyFilter => ({
 const isFilter = (v: unknown): v is Filter => v instanceof Filter
 
 // ---------------------------------------------------------------------------
-// Host-binding indirections
-// ---------------------------------------------------------------------------
-
-let getSelfMetadataImpl: () => RawAgentMetadata = () => ApiHost.getSelfMetadata()
-let getAgentMetadataImpl: (id: RawAgentId) => RawAgentMetadata | undefined = (id) =>
-  ApiHost.getAgentMetadata(id)
-let updateAgentImpl: (
-  id: RawAgentId,
-  targetRevision: RawComponentRevision,
-  mode: RawUpdateMode,
-) => void = (id, t, m) => ApiHost.updateAgent(id, t, m)
-let forkAgentImpl: (
-  source: RawAgentId,
-  target: RawAgentId,
-  oplogIdxCutOff: RawOplogIndex,
-) => void = (s, t, o) => ApiHost.forkAgent(s, t, o)
-let revertAgentImpl: (id: RawAgentId, target: RawRevertAgentTarget) => void = (id, t) =>
-  ApiHost.revertAgent(id, t)
-let forkImpl: () => RawForkResult = () => ApiHost.fork()
-let resolveComponentIdImpl: (ref: string) => RawComponentId | undefined = (r) =>
-  ApiHost.resolveComponentId(r)
-let resolveAgentIdImpl: (ref: string, name: string) => RawAgentId | undefined = (r, n) =>
-  ApiHost.resolveAgentId(r, n)
-let resolveAgentIdStrictImpl: (ref: string, name: string) => RawAgentId | undefined = (r, n) =>
-  ApiHost.resolveAgentIdStrict(r, n)
-let getAgentsCtorImpl: (
-  componentId: RawComponentId,
-  filter: RawAgentAnyFilter | undefined,
-  precise: boolean,
-) => ApiHost.GetAgents = (componentId, filter, precise) =>
-  new ApiHost.GetAgents(componentId, filter, precise)
-
-/** @internal */
-export const __setGetSelfMetadataForTest = (fn: () => RawAgentMetadata): void => {
-  getSelfMetadataImpl = fn
-}
-/** @internal */
-export const __resetGetSelfMetadataForTest = (): void => {
-  getSelfMetadataImpl = () => ApiHost.getSelfMetadata()
-}
-/** @internal */
-export const __setGetAgentMetadataForTest = (
-  fn: (id: RawAgentId) => RawAgentMetadata | undefined,
-): void => {
-  getAgentMetadataImpl = fn
-}
-/** @internal */
-export const __resetGetAgentMetadataForTest = (): void => {
-  getAgentMetadataImpl = (id) => ApiHost.getAgentMetadata(id)
-}
-/** @internal */
-export const __setUpdateAgentForTest = (
-  fn: (id: RawAgentId, t: RawComponentRevision, m: RawUpdateMode) => void,
-): void => {
-  updateAgentImpl = fn
-}
-/** @internal */
-export const __resetUpdateAgentForTest = (): void => {
-  updateAgentImpl = (id, t, m) => ApiHost.updateAgent(id, t, m)
-}
-/** @internal */
-export const __setForkAgentForTest = (
-  fn: (s: RawAgentId, t: RawAgentId, o: RawOplogIndex) => void,
-): void => {
-  forkAgentImpl = fn
-}
-/** @internal */
-export const __resetForkAgentForTest = (): void => {
-  forkAgentImpl = (s, t, o) => ApiHost.forkAgent(s, t, o)
-}
-/** @internal */
-export const __setRevertAgentForTest = (
-  fn: (id: RawAgentId, t: RawRevertAgentTarget) => void,
-): void => {
-  revertAgentImpl = fn
-}
-/** @internal */
-export const __resetRevertAgentForTest = (): void => {
-  revertAgentImpl = (id, t) => ApiHost.revertAgent(id, t)
-}
-/** @internal */
-export const __setForkForTest = (fn: () => RawForkResult): void => {
-  forkImpl = fn
-}
-/** @internal */
-export const __resetForkForTest = (): void => {
-  forkImpl = () => ApiHost.fork()
-}
-/** @internal */
-export const __setResolveComponentIdForTest = (
-  fn: (ref: string) => RawComponentId | undefined,
-): void => {
-  resolveComponentIdImpl = fn
-}
-/** @internal */
-export const __resetResolveComponentIdForTest = (): void => {
-  resolveComponentIdImpl = (r) => ApiHost.resolveComponentId(r)
-}
-/** @internal */
-export const __setResolveAgentIdForTest = (
-  fn: (ref: string, name: string) => RawAgentId | undefined,
-): void => {
-  resolveAgentIdImpl = fn
-}
-/** @internal */
-export const __resetResolveAgentIdForTest = (): void => {
-  resolveAgentIdImpl = (r, n) => ApiHost.resolveAgentId(r, n)
-}
-/** @internal */
-export const __setResolveAgentIdStrictForTest = (
-  fn: (ref: string, name: string) => RawAgentId | undefined,
-): void => {
-  resolveAgentIdStrictImpl = fn
-}
-/** @internal */
-export const __resetResolveAgentIdStrictForTest = (): void => {
-  resolveAgentIdStrictImpl = (r, n) => ApiHost.resolveAgentIdStrict(r, n)
-}
-/** @internal */
-export const __setGetAgentsCtorForTest = (
-  fn: (
-    componentId: RawComponentId,
-    filter: RawAgentAnyFilter | undefined,
-    precise: boolean,
-  ) => ApiHost.GetAgents,
-): void => {
-  getAgentsCtorImpl = fn
-}
-/** @internal */
-export const __resetGetAgentsCtorForTest = (): void => {
-  getAgentsCtorImpl = (c, f, p) => new ApiHost.GetAgents(c, f, p)
-}
-
-// ---------------------------------------------------------------------------
 // Effect-typed host calls
 // ---------------------------------------------------------------------------
 
@@ -390,47 +257,63 @@ export const __resetGetAgentsCtorForTest = (): void => {
  * oplog entry per invocation); for just the agent-id, prefer the
  * `SelfAgentId` Context service.
  */
-export const getSelfMetadata: Effect.Effect<RawAgentMetadata, AgentsHostError> = Effect.try({
-  try: () => getSelfMetadataImpl(),
-  catch: (e) => new AgentsHostError(e),
-})
+export const getSelfMetadata: Effect.Effect<RawAgentMetadata, AgentsHostError, AgentHostClient> =
+  Effect.gen(function* () {
+    const ah = yield* AgentHostClient
+    return yield* Effect.try({
+      try: () => ah.getSelfMetadata(),
+      catch: (e) => new AgentsHostError(e),
+    })
+  })
 
 /** Read another agent's metadata, or `undefined` if it does not exist. */
 export const getAgentMetadata = (
   id: RawAgentId,
-): Effect.Effect<RawAgentMetadata | undefined, AgentsHostError> =>
-  Effect.try({
-    try: () => getAgentMetadataImpl(id),
-    catch: (e) => new AgentsHostError(e),
+): Effect.Effect<RawAgentMetadata | undefined, AgentsHostError, AgentHostClient> =>
+  Effect.gen(function* () {
+    const ah = yield* AgentHostClient
+    return yield* Effect.try({
+      try: () => ah.getAgentMetadata(id),
+      catch: (e) => new AgentsHostError(e),
+    })
   })
 
 /** Resolve a component reference to its `ComponentId`. */
 export const resolveComponentId = (
   componentReference: string,
-): Effect.Effect<RawComponentId | undefined, AgentsHostError> =>
-  Effect.try({
-    try: () => resolveComponentIdImpl(componentReference),
-    catch: (e) => new AgentsHostError(e),
+): Effect.Effect<RawComponentId | undefined, AgentsHostError, AgentHostClient> =>
+  Effect.gen(function* () {
+    const ah = yield* AgentHostClient
+    return yield* Effect.try({
+      try: () => ah.resolveComponentId(componentReference),
+      catch: (e) => new AgentsHostError(e),
+    })
   })
 
 /** Resolve a `(componentReference, agentName)` pair to an `AgentId`. */
 export const resolveAgentId = (
   componentReference: string,
   agentName: string,
-): Effect.Effect<RawAgentId | undefined, AgentsHostError> =>
-  Effect.try({
-    try: () => resolveAgentIdImpl(componentReference, agentName),
-    catch: (e) => new AgentsHostError(e),
+): Effect.Effect<RawAgentId | undefined, AgentsHostError, AgentHostClient> =>
+  Effect.gen(function* () {
+    const ah = yield* AgentHostClient
+    return yield* Effect.try({
+      try: () => ah.resolveAgentId(componentReference, agentName),
+      catch: (e) => new AgentsHostError(e),
+    })
   })
 
 /** Strict variant of {@link resolveAgentId}. */
 export const resolveAgentIdStrict = (
   componentReference: string,
   agentName: string,
-): Effect.Effect<RawAgentId | undefined, AgentsHostError> =>
-  Effect.try({
-    try: () => resolveAgentIdStrictImpl(componentReference, agentName),
-    catch: (e) => new AgentsHostError(e),
+): Effect.Effect<RawAgentId | undefined, AgentsHostError, AgentHostClient> =>
+  Effect.gen(function* () {
+    const ah = yield* AgentHostClient
+    return yield* Effect.try({
+      try: () => ah.resolveAgentIdStrict(componentReference, agentName),
+      catch: (e) => new AgentsHostError(e),
+    })
   })
 
 /**
@@ -442,11 +325,12 @@ export const updateAgent = (input: {
   readonly agentId: RawAgentId
   readonly targetRevision: bigint | number
   readonly mode: RawUpdateMode
-}): Effect.Effect<void, AgentsHostError | AgentsValidationError> =>
+}): Effect.Effect<void, AgentsHostError | AgentsValidationError, AgentHostClient> =>
   Effect.gen(function* () {
     const target = yield* toUint64(input.targetRevision, "updateAgent.targetRevision")
+    const ah = yield* AgentHostClient
     yield* Effect.try({
-      try: () => updateAgentImpl(input.agentId, target, input.mode),
+      try: () => ah.updateAgent(input.agentId, target, input.mode),
       catch: (e) => new AgentsHostError(e),
     })
   })
@@ -456,20 +340,26 @@ export const forkAgent = (input: {
   readonly source: RawAgentId
   readonly target: RawAgentId
   readonly oplogIdxCutOff: RawOplogIndex
-}): Effect.Effect<void, AgentsHostError> =>
-  Effect.try({
-    try: () => forkAgentImpl(input.source, input.target, input.oplogIdxCutOff),
-    catch: (e) => new AgentsHostError(e),
+}): Effect.Effect<void, AgentsHostError, AgentHostClient> =>
+  Effect.gen(function* () {
+    const ah = yield* AgentHostClient
+    yield* Effect.try({
+      try: () => ah.forkAgent(input.source, input.target, input.oplogIdxCutOff),
+      catch: (e) => new AgentsHostError(e),
+    })
   })
 
 /** Revert an agent to a previous state. */
 export const revertAgent = (
   agentId: RawAgentId,
   target: RawRevertAgentTarget,
-): Effect.Effect<void, AgentsHostError> =>
-  Effect.try({
-    try: () => revertAgentImpl(agentId, target),
-    catch: (e) => new AgentsHostError(e),
+): Effect.Effect<void, AgentsHostError, AgentHostClient> =>
+  Effect.gen(function* () {
+    const ah = yield* AgentHostClient
+    yield* Effect.try({
+      try: () => ah.revertAgent(agentId, target),
+      catch: (e) => new AgentsHostError(e),
+    })
   })
 
 /**
@@ -477,10 +367,15 @@ export const revertAgent = (
  * original and the new ("forked") agent see this call return; inspect
  * the {@link RawForkResult} `tag` to discover which side you are on.
  */
-export const fork: Effect.Effect<RawForkResult, AgentsHostError> = Effect.try({
-  try: () => forkImpl(),
-  catch: (e) => new AgentsHostError(e),
-})
+export const fork: Effect.Effect<RawForkResult, AgentsHostError, AgentHostClient> = Effect.gen(
+  function* () {
+    const ah = yield* AgentHostClient
+    return yield* Effect.try({
+      try: () => ah.fork(),
+      catch: (e) => new AgentsHostError(e),
+    })
+  },
+)
 
 // ---------------------------------------------------------------------------
 // `GetAgents` pager
@@ -494,12 +389,15 @@ export const getAgents = (input: {
   readonly componentId: RawComponentId
   readonly filter?: Filter | RawAgentAnyFilter | undefined
   readonly precise?: boolean
-}): Stream.Stream<RawAgentMetadata, AgentsHostError> => {
+}): Stream.Stream<RawAgentMetadata, AgentsHostError, AgentHostClient> => {
   const rawFilter = isFilter(input.filter) ? toRawFilter(input.filter) : input.filter
   return Stream.unwrap(
-    Effect.try({
-      try: () => getAgentsCtorImpl(input.componentId, rawFilter, input.precise ?? false),
-      catch: (e) => new AgentsHostError(e),
+    Effect.gen(function* () {
+      const ah = yield* AgentHostClient
+      return yield* Effect.try({
+        try: () => ah.getAgentsCtor(input.componentId, rawFilter, input.precise ?? false),
+        catch: (e) => new AgentsHostError(e),
+      })
     }).pipe(
       Effect.map((handle) =>
         Stream.paginate<ApiHost.GetAgents, RawAgentMetadata, AgentsHostError>(handle, (state) =>
@@ -537,41 +435,6 @@ export class PromiseAlreadyCompletedError {
   }
 }
 
-let createPromiseImpl: () => ApiHost.PromiseId = () => ApiHost.createPromise()
-let getPromiseCtorImpl: (id: ApiHost.PromiseId) => ApiHost.GetPromiseResult = (id) =>
-  ApiHost.getPromise(id)
-let completePromiseImpl: (id: ApiHost.PromiseId, payload: Uint8Array) => boolean = (id, p) =>
-  ApiHost.completePromise(id, p)
-
-/** @internal */
-export const __setCreatePromiseForTest = (fn: () => ApiHost.PromiseId): void => {
-  createPromiseImpl = fn
-}
-/** @internal */
-export const __resetCreatePromiseForTest = (): void => {
-  createPromiseImpl = () => ApiHost.createPromise()
-}
-/** @internal */
-export const __setGetPromiseCtorForTest = (
-  fn: (id: ApiHost.PromiseId) => ApiHost.GetPromiseResult,
-): void => {
-  getPromiseCtorImpl = fn
-}
-/** @internal */
-export const __resetGetPromiseCtorForTest = (): void => {
-  getPromiseCtorImpl = (id) => ApiHost.getPromise(id)
-}
-/** @internal */
-export const __setCompletePromiseForTest = (
-  fn: (id: ApiHost.PromiseId, payload: Uint8Array) => boolean,
-): void => {
-  completePromiseImpl = fn
-}
-/** @internal */
-export const __resetCompletePromiseForTest = (): void => {
-  completePromiseImpl = (id, p) => ApiHost.completePromise(id, p)
-}
-
 /**
  * Effect-flavoured promise rendezvous. Thin wrappers around the
  * `golem:api/host@1.5.0` promise API: a host-side shared rendezvous
@@ -580,16 +443,24 @@ export const __resetCompletePromiseForTest = (): void => {
  */
 export const Promises = {
   /** Create a new host promise. */
-  create: Effect.try({
-    try: () => createPromiseImpl(),
-    catch: (e: unknown) => new AgentsHostError(e),
-  }) as Effect.Effect<ApiHost.PromiseId, AgentsHostError>,
+  create: Effect.gen(function* () {
+    const pc = yield* PromiseClient
+    return yield* Effect.try({
+      try: () => pc.createPromise(),
+      catch: (e: unknown) => new AgentsHostError(e),
+    })
+  }) as Effect.Effect<ApiHost.PromiseId, AgentsHostError, PromiseClient>,
 
   /** Poll a promise: returns `undefined` until completed. */
-  poll: (id: ApiHost.PromiseId): Effect.Effect<Uint8Array | undefined, AgentsHostError> =>
-    Effect.try({
-      try: () => getPromiseCtorImpl(id).get(),
-      catch: (e) => new AgentsHostError(e),
+  poll: (
+    id: ApiHost.PromiseId,
+  ): Effect.Effect<Uint8Array | undefined, AgentsHostError, PromiseClient> =>
+    Effect.gen(function* () {
+      const pc = yield* PromiseClient
+      return yield* Effect.try({
+        try: () => pc.getPromise(id).get(),
+        catch: (e) => new AgentsHostError(e),
+      })
     }),
 
   /**
@@ -608,10 +479,11 @@ export const Promises = {
    * (the in-flight `.then(...)` chain is dropped), and the underlying
    * host promise remains pending until some peer calls `complete`.
    */
-  await: (id: ApiHost.PromiseId): Effect.Effect<Uint8Array, AgentsHostError> =>
+  await: (id: ApiHost.PromiseId): Effect.Effect<Uint8Array, AgentsHostError, PromiseClient> =>
     Effect.gen(function* () {
+      const pc = yield* PromiseClient
       const handle = yield* Effect.try({
-        try: () => getPromiseCtorImpl(id),
+        try: () => pc.getPromise(id),
         catch: (e) => new AgentsHostError(e),
       })
       // Fast path: already completed.
@@ -671,10 +543,11 @@ export const Promises = {
   complete: (
     id: ApiHost.PromiseId,
     payload: Uint8Array,
-  ): Effect.Effect<true, AgentsHostError | PromiseAlreadyCompletedError> =>
+  ): Effect.Effect<true, AgentsHostError | PromiseAlreadyCompletedError, PromiseClient> =>
     Effect.gen(function* () {
+      const pc = yield* PromiseClient
       const ok = yield* Effect.try({
-        try: () => completePromiseImpl(id, payload),
+        try: () => pc.completePromise(id, payload),
         catch: (e) => new AgentsHostError(e),
       })
       if (!ok) return yield* Effect.fail(new PromiseAlreadyCompletedError(id))

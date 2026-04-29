@@ -1,9 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Effect, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import * as Webhook from "../src/webhook.js"
 import * as Http from "../src/http.js"
+import { AgentHostLive } from "../src/host/AgentHostClient.js"
+import { PromiseLive } from "../src/host/PromiseClient.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 import * as AgentHostMock from "./mocks/golem-agent-host.js"
+
+/**
+ * Layer-based replacement for the deleted `__setX/__resetX`
+ * indirection in `src/webhook.ts`. Production layers go through the
+ * vitest-aliased mock modules — the per-test `AgentHostMock.__set...`
+ * setters drive the host's `createWebhook` response unchanged.
+ */
+const HostLayer = Layer.mergeAll(AgentHostLive, PromiseLive)
 
 describe("Webhook.create", () => {
   beforeEach(() => {
@@ -28,7 +38,7 @@ describe("Webhook.create", () => {
       expect(hook.url).toBe("https://hooks.example/abc")
       expect(observedPromiseId).toBeDefined()
       expect(hook.promiseId).toEqual(observedPromiseId)
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("surfaces a thrown create-webhook as WebhookHostError", () =>
@@ -46,7 +56,7 @@ describe("Webhook.create", () => {
         expect(json).toContain("agent not deployed via http api")
         void failure
       }
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 })
 
@@ -78,7 +88,7 @@ describe("Webhook handle — await / poll", () => {
 
       const polled2 = yield* hook.poll
       expect(polled2).toBeInstanceOf(Webhook.WebhookPayload)
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 
   it.effect("await fast-paths when the promise is already completed", () =>
@@ -88,7 +98,7 @@ describe("Webhook handle — await / poll", () => {
       ApiHostMock.completePromise(hook.promiseId, new TextEncoder().encode("ready"))
       const payload = yield* hook.await
       expect(payload.text()).toBe("ready")
-    }),
+    }).pipe(Effect.provide(HostLayer)),
   )
 })
 

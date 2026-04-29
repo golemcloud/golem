@@ -1,6 +1,6 @@
 import { Effect, Option, Stream } from "effect"
-import * as ApiHost from "golem:api/host@1.5.0"
-import * as OplogHost from "golem:api/oplog@1.5.0"
+import type * as OplogHost from "golem:api/oplog@1.5.0"
+import { OplogClient } from "./host/OplogClient.js"
 
 /**
  * Effect-idiomatic façade over `golem:api/oplog@1.5.0`.
@@ -52,98 +52,32 @@ export class OplogHostError {
 }
 
 // ---------------------------------------------------------------------------
-// Host-binding indirections
-// ---------------------------------------------------------------------------
-
-let getOplogIndexImpl: () => RawOplogIndex = () => ApiHost.getOplogIndex()
-let setOplogIndexImpl: (idx: RawOplogIndex) => void = (idx) => ApiHost.setOplogIndex(idx)
-let enrichImpl: (
-  environmentId: RawEnvironmentId,
-  agentId: RawAgentId,
-  entries: Array<[RawOplogIndex, RawOplogEntry]>,
-  componentRevision: RawComponentRevision,
-) => RawPublicOplogEntry[] = (environmentId, agentId, entries, componentRevision) =>
-  OplogHost.enrichOplogEntries(environmentId, agentId, entries, componentRevision)
-let getOplogCtorImpl: (agentId: RawAgentId, start: RawOplogIndex) => OplogHost.GetOplog = (
-  agentId,
-  start,
-) => new OplogHost.GetOplog(agentId, start)
-let searchOplogCtorImpl: (agentId: RawAgentId, text: string) => OplogHost.SearchOplog = (
-  agentId,
-  text,
-) => new OplogHost.SearchOplog(agentId, text)
-
-/** @internal */
-export const __setGetOplogIndexForTest = (fn: () => RawOplogIndex): void => {
-  getOplogIndexImpl = fn
-}
-/** @internal */
-export const __resetGetOplogIndexForTest = (): void => {
-  getOplogIndexImpl = () => ApiHost.getOplogIndex()
-}
-/** @internal */
-export const __setSetOplogIndexForTest = (fn: (idx: RawOplogIndex) => void): void => {
-  setOplogIndexImpl = fn
-}
-/** @internal */
-export const __resetSetOplogIndexForTest = (): void => {
-  setOplogIndexImpl = (idx) => ApiHost.setOplogIndex(idx)
-}
-/** @internal */
-export const __setEnrichForTest = (
-  fn: (
-    environmentId: RawEnvironmentId,
-    agentId: RawAgentId,
-    entries: Array<[RawOplogIndex, RawOplogEntry]>,
-    componentRevision: RawComponentRevision,
-  ) => RawPublicOplogEntry[],
-): void => {
-  enrichImpl = fn
-}
-/** @internal */
-export const __resetEnrichForTest = (): void => {
-  enrichImpl = (e, a, es, cr) => OplogHost.enrichOplogEntries(e, a, es, cr)
-}
-/** @internal */
-export const __setGetOplogCtorForTest = (
-  fn: (agentId: RawAgentId, start: RawOplogIndex) => OplogHost.GetOplog,
-): void => {
-  getOplogCtorImpl = fn
-}
-/** @internal */
-export const __resetGetOplogCtorForTest = (): void => {
-  getOplogCtorImpl = (agentId, start) => new OplogHost.GetOplog(agentId, start)
-}
-/** @internal */
-export const __setSearchOplogCtorForTest = (
-  fn: (agentId: RawAgentId, text: string) => OplogHost.SearchOplog,
-): void => {
-  searchOplogCtorImpl = fn
-}
-/** @internal */
-export const __resetSearchOplogCtorForTest = (): void => {
-  searchOplogCtorImpl = (agentId, text) => new OplogHost.SearchOplog(agentId, text)
-}
-
-// ---------------------------------------------------------------------------
 // Effect-typed host calls
 // ---------------------------------------------------------------------------
 
 /** Read the current position in the persistent oplog. */
-export const currentIndex: Effect.Effect<RawOplogIndex, OplogHostError> = Effect.try({
-  try: () => getOplogIndexImpl(),
-  catch: (e) => new OplogHostError(e),
-})
+export const currentIndex: Effect.Effect<RawOplogIndex, OplogHostError, OplogClient> = Effect.gen(
+  function* () {
+    const client = yield* OplogClient
+    return yield* Effect.try({
+      try: () => client.getOplogIndex(),
+      catch: (e) => new OplogHostError(e),
+    })
+  },
+)
 
 /**
  * Imperative time-travel: rewind execution to a previous oplog index.
  * Marked dangerous — most app code should not need this. Mirrors the
  * official SDK's `setOplogIndex`.
  */
-export const setIndex = (idx: RawOplogIndex): Effect.Effect<void, OplogHostError> =>
-  Effect.try({
-    try: () => setOplogIndexImpl(idx),
-    catch: (e) => new OplogHostError(e),
+export const setIndex = (idx: RawOplogIndex): Effect.Effect<void, OplogHostError, OplogClient> =>
+  Effect.gen(function* () {
+    const client = yield* OplogClient
+    return yield* Effect.try({
+      try: () => client.setOplogIndex(idx),
+      catch: (e) => new OplogHostError(e),
+    })
   })
 
 /**
@@ -155,16 +89,19 @@ export const enrich = (input: {
   readonly agentId: RawAgentId
   readonly entries: ReadonlyArray<readonly [RawOplogIndex, RawOplogEntry]>
   readonly componentRevision: RawComponentRevision
-}): Effect.Effect<ReadonlyArray<RawPublicOplogEntry>, OplogHostError> =>
-  Effect.try({
-    try: () =>
-      enrichImpl(
-        input.environmentId,
-        input.agentId,
-        input.entries.map(([i, e]) => [i, e] as [RawOplogIndex, RawOplogEntry]),
-        input.componentRevision,
-      ),
-    catch: (e) => new OplogHostError(e),
+}): Effect.Effect<ReadonlyArray<RawPublicOplogEntry>, OplogHostError, OplogClient> =>
+  Effect.gen(function* () {
+    const client = yield* OplogClient
+    return yield* Effect.try({
+      try: () =>
+        client.enrichOplogEntries(
+          input.environmentId,
+          input.agentId,
+          input.entries.map(([i, e]) => [i, e] as [RawOplogIndex, RawOplogEntry]),
+          input.componentRevision,
+        ),
+      catch: (e) => new OplogHostError(e),
+    })
   })
 
 // ---------------------------------------------------------------------------
@@ -185,23 +122,23 @@ export interface OplogReader {
 export const reader = (input: {
   readonly agentId: RawAgentId
   readonly start: RawOplogIndex
-}): Effect.Effect<OplogReader, OplogHostError> =>
-  Effect.try({
-    try: () => getOplogCtorImpl(input.agentId, input.start),
-    catch: (e) => new OplogHostError(e),
-  }).pipe(
-    Effect.map(
-      (handle): OplogReader => ({
-        next: Effect.try({
-          try: () => {
-            const out = handle.getNext()
-            return out === undefined ? undefined : ([...out] as ReadonlyArray<RawPublicOplogEntry>)
-          },
-          catch: (e) => new OplogHostError(e),
-        }),
+}): Effect.Effect<OplogReader, OplogHostError, OplogClient> =>
+  Effect.gen(function* () {
+    const client = yield* OplogClient
+    const handle = yield* Effect.try({
+      try: () => client.newGetOplog(input.agentId, input.start),
+      catch: (e) => new OplogHostError(e),
+    })
+    return {
+      next: Effect.try({
+        try: () => {
+          const out = handle.getNext()
+          return out === undefined ? undefined : ([...out] as ReadonlyArray<RawPublicOplogEntry>)
+        },
+        catch: (e) => new OplogHostError(e),
       }),
-    ),
-  )
+    }
+  })
 
 /**
  * Stream the agent's oplog starting from `start`. The host's pager
@@ -211,7 +148,7 @@ export const reader = (input: {
 export const read = (input: {
   readonly agentId: RawAgentId
   readonly start: RawOplogIndex
-}): Stream.Stream<RawPublicOplogEntry, OplogHostError> =>
+}): Stream.Stream<RawPublicOplogEntry, OplogHostError, OplogClient> =>
   Stream.unwrap(
     Effect.map(reader(input), (r) =>
       Stream.paginate<OplogReader, RawPublicOplogEntry, OplogHostError>(r, (state) =>
@@ -242,27 +179,27 @@ export interface OplogSearchReader {
 export const searchReader = (input: {
   readonly agentId: RawAgentId
   readonly text: string
-}): Effect.Effect<OplogSearchReader, OplogHostError> =>
-  Effect.try({
-    try: () => searchOplogCtorImpl(input.agentId, input.text),
-    catch: (e) => new OplogHostError(e),
-  }).pipe(
-    Effect.map(
-      (handle): OplogSearchReader => ({
-        next: Effect.try({
-          try: () => {
-            const out = handle.getNext()
-            return out === undefined
-              ? undefined
-              : (out.map(
-                  ([i, e]) => [i, e] as [RawOplogIndex, RawPublicOplogEntry],
-                ) as ReadonlyArray<readonly [RawOplogIndex, RawPublicOplogEntry]>)
-          },
-          catch: (e) => new OplogHostError(e),
-        }),
+}): Effect.Effect<OplogSearchReader, OplogHostError, OplogClient> =>
+  Effect.gen(function* () {
+    const client = yield* OplogClient
+    const handle = yield* Effect.try({
+      try: () => client.newSearchOplog(input.agentId, input.text),
+      catch: (e) => new OplogHostError(e),
+    })
+    return {
+      next: Effect.try({
+        try: () => {
+          const out = handle.getNext()
+          return out === undefined
+            ? undefined
+            : (out.map(([i, e]) => [i, e] as [RawOplogIndex, RawPublicOplogEntry]) as ReadonlyArray<
+                readonly [RawOplogIndex, RawPublicOplogEntry]
+              >)
+        },
+        catch: (e) => new OplogHostError(e),
       }),
-    ),
-  )
+    }
+  })
 
 /**
  * Stream the host's full-text search results over the agent's oplog,
@@ -271,7 +208,7 @@ export const searchReader = (input: {
 export const search = (input: {
   readonly agentId: RawAgentId
   readonly text: string
-}): Stream.Stream<readonly [RawOplogIndex, RawPublicOplogEntry], OplogHostError> =>
+}): Stream.Stream<readonly [RawOplogIndex, RawPublicOplogEntry], OplogHostError, OplogClient> =>
   Stream.unwrap(
     Effect.map(searchReader(input), (r) =>
       Stream.paginate<

@@ -1,5 +1,7 @@
 import { Cause, Context, Effect, Ref, Scope } from "effect"
 import { atomically, DurabilityHostError } from "./durability-mode.js"
+import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
+import { OplogClient } from "./host/OplogClient.js"
 import { currentIndex, OplogHostError, setIndex } from "./oplog.js"
 
 /**
@@ -169,11 +171,11 @@ export const withCompensation: {
     compensate: (value: A, cause: Cause.Cause<unknown>) => Effect.Effect<void, never, R2>,
   ): <E, R>(
     effect: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | DurabilityHostError, R | R2 | Scope.Scope>
+  ) => Effect.Effect<A, E | DurabilityHostError, R | R2 | Scope.Scope | DurabilityModeClient>
   <A, E, R, R2>(
     effect: Effect.Effect<A, E, R>,
     compensate: (value: A, cause: Cause.Cause<unknown>) => Effect.Effect<void, never, R2>,
-  ): Effect.Effect<A, E | DurabilityHostError, R | R2 | Scope.Scope>
+  ): Effect.Effect<A, E | DurabilityHostError, R | R2 | Scope.Scope | DurabilityModeClient>
 } = ((...args: Array<unknown>) => {
   if (args.length === 1) {
     const compensate = args[0] as (
@@ -192,12 +194,12 @@ export const withCompensation: {
 const withCompensationImpl = <A, E, R, R2>(
   effect: Effect.Effect<A, E, R>,
   compensate: (value: A, cause: Cause.Cause<unknown>) => Effect.Effect<void, never, R2>,
-): Effect.Effect<A, E | DurabilityHostError, R | R2 | Scope.Scope> =>
+): Effect.Effect<A, E | DurabilityHostError, R | R2 | Scope.Scope | DurabilityModeClient> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
       const value = yield* restore(atomically(effect))
       const store = yield* Effect.service(CauseStoreRef)
-      const context = yield* Effect.context<R2>()
+      const context = yield* Effect.context<R2 | DurabilityModeClient>()
       const scope = yield* Effect.service(Scope.Scope)
       yield* Scope.addFinalizer(
         scope,
@@ -238,11 +240,11 @@ export const withFallibleCompensation: {
     compensate: (value: A, cause: Cause.Cause<unknown>) => Effect.Effect<void, E2, R2>,
   ): <E, R>(
     effect: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | DurabilityHostError, R | R2 | Scope.Scope>
+  ) => Effect.Effect<A, E | DurabilityHostError, R | R2 | Scope.Scope | DurabilityModeClient>
   <A, E, R, E2, R2>(
     effect: Effect.Effect<A, E, R>,
     compensate: (value: A, cause: Cause.Cause<unknown>) => Effect.Effect<void, E2, R2>,
-  ): Effect.Effect<A, E | DurabilityHostError, R | R2 | Scope.Scope>
+  ): Effect.Effect<A, E | DurabilityHostError, R | R2 | Scope.Scope | DurabilityModeClient>
 } = ((...args: Array<unknown>) => {
   if (args.length === 1) {
     const compensate = args[0] as (
@@ -264,7 +266,7 @@ export const withFallibleCompensation: {
 const withFallibleCompensationImpl = <A, E, R, E2, R2>(
   effect: Effect.Effect<A, E, R>,
   compensate: (value: A, cause: Cause.Cause<unknown>) => Effect.Effect<void, E2, R2>,
-): Effect.Effect<A, E | DurabilityHostError, R | R2 | Scope.Scope> =>
+): Effect.Effect<A, E | DurabilityHostError, R | R2 | Scope.Scope | DurabilityModeClient> =>
   withCompensationImpl(effect, (value, cause) =>
     Effect.gen(function* () {
       const ctx = yield* Effect.service(InsideSagaRef)
@@ -312,7 +314,9 @@ export const operation = <In, Out, E, R, R2>(input: {
     output: Out,
     cause: Cause.Cause<unknown>,
   ) => Effect.Effect<void, never, R2>
-}): ((input: In) => Effect.Effect<Out, E | DurabilityHostError, R | R2 | Scope.Scope>) => {
+}): ((
+  input: In,
+) => Effect.Effect<Out, E | DurabilityHostError, R | R2 | Scope.Scope | DurabilityModeClient>) => {
   return (in_: In) =>
     withCompensation(input.execute(in_), (out, cause) => input.compensate(in_, out, cause))
 }
@@ -370,7 +374,7 @@ const makeSagaContextValue = (
  *
  * @internal
  */
-const rewindAndSuspend = (checkpoint: bigint): Effect.Effect<never, OplogHostError> =>
+const rewindAndSuspend = (checkpoint: bigint): Effect.Effect<never, OplogHostError, OplogClient> =>
   setIndex(checkpoint).pipe(Effect.andThen(Effect.never))
 
 // ---------------------------------------------------------------------------
@@ -406,7 +410,7 @@ export const fallibleTransaction = <A, E, R>(
 ): Effect.Effect<
   A,
   TransactionFailure<E> | DurabilityHostError | OplogHostError | NestedSagaError,
-  Exclude<R, Scope.Scope>
+  Exclude<R, Scope.Scope> | DurabilityModeClient | OplogClient
 > =>
   Effect.gen(function* () {
     const existing = yield* Effect.service(InsideSagaRef)
@@ -458,7 +462,7 @@ export const fallibleTransaction = <A, E, R>(
   }) as Effect.Effect<
     A,
     TransactionFailure<E> | DurabilityHostError | OplogHostError | NestedSagaError,
-    Exclude<R, Scope.Scope>
+    Exclude<R, Scope.Scope> | DurabilityModeClient | OplogClient
   >
 
 // ---------------------------------------------------------------------------
@@ -499,7 +503,7 @@ export const infallibleTransaction = <A, R>(
 ): Effect.Effect<
   A,
   DurabilityHostError | OplogHostError | NestedSagaError,
-  Exclude<R, Scope.Scope>
+  Exclude<R, Scope.Scope> | DurabilityModeClient | OplogClient
 > =>
   Effect.gen(function* () {
     const existing = yield* Effect.service(InsideSagaRef)
@@ -533,5 +537,5 @@ export const infallibleTransaction = <A, R>(
   }) as Effect.Effect<
     A,
     DurabilityHostError | OplogHostError | NestedSagaError,
-    Exclude<R, Scope.Scope>
+    Exclude<R, Scope.Scope> | DurabilityModeClient | OplogClient
   >

@@ -1,22 +1,15 @@
+import { describe, expect, it } from "@effect/vitest"
 import { Effect, Fiber } from "effect"
 import { Socket } from "effect/unstable/socket"
-import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import * as Websocket from "../src/websocket.js"
+import * as WsFake from "./host/WsFake.js"
 import * as WsMock from "./mocks/golem-websocket-client.js"
-
-beforeEach(() => {
-  WsMock.__resetAll()
-  Websocket.__resetConnectForTest()
-})
-afterEach(() => {
-  WsMock.__resetAll()
-  Websocket.__resetConnectForTest()
-})
 
 describe("Websocket.connect — error mapping", () => {
   it.effect("maps `connection-failure` to SocketError(SocketOpenError)", () =>
     Effect.gen(function* () {
-      WsMock.__setConnectImpl(() => {
+      const fake = yield* WsFake.make
+      yield* fake.setResponder(() => {
         throw { tag: "connection-failure", val: "ECONNREFUSED" }
       })
 
@@ -26,7 +19,7 @@ describe("Websocket.connect — error mapping", () => {
             yield* Websocket.connect("wss://test.example/echo")
           }),
         ),
-      )
+      ).pipe(Effect.provide(fake.layer))
 
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -40,8 +33,9 @@ describe("Websocket.connect — error mapping", () => {
 
   it.effect("issues close(1000, undefined) when the surrounding scope ends", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       let conn: WsMock.WebsocketConnection | undefined
-      WsMock.__setConnectImpl((url) => {
+      yield* fake.setResponder((url) => {
         conn = new WsMock.WebsocketConnection(url, undefined)
         return conn
       })
@@ -50,7 +44,7 @@ describe("Websocket.connect — error mapping", () => {
         Effect.gen(function* () {
           yield* Websocket.connect("wss://test.example/echo")
         }),
-      )
+      ).pipe(Effect.provide(fake.layer))
 
       expect(conn).toBeDefined()
       const closes = WsMock.__outboundCloses(conn!)
@@ -63,8 +57,9 @@ describe("Websocket.connect — error mapping", () => {
 describe("Websocket — runString receives inbound text frames", () => {
   it.effect("delivers each text frame to the handler in order", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
 
       const seen: string[] = []
       yield* Effect.scoped(
@@ -83,15 +78,16 @@ describe("Websocket — runString receives inbound text frames", () => {
             seen.push(line)
           })
         }),
-      )
+      ).pipe(Effect.provide(fake.layer))
       expect(seen).toEqual(["one", "two", "three"])
     }),
   )
 
   it.effect("decodes binary frames via runString", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
 
       const seen: string[] = []
       yield* Effect.scoped(
@@ -108,15 +104,16 @@ describe("Websocket — runString receives inbound text frames", () => {
             seen.push(s)
           })
         }),
-      )
+      ).pipe(Effect.provide(fake.layer))
       expect(seen).toEqual(["bin-payload"])
     }),
   )
 
   it.effect("non-clean close codes surface as SocketError(SocketCloseError)", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
 
       const exit = yield* Effect.exit(
         Effect.scoped(
@@ -128,7 +125,7 @@ describe("Websocket — runString receives inbound text frames", () => {
             yield* sock.runString(() => {})
           }),
         ),
-      )
+      ).pipe(Effect.provide(fake.layer))
 
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -141,8 +138,9 @@ describe("Websocket — runString receives inbound text frames", () => {
 
   it.effect("clean close codes are filtered out via closeCodeIsError", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
 
       const exit = yield* Effect.exit(
         Effect.scoped(
@@ -154,7 +152,7 @@ describe("Websocket — runString receives inbound text frames", () => {
             yield* sock.runString(() => {})
           }),
         ),
-      )
+      ).pipe(Effect.provide(fake.layer))
 
       expect(exit._tag).toBe("Success")
     }),
@@ -164,8 +162,9 @@ describe("Websocket — runString receives inbound text frames", () => {
 describe("Websocket — writer sends text/binary/close", () => {
   it.effect("text payloads round-trip through the writer", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
 
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -184,7 +183,7 @@ describe("Websocket — writer sends text/binary/close", () => {
           WsMock.__signalClosed(conn, { code: 1000, reason: "" })
           yield* Effect.exit(Fiber.join(fiber))
         }),
-      )
+      ).pipe(Effect.provide(fake.layer))
       const out = WsMock.__outbound(conn)
       expect(out.length).toBe(2)
       expect(out[0]).toEqual({ tag: "text", val: "hello" })
@@ -194,8 +193,9 @@ describe("Websocket — writer sends text/binary/close", () => {
 
   it.effect("binary payloads round-trip through the writer", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
 
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -210,7 +210,7 @@ describe("Websocket — writer sends text/binary/close", () => {
           WsMock.__signalClosed(conn, { code: 1000, reason: "" })
           yield* Effect.exit(Fiber.join(fiber))
         }),
-      )
+      ).pipe(Effect.provide(fake.layer))
       const out = WsMock.__outbound(conn)
       expect(out.length).toBe(1)
       expect(out[0]?.tag).toBe("binary")
@@ -220,8 +220,9 @@ describe("Websocket — writer sends text/binary/close", () => {
 
   it.effect("a CloseEvent triggers ws.close(...) and exits the read loop cleanly", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
 
       const exit = yield* Effect.exit(
         Effect.scoped(
@@ -239,7 +240,7 @@ describe("Websocket — writer sends text/binary/close", () => {
             yield* Fiber.join(fiber)
           }),
         ),
-      )
+      ).pipe(Effect.provide(fake.layer))
       expect(exit._tag).toBe("Success")
       const closes = WsMock.__outboundCloses(conn)
       expect(closes.length).toBeGreaterThanOrEqual(1)
@@ -250,12 +251,13 @@ describe("Websocket — writer sends text/binary/close", () => {
 
   it.effect("send-failure during write surfaces as SocketError(SocketWriteError)", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
       // Wire the send to throw a tagged WIT error.
       conn._sendImpl = () => {
         throw { tag: "send-failure", val: "queue is full" }
       }
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
 
       const writeExit = yield* Effect.scoped(
         Effect.gen(function* () {
@@ -274,7 +276,7 @@ describe("Websocket — writer sends text/binary/close", () => {
           yield* Effect.exit(Fiber.join(fiber))
           return writeExit
         }),
-      )
+      ).pipe(Effect.provide(fake.layer))
       expect(writeExit._tag).toBe("Failure")
       if (writeExit._tag === "Failure") {
         const json = JSON.stringify(writeExit.cause)
@@ -288,8 +290,9 @@ describe("Websocket — writer sends text/binary/close", () => {
 describe("Websocket — Layer integration", () => {
   it.effect("layer(url) provides a Socket service that can be consumed via Socket.Socket.use", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
       WsMock.__deliverInbound(conn, { tag: "text", val: "from-layer" })
       WsMock.__signalClosed(conn, { code: 1000, reason: "" })
 
@@ -305,6 +308,7 @@ describe("Websocket — Layer integration", () => {
             closeCodeIsError: (c) => c !== 1000,
           }),
         ),
+        Effect.provide(fake.layer),
       )
       expect(seen).toEqual(["from-layer"])
     }),
@@ -322,7 +326,8 @@ describe("Websocket — makeChannel produces a Channel value", () => {
 describe("Websocket — call-site sensitive error classification", () => {
   it.effect("`other` thrown from connect maps to SocketOpenError, not SocketReadError", () =>
     Effect.gen(function* () {
-      WsMock.__setConnectImpl(() => {
+      const fake = yield* WsFake.make
+      yield* fake.setResponder(() => {
         throw { tag: "other", val: "weird-handshake-state" }
       })
 
@@ -332,7 +337,7 @@ describe("Websocket — call-site sensitive error classification", () => {
             yield* Websocket.connect("wss://test.example/echo")
           }),
         ),
-      )
+      ).pipe(Effect.provide(fake.layer))
 
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -346,7 +351,8 @@ describe("Websocket — call-site sensitive error classification", () => {
 
   it.effect("`protocol-error` thrown from connect maps to SocketOpenError", () =>
     Effect.gen(function* () {
-      WsMock.__setConnectImpl(() => {
+      const fake = yield* WsFake.make
+      yield* fake.setResponder(() => {
         throw { tag: "protocol-error", val: "bad-handshake" }
       })
 
@@ -356,7 +362,7 @@ describe("Websocket — call-site sensitive error classification", () => {
             yield* Websocket.connect("wss://test.example/echo")
           }),
         ),
-      )
+      ).pipe(Effect.provide(fake.layer))
 
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
@@ -370,11 +376,12 @@ describe("Websocket — call-site sensitive error classification", () => {
 
   it.effect("`other` thrown from send maps to SocketWriteError, not SocketReadError", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
       conn._sendImpl = () => {
         throw { tag: "other", val: "weird-send-state" }
       }
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
 
       const writeExit = yield* Effect.scoped(
         Effect.gen(function* () {
@@ -392,7 +399,7 @@ describe("Websocket — call-site sensitive error classification", () => {
           yield* Effect.exit(Fiber.join(fiber))
           return writeExit
         }),
-      )
+      ).pipe(Effect.provide(fake.layer))
       expect(writeExit._tag).toBe("Failure")
       if (writeExit._tag === "Failure") {
         const json = JSON.stringify(writeExit.cause)
@@ -405,8 +412,9 @@ describe("Websocket — call-site sensitive error classification", () => {
 
   it.effect("`other` thrown from receive maps to SocketReadError", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
 
       const exit = yield* Effect.exit(
         Effect.scoped(
@@ -416,7 +424,7 @@ describe("Websocket — call-site sensitive error classification", () => {
             yield* sock.runString(() => {})
           }),
         ),
-      )
+      ).pipe(Effect.provide(fake.layer))
       expect(exit._tag).toBe("Failure")
       if (exit._tag === "Failure") {
         const json = JSON.stringify(exit.cause)
@@ -431,8 +439,9 @@ describe("Websocket — read loop is interruption-safe", () => {
   // Real-time test: uses Effect.sleep + Fiber.interrupt + race-with-watchdog.
   it.live("interrupting the run-loop fiber wakes pollable.abortablePromise and exits cleanly", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
 
       const program = Effect.scoped(
         Effect.gen(function* () {
@@ -450,7 +459,7 @@ describe("Websocket — read loop is interruption-safe", () => {
           yield* Effect.sleep("10 millis")
           yield* Fiber.interrupt(fiber)
         }),
-      )
+      ).pipe(Effect.provide(fake.layer))
 
       // Race against a watchdog: if interruption did not wake the read
       // loop the program would hang forever and this race would emit a
@@ -468,6 +477,7 @@ describe("Websocket — local CloseEvent signals local termination", () => {
   // Real-time test: uses watchdog race against Effect.sleep("2 seconds").
   it.live("CloseEvent terminates the read loop even if the host never wakes the pollable", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
       // Override `close()` so it does NOT push a synthetic `closed`
       // error onto the inbound queue: this simulates a host that is
@@ -482,7 +492,7 @@ describe("Websocket — local CloseEvent signals local termination", () => {
         this._closed = true
         this._outboundCloses.push({ code, reason })
       }.bind(conn)
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
 
       const program = Effect.scoped(
         Effect.gen(function* () {
@@ -501,7 +511,7 @@ describe("Websocket — local CloseEvent signals local termination", () => {
           // closeCodeIsError filter classifies as a clean shutdown.
           yield* Fiber.join(fiber)
         }),
-      )
+      ).pipe(Effect.provide(fake.layer))
 
       const result = yield* Effect.race(
         program.pipe(Effect.map(() => "ok" as const)),
@@ -519,8 +529,9 @@ describe("Websocket — writer-before-runRaw contract", () => {
   // Real-time test: uses Effect.sleep("50 millis") to verify the writer suspends.
   it.live("writer suspends until a run* call activates the latch", () =>
     Effect.gen(function* () {
+      const fake = yield* WsFake.make
       const conn = new WsMock.WebsocketConnection("wss://test.example/echo", undefined)
-      WsMock.__setConnectImpl(() => conn)
+      yield* fake.setResponder(() => conn)
 
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -551,7 +562,43 @@ describe("Websocket — writer-before-runRaw contract", () => {
           WsMock.__signalClosed(conn, { code: 1000, reason: "" })
           yield* Fiber.join(reader)
         }),
-      )
+      ).pipe(Effect.provide(fake.layer))
+    }),
+  )
+})
+
+describe("Websocket — WsFake invariants", () => {
+  it.effect("recordedConnects captures every connect attempt (including failures)", () =>
+    Effect.gen(function* () {
+      const fake = yield* WsFake.make
+      yield* fake.setNextConnectError({ tag: "connection-failure", val: "first attempt" })
+      yield* fake.setResponder((url) => new WsMock.WebsocketConnection(url, undefined))
+
+      // First attempt fails via the one-shot injector.
+      const firstExit = yield* Effect.exit(
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* Websocket.connect("wss://first.example/echo", {
+              headers: [["x-trace", "first"]],
+            })
+          }),
+        ),
+      ).pipe(Effect.provide(fake.layer))
+      expect(firstExit._tag).toBe("Failure")
+
+      // Second attempt succeeds via the responder.
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* Websocket.connect("wss://second.example/echo")
+        }),
+      ).pipe(Effect.provide(fake.layer))
+
+      const recorded = yield* fake.recordedConnects.pipe(Effect.provide(fake.layer))
+      expect(recorded.length).toBe(2)
+      expect(recorded[0]?.url).toBe("wss://first.example/echo")
+      expect(recorded[0]?.headers).toEqual([["x-trace", "first"]])
+      expect(recorded[1]?.url).toBe("wss://second.example/echo")
+      expect(recorded[1]?.headers).toBeUndefined()
     }),
   )
 })

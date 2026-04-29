@@ -9,7 +9,8 @@ import * as Latch from "effect/Latch"
 import * as Layer from "effect/Layer"
 import * as Scope from "effect/Scope"
 import { Socket } from "effect/unstable/socket"
-import * as WsClient from "golem:websocket/client@1.5.0"
+import type * as WsClient from "golem:websocket/client@1.5.0"
+import { WebsocketClient } from "./host/WebsocketClient.js"
 
 /**
  * Effect-idiomatic façade over `golem:websocket/client@1.5.0`.
@@ -75,27 +76,6 @@ import * as WsClient from "golem:websocket/client@1.5.0"
  * const channel = Websocket.makeChannel("wss://echo.example/ws")
  * ```
  */
-
-// ---------------------------------------------------------------------------
-// Test-only host call swap (mirrors src/webhook.ts pattern)
-// ---------------------------------------------------------------------------
-
-let connectImpl: (
-  url: string,
-  headers: [string, string][] | undefined,
-) => WsClient.WebsocketConnection = (url, headers) =>
-  WsClient.WebsocketConnection.connect(url, headers)
-
-/** @internal */
-export const __setConnectForTest = (
-  fn: (url: string, headers: [string, string][] | undefined) => WsClient.WebsocketConnection,
-): void => {
-  connectImpl = fn
-}
-/** @internal */
-export const __resetConnectForTest = (): void => {
-  connectImpl = (url, headers) => WsClient.WebsocketConnection.connect(url, headers)
-}
 
 // ---------------------------------------------------------------------------
 // Error mapping (golem:websocket error → Socket.SocketError)
@@ -425,15 +405,16 @@ export const fromConnection = <RO>(
 export const connect = (
   url: string,
   options?: ConnectOptions,
-): Effect.Effect<Socket.Socket, Socket.SocketError, Scope.Scope> =>
+): Effect.Effect<Socket.Socket, Socket.SocketError, Scope.Scope | WebsocketClient> =>
   Effect.gen(function* () {
+    const client = yield* WebsocketClient
     // Open the WebSocket eagerly. Golem's `connect(...)` is
     // synchronous — it returns only after the handshake is complete
     // (or has failed) — so there is no separate "open" event to
     // await. Failure surfaces here as `SocketError(SocketOpenError)`.
     const ws = yield* Effect.acquireRelease(
       Effect.try({
-        try: () => connectImpl(url, toHostHeaders(options?.headers)),
+        try: () => client.connect(url, toHostHeaders(options?.headers)),
         catch: (cause) => mapToSocketError(cause, "open"),
       }),
       (ws) =>
@@ -461,7 +442,7 @@ export const connect = (
 export const layer = (
   url: string,
   options?: ConnectOptions,
-): Layer.Layer<Socket.Socket, Socket.SocketError> =>
+): Layer.Layer<Socket.Socket, Socket.SocketError, WebsocketClient> =>
   Layer.effect(Socket.Socket)(connect(url, options))
 
 // ---------------------------------------------------------------------------
@@ -492,5 +473,6 @@ export const makeChannel = <IE = never>(
   void,
   NonEmptyReadonlyArray<Uint8Array | string | Socket.CloseEvent>,
   IE,
-  unknown
+  unknown,
+  WebsocketClient
 > => Channel.unwrap(Effect.scoped(Effect.map(connect(url, options), Socket.toChannelWith<IE>())))

@@ -3,15 +3,17 @@
  * mock. Covers param encoding, row decoding, transactions, streaming,
  * and error classification.
  */
-import { beforeEach, describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Stream } from "effect"
+import { beforeEach, expect, layer } from "@effect/vitest"
+import { Cause, Effect, Exit, Layer, Stream } from "effect"
 import {
   ConnectionError,
   SqlError,
   SqlSyntaxError,
   UnknownError,
 } from "effect/unstable/sql/SqlError"
+import { PostgresHostClient } from "../src/host/PostgresHostClient.js"
 import { Pg, PgClient } from "../src/postgres.js"
+import * as MockPg from "./mocks/golem-rdbms-postgres.js"
 import {
   __getExecuteLog,
   __getQueryLog,
@@ -34,13 +36,27 @@ const failureValue = <E>(exit: Exit.Exit<unknown, E>): E => {
   return fails[0]!.error
 }
 
+/**
+ * Layer-based test stub for {@link PostgresHostClient}. Routes
+ * `open(address)` through the in-memory `golem:rdbms/postgres@1.5.0`
+ * mock module so each test can drive behaviour via the existing
+ * mock-module setters (`__setOpenMode`, `__setNextQueryError`,
+ * `__seedTable`, …) under a per-test reset cycle.
+ */
+const PgStub = Layer.succeed(
+  PostgresHostClient,
+  PostgresHostClient.of({
+    open: (address) => MockPg.DbConnection.open(address),
+  }),
+)
+
 beforeEach(() => {
   __resetPostgresMock()
 })
 
 const ADDR = "postgres://localhost/test"
 
-describe("PgClient (mocked golem:rdbms/postgres@1.5.0)", () => {
+layer(PgStub)("PgClient (mocked golem:rdbms/postgres@1.5.0)", (it) => {
   it.effect("opens a connection and runs DDL via execute", () =>
     Effect.gen(function* () {
       const sql = yield* PgClient.make({ connectionAddress: ADDR })

@@ -1,7 +1,10 @@
 import { Cause, Effect, Scope } from "effect"
-import * as ApiHost from "golem:api/host@1.5.0"
+import type * as ApiHost from "golem:api/host@1.5.0"
 import { revertAgent, RevertTarget, type AgentsHostError } from "./agents.js"
+import { AgentHostClient } from "./host/AgentHostClient.js"
+import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { currentIndex, type OplogHostError } from "./oplog.js"
+import { OplogClient } from "./host/OplogClient.js"
 import { SelfAgentId } from "./self-agent-id.js"
 
 /**
@@ -92,118 +95,54 @@ export const PersistenceLevel = {
 } as const
 
 // ---------------------------------------------------------------------------
-// Host-binding indirections
-// ---------------------------------------------------------------------------
-
-let getOplogPersistenceLevelImpl: () => RawPersistenceLevel = () =>
-  ApiHost.getOplogPersistenceLevel()
-let setOplogPersistenceLevelImpl: (next: RawPersistenceLevel) => void = (next) =>
-  ApiHost.setOplogPersistenceLevel(next)
-let getIdempotenceModeImpl: () => boolean = () => ApiHost.getIdempotenceMode()
-let setIdempotenceModeImpl: (next: boolean) => void = (next) => ApiHost.setIdempotenceMode(next)
-let oplogCommitImpl: (replicas: number) => void = (n) => ApiHost.oplogCommit(n)
-let markBeginOperationImpl: () => RawOplogIndex = () => ApiHost.markBeginOperation()
-let markEndOperationImpl: (begin: RawOplogIndex) => void = (b) => ApiHost.markEndOperation(b)
-let generateIdempotencyKeyImpl: () => ApiHost.Uuid = () => ApiHost.generateIdempotencyKey()
-
-/** @internal */
-export const __setGetOplogPersistenceLevelForTest = (fn: () => RawPersistenceLevel): void => {
-  getOplogPersistenceLevelImpl = fn
-}
-/** @internal */
-export const __resetGetOplogPersistenceLevelForTest = (): void => {
-  getOplogPersistenceLevelImpl = () => ApiHost.getOplogPersistenceLevel()
-}
-/** @internal */
-export const __setSetOplogPersistenceLevelForTest = (
-  fn: (next: RawPersistenceLevel) => void,
-): void => {
-  setOplogPersistenceLevelImpl = fn
-}
-/** @internal */
-export const __resetSetOplogPersistenceLevelForTest = (): void => {
-  setOplogPersistenceLevelImpl = (next) => ApiHost.setOplogPersistenceLevel(next)
-}
-/** @internal */
-export const __setGetIdempotenceModeForTest = (fn: () => boolean): void => {
-  getIdempotenceModeImpl = fn
-}
-/** @internal */
-export const __resetGetIdempotenceModeForTest = (): void => {
-  getIdempotenceModeImpl = () => ApiHost.getIdempotenceMode()
-}
-/** @internal */
-export const __setSetIdempotenceModeForTest = (fn: (next: boolean) => void): void => {
-  setIdempotenceModeImpl = fn
-}
-/** @internal */
-export const __resetSetIdempotenceModeForTest = (): void => {
-  setIdempotenceModeImpl = (next) => ApiHost.setIdempotenceMode(next)
-}
-/** @internal */
-export const __setOplogCommitForTest = (fn: (replicas: number) => void): void => {
-  oplogCommitImpl = fn
-}
-/** @internal */
-export const __resetOplogCommitForTest = (): void => {
-  oplogCommitImpl = (n) => ApiHost.oplogCommit(n)
-}
-/** @internal */
-export const __setMarkBeginOperationForTest = (fn: () => RawOplogIndex): void => {
-  markBeginOperationImpl = fn
-}
-/** @internal */
-export const __resetMarkBeginOperationForTest = (): void => {
-  markBeginOperationImpl = () => ApiHost.markBeginOperation()
-}
-/** @internal */
-export const __setMarkEndOperationForTest = (fn: (begin: RawOplogIndex) => void): void => {
-  markEndOperationImpl = fn
-}
-/** @internal */
-export const __resetMarkEndOperationForTest = (): void => {
-  markEndOperationImpl = (b) => ApiHost.markEndOperation(b)
-}
-/** @internal */
-export const __setGenerateIdempotencyKeyForTest = (fn: () => ApiHost.Uuid): void => {
-  generateIdempotencyKeyImpl = fn
-}
-/** @internal */
-export const __resetGenerateIdempotencyKeyForTest = (): void => {
-  generateIdempotencyKeyImpl = () => ApiHost.generateIdempotencyKey()
-}
-
-// ---------------------------------------------------------------------------
 // Effect-typed host calls
 // ---------------------------------------------------------------------------
 
 /** Read the current persistence level. */
-export const getPersistenceLevel: Effect.Effect<RawPersistenceLevel, DurabilityHostError> =
-  Effect.try({
-    try: () => getOplogPersistenceLevelImpl(),
+export const getPersistenceLevel: Effect.Effect<
+  RawPersistenceLevel,
+  DurabilityHostError,
+  DurabilityModeClient
+> = Effect.gen(function* () {
+  const client = yield* DurabilityModeClient
+  return yield* Effect.try({
+    try: () => client.getOplogPersistenceLevel(),
     catch: (e) => new DurabilityHostError(e),
   })
+})
 
 /** Write the persistence level. Persists to the oplog. */
 export const setPersistenceLevel = (
   level: RawPersistenceLevel,
-): Effect.Effect<void, DurabilityHostError> =>
-  Effect.try({
-    try: () => setOplogPersistenceLevelImpl(level),
-    catch: (e) => new DurabilityHostError(e),
+): Effect.Effect<void, DurabilityHostError, DurabilityModeClient> =>
+  Effect.gen(function* () {
+    const client = yield* DurabilityModeClient
+    return yield* Effect.try({
+      try: () => client.setOplogPersistenceLevel(level),
+      catch: (e) => new DurabilityHostError(e),
+    })
   })
 
 /** Read the current idempotence mode. `true` = at-least-once; `false` = at-most-once. */
-export const getIdempotenceMode: Effect.Effect<boolean, DurabilityHostError> = Effect.try({
-  try: () => getIdempotenceModeImpl(),
-  catch: (e) => new DurabilityHostError(e),
-})
+export const getIdempotenceMode: Effect.Effect<boolean, DurabilityHostError, DurabilityModeClient> =
+  Effect.gen(function* () {
+    const client = yield* DurabilityModeClient
+    return yield* Effect.try({
+      try: () => client.getIdempotenceMode(),
+      catch: (e) => new DurabilityHostError(e),
+    })
+  })
 
 /** Write the idempotence mode. */
-export const setIdempotenceMode = (idempotent: boolean): Effect.Effect<void, DurabilityHostError> =>
-  Effect.try({
-    try: () => setIdempotenceModeImpl(idempotent),
-    catch: (e) => new DurabilityHostError(e),
+export const setIdempotenceMode = (
+  idempotent: boolean,
+): Effect.Effect<void, DurabilityHostError, DurabilityModeClient> =>
+  Effect.gen(function* () {
+    const client = yield* DurabilityModeClient
+    return yield* Effect.try({
+      try: () => client.setIdempotenceMode(idempotent),
+      catch: (e) => new DurabilityHostError(e),
+    })
   })
 
 /**
@@ -213,7 +152,7 @@ export const setIdempotenceMode = (idempotent: boolean): Effect.Effect<void, Dur
  */
 export const oplogCommit = (
   replicas: number,
-): Effect.Effect<void, DurabilityHostError | DurabilityValidationError> => {
+): Effect.Effect<void, DurabilityHostError | DurabilityValidationError, DurabilityModeClient> => {
   if (!Number.isSafeInteger(replicas) || replicas < 0 || replicas > 0xff) {
     return Effect.fail(
       new DurabilityValidationError(
@@ -221,9 +160,12 @@ export const oplogCommit = (
       ),
     )
   }
-  return Effect.try({
-    try: () => oplogCommitImpl(replicas),
-    catch: (e) => new DurabilityHostError(e),
+  return Effect.gen(function* () {
+    const client = yield* DurabilityModeClient
+    return yield* Effect.try({
+      try: () => client.oplogCommit(replicas),
+      catch: (e) => new DurabilityHostError(e),
+    })
   })
 }
 
@@ -233,9 +175,16 @@ export const oplogCommit = (
  * {@link atomically} or {@link markAtomicOperationScoped} unless you
  * really need imperative control.
  */
-export const beginOperation: Effect.Effect<RawOplogIndex, DurabilityHostError> = Effect.try({
-  try: () => markBeginOperationImpl(),
-  catch: (e) => new DurabilityHostError(e),
+export const beginOperation: Effect.Effect<
+  RawOplogIndex,
+  DurabilityHostError,
+  DurabilityModeClient
+> = Effect.gen(function* () {
+  const client = yield* DurabilityModeClient
+  return yield* Effect.try({
+    try: () => client.markBeginOperation(),
+    catch: (e) => new DurabilityHostError(e),
+  })
 })
 
 /**
@@ -243,10 +192,15 @@ export const beginOperation: Effect.Effect<RawOplogIndex, DurabilityHostError> =
  * Idempotent on the host side: subsequent calls with the same index
  * are no-ops.
  */
-export const endOperation = (begin: RawOplogIndex): Effect.Effect<void, DurabilityHostError> =>
-  Effect.try({
-    try: () => markEndOperationImpl(begin),
-    catch: (e) => new DurabilityHostError(e),
+export const endOperation = (
+  begin: RawOplogIndex,
+): Effect.Effect<void, DurabilityHostError, DurabilityModeClient> =>
+  Effect.gen(function* () {
+    const client = yield* DurabilityModeClient
+    return yield* Effect.try({
+      try: () => client.markEndOperation(begin),
+      catch: (e) => new DurabilityHostError(e),
+    })
   })
 
 /**
@@ -255,9 +209,16 @@ export const endOperation = (begin: RawOplogIndex): Effect.Effect<void, Durabili
  * to use against external systems' idempotence checks (e.g. payment
  * gateways).
  */
-export const generateIdempotencyKey: Effect.Effect<ApiHost.Uuid, DurabilityHostError> = Effect.try({
-  try: () => generateIdempotencyKeyImpl(),
-  catch: (e) => new DurabilityHostError(e),
+export const generateIdempotencyKey: Effect.Effect<
+  ApiHost.Uuid,
+  DurabilityHostError,
+  DurabilityModeClient
+> = Effect.gen(function* () {
+  const client = yield* DurabilityModeClient
+  return yield* Effect.try({
+    try: () => client.generateIdempotencyKey(),
+    catch: (e) => new DurabilityHostError(e),
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -271,7 +232,7 @@ export const generateIdempotencyKey: Effect.Effect<ApiHost.Uuid, DurabilityHostE
  */
 export const usePersistenceLevelScoped = (
   level: RawPersistenceLevel,
-): Effect.Effect<void, DurabilityHostError, Scope.Scope> =>
+): Effect.Effect<void, DurabilityHostError, Scope.Scope | DurabilityModeClient> =>
   Effect.gen(function* () {
     const previous = yield* getPersistenceLevel
     yield* Effect.acquireRelease(setPersistenceLevel(level), () =>
@@ -287,7 +248,7 @@ export const usePersistenceLevelScoped = (
 export const withPersistenceLevel = <A, E, R>(
   level: RawPersistenceLevel,
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | DurabilityHostError, Exclude<R, Scope.Scope>> =>
+): Effect.Effect<A, E | DurabilityHostError, Exclude<R, Scope.Scope> | DurabilityModeClient> =>
   Effect.scoped(usePersistenceLevelScoped(level).pipe(Effect.andThen(effect)))
 
 /**
@@ -296,7 +257,7 @@ export const withPersistenceLevel = <A, E, R>(
  */
 export const useIdempotenceModeScoped = (
   idempotent: boolean,
-): Effect.Effect<void, DurabilityHostError, Scope.Scope> =>
+): Effect.Effect<void, DurabilityHostError, Scope.Scope | DurabilityModeClient> =>
   Effect.gen(function* () {
     const previous = yield* getIdempotenceMode
     yield* Effect.acquireRelease(setIdempotenceMode(idempotent), () =>
@@ -308,7 +269,7 @@ export const useIdempotenceModeScoped = (
 export const withIdempotenceMode = <A, E, R>(
   idempotent: boolean,
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | DurabilityHostError, Exclude<R, Scope.Scope>> =>
+): Effect.Effect<A, E | DurabilityHostError, Exclude<R, Scope.Scope> | DurabilityModeClient> =>
   Effect.scoped(useIdempotenceModeScoped(idempotent).pipe(Effect.andThen(effect)))
 
 /**
@@ -320,7 +281,7 @@ export const withIdempotenceMode = <A, E, R>(
 export const markAtomicOperationScoped: Effect.Effect<
   RawOplogIndex,
   DurabilityHostError,
-  Scope.Scope
+  Scope.Scope | DurabilityModeClient
 > = Effect.acquireRelease(beginOperation, (begin) => endOperation(begin).pipe(Effect.ignore))
 
 /**
@@ -331,7 +292,7 @@ export const markAtomicOperationScoped: Effect.Effect<
  */
 export const atomically = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | DurabilityHostError, Exclude<R, Scope.Scope>> =>
+): Effect.Effect<A, E | DurabilityHostError, Exclude<R, Scope.Scope> | DurabilityModeClient> =>
   Effect.scoped(markAtomicOperationScoped.pipe(Effect.andThen(effect)))
 
 // ---------------------------------------------------------------------------
@@ -359,7 +320,7 @@ const shouldRevertCause = <E>(cause: Cause.Cause<E>): boolean => {
 const revertAndSuspend = (
   self: ApiHost.AgentId,
   checkpointIdx: ApiHost.OplogIndex,
-): Effect.Effect<never, AgentsHostError, never> =>
+): Effect.Effect<never, AgentsHostError, AgentHostClient> =>
   revertAgent(self, RevertTarget.toOplogIndex(checkpointIdx)).pipe(Effect.andThen(Effect.never))
 
 /**
@@ -380,7 +341,11 @@ const revertAndSuspend = (
  */
 export const unwrapOrRevert = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, OplogHostError | AgentsHostError, R | SelfAgentId> =>
+): Effect.Effect<
+  A,
+  OplogHostError | AgentsHostError,
+  R | SelfAgentId | OplogClient | AgentHostClient
+> =>
   Effect.gen(function* () {
     const checkpointIdx = yield* currentIndex
     const self = yield* SelfAgentId
@@ -416,7 +381,11 @@ export type CheckpointResult<A, E> =
  */
 export const checkpoint = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<CheckpointResult<A, E>, OplogHostError | AgentsHostError, R | SelfAgentId> =>
+): Effect.Effect<
+  CheckpointResult<A, E>,
+  OplogHostError | AgentsHostError,
+  R | SelfAgentId | OplogClient | AgentHostClient
+> =>
   Effect.gen(function* () {
     const checkpointIdx = yield* currentIndex
     const self = yield* SelfAgentId
@@ -448,7 +417,11 @@ export const compensable = <A, B, E, R>(input: {
   readonly acquire: Effect.Effect<A, E, R>
   readonly body: (a: A) => Effect.Effect<B, E, R>
   readonly compensate: (a: A) => Effect.Effect<void, unknown, R>
-}): Effect.Effect<B, E | OplogHostError | AgentsHostError, R | SelfAgentId> =>
+}): Effect.Effect<
+  B,
+  E | OplogHostError | AgentsHostError,
+  R | SelfAgentId | OplogClient | AgentHostClient
+> =>
   Effect.gen(function* () {
     const checkpointIdx = yield* currentIndex
     const self = yield* SelfAgentId

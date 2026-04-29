@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Effect, Exit, Tracer } from "effect"
+import { Effect, Exit, Layer, Tracer } from "effect"
+import { TracingHost, TracingHostLive } from "../src/host/TracingHost.js"
 import * as Tracing from "../src/tracing.js"
 import * as ContextMock from "./mocks/golem-api-context.js"
-
-const provide = <A, E, R>(eff: Effect.Effect<A, E, R>) => Effect.provide(eff, Tracing.layer)
 
 beforeEach(() => {
   ContextMock.__reset()
@@ -11,6 +10,57 @@ beforeEach(() => {
 afterEach(() => {
   ContextMock.__reset()
 })
+
+/** Production-equivalent host: forwards to the vitest-aliased mock. */
+const HostLive = TracingHostLive
+
+/**
+ * `Tracing.layer` wired up against the production-equivalent host.
+ * `provideMerge` keeps the underlying `TracingHost` accessible to
+ * helpers like `withInvocationParent` that depend on it directly.
+ */
+const TracingStack = Tracing.layer.pipe(Layer.provideMerge(HostLive))
+
+const provide = <A, E, R>(eff: Effect.Effect<A, E, R>) => Effect.provide(eff, TracingStack)
+
+/**
+ * Build a `TracingHost` stub whose `startSpan` calls the supplied
+ * function and whose other methods delegate to the in-memory
+ * {@link ContextMock}. Composed alongside the `Tracing.layer` so the
+ * Effect tracer machinery is fully wired.
+ */
+const TracingStackWithStartSpan = (
+  startSpan: (name: string) => ContextMock.Span,
+): Layer.Layer<never> =>
+  Tracing.layer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        TracingHost,
+        TracingHost.of({
+          startSpan,
+          currentContext: ContextMock.currentContext,
+          allowForwardingTraceContextHeaders: ContextMock.allowForwardingTraceContextHeaders,
+        }),
+      ),
+    ),
+  )
+
+/**
+ * Build a `TracingHost` stub whose `currentContext` calls the supplied
+ * function. Used to drive the "host throws" branches of Tracing
+ * helpers.
+ */
+const TracingHostWithCurrentContext = (
+  currentContext: () => ContextMock.InvocationContext,
+): Layer.Layer<TracingHost> =>
+  Layer.succeed(
+    TracingHost,
+    TracingHost.of({
+      startSpan: ContextMock.startSpan,
+      currentContext,
+      allowForwardingTraceContextHeaders: ContextMock.allowForwardingTraceContextHeaders,
+    }),
+  )
 
 describe("Tracing — golemTracer / Effect.withSpan", () => {
   it.effect("creates a host span and finishes it on exit", () =>
@@ -47,49 +97,44 @@ describe("Tracing — golemTracer / Effect.withSpan", () => {
   it.effect("forwards span attributes to the host", () =>
     Effect.gen(function* () {
       let host: ContextMock.Span | undefined
-      Tracing.__setStartSpanImplForTest((name) => {
+      const stack = TracingStackWithStartSpan((name) => {
         host = ContextMock.startSpan(name)
         return host
       })
-      try {
-        yield* provide(
-          Effect.gen(function* () {
-            yield* Effect.annotateCurrentSpan("user", "alice")
-            yield* Effect.annotateCurrentSpan("count", 42)
-          }).pipe(Effect.withSpan("op")),
-        )
-        expect(host).toBeDefined()
-        const attrs = ContextMock.__getAttributesOf(host!)
-        expect(attrs).toEqual(
-          expect.arrayContaining([
-            { key: "user", value: { tag: "string", val: "alice" } },
-            { key: "count", value: { tag: "string", val: "42" } },
-          ]),
-        )
-        expect(ContextMock.__isFinished(host!)).toBe(true)
-      } finally {
-        Tracing.__resetStartSpanImplForTest()
-      }
+      yield* Effect.provide(
+        Effect.gen(function* () {
+          yield* Effect.annotateCurrentSpan("user", "alice")
+          yield* Effect.annotateCurrentSpan("count", 42)
+        }).pipe(Effect.withSpan("op")),
+        stack,
+      )
+      expect(host).toBeDefined()
+      const attrs = ContextMock.__getAttributesOf(host!)
+      expect(attrs).toEqual(
+        expect.arrayContaining([
+          { key: "user", value: { tag: "string", val: "alice" } },
+          { key: "count", value: { tag: "string", val: "42" } },
+        ]),
+      )
+      expect(ContextMock.__isFinished(host!)).toBe(true)
     }),
   )
 
   it.effect("flags errors when the span fails", () =>
     Effect.gen(function* () {
       let host: ContextMock.Span | undefined
-      Tracing.__setStartSpanImplForTest((name) => {
+      const stack = TracingStackWithStartSpan((name) => {
         host = ContextMock.startSpan(name)
         return host
       })
-      try {
-        yield* Effect.exit(provide(Effect.fail("boom" as const).pipe(Effect.withSpan("failing"))))
-        const attrs = ContextMock.__getAttributesOf(host!)
-        const errKey = attrs.find((a) => a.key === "error")
-        expect(errKey).toBeDefined()
-        expect(errKey?.value).toEqual({ tag: "string", val: "true" })
-        expect(ContextMock.__isFinished(host!)).toBe(true)
-      } finally {
-        Tracing.__resetStartSpanImplForTest()
-      }
+      yield* Effect.exit(
+        Effect.provide(Effect.fail("boom" as const).pipe(Effect.withSpan("failing")), stack),
+      )
+      const attrs = ContextMock.__getAttributesOf(host!)
+      const errKey = attrs.find((a) => a.key === "error")
+      expect(errKey).toBeDefined()
+      expect(errKey?.value).toEqual({ tag: "string", val: "true" })
+      expect(ContextMock.__isFinished(host!)).toBe(true)
     }),
   )
 
@@ -101,17 +146,16 @@ describe("Tracing — golemTracer / Effect.withSpan", () => {
         // host's currentContext is always the right parent, so we
         // intentionally always delegate.
         let started = 0
-        Tracing.__setStartSpanImplForTest((name) => {
+        const stack = TracingStackWithStartSpan((name) => {
           started++
           return ContextMock.startSpan(name)
         })
-        try {
-          yield* provide(Effect.succeed(0).pipe(Effect.withSpan("rooted", { root: true })))
-          expect(started).toBe(1)
-          expect(ContextMock.__getStack()).toEqual([])
-        } finally {
-          Tracing.__resetStartSpanImplForTest()
-        }
+        yield* Effect.provide(
+          Effect.succeed(0).pipe(Effect.withSpan("rooted", { root: true })),
+          stack,
+        )
+        expect(started).toBe(1)
+        expect(ContextMock.__getStack()).toEqual([])
       }),
   )
 
@@ -123,16 +167,15 @@ describe("Tracing — golemTracer / Effect.withSpan", () => {
         sampled: true,
       })
       let started = 0
-      Tracing.__setStartSpanImplForTest((name) => {
+      const stack = TracingStackWithStartSpan((name) => {
         started++
         return ContextMock.startSpan(name)
       })
-      try {
-        yield* provide(Effect.succeed(0).pipe(Effect.withSpan("foo", { parent: external })))
-        expect(started).toBe(0)
-      } finally {
-        Tracing.__resetStartSpanImplForTest()
-      }
+      yield* Effect.provide(
+        Effect.succeed(0).pipe(Effect.withSpan("foo", { parent: external })),
+        stack,
+      )
+      expect(started).toBe(0)
     }),
   )
 
@@ -148,19 +191,18 @@ describe("Tracing — golemTracer / Effect.withSpan", () => {
           sampled: true,
         })
         let started = 0
-        Tracing.__setStartSpanImplForTest((name) => {
+        const stack = TracingStackWithStartSpan((name) => {
           started++
           return ContextMock.startSpan(name)
         })
-        try {
-          yield* provide(Effect.succeed(0).pipe(Effect.withSpan("op", { parent: external })))
-          // Only the seeded invocation root is on the stack — no host
-          // span was created for "op".
-          expect(started).toBe(0)
-          expect(ContextMock.__getStack().map((s) => s.name)).toEqual(["invocation-root"])
-        } finally {
-          Tracing.__resetStartSpanImplForTest()
-        }
+        yield* Effect.provide(
+          Effect.succeed(0).pipe(Effect.withSpan("op", { parent: external })),
+          stack,
+        )
+        // Only the seeded invocation root is on the stack — no host
+        // span was created for "op".
+        expect(started).toBe(0)
+        expect(ContextMock.__getStack().map((s) => s.name)).toEqual(["invocation-root"])
       } finally {
         ContextMock.__reset()
       }
@@ -169,9 +211,8 @@ describe("Tracing — golemTracer / Effect.withSpan", () => {
 
   it.effect("end() never throws even if the host finish() throws", () =>
     Effect.gen(function* () {
-      const original = ContextMock.startSpan
-      Tracing.__setStartSpanImplForTest((name) => {
-        const handle = original(name)
+      const stack = TracingStackWithStartSpan((name) => {
+        const handle = ContextMock.startSpan(name)
         const broken = handle as unknown as { finish: () => void }
         const previous = broken.finish.bind(handle)
         broken.finish = () => {
@@ -180,27 +221,21 @@ describe("Tracing — golemTracer / Effect.withSpan", () => {
         }
         return handle
       })
-      try {
-        const exit = yield* Effect.exit(provide(Effect.succeed(0).pipe(Effect.withSpan("op"))))
-        expect(Exit.isSuccess(exit)).toBe(true)
-      } finally {
-        Tracing.__resetStartSpanImplForTest()
-      }
+      const exit = yield* Effect.exit(
+        Effect.provide(Effect.succeed(0).pipe(Effect.withSpan("op")), stack),
+      )
+      expect(Exit.isSuccess(exit)).toBe(true)
     }),
   )
 
   it.effect("survives host startSpan failure with a NativeSpan fallback", () =>
     Effect.gen(function* () {
-      Tracing.__setStartSpanImplForTest(() => {
+      const stack = TracingStackWithStartSpan(() => {
         throw new Error("nope")
       })
-      try {
-        const span = yield* provide(Effect.currentSpan.pipe(Effect.withSpan("op")))
-        expect(span._tag).toBe("Span")
-        expect(span.name).toBe("op")
-      } finally {
-        Tracing.__resetStartSpanImplForTest()
-      }
+      const span = yield* Effect.provide(Effect.currentSpan.pipe(Effect.withSpan("op")), stack)
+      expect(span._tag).toBe("Span")
+      expect(span.name).toBe("op")
     }),
   )
 })
@@ -210,7 +245,7 @@ describe("Tracing — currentContext / traceContextHeaders", () => {
     Effect.gen(function* () {
       const seeded = ContextMock.__pushSpan("invocation-root")
       try {
-        const snap = yield* Tracing.currentContext
+        const snap = yield* Effect.provide(Tracing.currentContext, HostLive)
         expect(snap.traceId).toBe(seeded.state.traceId)
         expect(snap.spanId).toBe(seeded.state.spanId)
         expect(snap.traceContextHeaders.length).toBeGreaterThan(0)
@@ -222,17 +257,13 @@ describe("Tracing — currentContext / traceContextHeaders", () => {
 
   it.effect("wraps host throws as TracingHostError", () =>
     Effect.gen(function* () {
-      Tracing.__setCurrentContextImplForTest(() => {
+      const stub = TracingHostWithCurrentContext(() => {
         throw new Error("no ctx")
       })
-      try {
-        const exit = yield* Effect.exit(Tracing.currentContext)
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit)) {
-          expect(JSON.stringify(exit.cause)).toMatch(/TracingHostError/)
-        }
-      } finally {
-        Tracing.__resetCurrentContextImplForTest()
+      const exit = yield* Effect.exit(Effect.provide(Tracing.currentContext, stub))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(JSON.stringify(exit.cause)).toMatch(/TracingHostError/)
       }
     }),
   )
@@ -241,10 +272,16 @@ describe("Tracing — currentContext / traceContextHeaders", () => {
 describe("Tracing — allow forwarding flag", () => {
   it.effect("flips the host setting and returns the previous value", () =>
     Effect.gen(function* () {
-      const prev1 = yield* Tracing.allowForwardingTraceContextHeaders(true)
+      const prev1 = yield* Effect.provide(
+        Tracing.allowForwardingTraceContextHeaders(true),
+        HostLive,
+      )
       expect(prev1).toBe(false)
       expect(ContextMock.__getForwardingFlag()).toBe(true)
-      const prev2 = yield* Tracing.allowForwardingTraceContextHeaders(false)
+      const prev2 = yield* Effect.provide(
+        Tracing.allowForwardingTraceContextHeaders(false),
+        HostLive,
+      )
       expect(prev2).toBe(true)
       expect(ContextMock.__getForwardingFlag()).toBe(false)
     }),
@@ -254,11 +291,14 @@ describe("Tracing — allow forwarding flag", () => {
     Effect.gen(function* () {
       expect(ContextMock.__getForwardingFlag()).toBe(false)
       let inside = false
-      yield* Tracing.withForwardedHeaders(
-        true,
-        Effect.sync(() => {
-          inside = ContextMock.__getForwardingFlag()
-        }),
+      yield* Effect.provide(
+        Tracing.withForwardedHeaders(
+          true,
+          Effect.sync(() => {
+            inside = ContextMock.__getForwardingFlag()
+          }),
+        ),
+        HostLive,
       )
       expect(inside).toBe(true)
       expect(ContextMock.__getForwardingFlag()).toBe(false)
@@ -267,7 +307,9 @@ describe("Tracing — allow forwarding flag", () => {
 
   it.effect("withForwardedHeaders restores on failure too", () =>
     Effect.gen(function* () {
-      yield* Effect.exit(Tracing.withForwardedHeaders(true, Effect.fail("nope" as const)))
+      yield* Effect.exit(
+        Effect.provide(Tracing.withForwardedHeaders(true, Effect.fail("nope" as const)), HostLive),
+      )
       expect(ContextMock.__getForwardingFlag()).toBe(false)
     }),
   )
@@ -278,8 +320,9 @@ describe("Tracing — withInvocationParent", () => {
     Effect.gen(function* () {
       const root = ContextMock.__pushSpan("invocation-root")
       try {
-        const span = yield* provide(
+        const span = yield* Effect.provide(
           Tracing.withInvocationParent(Effect.currentSpan.pipe(Effect.withSpan("op"))),
+          TracingStack,
         )
         expect(span._tag).toBe("Span")
         // The host stack should still contain the root, even though the
@@ -300,8 +343,9 @@ describe("Tracing — withInvocationParent", () => {
     Effect.gen(function* () {
       // No span is pushed; trace/span ids are zero, so withInvocationParent
       // should run the inner effect verbatim.
-      const span = yield* provide(
+      const span = yield* Effect.provide(
         Tracing.withInvocationParent(Effect.currentSpan.pipe(Effect.withSpan("op"))),
+        TracingStack,
       )
       expect(span._tag).toBe("Span")
       expect(span.parent._tag).toBe("None")
@@ -310,15 +354,14 @@ describe("Tracing — withInvocationParent", () => {
 
   it.effect("survives currentContext throwing", () =>
     Effect.gen(function* () {
-      Tracing.__setCurrentContextImplForTest(() => {
+      const stub = TracingHostWithCurrentContext(() => {
         throw new Error("nope")
       })
-      try {
-        const out = yield* provide(Tracing.withInvocationParent(Effect.succeed(123)))
-        expect(out).toBe(123)
-      } finally {
-        Tracing.__resetCurrentContextImplForTest()
-      }
+      const out = yield* Effect.provide(
+        Tracing.withInvocationParent(Effect.succeed(123)),
+        Tracing.layer.pipe(Layer.provideMerge(stub)),
+      )
+      expect(out).toBe(123)
     }),
   )
 })

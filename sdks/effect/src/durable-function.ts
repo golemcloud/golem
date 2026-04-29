@@ -1,12 +1,14 @@
-import { Cause, Context, Effect, Exit, Result, Schema, Semaphore } from "effect"
+import { Cause, Context, Effect, Exit, Layer, Result, Schema, Semaphore } from "effect"
 import type * as CoreTypes from "golem:core/types@1.5.0"
-import * as DurabilityHost from "golem:durability/durability@1.5.0"
+import type * as DurabilityHost from "golem:durability/durability@1.5.0"
 import {
   DurabilityHostError,
   PersistenceLevel,
   withPersistenceLevel,
   type PersistenceLevelValue,
 } from "./durability-mode.js"
+import { DurabilityClient } from "./host/DurabilityClient.js"
+import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./wit-codec.js"
 
 /**
@@ -198,109 +200,20 @@ export type UnaryDurableFunctionType =
   | { tag: "write-remote" }
 
 // ---------------------------------------------------------------------------
-// Host-binding indirections
-// ---------------------------------------------------------------------------
-
-let observeFunctionCallImpl: (iface: string, function_: string) => void = (iface, function_) =>
-  DurabilityHost.observeFunctionCall(iface, function_)
-let beginDurableFunctionImpl: (functionType: DurableFunctionType) => OplogIndex = (functionType) =>
-  DurabilityHost.beginDurableFunction(functionType)
-let endDurableFunctionImpl: (
-  functionType: DurableFunctionType,
-  beginIndex: OplogIndex,
-  forcedCommit: boolean,
-) => void = (functionType, beginIndex, forcedCommit) =>
-  DurabilityHost.endDurableFunction(functionType, beginIndex, forcedCommit)
-let currentDurableExecutionStateImpl: () => DurableExecutionState = () =>
-  DurabilityHost.currentDurableExecutionState()
-let persistDurableFunctionInvocationImpl: (
-  functionName: string,
-  request: CoreTypes.ValueAndType,
-  response: CoreTypes.ValueAndType,
-  functionType: DurableFunctionType,
-) => void = (functionName, request, response, functionType) =>
-  DurabilityHost.persistDurableFunctionInvocation(functionName, request, response, functionType)
-let readPersistedDurableFunctionInvocationImpl: () => PersistedDurableFunctionInvocation = () =>
-  DurabilityHost.readPersistedDurableFunctionInvocation()
-
-/** @internal */
-export const __setObserveFunctionCallForTest = (fn: (iface: string, fn_: string) => void): void => {
-  observeFunctionCallImpl = fn
-}
-/** @internal */
-export const __resetObserveFunctionCallForTest = (): void => {
-  observeFunctionCallImpl = (iface, function_) =>
-    DurabilityHost.observeFunctionCall(iface, function_)
-}
-/** @internal */
-export const __setBeginDurableFunctionForTest = (
-  fn: (functionType: DurableFunctionType) => OplogIndex,
-): void => {
-  beginDurableFunctionImpl = fn
-}
-/** @internal */
-export const __resetBeginDurableFunctionForTest = (): void => {
-  beginDurableFunctionImpl = (functionType) => DurabilityHost.beginDurableFunction(functionType)
-}
-/** @internal */
-export const __setEndDurableFunctionForTest = (
-  fn: (functionType: DurableFunctionType, beginIndex: OplogIndex, forcedCommit: boolean) => void,
-): void => {
-  endDurableFunctionImpl = fn
-}
-/** @internal */
-export const __resetEndDurableFunctionForTest = (): void => {
-  endDurableFunctionImpl = (functionType, beginIndex, forcedCommit) =>
-    DurabilityHost.endDurableFunction(functionType, beginIndex, forcedCommit)
-}
-/** @internal */
-export const __setCurrentDurableExecutionStateForTest = (fn: () => DurableExecutionState): void => {
-  currentDurableExecutionStateImpl = fn
-}
-/** @internal */
-export const __resetCurrentDurableExecutionStateForTest = (): void => {
-  currentDurableExecutionStateImpl = () => DurabilityHost.currentDurableExecutionState()
-}
-/** @internal */
-export const __setPersistDurableFunctionInvocationForTest = (
-  fn: (
-    functionName: string,
-    request: CoreTypes.ValueAndType,
-    response: CoreTypes.ValueAndType,
-    functionType: DurableFunctionType,
-  ) => void,
-): void => {
-  persistDurableFunctionInvocationImpl = fn
-}
-/** @internal */
-export const __resetPersistDurableFunctionInvocationForTest = (): void => {
-  persistDurableFunctionInvocationImpl = (functionName, request, response, functionType) =>
-    DurabilityHost.persistDurableFunctionInvocation(functionName, request, response, functionType)
-}
-/** @internal */
-export const __setReadPersistedDurableFunctionInvocationForTest = (
-  fn: () => PersistedDurableFunctionInvocation,
-): void => {
-  readPersistedDurableFunctionInvocationImpl = fn
-}
-/** @internal */
-export const __resetReadPersistedDurableFunctionInvocationForTest = (): void => {
-  readPersistedDurableFunctionInvocationImpl = () =>
-    DurabilityHost.readPersistedDurableFunctionInvocation()
-}
-
-// ---------------------------------------------------------------------------
-// Effect-typed escape hatches
+// Effect-typed escape hatches (consume DurabilityClient via DI)
 // ---------------------------------------------------------------------------
 
 /** Emit a host metric/log line for a (iface, function) pair. */
 export const observeFunctionCall = (
   iface: string,
   function_: string,
-): Effect.Effect<void, DurabilityHostError> =>
-  Effect.try({
-    try: () => observeFunctionCallImpl(iface, function_),
-    catch: (e) => new DurabilityHostError(e),
+): Effect.Effect<void, DurabilityHostError, DurabilityClient> =>
+  Effect.gen(function* () {
+    const svc = yield* DurabilityClient
+    return yield* Effect.try({
+      try: () => svc.observeFunctionCall(iface, function_),
+      catch: (e) => new DurabilityHostError(e),
+    })
   })
 
 /**
@@ -309,10 +222,13 @@ export const observeFunctionCall = (
  */
 export const beginDurableFunction = (
   functionType: DurableFunctionType,
-): Effect.Effect<OplogIndex, DurabilityHostError> =>
-  Effect.try({
-    try: () => beginDurableFunctionImpl(functionType),
-    catch: (e) => new DurabilityHostError(e),
+): Effect.Effect<OplogIndex, DurabilityHostError, DurabilityClient> =>
+  Effect.gen(function* () {
+    const svc = yield* DurabilityClient
+    return yield* Effect.try({
+      try: () => svc.beginDurableFunction(functionType),
+      catch: (e) => new DurabilityHostError(e),
+    })
   })
 
 /**
@@ -323,19 +239,26 @@ export const endDurableFunction = (
   functionType: DurableFunctionType,
   beginIndex: OplogIndex,
   forcedCommit: boolean = false,
-): Effect.Effect<void, DurabilityHostError> =>
-  Effect.try({
-    try: () => endDurableFunctionImpl(functionType, beginIndex, forcedCommit),
-    catch: (e) => new DurabilityHostError(e),
+): Effect.Effect<void, DurabilityHostError, DurabilityClient> =>
+  Effect.gen(function* () {
+    const svc = yield* DurabilityClient
+    return yield* Effect.try({
+      try: () => svc.endDurableFunction(functionType, beginIndex, forcedCommit),
+      catch: (e) => new DurabilityHostError(e),
+    })
   })
 
 /** Read the host's current durable-execution state (live vs replay). */
 export const currentDurableExecutionState: Effect.Effect<
   DurableExecutionState,
-  DurabilityHostError
-> = Effect.try({
-  try: () => currentDurableExecutionStateImpl(),
-  catch: (e) => new DurabilityHostError(e),
+  DurabilityHostError,
+  DurabilityClient
+> = Effect.gen(function* () {
+  const svc = yield* DurabilityClient
+  return yield* Effect.try({
+    try: () => svc.currentDurableExecutionState(),
+    catch: (e) => new DurabilityHostError(e),
+  })
 })
 
 /**
@@ -343,7 +266,7 @@ export const currentDurableExecutionState: Effect.Effect<
  * live mode OR persistence level is `persist-nothing`). Mirrors Rust's
  * `Durability::is_live()`.
  */
-export const isLive: Effect.Effect<boolean, DurabilityHostError> = Effect.map(
+export const isLive: Effect.Effect<boolean, DurabilityHostError, DurabilityClient> = Effect.map(
   currentDurableExecutionState,
   (s) => s.isLive || s.persistenceLevel.tag === "persist-nothing",
 )
@@ -354,19 +277,27 @@ export const persistDurableFunctionInvocation = (
   request: CoreTypes.ValueAndType,
   response: CoreTypes.ValueAndType,
   functionType: DurableFunctionType,
-): Effect.Effect<void, DurabilityHostError> =>
-  Effect.try({
-    try: () => persistDurableFunctionInvocationImpl(functionName, request, response, functionType),
-    catch: (e) => new DurabilityHostError(e),
+): Effect.Effect<void, DurabilityHostError, DurabilityClient> =>
+  Effect.gen(function* () {
+    const svc = yield* DurabilityClient
+    return yield* Effect.try({
+      try: () =>
+        svc.persistDurableFunctionInvocation(functionName, request, response, functionType),
+      catch: (e) => new DurabilityHostError(e),
+    })
   })
 
 /** Read the next persisted durable-function invocation during replay. */
 export const readPersistedDurableFunctionInvocation: Effect.Effect<
   PersistedDurableFunctionInvocation,
-  DurabilityHostError
-> = Effect.try({
-  try: () => readPersistedDurableFunctionInvocationImpl(),
-  catch: (e) => new DurabilityHostError(e),
+  DurabilityHostError,
+  DurabilityClient
+> = Effect.gen(function* () {
+  const svc = yield* DurabilityClient
+  return yield* Effect.try({
+    try: () => svc.readPersistedDurableFunctionInvocation(),
+    catch: (e) => new DurabilityHostError(e),
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -413,17 +344,38 @@ export interface DurabilityWrapInfallibleOptions<
   readonly forcedCommit?: boolean
 }
 
-// ---- internal: module-level semaphore + fiber-local nesting marker -----
+// ---- internal: WrapSemaphore service + fiber-local nesting marker -----
 
-let _semaphore: Semaphore.Semaphore | undefined
-const acquireSemaphore: Effect.Effect<Semaphore.Semaphore> = Effect.suspend(() => {
-  if (_semaphore !== undefined) return Effect.succeed(_semaphore)
-  return Effect.tap(Semaphore.make(1), (s) =>
-    Effect.sync(() => {
-      _semaphore = s
-    }),
-  )
-})
+/**
+ * Single-permit semaphore that serializes {@link wrap} calls across
+ * fibers. The host's replay cursor + begin/end bracketing is
+ * inherently sequential, so concurrent fibers (e.g. via
+ * `Effect.all([wrap1, wrap2], { concurrency: "unbounded" })`) must
+ * fan-in through this one permit.
+ *
+ * Encapsulated as an Effect-typed service tag (rather than a
+ * module-level mutable `let`) so tests can supply a fresh semaphore
+ * per `it.effect` body via {@link WrapSemaphoreLive}, replacing the
+ * old `__resetWrapStateForTest` indirection.
+ *
+ * @internal
+ */
+export class WrapSemaphore extends Context.Service<WrapSemaphore, Semaphore.Semaphore>()(
+  "effect-golem/durable-function/wrap-semaphore",
+) {}
+
+/**
+ * Layer that allocates a fresh single-permit semaphore. Included in
+ * the per-process `HostLive` macro layer so production code shares
+ * one semaphore across the lifetime of a single dispatcher entry;
+ * tests get a fresh semaphore per provided layer.
+ *
+ * @internal
+ */
+export const WrapSemaphoreLive: Layer.Layer<WrapSemaphore> = Layer.effect(
+  WrapSemaphore,
+  Effect.map(Semaphore.make(1), (s) => WrapSemaphore.of(s)),
+)
 
 /**
  * Fiber-local marker for "this fiber tree is currently inside a
@@ -440,11 +392,6 @@ const InsideWrapRef = Context.Reference<string | null>(
   "effect-golem/durable-function/inside-wrap",
   { defaultValue: () => null },
 )
-
-/** @internal */
-export const __resetWrapStateForTest = (): void => {
-  _semaphore = undefined
-}
 
 /**
  * Test-only helper: wrap `effect` so that it sees `outerName` as the
@@ -504,7 +451,7 @@ const compileResponseSchema = (success: Schema.Top, error: Schema.Top | undefine
 const runLiveBody = <A, E, R>(
   body: Effect.Effect<A, E, R>,
   current: PersistenceLevelValue,
-): Effect.Effect<A, E | DurabilityHostError, R> =>
+): Effect.Effect<A, E | DurabilityHostError, R | DurabilityModeClient> =>
   current.tag === "persist-nothing"
     ? body
     : withPersistenceLevel(PersistenceLevel.persistNothing, body)
@@ -534,7 +481,22 @@ export const wrap = <
   | SuccessS["DecodingServices"]
   | ErrorS["EncodingServices"]
   | ErrorS["DecodingServices"]
-> => sdkErrorsToDefects(wrapInternal(opts, request, body, opts.error))
+> =>
+  // Internally widens R with `DurabilityClient | WrapSemaphore` (and
+  // anything `withPersistenceLevel` adds, e.g. `DurabilityModeClient`);
+  // the cast hides them from user-facing types because the agent
+  // dispatcher's `provideUserRuntime` provides them before any user
+  // code runs.
+  sdkErrorsToDefects(wrapInternal(opts, request, body, opts.error)) as Effect.Effect<
+    SuccessS["Type"],
+    ErrorS["Type"],
+    | R
+    | RequestS["EncodingServices"]
+    | SuccessS["EncodingServices"]
+    | SuccessS["DecodingServices"]
+    | ErrorS["EncodingServices"]
+    | ErrorS["DecodingServices"]
+  >
 
 /**
  * Same as {@link wrap}, but for `Effect<A, never, R>` bodies. The
@@ -551,6 +513,9 @@ export const wrapInfallible = <RequestS extends Schema.Top, SuccessS extends Sch
   never,
   R | RequestS["EncodingServices"] | SuccessS["EncodingServices"] | SuccessS["DecodingServices"]
 > =>
+  // Same internal-vs-public R discrepancy as {@link wrap}; cast hides
+  // `DurabilityClient | WrapSemaphore | DurabilityModeClient` from the
+  // user-facing type.
   sdkErrorsToDefects(
     wrapInternal<RequestS, SuccessS, Schema.Never, R>(opts, request, body, undefined),
   ) as Effect.Effect<
@@ -657,7 +622,7 @@ const wrapInternal = <
       "request-encode",
     )
 
-    const sem = yield* acquireSemaphore
+    const sem = yield* WrapSemaphore
     return yield* sem.withPermits(1)(
       protocol<RequestS, SuccessS, ErrorS, R>({
         fnName,

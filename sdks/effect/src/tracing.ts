@@ -1,5 +1,6 @@
 import { Cause, Context, Effect, Exit, Layer, Option, Tracer, type Scope } from "effect"
-import * as ContextHost from "golem:api/context@1.5.0"
+import type * as ContextHost from "golem:api/context@1.5.0"
+import { TracingHost, type TracingHostShape } from "./host/TracingHost.js"
 import { safeStringify } from "./logging.js"
 
 /**
@@ -11,10 +12,11 @@ import { safeStringify } from "./logging.js"
  *   `golem:api/context.startSpan`, so every `Effect.withSpan` ends up
  *   in the Golem oplog / propagated trace context. This is the
  *   production wiring; the agent dispatcher applies it automatically.
+ *   Requires {@link TracingHost} (provided by `HostLive`).
  * - {@link withInvocationParent} — captures the host's current
  *   invocation context and wraps a program with the matching Effect
  *   `ExternalSpan` parent, so user-side `Effect.withSpan` chains under
- *   the live invocation root.
+ *   the live invocation root. Effect-typed: requires {@link TracingHost}.
  * - {@link currentContext} / {@link traceContextHeaders} — Effect-typed
  *   wrappers around the host's snapshot accessors.
  * - {@link allowForwardingTraceContextHeaders} / {@link withForwardedHeaders}
@@ -48,40 +50,6 @@ export class TracingHostError {
   constructor(readonly cause: unknown) {
     this.message = `TracingHostError: ${cause instanceof Error ? cause.message : String(cause)}`
   }
-}
-
-// ---------------------------------------------------------------------------
-// Host-binding indirections
-// ---------------------------------------------------------------------------
-
-let startSpanImpl: (name: string) => ContextHost.Span = (name) => ContextHost.startSpan(name)
-let currentContextImpl: () => ContextHost.InvocationContext = () => ContextHost.currentContext()
-let allowForwardingImpl: (allow: boolean) => boolean = (allow) =>
-  ContextHost.allowForwardingTraceContextHeaders(allow)
-
-/** @internal */
-export const __setStartSpanImplForTest = (fn: (name: string) => ContextHost.Span): void => {
-  startSpanImpl = fn
-}
-/** @internal */
-export const __resetStartSpanImplForTest = (): void => {
-  startSpanImpl = (name) => ContextHost.startSpan(name)
-}
-/** @internal */
-export const __setCurrentContextImplForTest = (fn: () => ContextHost.InvocationContext): void => {
-  currentContextImpl = fn
-}
-/** @internal */
-export const __resetCurrentContextImplForTest = (): void => {
-  currentContextImpl = () => ContextHost.currentContext()
-}
-/** @internal */
-export const __setAllowForwardingImplForTest = (fn: (allow: boolean) => boolean): void => {
-  allowForwardingImpl = fn
-}
-/** @internal */
-export const __resetAllowForwardingImplForTest = (): void => {
-  allowForwardingImpl = (allow) => ContextHost.allowForwardingTraceContextHeaders(allow)
 }
 
 // ---------------------------------------------------------------------------
@@ -137,10 +105,13 @@ const ZERO_SPAN_ID = "0000000000000000"
  * context is the canonical root for a worker call, so silently
  * attaching to it is the correct behaviour for the common case.
  */
-const isHostStackSafe = (parent: Option.Option<Tracer.AnySpan>): boolean => {
+const isHostStackSafe = (
+  host: TracingHostShape,
+  parent: Option.Option<Tracer.AnySpan>,
+): boolean => {
   if (Option.isNone(parent)) return true
   try {
-    const ctx = currentContextImpl()
+    const ctx = host.currentContext()
     return parent.value.spanId === ctx.spanId() && parent.value.traceId === ctx.traceId()
   } catch {
     return false
@@ -221,69 +192,70 @@ class GolemSpan implements Tracer.Span {
 }
 
 // ---------------------------------------------------------------------------
-// Tracer
+// Tracer factory
 // ---------------------------------------------------------------------------
 
 /**
- * The Effect `Tracer` backed by `golem:api/context`. Each `withSpan`
- * call either delegates to the host (sequential / nested case) or
- * falls back to {@link Tracer.NativeSpan} (forked / explicit-parent
- * case). All operations are best-effort — host failures degrade
- * gracefully to local-only tracing.
+ * Build the Effect `Tracer` backed by the given {@link TracingHost}.
+ * Each `withSpan` call either delegates to the host (sequential /
+ * nested case) or falls back to {@link Tracer.NativeSpan}
+ * (forked / explicit-parent case). All operations are best-effort —
+ * host failures degrade gracefully to local-only tracing.
  */
-export const golemTracer: Tracer.Tracer = Tracer.make({
-  span({ annotations, kind, links, name, parent, sampled, startTime }) {
-    if (!isHostStackSafe(parent)) {
-      return new Tracer.NativeSpan({
+const makeGolemTracer = (host: TracingHostShape): Tracer.Tracer =>
+  Tracer.make({
+    span({ annotations, kind, links, name, parent, sampled, startTime }) {
+      if (!isHostStackSafe(host, parent)) {
+        return new Tracer.NativeSpan({
+          name,
+          parent,
+          annotations,
+          links: [...links],
+          startTime,
+          kind,
+          sampled,
+        })
+      }
+
+      let handle: ContextHost.Span
+      try {
+        handle = host.startSpan(name)
+      } catch {
+        return new Tracer.NativeSpan({
+          name,
+          parent,
+          annotations,
+          links: [...links],
+          startTime,
+          kind,
+          sampled,
+        })
+      }
+
+      let spanId = ZERO_SPAN_ID
+      let traceId = ZERO_TRACE_ID
+      try {
+        const ctx = host.currentContext()
+        spanId = ctx.spanId()
+        traceId = ctx.traceId()
+      } catch {
+        // host failure: keep zero ids but still produce a working span
+      }
+
+      return new GolemSpan(
+        handle,
         name,
+        spanId,
+        traceId,
         parent,
         annotations,
-        links: [...links],
-        startTime,
+        links,
         kind,
         sampled,
-      })
-    }
-
-    let handle: ContextHost.Span
-    try {
-      handle = startSpanImpl(name)
-    } catch {
-      return new Tracer.NativeSpan({
-        name,
-        parent,
-        annotations,
-        links: [...links],
         startTime,
-        kind,
-        sampled,
-      })
-    }
-
-    let spanId = ZERO_SPAN_ID
-    let traceId = ZERO_TRACE_ID
-    try {
-      const ctx = currentContextImpl()
-      spanId = ctx.spanId()
-      traceId = ctx.traceId()
-    } catch {
-      // host failure: keep zero ids but still produce a working span
-    }
-
-    return new GolemSpan(
-      handle,
-      name,
-      spanId,
-      traceId,
-      parent,
-      annotations,
-      links,
-      kind,
-      sampled,
-      startTime,
-    )
-  },
-})
+      )
+    },
+  })
 
 // ---------------------------------------------------------------------------
 // Layer
@@ -294,7 +266,13 @@ export const golemTracer: Tracer.Tracer = Tracer.make({
  * `Effect.withSpan` (and the built-in span events emitted by
  * `Logger.tracerLogger`, when enabled) flows through it.
  */
-export const layer: Layer.Layer<never> = Layer.succeed(Tracer.Tracer, golemTracer)
+export const layer: Layer.Layer<never, never, TracingHost> = Layer.effect(
+  Tracer.Tracer,
+  Effect.gen(function* () {
+    const host = yield* TracingHost
+    return makeGolemTracer(host)
+  }),
+)
 
 // ---------------------------------------------------------------------------
 // Invocation-context helpers
@@ -307,8 +285,8 @@ export interface InvocationContextSnapshot {
   readonly traceContextHeaders: ReadonlyArray<readonly [string, string]>
 }
 
-const snapshotContext = (): InvocationContextSnapshot => {
-  const ctx = currentContextImpl()
+const snapshotOf = (host: TracingHostShape): InvocationContextSnapshot => {
+  const ctx = host.currentContext()
   return {
     traceId: ctx.traceId(),
     spanId: ctx.spanId(),
@@ -317,22 +295,33 @@ const snapshotContext = (): InvocationContextSnapshot => {
 }
 
 /** Read the host's current invocation context, wrapped in Effect. */
-export const currentContext: Effect.Effect<InvocationContextSnapshot, TracingHostError> =
-  Effect.try({
-    try: () => snapshotContext(),
+export const currentContext: Effect.Effect<
+  InvocationContextSnapshot,
+  TracingHostError,
+  TracingHost
+> = Effect.gen(function* () {
+  const host = yield* TracingHost
+  return yield* Effect.try({
+    try: () => snapshotOf(host),
     catch: (e) => new TracingHostError(e),
   })
+})
 
 /** Read the W3C Trace Context headers for the current invocation. */
 export const traceContextHeaders: Effect.Effect<
   ReadonlyArray<readonly [string, string]>,
-  TracingHostError
-> = Effect.try({
-  try: () =>
-    currentContextImpl()
-      .traceContextHeaders()
-      .map(([k, v]) => [k, v] as const),
-  catch: (e) => new TracingHostError(e),
+  TracingHostError,
+  TracingHost
+> = Effect.gen(function* () {
+  const host = yield* TracingHost
+  return yield* Effect.try({
+    try: () =>
+      host
+        .currentContext()
+        .traceContextHeaders()
+        .map(([k, v]) => [k, v] as const),
+    catch: (e) => new TracingHostError(e),
+  })
 })
 
 /**
@@ -341,10 +330,13 @@ export const traceContextHeaders: Effect.Effect<
  */
 export const allowForwardingTraceContextHeaders = (
   allow: boolean,
-): Effect.Effect<boolean, TracingHostError> =>
-  Effect.try({
-    try: () => allowForwardingImpl(allow),
-    catch: (e) => new TracingHostError(e),
+): Effect.Effect<boolean, TracingHostError, TracingHost> =>
+  Effect.gen(function* () {
+    const host = yield* TracingHost
+    return yield* Effect.try({
+      try: () => host.allowForwardingTraceContextHeaders(allow),
+      catch: (e) => new TracingHostError(e),
+    })
   })
 
 /**
@@ -354,18 +346,21 @@ export const allowForwardingTraceContextHeaders = (
  */
 export const useForwardedHeaders = (
   allow: boolean,
-): Effect.Effect<boolean, TracingHostError, Scope.Scope> =>
-  Effect.acquireRelease(
-    Effect.try({
-      try: () => allowForwardingImpl(allow),
-      catch: (e) => new TracingHostError(e),
-    }),
-    (previous) =>
+): Effect.Effect<boolean, TracingHostError, Scope.Scope | TracingHost> =>
+  Effect.gen(function* () {
+    const host = yield* TracingHost
+    return yield* Effect.acquireRelease(
       Effect.try({
-        try: () => allowForwardingImpl(previous),
-        catch: () => undefined,
-      }).pipe(Effect.ignore),
-  )
+        try: () => host.allowForwardingTraceContextHeaders(allow),
+        catch: (e) => new TracingHostError(e),
+      }),
+      (previous) =>
+        Effect.try({
+          try: () => host.allowForwardingTraceContextHeaders(previous),
+          catch: () => undefined,
+        }).pipe(Effect.ignore),
+    )
+  })
 
 /**
  * Run `effect` with the host's outgoing-trace-header forwarding flag
@@ -375,7 +370,7 @@ export const useForwardedHeaders = (
 export const withForwardedHeaders = <A, E, R>(
   allow: boolean,
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | TracingHostError, Exclude<R, Scope.Scope>> =>
+): Effect.Effect<A, E | TracingHostError, Exclude<R, Scope.Scope> | TracingHost> =>
   Effect.scoped(useForwardedHeaders(allow).pipe(Effect.andThen(effect)))
 
 // ---------------------------------------------------------------------------
@@ -389,23 +384,30 @@ export const withForwardedHeaders = <A, E, R>(
  * invocation context without producing an extra child host span.
  *
  * Best-effort: if reading the host fails, we just run `effect`.
+ *
+ * Effect-typed: requires {@link TracingHost} so that the host read
+ * happens *inside* the layer scope (the dispatcher applies this
+ * combinator before `Effect.provide(userRuntimeLayer)` strips the
+ * dependency).
  */
 export const withInvocationParent = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> => {
-  let snap: InvocationContextSnapshot
-  try {
-    snap = snapshotContext()
-  } catch {
-    return effect
-  }
-  if (snap.traceId === ZERO_TRACE_ID || snap.spanId === ZERO_SPAN_ID) {
-    return effect
-  }
-  const external = Tracer.externalSpan({
-    traceId: snap.traceId,
-    spanId: snap.spanId,
-    sampled: true,
+): Effect.Effect<A, E, R | TracingHost> =>
+  Effect.gen(function* () {
+    const host = yield* TracingHost
+    let snap: InvocationContextSnapshot
+    try {
+      snap = snapshotOf(host)
+    } catch {
+      return yield* effect
+    }
+    if (snap.traceId === ZERO_TRACE_ID || snap.spanId === ZERO_SPAN_ID) {
+      return yield* effect
+    }
+    const external = Tracer.externalSpan({
+      traceId: snap.traceId,
+      spanId: snap.spanId,
+      sampled: true,
+    })
+    return yield* Effect.withParentSpan(effect, external)
   })
-  return Effect.withParentSpan(effect, external)
-}

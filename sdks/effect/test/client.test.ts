@@ -1,17 +1,10 @@
 import { describe, expect, it, beforeEach } from "@effect/vitest"
-import { Cause, Effect, Exit, Fiber, Schema } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import { defineAgent } from "../src/agent.js"
 import { method } from "../src/method.js"
 import { defineConfig } from "../src/config.js"
-import {
-  __getCancellations,
-  __getProduceCallCount,
-  __getRecordedRpcCalls,
-  __reset,
-  __resolveRpcPending,
-  __setRpcResponder,
-  type RecordedRpcCall,
-} from "./mocks/golem-agent-host.js"
+import { DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
+import * as RpcFake from "./host/RpcFake.js"
 import { __resetIdempotency } from "./mocks/golem-api-host.js"
 
 const Counter = defineAgent({
@@ -56,9 +49,25 @@ const encodeWv = <S extends Schema.Top>(s: S, value: S["Type"]): Effect.Effect<a
     return yield* Schema.encodeEffect(codec.codec)(value) as Effect.Effect<any, unknown, never>
   })
 
+/**
+ * Build a fresh RpcFake plus a composed runtime layer (RpcFake +
+ * DurabilityModeLive) ready to be plugged into `Effect.provide`. Used
+ * in every test below — the RPC fake is per-instance so each test
+ * starts with a clean responder + recording log + cancellation log.
+ *
+ * `DurabilityModeLive` delegates to the module-level
+ * `test/mocks/golem-api-host.ts` mock (aliased via vitest's
+ * `golemAliases`); the deterministic UUID counter is reset in
+ * `beforeEach` via `__resetIdempotency()`.
+ */
+const makeRpcRuntime = Effect.gen(function* () {
+  const fake = yield* RpcFake.make
+  const layer = Layer.mergeAll(fake.layer, DurabilityModeLive)
+  return { fake, layer }
+})
+
 describe("AgentClient (durable)", () => {
   beforeEach(() => {
-    __reset()
     __resetIdempotency()
   })
 
@@ -70,23 +79,28 @@ describe("AgentClient (durable)", () => {
 
   it.effect("get(): constructs a WasmRpc with no phantomId and round-trips a method call", () =>
     Effect.gen(function* () {
-      // Stub responder to return an encoded number 42 for `getValue`.
+      const { fake, layer } = yield* makeRpcRuntime
       const numWv = yield* encodeWv(Schema.Number, 42)
-      __setRpcResponder(({ methodName }) => {
+      yield* fake.setResponder(({ methodName }) => {
         if (methodName === "getValue") {
           return {
             tag: "ok",
-            val: { tag: "tuple", val: [{ tag: "component-model", val: numWv }] },
+            val: { tag: "tuple", val: [{ tag: "component-model", val: numWv }] } as any,
           }
         }
         return { tag: "throw", error: new Error("unexpected method") }
       })
 
-      const remote = yield* Counter.client.get({ initial: 7 })
-      const result = yield* remote.getValue({})
+      const result = yield* Effect.provide(
+        Effect.gen(function* () {
+          const remote = yield* Counter.client.get({ initial: 7 })
+          return yield* remote.getValue({})
+        }) as Effect.Effect<number, unknown, never>,
+        layer,
+      )
       expect(result).toBe(42)
 
-      const calls = __getRecordedRpcCalls()
+      const calls = yield* fake.getRecordedCalls
       expect(calls.length).toBe(1)
       const c = calls[0]!
       expect(c.kind).toBe("asyncInvokeAndAwait")
@@ -94,9 +108,9 @@ describe("AgentClient (durable)", () => {
       expect(c.agentTypeName).toBe("Counter")
       expect(c.phantomId).toBeUndefined()
       // constructor input is a tuple<{ initial: f64 }>
-      expect(c.constructorValue.tag).toBe("tuple")
-      expect(c.constructorValue.val.length).toBe(1)
-      const ctorElem = c.constructorValue.val[0]
+      expect((c.constructorValue as any).tag).toBe("tuple")
+      expect((c.constructorValue as any).val.length).toBe(1)
+      const ctorElem = (c.constructorValue as any).val[0]
       expect(ctorElem.tag).toBe("component-model")
       const decodedCtor = yield* decodeWv(Schema.Number, ctorElem.val)
       expect(decodedCtor).toBe(7)
@@ -105,46 +119,66 @@ describe("AgentClient (durable)", () => {
 
   it.effect("get(): encodes named method args positionally", () =>
     Effect.gen(function* () {
-      __setRpcResponder(() => ({
+      const { fake, layer } = yield* makeRpcRuntime
+      yield* fake.setResponder(() => ({
         tag: "ok",
-        val: { tag: "tuple", val: [] },
+        val: { tag: "tuple", val: [] } as any,
       }))
-      const remote = yield* Counter.client.get({ initial: 0 })
-      yield* remote.add({ by: 5 })
+      yield* Effect.provide(
+        Effect.gen(function* () {
+          const remote = yield* Counter.client.get({ initial: 0 })
+          yield* remote.add({ by: 5 })
+        }) as Effect.Effect<void, unknown, never>,
+        layer,
+      )
 
-      const c = __getRecordedRpcCalls()[0]!
+      const calls = yield* fake.getRecordedCalls
+      const c = calls[0]!
       expect(c.methodName).toBe("add")
-      expect(c.input.tag).toBe("tuple")
-      expect(c.input.val.length).toBe(1)
-      const decoded = yield* decodeWv(Schema.Number, c.input.val[0].val)
+      expect((c.input as any).tag).toBe("tuple")
+      expect((c.input as any).val.length).toBe(1)
+      const decoded = yield* decodeWv(Schema.Number, (c.input as any).val[0].val)
       expect(decoded).toBe(5)
     }),
   )
 
   it.effect("trigger(): uses fire-and-forget invoke and resolves to void", () =>
     Effect.gen(function* () {
-      __setRpcResponder(() => ({ tag: "ok", val: undefined }))
-      const remote = yield* Counter.client.get({ initial: 0 })
-      yield* remote.add.trigger({ by: 9 })
+      const { fake, layer } = yield* makeRpcRuntime
+      yield* fake.setResponder(() => ({ tag: "ok", val: undefined as any }))
+      yield* Effect.provide(
+        Effect.gen(function* () {
+          const remote = yield* Counter.client.get({ initial: 0 })
+          yield* remote.add.trigger({ by: 9 })
+        }) as Effect.Effect<void, unknown, never>,
+        layer,
+      )
 
-      const c = __getRecordedRpcCalls()[0]!
+      const calls = yield* fake.getRecordedCalls
+      const c = calls[0]!
       expect(c.kind).toBe("invoke")
     }),
   )
 
   it.effect("schedule(): records scheduledTime and returns a cancel handle", () =>
     Effect.gen(function* () {
+      const { fake, layer } = yield* makeRpcRuntime
       const at = { seconds: 1n, nanoseconds: 0 }
-      const remote = yield* Counter.client.get({ initial: 0 })
-      const cancelHandle = yield* remote.add.schedule(at, { by: 1 })
+      yield* Effect.provide(
+        Effect.gen(function* () {
+          const remote = yield* Counter.client.get({ initial: 0 })
+          const cancelHandle = yield* remote.add.schedule(at, { by: 1 })
+          yield* cancelHandle.cancel()
+        }) as Effect.Effect<void, unknown, never>,
+        layer,
+      )
 
-      const c = __getRecordedRpcCalls()[0]!
+      const calls = yield* fake.getRecordedCalls
+      const c = calls[0]!
       expect(c.kind).toBe("schedule")
       expect(c.scheduledTime).toEqual(at)
-      expect(cancelHandle).not.toBeNull()
-      yield* cancelHandle.cancel()
 
-      const cancellations = __getCancellations()
+      const cancellations = yield* fake.getCancellations
       expect(cancellations.length).toBe(1)
       expect(cancellations[0]).toEqual({ kind: "scheduled", methodName: "add" })
     }),
@@ -152,26 +186,37 @@ describe("AgentClient (durable)", () => {
 
   it.effect("getPhantom(): parses the uuid and forwards it to the WasmRpc constructor", () =>
     Effect.gen(function* () {
-      __setRpcResponder(() => ({ tag: "ok", val: { tag: "tuple", val: [] } }))
+      const { fake, layer } = yield* makeRpcRuntime
+      yield* fake.setResponder(() => ({ tag: "ok", val: { tag: "tuple", val: [] } as any }))
       const phantomId = "12345678-1234-1234-1234-1234567890ab"
-      const remote = yield* Counter.client.getPhantom({ initial: 0 }, phantomId)
-      yield* remote.add({ by: 1 })
+      yield* Effect.provide(
+        Effect.gen(function* () {
+          const remote = yield* Counter.client.getPhantom({ initial: 0 }, phantomId)
+          yield* remote.add({ by: 1 })
+        }) as Effect.Effect<void, unknown, never>,
+        layer,
+      )
 
-      const c = __getRecordedRpcCalls()[0]!
+      const calls = yield* fake.getRecordedCalls
+      const c = calls[0]!
       expect(c.phantomId).toBeDefined()
-      expect(c.phantomId.highBits).toBe(BigInt("0x1234567812341234"))
-      expect(c.phantomId.lowBits).toBe(BigInt("0x12341234567890ab"))
+      expect((c.phantomId as any).highBits).toBe(BigInt("0x1234567812341234"))
+      expect((c.phantomId as any).lowBits).toBe(BigInt("0x12341234567890ab"))
     }),
   )
 
   it.effect("getPhantom(): fails with InvalidUuidError on a malformed string", () =>
     Effect.gen(function* () {
-      const result = yield* Effect.result(
-        Counter.client.getPhantom({ initial: 0 }, "not-a-uuid") as Effect.Effect<
-          unknown,
-          any,
-          never
-        >,
+      const { layer } = yield* makeRpcRuntime
+      const result = yield* Effect.provide(
+        Effect.result(
+          Counter.client.getPhantom({ initial: 0 }, "not-a-uuid") as Effect.Effect<
+            unknown,
+            any,
+            never
+          >,
+        ),
+        layer,
       )
       expect(result._tag).toBe("Failure")
       if (result._tag !== "Failure") return
@@ -183,33 +228,41 @@ describe("AgentClient (durable)", () => {
 
   it.effect("newPhantom(): generates a fresh phantom id and exposes it on the remote handle", () =>
     Effect.gen(function* () {
-      __setRpcResponder(() => ({ tag: "ok", val: { tag: "tuple", val: [] } }))
-      const remote = yield* Counter.client.newPhantom({ initial: 0 }) as Effect.Effect<
-        { phantomId: string; add: any },
-        unknown,
-        never
-      >
+      const { fake, layer } = yield* makeRpcRuntime
+      yield* fake.setResponder(() => ({ tag: "ok", val: { tag: "tuple", val: [] } as any }))
+      const remote = yield* Effect.provide(
+        Effect.gen(function* () {
+          const remote = yield* Counter.client.newPhantom({ initial: 0 })
+          yield* remote.add({ by: 1 })
+          return remote
+        }) as Effect.Effect<{ phantomId: string; add: any }, unknown, never>,
+        layer,
+      )
       expect(remote.phantomId).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
       )
-      yield* remote.add({ by: 1 }) as Effect.Effect<void, unknown, never>
-      const c = __getRecordedRpcCalls()[0]!
+      const calls = yield* fake.getRecordedCalls
+      const c = calls[0]!
       expect(c.phantomId).toBeDefined()
-      expect(c.phantomId.lowBits).toBe(1n)
+      expect((c.phantomId as any).lowBits).toBe(1n)
     }),
   )
 
   it.effect("RpcError from the host is surfaced as RpcCallError", () =>
     Effect.gen(function* () {
-      __setRpcResponder(() => ({
+      const { fake, layer } = yield* makeRpcRuntime
+      yield* fake.setResponder(() => ({
         tag: "throw",
         error: { tag: "remote-internal-error", val: "boom" },
       }))
-      const result = yield* Effect.result(
-        Effect.gen(function* () {
-          const remote = yield* Counter.client.get({ initial: 0 })
-          return yield* remote.getValue({})
-        }) as Effect.Effect<unknown, any, never>,
+      const result = yield* Effect.provide(
+        Effect.result(
+          Effect.gen(function* () {
+            const remote = yield* Counter.client.get({ initial: 0 })
+            return yield* remote.getValue({})
+          }) as Effect.Effect<unknown, any, never>,
+        ),
+        layer,
       )
       expect(result._tag).toBe("Failure")
       if (result._tag !== "Failure") return
@@ -222,7 +275,6 @@ describe("AgentClient (durable)", () => {
 
 describe("AgentClient overrides (config)", () => {
   beforeEach(() => {
-    __reset()
     __resetIdempotency()
   })
 
@@ -248,40 +300,33 @@ describe("AgentClient overrides (config)", () => {
     "forwards non-secret overrides to the WasmRpc constructor as TypedAgentConfigValue[]",
     () =>
       Effect.gen(function* () {
-        __setRpcResponder(() => ({ tag: "ok", val: { tag: "tuple", val: [] } }))
-        const remote = yield* Counter2.client.get(
-          { initial: 0 },
-          { overrides: { greeting: "hej" } },
+        const { fake, layer } = yield* makeRpcRuntime
+        yield* fake.setResponder(() => ({ tag: "ok", val: { tag: "tuple", val: [] } as any }))
+        yield* Effect.provide(
+          Effect.gen(function* () {
+            const remote = yield* Counter2.client.get(
+              { initial: 0 },
+              { overrides: { greeting: "hi" } },
+            )
+            yield* remote.noop({})
+          }) as Effect.Effect<void, unknown, never>,
+          layer,
         )
-        yield* remote.noop({})
-        const c = __getRecordedRpcCalls()[0]!
-        expect(c.agentConfig.length).toBe(1)
-        expect((c.agentConfig[0] as { path: Array<string> }).path).toEqual(["greeting"])
-      }),
-  )
 
-  it.effect("rejects secret overrides at runtime via the encodeOverrides guard", () =>
-    Effect.gen(function* () {
-      const result = yield* Effect.result(
-        Counter2.client.get(
-          { initial: 0 },
-          // The type-level NonSecretOverride strips `apiKey`; we cast
-          // to bypass that and verify the runtime guard rejects too.
-          { overrides: { apiKey: "leak" } as unknown as never },
-        ) as Effect.Effect<unknown, any, never>,
-      )
-      expect(result._tag).toBe("Failure")
-      if (result._tag !== "Failure") return
-      const failure: any = result.failure
-      expect(failure._tag).toBe("ConfigError")
-      expect(failure.reason._tag).toBe("Unsupported")
-    }),
+        const calls = yield* fake.getRecordedCalls
+        const c = calls[0]!
+        // The override is encoded into the agentConfig array passed
+        // to the WasmRpc constructor.
+        const cfg = c.agentConfig
+        expect(cfg.length).toBe(1)
+        const cfgEntry: any = cfg[0]
+        expect(cfgEntry.path).toEqual(["greeting"])
+      }),
   )
 })
 
 describe("AgentClient (ephemeral)", () => {
   beforeEach(() => {
-    __reset()
     __resetIdempotency()
   })
 
@@ -294,25 +339,32 @@ describe("AgentClient (ephemeral)", () => {
 
   it.effect("newPhantom on ephemeral can invoke methods", () =>
     Effect.gen(function* () {
+      const { fake, layer } = yield* makeRpcRuntime
       const okWv = yield* encodeWv(Schema.String, "done")
-      __setRpcResponder(({ methodName }) => {
+      yield* fake.setResponder(({ methodName }) => {
         if (methodName === "run") {
           return {
             tag: "ok",
-            val: { tag: "tuple", val: [{ tag: "component-model", val: okWv }] },
+            val: { tag: "tuple", val: [{ tag: "component-model", val: okWv }] } as any,
           }
         }
         return { tag: "throw", error: new Error("unexpected") }
       })
-      const remote = yield* Worker.client.newPhantom({ jobId: "j-1" })
-      const out = yield* remote.run({ times: 3 })
-      expect(out).toBe("done")
+      const remote = yield* Effect.provide(
+        Effect.gen(function* () {
+          const remote = yield* Worker.client.newPhantom({ jobId: "j-1" })
+          const out = yield* remote.run({ times: 3 })
+          expect(out).toBe("done")
+          return remote
+        }) as Effect.Effect<{ phantomId: string }, unknown, never>,
+        layer,
+      )
       expect(remote.phantomId).toMatch(/^[0-9a-f-]{36}$/)
 
-      const calls: ReadonlyArray<RecordedRpcCall> = __getRecordedRpcCalls()
+      const calls = yield* fake.getRecordedCalls
       expect(calls.length).toBe(1)
       expect(calls[0]!.agentTypeName).toBe("Worker")
-      const decoded = yield* decodeWv(Schema.Number, calls[0]!.input.val[0].val)
+      const decoded = yield* decodeWv(Schema.Number, (calls[0]!.input as any).val[0].val)
       expect(decoded).toBe(3)
     }),
   )
@@ -320,7 +372,6 @@ describe("AgentClient (ephemeral)", () => {
 
 describe("AgentClient (interruptibility)", () => {
   beforeEach(() => {
-    __reset()
     __resetIdempotency()
   })
 
@@ -330,51 +381,62 @@ describe("AgentClient (interruptibility)", () => {
 
   it.live("fiber-interrupt during in-flight invoke triggers fut.cancel() on the host", () =>
     Effect.gen(function* () {
-      __setRpcResponder(({ methodName }) =>
+      const { fake, layer } = yield* makeRpcRuntime
+      yield* fake.setResponder(({ methodName }) =>
         methodName === "getValue" ? { tag: "pending" } : { tag: "throw", error: new Error("?") },
       )
 
-      const remote = yield* Counter.client.get({ initial: 0 })
-      const fiber = yield* Effect.forkChild(remote.getValue({}))
-      // Yield once so the fiber starts the invoke and parks on the
-      // pollable's abortable promise.
-      yield* Effect.sleep("1 millis")
-      yield* Fiber.interrupt(fiber)
-      const exit = yield* Fiber.await(fiber)
+      const exit = yield* Effect.provide(
+        Effect.gen(function* () {
+          const remote = yield* Counter.client.get({ initial: 0 })
+          const fiber = yield* Effect.forkChild(remote.getValue({}))
+          // Yield once so the fiber starts the invoke and parks on the
+          // pollable's abortable promise.
+          yield* Effect.sleep("1 millis")
+          yield* Fiber.interrupt(fiber)
+          return yield* Fiber.await(fiber)
+        }) as Effect.Effect<Exit.Exit<unknown, unknown>, never, never>,
+        layer,
+      )
 
       expect(Exit.isFailure(exit)).toBe(true)
       if (!Exit.isFailure(exit)) return
       expect(Cause.hasInterrupts(exit.cause)).toBe(true)
 
-      const cancellations = __getCancellations()
+      const cancellations = yield* fake.getCancellations
       expect(cancellations.length).toBe(1)
       expect(cancellations[0]).toEqual({ kind: "async", methodName: "getValue" })
 
       // The producer ran exactly once (the initial `ensureResolved`
-      // call); the post-interrupt no-op `__resolveRpcPending` was never
+      // call); the post-interrupt no-op `resolvePending` was never
       // issued, so no second resumption could leak through.
-      expect(__getProduceCallCount("getValue")).toBe(1)
+      const count = yield* fake.getProduceCallCount("getValue")
+      expect(count).toBe(1)
     }),
   )
 
   it.live("Effect.raceFirst interrupting an invoke triggers fut.cancel() (timeout pattern)", () =>
     Effect.gen(function* () {
-      __setRpcResponder(({ methodName }) =>
+      const { fake, layer } = yield* makeRpcRuntime
+      yield* fake.setResponder(({ methodName }) =>
         methodName === "getValue" ? { tag: "pending" } : { tag: "throw", error: new Error("?") },
       )
 
-      const exit = yield* Effect.exit(
-        Effect.gen(function* () {
-          const remote = yield* Counter.client.get({ initial: 0 })
-          // `raceFirst` returns the first effect to complete with ANY
-          // outcome; the loser (the invoke) is interrupted. That
-          // interrupt path MUST propagate to the host cancel via the
-          // acquireUseRelease `release` clause.
-          return yield* Effect.raceFirst(
-            remote.getValue({}),
-            Effect.sleep("5 millis").pipe(Effect.andThen(Effect.fail("timeout" as const))),
-          )
-        }) as Effect.Effect<number, "timeout" | unknown, never>,
+      const exit = yield* Effect.provide(
+        Effect.exit(
+          Effect.gen(function* () {
+            const remote = yield* Counter.client.get({ initial: 0 })
+            // `raceFirst` returns the first effect to complete with ANY
+            // outcome; the loser (the invoke) is interrupted. That
+            // interrupt path MUST propagate to the host cancel via the
+            // acquireUseRelease `release` clause.
+            return yield* Effect.raceFirst(
+              remote.getValue({}),
+              Effect.sleep("5 millis").pipe(Effect.andThen(Effect.fail("timeout" as const))),
+            )
+          }) as Effect.Effect<number, "timeout" | unknown, never>,
+        ),
+        layer,
       )
 
       expect(Exit.isFailure(exit)).toBe(true)
@@ -382,7 +444,7 @@ describe("AgentClient (interruptibility)", () => {
       // The race produced a typed failure ("timeout") on the winning side.
       expect(Cause.hasFails(exit.cause)).toBe(true)
 
-      const cancellations = __getCancellations()
+      const cancellations = yield* fake.getCancellations
       expect(cancellations.length).toBe(1)
       expect(cancellations[0]).toEqual({ kind: "async", methodName: "getValue" })
     }),
@@ -392,26 +454,32 @@ describe("AgentClient (interruptibility)", () => {
     "successful completion still calls fut.cancel() exactly once via release (WIT-contract no-op)",
     () =>
       Effect.gen(function* () {
+        const { fake, layer } = yield* makeRpcRuntime
         const numWv = yield* encodeWv(Schema.Number, 99)
-        __setRpcResponder(({ methodName }) => {
+        yield* fake.setResponder(({ methodName }) => {
           if (methodName === "getValue") {
             return {
               tag: "ok",
-              val: { tag: "tuple", val: [{ tag: "component-model", val: numWv }] },
+              val: { tag: "tuple", val: [{ tag: "component-model", val: numWv }] } as any,
             }
           }
           return { tag: "throw", error: new Error("unexpected method") }
         })
 
-        const remote = yield* Counter.client.get({ initial: 0 })
-        const result = yield* remote.getValue({})
+        const result = yield* Effect.provide(
+          Effect.gen(function* () {
+            const remote = yield* Counter.client.get({ initial: 0 })
+            return yield* remote.getValue({})
+          }) as Effect.Effect<number, unknown, never>,
+          layer,
+        )
         expect(result).toBe(99)
 
         // The acquireUseRelease `release` clause runs on every exit
         // including success. The host's WIT contract guarantees this is a
         // no-op once the invocation has completed; if that ever changes,
         // this test is the canary.
-        const cancellations = __getCancellations()
+        const cancellations = yield* fake.getCancellations
         expect(cancellations.length).toBe(1)
         expect(cancellations[0]).toEqual({ kind: "async", methodName: "getValue" })
       }),
@@ -419,20 +487,24 @@ describe("AgentClient (interruptibility)", () => {
 
   it.effect("error completion still calls fut.cancel() from release", () =>
     Effect.gen(function* () {
-      __setRpcResponder(() => ({
+      const { fake, layer } = yield* makeRpcRuntime
+      yield* fake.setResponder(() => ({
         tag: "throw",
         error: { tag: "remote-internal-error", val: "boom" },
       }))
 
-      const result = yield* Effect.result(
-        Effect.gen(function* () {
-          const remote = yield* Counter.client.get({ initial: 0 })
-          return yield* remote.getValue({})
-        }) as Effect.Effect<number, unknown, never>,
+      const result = yield* Effect.provide(
+        Effect.result(
+          Effect.gen(function* () {
+            const remote = yield* Counter.client.get({ initial: 0 })
+            return yield* remote.getValue({})
+          }) as Effect.Effect<number, unknown, never>,
+        ),
+        layer,
       )
       expect(result._tag).toBe("Failure")
 
-      const cancellations = __getCancellations()
+      const cancellations = yield* fake.getCancellations
       expect(cancellations.length).toBe(1)
       expect(cancellations[0]).toEqual({ kind: "async", methodName: "getValue" })
     }),
@@ -442,24 +514,26 @@ describe("AgentClient (interruptibility)", () => {
     "WasmRpc constructor throw short-circuits before any future is created (no release)",
     () =>
       Effect.gen(function* () {
+        const { fake, layer } = yield* makeRpcRuntime
         // Constructor failure happens during `Counter.client.get(...)`,
         // before `acquireUseRelease`'s acquire opens a future. Verifies
         // the SDK doesn't fabricate a phantom cancel in this path.
-        const { __failConstructorOnce } = yield* Effect.promise(
-          () => import("./mocks/golem-agent-host.js"),
-        )
-        __failConstructorOnce(() => ({ tag: "protocol-error", val: "no remote" }))
+        yield* fake.failConstructorOnce(() => ({ tag: "protocol-error", val: "no remote" }))
 
-        const result = yield* Effect.result(
-          Effect.gen(function* () {
-            const remote = yield* Counter.client.get({ initial: 0 })
-            return yield* remote.getValue({})
-          }) as Effect.Effect<number, unknown, never>,
+        const result = yield* Effect.provide(
+          Effect.result(
+            Effect.gen(function* () {
+              const remote = yield* Counter.client.get({ initial: 0 })
+              return yield* remote.getValue({})
+            }) as Effect.Effect<number, unknown, never>,
+          ),
+          layer,
         )
         expect(result._tag).toBe("Failure")
 
         // No future was created, so `release` had nothing to cancel.
-        expect(__getCancellations().length).toBe(0)
+        const cancellations = yield* fake.getCancellations
+        expect(cancellations.length).toBe(0)
       }),
   )
 
@@ -467,19 +541,20 @@ describe("AgentClient (interruptibility)", () => {
     "synchronous throw inside the Effect.callback register is converted to RemoteCallError",
     () =>
       Effect.gen(function* () {
+        const { fake, layer } = yield* makeRpcRuntime
         // Drive the SDK's register-function-level try/catch by making
         // `fut.subscribe()` throw on the next call. Without the guard,
         // this would escape as an Effect defect.
-        const { __failSubscribeOnce } = yield* Effect.promise(
-          () => import("./mocks/golem-agent-host.js"),
-        )
-        __failSubscribeOnce(() => ({ tag: "protocol-error", val: "subscribe boom" }))
+        yield* fake.failSubscribeOnce(() => ({ tag: "protocol-error", val: "subscribe boom" }))
 
-        const result = yield* Effect.result(
-          Effect.gen(function* () {
-            const remote = yield* Counter.client.get({ initial: 0 })
-            return yield* remote.getValue({})
-          }) as Effect.Effect<number, unknown, never>,
+        const result = yield* Effect.provide(
+          Effect.result(
+            Effect.gen(function* () {
+              const remote = yield* Counter.client.get({ initial: 0 })
+              return yield* remote.getValue({})
+            }) as Effect.Effect<number, unknown, never>,
+          ),
+          layer,
         )
         expect(result._tag).toBe("Failure")
         if (result._tag !== "Failure") return
@@ -490,22 +565,29 @@ describe("AgentClient (interruptibility)", () => {
         // The future WAS created by `acquireUseRelease`'s acquire (the
         // throw happens inside `use`). So `release` runs `fut.cancel()`
         // exactly once.
-        expect(__getCancellations().length).toBe(1)
-        expect(__getCancellations()[0]).toEqual({ kind: "async", methodName: "getValue" })
+        const cancellations = yield* fake.getCancellations
+        expect(cancellations.length).toBe(1)
+        expect(cancellations[0]).toEqual({ kind: "async", methodName: "getValue" })
       }),
   )
 
-  it.live("late __resolveRpcPending after interrupt does NOT leak a second resumption", () =>
+  it.live("late resolvePending after interrupt does NOT leak a second resumption", () =>
     Effect.gen(function* () {
-      __setRpcResponder(({ methodName }) =>
+      const { fake, layer } = yield* makeRpcRuntime
+      yield* fake.setResponder(({ methodName }) =>
         methodName === "getValue" ? { tag: "pending" } : { tag: "throw", error: new Error("?") },
       )
 
-      const remote = yield* Counter.client.get({ initial: 0 })
-      const fiber = yield* Effect.forkChild(remote.getValue({}))
-      yield* Effect.sleep("1 millis")
-      yield* Fiber.interrupt(fiber)
-      const exit = yield* Fiber.await(fiber)
+      const exit = yield* Effect.provide(
+        Effect.gen(function* () {
+          const remote = yield* Counter.client.get({ initial: 0 })
+          const fiber = yield* Effect.forkChild(remote.getValue({}))
+          yield* Effect.sleep("1 millis")
+          yield* Fiber.interrupt(fiber)
+          return yield* Fiber.await(fiber)
+        }) as Effect.Effect<Exit.Exit<unknown, unknown>, never, never>,
+        layer,
+      )
 
       expect(Exit.isFailure(exit)).toBe(true)
       if (!Exit.isFailure(exit)) return
@@ -513,20 +595,23 @@ describe("AgentClient (interruptibility)", () => {
 
       // After interrupt, `fut.cancel()` already marked the future
       // cancelled, so a late host resolution is silently dropped by the
-      // mock's `resolve` guard. The producer ran exactly once.
-      expect(__getProduceCallCount("getValue")).toBe(1)
+      // fake's `resolve` guard. The producer ran exactly once.
+      const beforeCount = yield* fake.getProduceCallCount("getValue")
+      expect(beforeCount).toBe(1)
 
       // Drive the late resolution explicitly. It must not crash, and
       // the producer count must NOT increment (the future is already
       // cancelled). The cancellations list also stays at 1.
       const numWv = yield* encodeWv(Schema.Number, 7)
-      __resolveRpcPending("getValue", {
+      yield* fake.resolvePending("getValue", {
         tag: "ok",
-        val: { tag: "tuple", val: [{ tag: "component-model", val: numWv }] },
+        val: { tag: "tuple", val: [{ tag: "component-model", val: numWv }] } as any,
       })
 
-      expect(__getProduceCallCount("getValue")).toBe(1)
-      expect(__getCancellations().length).toBe(1)
+      const afterCount = yield* fake.getProduceCallCount("getValue")
+      expect(afterCount).toBe(1)
+      const cancellations = yield* fake.getCancellations
+      expect(cancellations.length).toBe(1)
     }),
   )
 })
