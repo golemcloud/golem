@@ -39,10 +39,17 @@ impl IsRetriableError for tonic::Status {
             | Code::OutOfRange
             | Code::Unimplemented
             | Code::DataLoss
-            | Code::Unauthenticated => false,
+            | Code::Unauthenticated
+            // ResourceExhausted is treated as non-retriable. Within this codebase it covers two
+            // categories of failures, neither of which should be retried automatically:
+            //  1. Domain-level quota/limit-exceeded errors (see `error_to_status` mapping
+            //     `agent_error::LimitExceeded` to `Status::resource_exhausted`).
+            //  2. tonic-internal codec/compression size-limit errors (e.g. encoded or decoded
+            //     message exceeds `max_(en|de)coding_message_size`). Retrying these will keep
+            //     producing the same error and previously caused infinite retry loops.
+            | Code::ResourceExhausted => false,
             Code::Unknown
             | Code::DeadlineExceeded
-            | Code::ResourceExhausted
             | Code::Aborted
             | Code::Internal
             | Code::Unavailable => true,
@@ -51,5 +58,33 @@ impl IsRetriableError for tonic::Status {
 
     fn as_loggable(&self) -> Option<String> {
         Some(self.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+    use tonic::{Code, Status};
+
+    #[test]
+    fn resource_exhausted_is_not_retriable() {
+        let status = Status::new(
+            Code::ResourceExhausted,
+            "Error decompressing: size limit, of 4194304 bytes, exceeded while decompressing message",
+        );
+        assert!(!status.is_retriable());
+    }
+
+    #[test]
+    fn unavailable_is_retriable() {
+        let status = Status::new(Code::Unavailable, "service unavailable");
+        assert!(status.is_retriable());
+    }
+
+    #[test]
+    fn not_found_is_not_retriable() {
+        let status = Status::new(Code::NotFound, "not found");
+        assert!(!status.is_retriable());
     }
 }
