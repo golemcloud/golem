@@ -19,7 +19,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::Wo
 use golem_common::SafeDisplay;
 use golem_common::model::RetryConfig;
 use golem_common::model::{AgentId, Pod, ShardId};
-use golem_common::retriable_error::IsRetriableError;
+use golem_common::retriable_error::{IsRetriableError, is_grpc_message_size_limit};
 use golem_common::retries::get_delay;
 use golem_service_base::clients::shard_manager::ShardManagerError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -426,6 +426,8 @@ pub enum CallWorkerExecutorError {
     FailedToGetRoutingTable(ShardManagerError),
     #[error("Failed to connect to pod: {} {}", .0.code(), .0.message())]
     FailedToConnectToPod(Status),
+    #[error("gRPC message exceeded the configured size limit: {}", .0.message())]
+    MessageTooLarge(Status),
 }
 
 impl SafeDisplay for CallWorkerExecutorError {
@@ -433,6 +435,7 @@ impl SafeDisplay for CallWorkerExecutorError {
         match self {
             CallWorkerExecutorError::FailedToGetRoutingTable(_) => self.to_string(),
             CallWorkerExecutorError::FailedToConnectToPod(_) => self.to_string(),
+            CallWorkerExecutorError::MessageTooLarge(_) => self.to_string(),
         }
     }
 }
@@ -452,8 +455,13 @@ impl CallWorkerExecutorErrorWithContext {
     }
 
     fn failed_to_connect_to_pod(status: Status, pod: Pod) -> Self {
+        let error = if is_grpc_message_size_limit(&status) {
+            CallWorkerExecutorError::MessageTooLarge(status)
+        } else {
+            CallWorkerExecutorError::FailedToConnectToPod(status)
+        };
         CallWorkerExecutorErrorWithContext {
-            error: CallWorkerExecutorError::FailedToConnectToPod(status),
+            error,
             pod: Some(pod),
         }
     }
@@ -466,6 +474,7 @@ impl IsRetriableError for CallWorkerExecutorError {
             CallWorkerExecutorError::FailedToConnectToPod(status) => {
                 status.is_retriable() || status.code() == tonic::Code::Cancelled
             }
+            CallWorkerExecutorError::MessageTooLarge(_) => false,
         }
     }
 

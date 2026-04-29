@@ -61,6 +61,20 @@ impl IsRetriableError for tonic::Status {
     }
 }
 
+/// Returns true if the given gRPC status was produced by tonic's codec because the
+/// encoded or decoded message exceeded the configured `max_(en|de)coding_message_size`.
+///
+/// Tonic surfaces these as `Code::ResourceExhausted` with messages such as
+/// `"Error decompressing: size limit, of N bytes, exceeded while decompressing message"`
+/// or `"Error encoding: size limit, of N bytes, exceeded while encoding message"`.
+pub fn is_grpc_message_size_limit(status: &tonic::Status) -> bool {
+    if status.code() != tonic::Code::ResourceExhausted {
+        return false;
+    }
+    let message = status.message();
+    message.contains("size limit") && message.contains("message")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,5 +100,26 @@ mod tests {
     fn not_found_is_not_retriable() {
         let status = Status::new(Code::NotFound, "not found");
         assert!(!status.is_retriable());
+    }
+
+    #[test]
+    fn message_size_limit_is_detected() {
+        let status = Status::new(
+            Code::ResourceExhausted,
+            "Error decompressing: size limit, of 4194304 bytes, exceeded while decompressing message",
+        );
+        assert!(is_grpc_message_size_limit(&status));
+    }
+
+    #[test]
+    fn limit_exceeded_is_not_message_size_limit() {
+        let status = Status::new(Code::ResourceExhausted, "quota exceeded");
+        assert!(!is_grpc_message_size_limit(&status));
+    }
+
+    #[test]
+    fn non_resource_exhausted_is_not_message_size_limit() {
+        let status = Status::new(Code::Unavailable, "size limit message");
+        assert!(!is_grpc_message_size_limit(&status));
     }
 }
