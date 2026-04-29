@@ -38,9 +38,12 @@ use crate::log::{
     logged_failed_to, logged_finished_or_failed_to, logln,
 };
 use crate::model::GuestLanguage;
+use crate::model::agent::view::AgentTypeView;
 use crate::model::app::{
     AppBuildStep, ApplicationComponentSelectMode, BuildConfig, CleanMode, DynamicHelpSections,
+    WithSource,
 };
+use crate::model::config::{collect_unused_leaf_paths, value_at_path};
 use crate::model::deploy::{
     DeployConfig, DeployError, DeployResult, DeploySummary, PostDeployError, PostDeployResult,
     PostDeploySummary,
@@ -59,8 +62,9 @@ use futures_util::{StreamExt, TryStreamExt, stream};
 use golem_client::api::{ApplicationClient, ComponentClient, EnvironmentClient};
 use golem_client::model::{ApplicationCreation, DeploymentCreation, DeploymentRollback};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::DeployedRegisteredAgentType;
 use golem_common::model::agent::schema_evolution::validate_schema_evolution;
+use golem_common::model::agent::{AgentConfigSource, AgentTypeName, DeployedRegisteredAgentType};
+use golem_common::model::agent_secret::AgentSecretPath;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
@@ -71,8 +75,9 @@ use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
+use golem_wasm::analysis::AnalysedType;
 use itertools::Itertools;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -410,6 +415,31 @@ impl AppCommandHandler {
         let agent_types = self.list_agent_types(&environment).await?;
 
         self.ctx.log_handler().log_view(&agent_types);
+
+        Ok(())
+    }
+
+    pub async fn cmd_get_agent_type(&self, agent_type_name: AgentTypeName) -> anyhow::Result<()> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+
+        let Some(agent_type) = self
+            .get_agent_type_by_name(&environment, agent_type_name.0.as_str())
+            .await?
+        else {
+            log_error(format!(
+                "Agent type {} not found",
+                agent_type_name.0.log_color_highlight()
+            ));
+            bail!(NonSuccessfulExit);
+        };
+
+        self.ctx
+            .log_handler()
+            .log_view(&AgentTypeView::new(&agent_type, true));
 
         Ok(())
     }
@@ -1476,11 +1506,42 @@ impl AppCommandHandler {
     ) -> anyhow::Result<CurrentDeployment> {
         let app_ctx = self.ctx.app_context_lock().await;
 
-        let agent_secret_defaults = app_ctx
+        let raw_agent_secret_defaults = app_ctx
             .some_or_err()?
             .application()
-            .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name)
-            .apply(resolve_secret_defaults)?;
+            .deployment_agent_secret_defaults(&deploy_diff.environment.environment_name);
+
+        let declared_secret_paths = collect_declared_agent_secret_paths(deploy_diff)?;
+
+        let (agent_secret_defaults, unused_secret_default_paths) =
+            materialize_agent_secret_defaults(
+                raw_agent_secret_defaults.as_ref(),
+                &declared_secret_paths,
+            );
+
+        if !unused_secret_default_paths.is_empty() {
+            let rendered_unused_secret_default_paths = unused_secret_default_paths
+                .iter()
+                .map(|path| path.join("."))
+                .collect::<Vec<_>>();
+
+            log_warn_action(
+                "Ignoring unused secret default paths",
+                rendered_unused_secret_default_paths.join(", "),
+            );
+
+            if !self
+                .ctx
+                .interactive_handler()
+                .confirm_ignore_unused_agent_secret_defaults(
+                    &rendered_unused_secret_default_paths,
+                )?
+            {
+                bail!(NonSuccessfulExit);
+            }
+        }
+
+        let agent_secret_defaults = agent_secret_defaults.apply(resolve_secret_defaults)?;
 
         let retry_policy_defaults = app_ctx
             .some_or_err()?
@@ -2146,4 +2207,75 @@ fn resolve_secret_defaults(
             })
         })
         .collect()
+}
+
+fn collect_declared_agent_secret_paths(
+    deploy_diff: &DeployDiff,
+) -> anyhow::Result<BTreeSet<Vec<String>>> {
+    let mut declared_secret_types = BTreeMap::<Vec<String>, (AnalysedType, String)>::new();
+
+    for component in deploy_diff.deployable_components.values() {
+        for agent_type in &component.agent_types {
+            for config in &agent_type.config {
+                if config.source != AgentConfigSource::Secret {
+                    continue;
+                }
+
+                if let Some((existing_type, existing_agent_type)) =
+                    declared_secret_types.get(&config.path)
+                {
+                    if existing_type != &config.value_type {
+                        bail!(
+                            "Conflicting secret declaration for path '{}' across agents '{}' and '{}': declared types differ ({:?} vs {:?}).",
+                            config.path.join(".").log_color_error_highlight(),
+                            existing_agent_type.log_color_highlight(),
+                            agent_type.type_name.0.log_color_highlight(),
+                            existing_type,
+                            config.value_type,
+                        );
+                    }
+                } else {
+                    declared_secret_types.insert(
+                        config.path.clone(),
+                        (config.value_type.clone(), agent_type.type_name.0.clone()),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(declared_secret_types.into_keys().collect())
+}
+
+fn materialize_agent_secret_defaults(
+    raw_default: Option<&WithSource<serde_json::Value>>,
+    declared_secret_paths: &BTreeSet<Vec<String>>,
+) -> (Vec<DeploymentAgentSecretDefault>, Vec<Vec<String>>) {
+    let mut materialized_defaults = Vec::new();
+    let mut unused_paths = Vec::new();
+
+    if let Some(raw_default) = raw_default {
+        let mut consumed_paths = Vec::new();
+
+        for declared_path in declared_secret_paths {
+            if let Some(secret_value) = value_at_path(&raw_default.value, declared_path) {
+                materialized_defaults.push(DeploymentAgentSecretDefault {
+                    path: AgentSecretPath(declared_path.clone()),
+                    secret_value: secret_value.clone(),
+                });
+                consumed_paths.push(declared_path.clone());
+            }
+        }
+
+        unused_paths.extend(collect_unused_leaf_paths(&raw_default.value, |leaf_path| {
+            consumed_paths
+                .iter()
+                .any(|consumed_path| leaf_path.starts_with(consumed_path))
+        }));
+    }
+
+    unused_paths.sort();
+    unused_paths.dedup();
+
+    (materialized_defaults, unused_paths)
 }

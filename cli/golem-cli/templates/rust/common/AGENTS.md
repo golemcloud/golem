@@ -49,12 +49,16 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-manage-plugins` | Managing Golem plugins — listing available plugins, installing and configuring plugins via golem.yaml or CLI, and understanding built-in plugins like the OTLP exporter |
 | `golem-add-config-rust` | Adding typed configuration to a Rust Golem agent |
 | `golem-add-secret-rust` | Adding secrets to Rust Golem agents |
+| `golem-quota-rust` | Adding resource quotas (rate limiting, capacity, concurrency) to Rust Golem agents using QuotaToken and reservations |
+| `golem-retry-policies-rust` | Configuring semantic retry policies — composable exponential/periodic/fibonacci backoff, predicates on error properties, scoped overrides with `with_named_policy`, and live CLI management |
 | `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
 | `golem-file-io-rust` | Reading and writing files from agent code |
 | `golem-add-llm-rust` | Adding LLM and AI capabilities using golem-ai libraries |
 | `golem-make-http-request-rust` | Making outgoing HTTP requests from agent code using wstd |
+| `golem-logging-rust` | Adding logging to a Rust Golem agent using the `log` crate |
+| `golem-enable-otlp-rust` | Enabling the OpenTelemetry (OTLP) plugin for a Rust agent — exporting traces, logs, and metrics to an OTLP collector, adding custom spans with the invocation context API |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
 | `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
 | `golem-list-and-filter-agents` | Listing and querying agents with filters |

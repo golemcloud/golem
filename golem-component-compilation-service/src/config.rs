@@ -205,7 +205,6 @@ impl SafeDisplay for StaticRegistryServiceConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompileWorkerConfig {
-    pub max_message_size: usize,
     #[serde(flatten)]
     pub client_config: GrpcClientConfig,
 }
@@ -213,7 +212,6 @@ pub struct CompileWorkerConfig {
 impl SafeDisplay for CompileWorkerConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
-        let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
         let _ = writeln!(&mut result, "{}", self.client_config.to_safe_string());
         result
     }
@@ -237,7 +235,6 @@ impl Default for RegistryServiceConfig {
 impl Default for CompileWorkerConfig {
     fn default() -> Self {
         Self {
-            max_message_size: 1000000,
             client_config: GrpcClientConfig {
                 retries_on_unavailable: RetryConfig::max_attempts_3(),
                 connect_timeout: Duration::from_secs(10),

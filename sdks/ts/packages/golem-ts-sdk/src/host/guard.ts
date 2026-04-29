@@ -172,7 +172,7 @@ function formatErrorForTrap(err: unknown): string {
   }
 }
 
-function isPromiseLike(value: unknown): value is Promise<unknown> {
+export function isPromiseLike(value: unknown): value is Promise<unknown> {
   return value !== null && value !== undefined && typeof (value as any).then === 'function';
 }
 

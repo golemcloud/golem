@@ -119,10 +119,9 @@ For local development convenience, set defaults under `secretDefaults`. These ar
 ```yaml
 secretDefaults:
   local:
-    - path: [apiKey]
-      value: "dev-key-123"
-    - path: [db, password]
-      value: "dev-password"
+    apiKey: "dev-key-123"
+    db:
+      password: "dev-password"
 ```
 
 ## Key Points

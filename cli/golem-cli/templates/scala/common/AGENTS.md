@@ -49,6 +49,8 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-manage-plugins` | Managing Golem plugins — listing available plugins, installing and configuring plugins via golem.yaml or CLI, and understanding built-in plugins like the OTLP exporter |
 | `golem-add-config-scala` | Adding typed configuration to Scala Golem agents |
 | `golem-add-secret-scala` | Adding secrets to Scala Golem agents |
+| `golem-quota-scala` | Adding resource quotas (rate limiting, capacity, concurrency) to Scala Golem agents using QuotaToken and reservations |
+| `golem-retry-policies-scala` | Configuring semantic retry policies — composable exponential/periodic/fibonacci backoff, predicates on error properties, scoped overrides with `withRetryPolicy`, and live CLI management |
 | `golem-profiles-and-environments` | Understanding CLI profiles, app environments, and component presets — switching between local/cloud, managing deployment targets, and activating per-environment configuration |
 | `golem-add-env-vars` | Defining environment variables for agents in golem.yaml and via CLI |
 | `golem-add-initial-files` | Adding initial files to agent filesystems via golem.yaml |
@@ -56,6 +58,8 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-js-runtime` | JavaScript runtime environment: available Web APIs, Node.js modules, and npm compatibility |
 | `golem-add-llm-scala` | Adding LLM and AI capabilities by calling provider APIs with fetch or ZIO HTTP |
 | `golem-make-http-request-scala` | Making outgoing HTTP requests from agent code using fetch or ZIO HTTP |
+| `golem-logging-scala` | Adding logging to a Scala Golem agent using `golem.wasi.Logging` and `wasi:logging` |
+| `golem-enable-otlp-scala` | Enabling the OpenTelemetry (OTLP) plugin for a Scala agent — exporting traces, logs, and metrics to an OTLP collector, adding custom spans with the invocation context API |
 | `golem-view-agent-logs` | Viewing agent logs and output via streaming |
 | `golem-view-agent-files` | Listing files in an agent's virtual filesystem |
 | `golem-list-and-filter-agents` | Listing and querying agents with filters |

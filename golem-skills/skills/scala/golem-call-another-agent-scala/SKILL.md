@@ -11,10 +11,10 @@ The SDK generates companion objects for agent-to-agent calls. Define a companion
 
 ## Setup
 
-Define the companion object alongside the agent trait:
+Define the agent trait. The SDK auto-generates a `CounterAgentClient` companion object at build time:
 
 ```scala
-import golem.{AgentCompanion, BaseAgent}
+import golem.BaseAgent
 import golem.runtime.annotations.agentDefinition
 
 import scala.concurrent.Future
@@ -25,30 +25,49 @@ trait CounterAgent extends BaseAgent {
   def increment(): Future[Int]
   def getCount(): Future[Int]
 }
-
-object CounterAgent extends AgentCompanion[CounterAgent]
 ```
 
 ## Getting a Client
 
-Use `<AgentObject>.get(...)` with the target agent's constructor parameters:
+Use `CounterAgentClient.get(...)` with the target agent's constructor parameters:
 
 ```scala
-val counter = CounterAgent.get("my-counter")
+val counter = CounterAgentClient.get("my-counter")
 ```
 
-This does **not** create the agent — the agent is created implicitly on its first invocation. If it already exists, you get a handle to the existing instance.
+This returns a `CounterAgentRemote` with per-method wrapper fields. It does **not** create the agent — the agent is created implicitly on its first invocation. If it already exists, you get a handle to the existing instance.
 
 ## Awaited Call
 
 Call a method and wait for the result:
 
 ```scala
-val result = counter.increment()
-val count = counter.getCount()
+val result: Future[Int] = counter.increment()
+val count: Future[Int] = counter.getCount()
 ```
 
-The calling agent **blocks** until the target agent processes the request and returns. This is the standard RPC pattern.
+The call uses `async-invoke-and-await` under the hood — the calling agent **suspends** (yields the WASM event loop) until the target agent returns. The returned `Future` is genuinely async, enabling concurrent RPC calls to multiple agents.
+
+## Cancelable Call
+
+Get a `(Future[Out], CancellationToken)` pair to cancel a pending call:
+
+```scala
+val (result, token) = counter.increment.cancelable()
+// Later: token.cancel() — best-effort cancellation
+```
+
+## Other Call Modes
+
+Each method also supports fire-and-forget and scheduling:
+
+```scala
+counter.increment.trigger()                          // fire-and-forget
+counter.increment.scheduleAt(Datetime.afterSeconds(60)) // scheduled
+counter.increment.scheduleCancelableAt(Datetime.afterSeconds(60)) // cancelable scheduled
+```
+
+See the `golem-fire-and-forget-scala` and `golem-schedule-future-call-scala` skills.
 
 ## Phantom Agents
 
@@ -60,4 +79,4 @@ When calling agents defined in a **different component**, the generated client t
 
 ## Avoiding Deadlocks
 
-**Never create RPC cycles** where A awaits B and B awaits A — this deadlocks both agents. Use `.trigger` (fire-and-forget) to break cycles. See the `golem-fire-and-forget-scala` skill.
+**Never create RPC cycles** where A awaits B and B awaits A — this deadlocks both agents. Use `.trigger()` (fire-and-forget) to break cycles. See the `golem-fire-and-forget-scala` skill.

@@ -15,6 +15,7 @@
 #[path = "agent_config/shared_agent_config_live_mutation.rs"]
 mod shared_agent_config_live_mutation;
 
+use convert_case::ccase;
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
@@ -30,6 +31,7 @@ trait TestContext: std::fmt::Debug + Send + Sync {
     fn test_component_file(&self) -> &'static str;
     fn test_component_name(&self) -> &'static str;
     fn agent_method_name(&self) -> &'static str;
+    fn case_config_path_segment(&self, segment: &str) -> String;
 }
 
 #[test_dep(tagged_as = "ts")]
@@ -46,6 +48,9 @@ fn test_context_ts() -> Arc<dyn TestContext> {
         }
         fn agent_method_name(&self) -> &'static str {
             "echoLocalConfig"
+        }
+        fn case_config_path_segment(&self, segment: &str) -> String {
+            ccase!(kebab -> camel, segment)
         }
     }
 
@@ -66,6 +71,9 @@ fn test_context_rust() -> Arc<dyn TestContext> {
         }
         fn agent_method_name(&self) -> &'static str {
             "echo_local_config"
+        }
+        fn case_config_path_segment(&self, segment: &str) -> String {
+            ccase!(kebab -> snake, segment)
         }
     }
 

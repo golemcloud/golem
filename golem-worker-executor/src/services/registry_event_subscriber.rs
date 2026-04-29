@@ -134,6 +134,56 @@ impl RegistryInvalidationHandler for WorkerExecutorRegistryInvalidationHandler {
                     .invalidate_environment(*environment_id)
                     .await;
             }
+            RegistryInvalidationEvent::ApplicationDeleted {
+                application_id,
+                account_id,
+                app_name,
+                environment_ids,
+                ..
+            } => {
+                debug!(
+                    application_id = %application_id,
+                    account_id = %account_id,
+                    app_name,
+                    environment_count = environment_ids.len(),
+                    "Received application deleted event, invalidating per-environment caches"
+                );
+                // Invalidate each environment individually using the provided UUIDs
+                // rather than flushing all caches.
+                for env_id in environment_ids {
+                    self.component_service
+                        .invalidate_latest_deployed_metadata_for_environment(*env_id)
+                        .await;
+                    self.environment_state_service
+                        .invalidate_environment(*env_id)
+                        .await;
+                    self.agent_types_service
+                        .invalidate_environment(*env_id)
+                        .await;
+                }
+            }
+            RegistryInvalidationEvent::EnvironmentDeleted {
+                environment_id,
+                app_name,
+                env_name,
+                ..
+            } => {
+                debug!(
+                    environment_id = %environment_id,
+                    app_name,
+                    env_name,
+                    "Received environment deleted event, invalidating environment caches"
+                );
+                self.component_service
+                    .invalidate_latest_deployed_metadata_for_environment(*environment_id)
+                    .await;
+                self.environment_state_service
+                    .invalidate_environment(*environment_id)
+                    .await;
+                self.agent_types_service
+                    .invalidate_environment(*environment_id)
+                    .await;
+            }
         }
     }
 }

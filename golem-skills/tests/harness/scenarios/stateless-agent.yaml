@@ -54,7 +54,7 @@ steps:
   - id: "verify-ephemeral-mode"
     shell:
       command: "golem"
-      args: ["list-agent-types", "--environment", "test-app/local", "--format", "json"]
+      args: ["agent-type", "list", "--environment", "test-app/local", "--format", "json"]
     expect:
       exit_code: 0
       stdout_contains: '"mode":"Ephemeral"'

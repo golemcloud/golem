@@ -344,33 +344,39 @@ impl OplogConstructor for CreateOplogConstructor {
                 .await
             }
             AgentMode::Ephemeral => {
-                let primary = self
-                    .primary
-                    .open(
-                        &self.owned_agent_id,
-                        Some(last_oplog_index),
-                        self.initial_worker_metadata,
-                        self.last_known_status,
-                        self.execution_status,
-                    )
-                    .await;
+                let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
-                let target_layer = self.service.lower.last();
-                let target = target_layer.open(&self.owned_agent_id).await;
+                let lower = EphemeralOplog::build_lower_layers(
+                    &self.service.lower,
+                    &self.owned_agent_id,
+                    account_id,
+                    self.service.entry_count_limit,
+                    &tx,
+                )
+                .await;
 
                 if let Some(initial_entry) = self.initial_entry {
-                    target
+                    lower
+                        .first()
                         .append(vec![(OplogIndex::INITIAL, initial_entry)])
                         .await;
                 }
+
+                let transfer_fiber = EphemeralOplog::spawn_background_transfer(
+                    self.owned_agent_id.clone(),
+                    lower.clone(),
+                    rx,
+                );
 
                 Arc::new(
                     EphemeralOplog::new(
                         self.owned_agent_id,
                         last_oplog_index,
                         self.service.max_operations_before_commit_ephemeral,
-                        primary,
-                        target,
+                        self.primary.clone(),
+                        lower,
+                        tx,
+                        transfer_fiber,
                         close,
                     )
                     .await,
@@ -989,7 +995,7 @@ impl Oplog for MultiLayerOplog {
 }
 
 #[derive(Debug)]
-enum BackgroundTransferMessage {
+pub enum BackgroundTransferMessage {
     TransferFromPrimary {
         last_transferred_idx: OplogIndex,
         keep_alive: Option<Arc<dyn Oplog>>,
@@ -1028,7 +1034,7 @@ trait BackgroundTransfer {
 /// Wraps an open oplog archive to track the number of items written and automatically
 /// scheduling transfers to lower levels when the limit is reached
 #[derive(Debug)]
-struct WrappedOplogArchive {
+pub struct WrappedOplogArchive {
     layer: usize,
     archive: Arc<dyn OplogArchive + Send + Sync>,
     entry_count: AtomicU64,

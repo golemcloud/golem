@@ -270,6 +270,7 @@ const ScenarioSpecSchema = z.object({
   prerequisites: PrerequisitesSchema,
   skip_if: StepConditionSchema.optional(),
   steps: z.array(StepSpecSchema).min(1, "Scenario must have at least one step"),
+  finally: z.array(StepSpecSchema).optional(),
 });
 
 type LangConditional<T> = T | Record<string, T>;
@@ -377,6 +378,7 @@ export interface ScenarioSpec {
   };
   skip_if?: StepCondition;
   steps: StepSpec[];
+  finally?: StepSpec[];
 }
 
 export function parseStep(raw: RawStepSpec): StepSpec {
@@ -442,7 +444,8 @@ export class ScenarioLoader {
     }
     const data = result.data;
     const steps = data.steps.map(parseStep);
-    return { ...data, steps } as ScenarioSpec;
+    const finallySteps = data.finally?.map(parseStep);
+    return { ...data, steps, ...(finallySteps && { finally: finallySteps }) } as ScenarioSpec;
   }
 }
 
@@ -933,27 +936,27 @@ export class ScenarioExecutor {
       }
     }
 
-    // Setup workspace (each run gets a unique ID so no cleanup needed)
-    this.currentSkillSessionBaseline = undefined;
-    await fs.mkdir(this.workspace, { recursive: true });
-    await this.driver.setup(this.workspace, this.bootstrapSkillSourceDirs);
-    await this.verifyGolemConnectivity(spec);
-
-    // Build extra env for commands from settings
-    const commandEnv = this.buildCommandEnv(spec, startedServices.env);
-    this.routerPort = spec.settings?.golem_server?.router_port ?? 9881;
-    const variables = this.buildVariables(spec.name, startedServices.variables);
-    const conditionContext = {
-      agent: this.options.agent,
-      language: this.options.language,
-      os: process.platform,
-    };
-
     const startTime = Date.now();
     let isFirstPrompt = true;
     let resumeReached = !this.options.resumeFromStepId;
     let creditInsufficient = false;
+    // Build env and variables early so finalizers can use them even if setup fails
+    const commandEnv = this.buildCommandEnv(spec, startedServices.env);
+    this.routerPort = spec.settings?.golem_server?.router_port ?? 9881;
+    const variables = this.buildVariables(spec.name, startedServices.variables);
+
     try {
+      // Setup workspace (each run gets a unique ID so no cleanup needed)
+      this.currentSkillSessionBaseline = undefined;
+      await fs.mkdir(this.workspace, { recursive: true });
+      await this.driver.setup(this.workspace, this.bootstrapSkillSourceDirs);
+      await this.verifyGolemConnectivity(spec);
+      const conditionContext = {
+        agent: this.options.agent,
+        language: this.options.language,
+        os: process.platform,
+      };
+
       for (const originalStep of spec.steps) {
         // Check abort signal
         if (this.options.abortSignal?.aborted) break;
@@ -1063,7 +1066,22 @@ export class ScenarioExecutor {
         if (!finalResult!.success) break; // Stop on failure
       }
     } finally {
-      await startedServices.stopAll();
+      // Run finalizer steps (best-effort: all run even if some fail, abort signal is ignored)
+      if (spec.finally?.length) {
+        const savedAbortSignal = this.options.abortSignal;
+        this.options.abortSignal = undefined;
+        try {
+          await this.executeFinalizers(spec, commandEnv, variables, results);
+        } finally {
+          this.options.abortSignal = savedAbortSignal;
+        }
+      }
+
+      try {
+        await startedServices.stopAll();
+      } catch (err) {
+        log.stepAction("finally", `failed to stop services: ${err}`);
+      }
 
       // Restore env vars
       for (const [key, value] of Object.entries(savedEnv)) {
@@ -1074,9 +1092,18 @@ export class ScenarioExecutor {
         }
       }
 
-      await this.watcher.stop();
+      try {
+        await this.watcher.stop();
+      } catch (err) {
+        log.stepAction("finally", `failed to stop watcher: ${err}`);
+      }
       this.watcherStarted = false;
-      await this.driver.teardown();
+
+      try {
+        await this.driver.teardown();
+      } catch (err) {
+        log.stepAction("finally", `failed to teardown driver: ${err}`);
+      }
     }
 
     const aggregatedUsage = this.aggregateUsage(results);
@@ -1114,6 +1141,47 @@ export class ScenarioExecutor {
       ...(costUsd > 0 && { costUsd }),
       ...(numTurns > 0 && { numTurns }),
     };
+  }
+
+  private async executeFinalizers(
+    spec: ScenarioSpec,
+    commandEnv: Record<string, string>,
+    variables: Record<string, string>,
+    results: StepResult[],
+  ): Promise<void> {
+    log.stepAction("finally", "running finalizer steps");
+    for (const originalStep of spec.finally!) {
+      const stepLabel = `finally:${originalStep.id ?? "(unnamed)"}`;
+      const stepStart = Date.now();
+      try {
+        const step = this.resolveLanguageFields(
+          this.substituteStepVariables(originalStep, variables),
+        );
+        const bodyResult = await this.executeStepBody(step, spec, commandEnv, false);
+        results.push({
+          step: originalStep,
+          success: bodyResult.success,
+          durationSeconds: (Date.now() - stepStart) / 1000,
+          expectedSkills: [],
+          activatedSkills: bodyResult.activatedSkills,
+          error: bodyResult.errors.length > 0 ? bodyResult.errors.join("\n") : undefined,
+        });
+        if (!bodyResult.success) {
+          log.stepAction(stepLabel, `finalizer failed: ${bodyResult.errors.join(", ")}`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.stepAction(stepLabel, `finalizer threw: ${msg}`);
+        results.push({
+          step: originalStep,
+          success: false,
+          durationSeconds: (Date.now() - stepStart) / 1000,
+          expectedSkills: [],
+          activatedSkills: [],
+          error: `FINALIZER_ERROR: ${msg}`,
+        });
+      }
+    }
   }
 
   private async executeStepBody(

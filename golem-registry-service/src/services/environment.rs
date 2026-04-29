@@ -15,6 +15,7 @@
 use super::account_usage::AccountUsageService;
 use super::account_usage::error::{AccountUsageError, LimitExceededError};
 use super::application::ApplicationService;
+use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment::EnvironmentRepoError;
@@ -93,6 +94,7 @@ pub struct EnvironmentService {
     account_usage_service: Arc<AccountUsageService>,
     plugin_repo: Arc<dyn PluginRepo>,
     builtin_plugin_owner_account_id: AccountId,
+    registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
 }
 
 impl EnvironmentService {
@@ -102,6 +104,7 @@ impl EnvironmentService {
         account_usage_service: Arc<AccountUsageService>,
         plugin_repo: Arc<dyn PluginRepo>,
         builtin_plugin_owner_account_id: AccountId,
+        registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
     ) -> Self {
         Self {
             environment_repo,
@@ -109,6 +112,7 @@ impl EnvironmentService {
             account_usage_service,
             plugin_repo,
             builtin_plugin_owner_account_id,
+            registry_change_notifier,
         }
     }
 
@@ -252,7 +256,8 @@ impl EnvironmentService {
                     EnvironmentError::ConcurrentModification
                 }
                 other => other.into(),
-            })?;
+            })?
+            .signal_new_events_available(&self.registry_change_notifier);
 
         Ok(())
     }

@@ -436,8 +436,17 @@ fn compressed_oplog() -> BlobStorageNamespace {
     }
 }
 
+#[test_dep(tagged_as = "cs")]
+fn custom_storage() -> BlobStorageNamespace {
+    BlobStorageNamespace::CustomStorage {
+        environment_id: EnvironmentId(
+            Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap(),
+        ),
+    }
+}
+
 define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "fs", "s3", "s3_prefixed", "sqlite");
-define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co");
+define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co", "cs");
 
 #[test]
 #[tracing::instrument]
@@ -1292,6 +1301,91 @@ async fn delete_dir_does_not_delete_file_with_same_path(
         .unwrap();
 
     assert_eq!(remaining, Some(Bytes::from("payload").to_vec()));
+}
+
+// Regression test for https://github.com/golemcloud/golem/issues/3280
+// clear() (delete_dir + create_dir) must leave the container directory intact so that a
+// subsequent list_dir does not fail with "No such file or directory".
+#[test]
+#[tracing::instrument]
+async fn clear_then_list_objects(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+
+    let container = Path::new("my-container");
+
+    storage
+        .create_dir(
+            "clear_then_list_objects",
+            "create-dir",
+            namespace.clone(),
+            container,
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "clear_then_list_objects",
+            "put-raw-1",
+            namespace.clone(),
+            &container.join("obj1"),
+            &Bytes::from("data1"),
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "clear_then_list_objects",
+            "put-raw-2",
+            namespace.clone(),
+            &container.join("obj2"),
+            &Bytes::from("data2"),
+        )
+        .await
+        .unwrap();
+
+    storage
+        .delete_dir(
+            "clear_then_list_objects",
+            "delete-dir",
+            namespace.clone(),
+            container,
+        )
+        .await
+        .unwrap();
+    storage
+        .create_dir(
+            "clear_then_list_objects",
+            "create-dir",
+            namespace.clone(),
+            container,
+        )
+        .await
+        .unwrap();
+
+    let exists = storage
+        .exists(
+            "clear_then_list_objects",
+            "exists",
+            namespace.clone(),
+            container,
+        )
+        .await
+        .unwrap();
+    assert_eq!(exists, ExistsResult::Directory);
+
+    let entries = storage
+        .list_dir(
+            "clear_then_list_objects",
+            "list-dir",
+            namespace.clone(),
+            container,
+        )
+        .await
+        .unwrap();
+    assert_eq!(entries, Vec::<PathBuf>::new());
 }
 
 #[test]

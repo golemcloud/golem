@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Upstream docs about the result type https://bytecodealliance.github.io/jco/wit-type-representations.html#result-result
-
 const prototype = {
   /**
    * Returns `true` if the result is successful, `false` otherwise
@@ -34,7 +32,6 @@ const prototype = {
   /**
    * Returns the successful value of the result or throws the error value.
    * This should be used when returning from a component function that expects to receive a result.
-   * See https://bytecodealliance.github.io/jco/wit-type-representations.html#results-in-context-function-return-values for more details.
    * @example Returns the payload of a successful result.
    * Result.ok(123).unwrapForWit() // 123
    * @example Throws the payload of a failed result.

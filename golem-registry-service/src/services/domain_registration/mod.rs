@@ -293,7 +293,7 @@ impl DomainMatcher {
             AvailableDomainsConfig::Restricted(restricted) => {
                 let make_regex = |base| {
                     let escaped = regex::escape(base);
-                    let pattern = if restricted.allow_arbitary_subdomains {
+                    let pattern = if restricted.allow_arbitrary_subdomains {
                         format!("^([^\\.]+\\.)+{escaped}$")
                     } else {
                         format!("^[^\\.]+\\.{escaped}$")
@@ -365,7 +365,7 @@ mod tests {
             RestrictedAvailableDomainsConfig {
                 golem_apps_domain: apps_base.to_string(),
                 golem_mcps_domain: mcps_base.to_string(),
-                allow_arbitary_subdomains: allow_arbitrary,
+                allow_arbitrary_subdomains: allow_arbitrary,
             },
         ))
         .unwrap()

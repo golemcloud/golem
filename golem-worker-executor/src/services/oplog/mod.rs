@@ -33,6 +33,7 @@ use golem_common::read_only_lock;
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
+pub use ephemeral::EphemeralOplog;
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
 use std::any::{Any, TypeId};

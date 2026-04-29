@@ -7,7 +7,7 @@ description: "Implementing a recurring (cron-like) task in a Scala Golem agent b
 
 ## Overview
 
-A Golem agent can act as its own scheduler by calling `.schedule` on its own client at the end of each invocation. This creates a durable, crash-resilient recurring task — if the agent restarts, the scheduled invocation is still pending and will fire at the designated time.
+A Golem agent can act as its own scheduler by calling `.poll.scheduleAt(...)` on its own remote client at the end of each invocation. This creates a durable, crash-resilient recurring task — if the agent restarts, the scheduled invocation is still pending and will fire at the designated time.
 
 ## Basic Pattern
 
@@ -33,8 +33,8 @@ class PollerAgentImpl(id: PollerAgent.Id) extends PollerAgent {
     doWork()
 
     // 2. Schedule the next run (60 seconds from now)
-    val self = PollerAgent.get(id.name)
-    self.schedule.poll(Datetime.afterSeconds(60))
+    val self = PollerAgentClient.get(id.name)
+    self.poll.scheduleAt(Datetime.afterSeconds(60))
   }
 }
 ```
@@ -63,8 +63,8 @@ class PollerAgentImpl(id: PollerAgent.Id) extends PollerAgent {
       Math.min(backoff, maxIntervalSecs)
     }
 
-    val self = PollerAgent.get(id.name)
-    self.schedule.poll(Datetime.afterSeconds(delay))
+    val self = PollerAgentClient.get(id.name)
+    self.poll.scheduleAt(Datetime.afterSeconds(delay))
   }
 }
 ```
@@ -88,7 +88,7 @@ class PollerAgentImpl(id: PollerAgent.Id) extends PollerAgent {
 
     doWork()
 
-    val self = PollerAgent.get(id.name)
+    val self = PollerAgentClient.get(id.name)
     pendingToken = Some(Await.result(
       self.poll.scheduleCancelableAt(Datetime.afterSeconds(60)),
       Duration.Inf
@@ -173,8 +173,8 @@ Extract the scheduling logic into a helper to keep methods clean:
 
 ```scala
 private def scheduleNext(delaySecs: Int): Unit = {
-  val self = PollerAgent.get(id.name)
-  self.schedule.poll(Datetime.afterSeconds(delaySecs))
+  val self = PollerAgentClient.get(id.name)
+  self.poll.scheduleAt(Datetime.afterSeconds(delaySecs))
 }
 ```
 
@@ -182,6 +182,6 @@ private def scheduleNext(delaySecs: Int): Unit = {
 
 - The agent is durable — if it crashes, the pending scheduled invocation still fires and the agent recovers
 - Invocations are sequential — no concurrent executions of `poll` on the same agent
-- Each `.schedule` call is a fire-and-forget enqueue; the current invocation completes immediately
+- Each `.scheduleAt` call is a fire-and-forget enqueue; the current invocation completes immediately
 - Use a state flag to stop the loop gracefully
 - Keep the scheduled method idempotent — it may be retried on recovery

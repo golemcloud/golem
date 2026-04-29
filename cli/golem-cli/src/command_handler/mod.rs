@@ -15,6 +15,7 @@
 use self::agent_secret::AgentSecretCommandHandler;
 use self::resource_definition::ResourceDefinitionCommandHandler;
 use self::retry_policy::RetryPolicyCommandHandler;
+use crate::command::agent_type::AgentTypeSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
 use crate::command::{
@@ -364,9 +365,6 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .cmd_redeploy_workers(component_name.component_name)
                         .await
                 }
-                GolemCliSubcommand::ListAgentTypes {} => {
-                    self.ctx.app_handler().cmd_list_agent_types().await
-                }
                 GolemCliSubcommand::Exec { subcommand } => {
                     self.ctx.app_handler().exec_custom_command(subcommand).await
                 }
@@ -387,6 +385,17 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 GolemCliSubcommand::Agent { subcommand } => {
                     self.ctx.worker_handler().handle_command(subcommand).await
                 }
+                GolemCliSubcommand::AgentType { subcommand } => match subcommand {
+                    AgentTypeSubcommand::List => {
+                        self.ctx.app_handler().cmd_list_agent_types().await
+                    }
+                    AgentTypeSubcommand::Get { agent_type_name } => {
+                        self.ctx
+                            .app_handler()
+                            .cmd_get_agent_type(agent_type_name)
+                            .await
+                    }
+                },
                 GolemCliSubcommand::Api { subcommand } => {
                     self.ctx.api_handler().handle_command(subcommand).await
                 }

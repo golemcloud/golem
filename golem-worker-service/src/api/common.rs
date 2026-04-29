@@ -60,6 +60,8 @@ pub enum ApiEndpointError {
     NotFound(Json<ErrorBody>),
     #[oai(status = 409)]
     Conflict(Json<ErrorBody>),
+    #[oai(status = 413)]
+    PayloadTooLarge(Json<ErrorBody>),
     #[oai(status = 422)]
     LimitExceeded(Json<ErrorBody>),
     #[oai(status = 500)]
@@ -74,6 +76,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::Forbidden(_) => "Forbidden",
             Self::NotFound(_) => "NotFound",
             Self::Conflict(_) => "Conflict",
+            Self::PayloadTooLarge(_) => "PayloadTooLarge",
             Self::LimitExceeded(_) => "LimitExceeded",
             Self::InternalError(_) => "InternalError",
         }
@@ -84,6 +87,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::BadRequest(_) => true,
             Self::NotFound(_) => true,
             Self::Conflict(_) => true,
+            Self::PayloadTooLarge(_) => true,
             Self::LimitExceeded(_) => true,
             Self::Forbidden(_) => true,
             Self::Unauthorized(_) => true,
@@ -98,6 +102,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::Unauthorized(inner) => inner.cause.take(),
             Self::InternalError(_) => None,
             Self::Forbidden(inner) => inner.cause.take(),
+            Self::PayloadTooLarge(inner) => inner.cause.take(),
             Self::LimitExceeded(inner) => inner.cause.take(),
             Self::Conflict(inner) => inner.cause.take(),
         }
@@ -176,6 +181,14 @@ impl ApiEndpointError {
             cause: None,
         }))
     }
+
+    pub fn payload_too_large<T: SafeDisplay>(code: &str, error: T) -> Self {
+        Self::PayloadTooLarge(Json(ErrorBody {
+            error: error.to_safe_string(),
+            code: code.to_string(),
+            cause: None,
+        }))
+    }
 }
 
 impl From<WorkerServiceError> for ApiEndpointError {
@@ -247,6 +260,9 @@ impl From<CallWorkerExecutorError> for ApiEndpointError {
             }
             CallWorkerExecutorError::FailedToGetRoutingTable(_) => {
                 Self::internal(api::error_code::INTERNAL_ROUTING_FAILURE, error)
+            }
+            CallWorkerExecutorError::MessageTooLarge(_) => {
+                Self::payload_too_large(api::error_code::REQUEST_PAYLOAD_TOO_LARGE, error)
             }
         }
     }
@@ -424,6 +440,9 @@ impl From<RequestHandlerError> for ApiEndpointError {
             RequestHandlerError::ResolvingRouteFailed(RouteResolverError::CouldNotBuildRouter) => {
                 Self::internal(api::error_code::INTERNAL_ROUTING_FAILURE, value)
             }
+            RequestHandlerError::AgentInvocationFailed(WorkerServiceError::InternalCallError(
+                CallWorkerExecutorError::MessageTooLarge(_),
+            )) => Self::payload_too_large(api::error_code::REQUEST_PAYLOAD_TOO_LARGE, value),
             RequestHandlerError::AgentInvocationFailed(_) => {
                 Self::internal(api::error_code::INTERNAL_AGENT_EXECUTION_FAILED, value)
             }
@@ -433,6 +452,50 @@ impl From<RequestHandlerError> for ApiEndpointError {
             RequestHandlerError::OpenApiSpecGenerationFailed => {
                 Self::internal(api::error_code::INTERNAL_UNKNOWN, value)
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::worker::{CallWorkerExecutorError, WorkerServiceError};
+    use test_r::test;
+    use tonic::{Code, Status};
+
+    fn message_too_large_status() -> Status {
+        Status::new(
+            Code::ResourceExhausted,
+            "Error decompressing: size limit, of 4194304 bytes, exceeded while decompressing message",
+        )
+    }
+
+    #[test]
+    fn message_size_limit_status_maps_to_payload_too_large() {
+        let error = CallWorkerExecutorError::MessageTooLarge(message_too_large_status());
+
+        let api_error: ApiEndpointError = error.into();
+        match api_error {
+            ApiEndpointError::PayloadTooLarge(Json(body)) => {
+                assert_eq!(body.code, api::error_code::REQUEST_PAYLOAD_TOO_LARGE);
+            }
+            other => panic!("expected PayloadTooLarge, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn custom_api_message_too_large_maps_to_payload_too_large() {
+        let inner = WorkerServiceError::InternalCallError(
+            CallWorkerExecutorError::MessageTooLarge(message_too_large_status()),
+        );
+        let error = RequestHandlerError::AgentInvocationFailed(inner);
+
+        let api_error: ApiEndpointError = error.into();
+        match api_error {
+            ApiEndpointError::PayloadTooLarge(Json(body)) => {
+                assert_eq!(body.code, api::error_code::REQUEST_PAYLOAD_TOO_LARGE);
+            }
+            other => panic!("expected PayloadTooLarge, got: {other:?}"),
         }
     }
 }

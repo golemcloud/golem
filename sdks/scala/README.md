@@ -269,19 +269,6 @@ To regenerate when upgrading Golem/WIT versions:
 ./golem/scripts/generate-agent-guest-wasm.sh
 ```
 
-### Golem AI provider dependencies
-
-To use Golem AI, add the provider WASM as a component dependency in your app manifest:
-
-```yaml
-components:
-  scala:demo:
-    templates: scala.js
-    dependencies:
-    - type: wasm
-      url: https://github.com/golemcloud/golem-ai/releases/download/v0.4.0/golem_llm_ollama.wasm
-```
-
 ## Host API surface (Scala.js)
 
 The Scala SDK exposes host APIs in two layers:

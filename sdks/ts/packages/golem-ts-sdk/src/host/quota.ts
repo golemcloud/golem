@@ -18,6 +18,7 @@ import {
   QuotaToken as RawQuotaToken,
   Reservation as RawReservation,
 } from 'golem:quota/types@1.5.0';
+import { isPromiseLike } from './guard';
 import { Result } from './result';
 
 export type { FailedReservation, QuotaTokenRecord };
@@ -134,24 +135,41 @@ export function acquireQuotaToken(resourceName: string, expectedUse: bigint): Qu
  * Returns `Result.ok(value)` on success, or `Result.err(failedReservation)`
  * if the reservation could not be granted.
  *
+ * Supports both sync and async callbacks — if `fn` returns a Promise, the
+ * result is a `Promise<Result<T, FailedReservation>>`.
+ *
  * @param token  - The token to reserve against.
  * @param amount - Units to reserve.
  * @param fn     - Work to perform; must return the actual units consumed.
  */
-export function withReservation<T>(
+export function withReservation<R>(
   token: QuotaToken,
   amount: bigint,
-  fn: (reservation: Reservation) => { used: bigint; value: T },
-): Result<T, FailedReservation> {
+  fn: (reservation: Reservation) => { used: bigint; value: R },
+): R {
   const reserveResult = token.reserve(amount);
   if (reserveResult.isErr()) {
-    return Result.err(reserveResult.unwrapErr());
+    return Result.err(reserveResult.unwrapErr()) as R;
   }
   const reservation = reserveResult.unwrap();
   try {
-    const { used, value } = fn(reservation);
+    const result = fn(reservation);
+    if (isPromiseLike(result)) {
+      return result.then(
+        (resolved) => {
+          const { used, value } = resolved as { used: bigint; value: unknown };
+          reservation.commit(used);
+          return Result.ok(value);
+        },
+        (e) => {
+          reservation.commit(0n);
+          throw e;
+        },
+      ) as R;
+    }
+    const { used, value } = result;
     reservation.commit(used);
-    return Result.ok(value);
+    return Result.ok(value) as R;
   } catch (e) {
     reservation.commit(0n);
     throw e;

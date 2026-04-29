@@ -244,10 +244,12 @@ impl RemoteWorkerProxy {
         Self {
             worker_service_client: GrpcClient::new(
                 "worker_service",
-                |channel| {
+                |channel, max_message_size| {
                     WorkerServiceClient::new(channel)
                         .send_compressed(CompressionEncoding::Gzip)
                         .accept_compressed(CompressionEncoding::Gzip)
+                        .max_decoding_message_size(max_message_size)
+                        .max_encoding_message_size(max_message_size)
                 },
                 config.uri(),
                 config.client_config.clone(),

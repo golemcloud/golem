@@ -124,7 +124,7 @@ object OplogApi {
   final case class SetRetryPolicyParameters(
     timestamp: ContextApi.DateTime,
     name: String,
-    priority: Int,
+    priority: Long,
     predicateJson: String,
     policyJson: String
   )
@@ -558,7 +558,7 @@ object OplogApi {
 
   private def parseDateTime(raw: JsDatetime): ContextApi.DateTime = {
     val secs  = BigInt(raw.seconds.toString)
-    val nanos = raw.nanoseconds.toLong
+    val nanos = raw.nanoseconds.toInt
     ContextApi.DateTime(secs, nanos)
   }
 
@@ -735,7 +735,14 @@ object OplogApi {
     SetRetryPolicyParameters(
       timestamp = parseDateTime(raw.timestamp),
       name = p.name,
-      priority = p.priority,
+      priority =
+        if (
+          !p.priority.isFinite || p.priority < 0 || p.priority > 0xffffffffL.toDouble || p.priority != p.priority.floor
+        ) {
+          throw new IllegalArgumentException(s"Invalid retry policy priority in oplog entry: ${p.priority}")
+        } else {
+          p.priority.toLong
+        },
       predicateJson = js.JSON.stringify(p.predicate.asInstanceOf[js.Any]),
       policyJson = js.JSON.stringify(p.policy.asInstanceOf[js.Any])
     )

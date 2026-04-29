@@ -77,7 +77,7 @@ impl Default for AvailableDomainsConfig {
 pub struct RestrictedAvailableDomainsConfig {
     pub golem_apps_domain: String,
     pub golem_mcps_domain: String,
-    pub allow_arbitary_subdomains: bool,
+    pub allow_arbitrary_subdomains: bool,
 }
 
 impl SafeDisplay for RestrictedAvailableDomainsConfig {
@@ -88,7 +88,7 @@ impl SafeDisplay for RestrictedAvailableDomainsConfig {
         let _ = writeln!(
             &mut result,
             "allow arbitrary subdomains: {}",
-            self.allow_arbitary_subdomains
+            self.allow_arbitrary_subdomains
         );
         result
     }
@@ -99,7 +99,7 @@ impl Default for RestrictedAvailableDomainsConfig {
         Self {
             golem_apps_domain: "apps.golem.cloud".to_string(),
             golem_mcps_domain: "mcps.golem.cloud".to_string(),
-            allow_arbitary_subdomains: false,
+            allow_arbitrary_subdomains: false,
         }
     }
 }

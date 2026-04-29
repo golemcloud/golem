@@ -231,6 +231,38 @@ impl AgentResolutionCache {
         );
     }
 
+    /// Removes all cache entries for a specific application name.
+    /// Also removes corresponding entries from `latest_revisions` for the
+    /// given environment UUIDs to avoid the stale-but-not-observed path.
+    pub async fn invalidate_by_app_name(&self, app_name: &str, environment_ids: &[EnvironmentId]) {
+        let keys = self.cache.keys().await;
+        for key in keys.into_iter().filter(|k| k.app_name == app_name) {
+            self.cache.remove(&key).await;
+        }
+        for env_id in environment_ids {
+            self.latest_revisions.remove_sync(env_id);
+        }
+    }
+
+    /// Removes all cache entries for a specific (app_name, env_name) pair.
+    /// Also removes the corresponding `latest_revisions` entry for the given
+    /// environment UUID.
+    pub async fn invalidate_by_env(
+        &self,
+        app_name: &str,
+        env_name: &str,
+        environment_id: EnvironmentId,
+    ) {
+        let keys = self.cache.keys().await;
+        for key in keys
+            .into_iter()
+            .filter(|k| k.app_name == app_name && k.env_name == env_name)
+        {
+            self.cache.remove(&key).await;
+        }
+        self.latest_revisions.remove_sync(&environment_id);
+    }
+
     pub async fn clear(&self) {
         let keys = self.cache.keys().await;
         for key in keys {

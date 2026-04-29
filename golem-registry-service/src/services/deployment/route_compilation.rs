@@ -145,6 +145,7 @@ pub fn add_agent_method_http_routes(
                     constructor_parameters: constructor_parameters.clone(),
                     method_parameters,
                     expected_agent_response: agent_method.output_schema.clone(),
+                    method_description: Some(agent_method.description.clone()),
                 }),
                 security,
                 cors,
@@ -929,6 +930,7 @@ mod tests {
                             ),
                     }],
                     expected_agent_response: DataSchema::Tuple(NamedElementSchemas::empty()),
+                    method_description: None,
                 }),
                 security: UnboundRouteSecurity::None,
                 cors: CorsOptions {
@@ -953,6 +955,7 @@ mod tests {
                     method_name: "add".to_string(),
                     method_parameters: vec![],
                     expected_agent_response: DataSchema::Tuple(NamedElementSchemas::empty()),
+                    method_description: None,
                 }),
                 security: UnboundRouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
                     header_name: "X-Session".to_string(),

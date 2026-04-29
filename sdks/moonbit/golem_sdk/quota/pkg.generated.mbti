@@ -1,0 +1,45 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/quota"
+
+import {
+  "golemcloud/golem_sdk/extractor",
+  "golemcloud/golem_sdk/interface/golem/agent/common",
+  "golemcloud/golem_sdk/schema",
+}
+
+// Values
+pub fn[T] with_reservation(QuotaToken, UInt64, (Reservation) -> (UInt64, T)) -> Result[T, FailedReservation]
+
+// Errors
+
+// Types and methods
+pub(all) struct FailedReservation {
+  estimated_wait_nanos : UInt64?
+}
+
+pub(all) struct QuotaToken {
+  // private fields
+}
+pub fn QuotaToken::drop(Self) -> Unit
+pub fn QuotaToken::from_record(@golemcloud/golem_sdk/interface/golem/quota/types.QuotaTokenRecord) -> Self
+pub fn QuotaToken::merge(Self, Self) -> Unit
+pub fn QuotaToken::new(String, UInt64) -> Self
+pub fn QuotaToken::reserve(Self, UInt64) -> Result[Reservation, FailedReservation]
+pub fn QuotaToken::split(Self, UInt64) -> Self
+pub fn QuotaToken::to_record(Self) -> @golemcloud/golem_sdk/interface/golem/quota/types.QuotaTokenRecord
+pub impl @schema.FromElementValue for QuotaToken
+pub impl @schema.FromExtractor for QuotaToken
+pub impl @schema.HasElementSchema for QuotaToken
+pub impl @schema.ToElementValue for QuotaToken
+
+pub(all) struct Reservation {
+  // private fields
+}
+pub fn Reservation::commit(Self, UInt64) -> Unit
+pub fn Reservation::drop(Self) -> Unit
+
+// Type aliases
+pub using @golemcloud/golem_sdk/interface/golem/quota/types {type QuotaTokenRecord}
+
+// Traits
+
