@@ -56,6 +56,7 @@ secs = 300
 acquire_retry_delay = "500ms"
 
 [grpc]
+max_message_size = 33554432
 port = 9093
 
 [grpc.tls]
@@ -151,6 +152,7 @@ count = 10
 [public_worker_api]
 connect_timeout = "10s"
 host = "localhost"
+max_message_size = 33554432
 port = 9007
 
 [public_worker_api.retries_on_unavailable]
@@ -222,6 +224,7 @@ refresh_interval = "2s"
 [shard_manager]
 connect_timeout = "10s"
 host = "localhost"
+max_message_size = 33554432
 port = 9002
 
 [shard_manager.retries]
@@ -370,6 +373,7 @@ without_time = false
 # acquire_retry_delay = "500ms"
 # 
 # [grpc]
+# max_message_size = 33554432
 # port = 9093
 # 
 # [grpc.tls]
@@ -465,6 +469,7 @@ without_time = false
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
+# max_message_size = 33554432
 # port = 9007
 # 
 # [public_worker_api.retries_on_unavailable]
@@ -536,6 +541,7 @@ without_time = false
 # [shard_manager]
 # connect_timeout = "10s"
 # host = "localhost"
+# max_message_size = 33554432
 # port = 9002
 # 
 # [shard_manager.retries]
@@ -668,6 +674,7 @@ without_time = false
 # acquire_retry_delay = "500ms"
 # 
 # [grpc]
+# max_message_size = 33554432
 # port = 9093
 # 
 # [grpc.tls]
@@ -749,6 +756,7 @@ without_time = false
 # [public_worker_api]
 # connect_timeout = "10s"
 # host = "localhost"
+# max_message_size = 33554432
 # port = 9007
 # 
 # [public_worker_api.retries_on_unavailable]
@@ -820,6 +828,7 @@ without_time = false
 # [shard_manager]
 # connect_timeout = "10s"
 # host = "localhost"
+# max_message_size = 33554432
 # port = 9002
 # 
 # [shard_manager.retries]

@@ -59,10 +59,12 @@ impl GrpcComponentCompilationService {
     pub fn new(config: &ComponentCompilationEnabledConfig) -> Self {
         let client = GrpcClient::new(
             "component-compilation-service",
-            |channel| {
+            |channel, max_message_size| {
                 ComponentCompilationServiceClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
+                    .max_decoding_message_size(max_message_size)
+                    .max_encoding_message_size(max_message_size)
             },
             config.uri(),
             config.client_config.clone(),

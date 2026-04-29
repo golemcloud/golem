@@ -1041,7 +1041,9 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
 
     let service = WorkerExecutorServer::new(worker_impl)
         .accept_compressed(CompressionEncoding::Gzip)
-        .send_compressed(CompressionEncoding::Gzip);
+        .send_compressed(CompressionEncoding::Gzip)
+        .max_decoding_message_size(golem_config.grpc.max_message_size)
+        .max_encoding_message_size(golem_config.grpc.max_message_size);
 
     join_set.spawn({
         let mut server = Server::builder();

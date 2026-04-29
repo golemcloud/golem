@@ -250,7 +250,6 @@ impl Default for RegistryInvalidationEventSubscriberConfig {
 pub struct GrpcRegistryServiceConfig {
     pub host: String,
     pub port: u16,
-    pub max_message_size: usize,
     #[serde(flatten)]
     pub client_config: GrpcClientConfig,
     #[serde(default)]
@@ -268,7 +267,6 @@ impl SafeDisplay for GrpcRegistryServiceConfig {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
         let _ = writeln!(&mut result, "port: {}", self.port);
-        let _ = writeln!(&mut result, "max_message_size: {}", self.max_message_size);
         let _ = writeln!(
             &mut result,
             "invalidation_event_subscriber.initial_backoff: {:?}",
@@ -289,9 +287,11 @@ impl Default for GrpcRegistryServiceConfig {
         Self {
             host: "localhost".to_string(),
             port: 8080,
-            max_message_size: 50 * 1024 * 1024,
             invalidation_event_subscriber: RegistryInvalidationEventSubscriberConfig::default(),
-            client_config: GrpcClientConfig::default(),
+            client_config: GrpcClientConfig {
+                max_message_size: 50 * 1024 * 1024,
+                ..GrpcClientConfig::default()
+            },
         }
     }
 }
@@ -310,14 +310,14 @@ pub struct GrpcRegistryService {
 
 impl GrpcRegistryService {
     pub fn new(config: &GrpcRegistryServiceConfig) -> Self {
-        let max_message_size = config.max_message_size;
         let client = GrpcClient::new(
             "registry",
-            move |channel| {
+            |channel, max_message_size| {
                 RegistryServiceClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
                     .max_decoding_message_size(max_message_size)
+                    .max_encoding_message_size(max_message_size)
             },
             config.uri(),
             config.client_config.clone(),
