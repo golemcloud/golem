@@ -2,6 +2,7 @@ import { Effect, Pipeable, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import { componentModelElement, ElementValueKindError, type ElementCodec } from "./element.js"
+import type { HostServices } from "./host/HostLive.js"
 import type { EndpointDef } from "./http.js"
 import { isMultimodal, type Multimodal, type MultimodalShape } from "./multimodal.js"
 import { withPipe } from "./pipeable.js"
@@ -233,15 +234,20 @@ export const defineMethod: {
  * A handler implementing a `MethodSpec`: takes the decoded input record,
  * returns an Effect of the success/error types declared by the spec.
  *
- * The required-services slot allows {@link Principal} (and an optional
- * agent-specific config tag, defaulting to `never`) because the agent
- * dispatcher always provides them; users can `yield* Principal` /
- * `yield* MyConfig` inside any handler body without leaking the
- * requirement.
+ * The required-services slot allows {@link Principal}, {@link SelfAgentId},
+ * any host-service tag bundled into `HostLive` (so `yield*
+ * BlobstoreClient`, `yield* OplogClient`, etc. inside a handler body
+ * does not leak), and an optional agent-specific config tag (defaulting
+ * to `never`). The dispatcher always provides all of these via the
+ * `userRuntimeLayer`.
  */
 export type Handler<S extends MethodSpec<any, any, any>, CfgTag = never> = (
   input: MethodInput<S["params"]>,
-) => Effect.Effect<S["success"]["Type"], S["error"]["Type"], Principal | SelfAgentId | CfgTag>
+) => Effect.Effect<
+  S["success"]["Type"],
+  S["error"]["Type"],
+  Principal | SelfAgentId | HostServices | CfgTag
+>
 
 /**
  * Invoke a standalone {@link Method} with a *decoded* input record. Useful

@@ -6,7 +6,7 @@ import type { DatabaseSync } from "node:sqlite"
 import { ElementValueKindError } from "./element.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { EnvironmentClient } from "./host/EnvironmentClient.js"
-import { HostLive } from "./host/HostLive.js"
+import { HostLive, type HostServices } from "./host/HostLive.js"
 import { SqliteHostExtClient } from "./host/SqliteHostExtClient.js"
 import {
   HttpRouteError,
@@ -235,7 +235,11 @@ export interface AgentDefinition<
    */
   readonly impl: (
     ...args: ImplArgs<C, S, CfgTagOf<F>>
-  ) => Effect.Effect<Handlers<Methods, CfgTagOf<F>>, unknown, Scope.Scope | Principal | CfgTagOf<F>>
+  ) => Effect.Effect<
+    Handlers<Methods, CfgTagOf<F>>,
+    unknown,
+    Scope.Scope | Principal | HostServices | CfgTagOf<F>
+  >
 }
 
 /**

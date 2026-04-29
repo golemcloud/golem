@@ -96,6 +96,8 @@ export class WebhookHostError {
 // WebhookPayload — the HTTP POST body delivered to the webhook URL
 // ---------------------------------------------------------------------------
 
+const strictDecoder = new TextDecoder("utf-8", { fatal: true })
+
 /**
  * The HTTP POST body delivered to the webhook URL. Mirrors the
  * official SDKs' `WebhookRequestPayload` shape.
@@ -110,8 +112,8 @@ export class WebhookPayload {
 
   /**
    * `JSON.parse` of the UTF-8 body. Throws synchronously if the body
-   * is not valid JSON; wrap in `Effect.try` (or use {@link decode})
-   * to surface as a typed Effect failure.
+   * is not valid JSON; use {@link decode} to surface failures as a
+   * typed Effect.
    */
   json<T = unknown>(): T {
     return JSON.parse(this.text()) as T
@@ -119,9 +121,11 @@ export class WebhookPayload {
 
   /**
    * Parse the body as JSON and validate the parsed value against
-   * `schema`. Failures surface as either {@link WebhookDecodeError}
-   * (when the body is not valid JSON) or `Schema.SchemaError` (when
-   * JSON parses but does not match the schema).
+   * `schema`. Composes `Schema.fromJsonString(schema)` so JSON syntax
+   * errors and schema validation failures uniformly surface as
+   * `Schema.SchemaError`; only malformed UTF-8 (which the schema
+   * layer does not see) surfaces as the typed
+   * {@link WebhookDecodeError}.
    *
    * This is the recommended decoding path; prefer it over the
    * synchronous {@link json} helper, which throws.
@@ -130,20 +134,21 @@ export class WebhookPayload {
     schema: S,
   ): Effect.Effect<S["Type"], Schema.SchemaError | WebhookDecodeError, S["DecodingServices"]> {
     const bytes = this.bytes
+    const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(schema))
     return Effect.gen(function* () {
-      const json = yield* Effect.try({
-        try: () => JSON.parse(new TextDecoder().decode(bytes)) as unknown,
+      const text = yield* Effect.try({
+        try: () => strictDecoder.decode(bytes),
         catch: (e) => new WebhookDecodeError(e),
       })
-      return yield* Schema.decodeUnknownEffect(schema)(json)
+      return (yield* decodeJson(text)) as S["Type"]
     })
   }
 }
 
 /**
- * Raised when {@link WebhookPayload.decode} cannot parse the body as
- * JSON. Schema-level decode failures surface as
- * `effect/Schema.SchemaError` instead.
+ * Raised when {@link WebhookPayload.decode} cannot decode the body as
+ * UTF-8. JSON syntax errors and schema-level validation failures both
+ * surface as `effect/Schema.SchemaError` instead.
  */
 export class WebhookDecodeError {
   readonly _tag = "WebhookDecodeError"

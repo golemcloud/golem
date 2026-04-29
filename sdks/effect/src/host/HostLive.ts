@@ -58,7 +58,14 @@ export {
   WebsocketClient,
 }
 
-export const HostLive: Layer.Layer<
+/**
+ * Union of every host-service tag the dispatcher provides to user
+ * effects via {@link HostLive}. SDK signatures (`Handler`, `impl`)
+ * widen their `R` channel with this union so user code can yield
+ * from any host-service tag without leaking it into the user-visible
+ * required-services slot.
+ */
+export type HostServices =
   | EnvironmentClient
   | ConfigClient
   | AgentHostClient
@@ -80,7 +87,8 @@ export const HostLive: Layer.Layer<
   | WebsocketClient
   | BlobstoreClient
   | KeyValueClient
-> = Layer.mergeAll(
+
+export const HostLive: Layer.Layer<HostServices> = Layer.mergeAll(
   EnvironmentLive,
   ConfigLive,
   AgentHostLive,

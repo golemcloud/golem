@@ -92,7 +92,7 @@ export const WebSocketAgent = defineAgent({
       // Single helper that opens a fresh connection, sends + receives,
       // and tears it down. Each invocation uses its own scope so the
       // connection is deterministically closed when the method returns.
-      const echoOnce = (messages: ReadonlyArray<string>): Effect.Effect<EchoManyResult> =>
+      const echoOnce = (messages: ReadonlyArray<string>) =>
         Effect.scoped(
           Effect.gen(function* () {
             const expected = messages.length

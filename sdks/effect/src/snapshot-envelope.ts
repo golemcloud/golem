@@ -1,3 +1,4 @@
+import { Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import * as CoreTypes from "golem:core/types@1.5.0"
@@ -26,8 +27,16 @@ import { decodeMultipart, encodeMultipart, extractBoundary } from "./multipart.j
  * components.
  *
  * `multipart/mixed` envelopes (used by the official SDK when SQLite
- * databases are present) are intentionally rejected here with a clear
- * error: `effect-golem` does not yet have a SQLite story.
+ * databases are present) are handled by
+ * {@link encodeMultipartJsonEnvelope} on the encode side and detected
+ * automatically by {@link decodeEnvelope} on the decode side.
+ *
+ * The wire-shape JSON parts of every envelope (the
+ * `{version, principal, state}` object and the standalone principal
+ * blob in binary v2) are defined as {@link Schema} types and parsed
+ * via `Schema.fromJsonString` so all JSON validation flows through
+ * the canonical Effect Schema parser — there is no hand-rolled JSON
+ * shape checking in this module.
  */
 
 /** A typed failure for envelope encode/decode operations. */
@@ -49,34 +58,93 @@ const SQLITE_PART_MIME = "application/x-sqlite3"
 const STATE_PART_NAME = "state"
 const DB_PART_PREFIX = "db:"
 
+// ---------------------------------------------------------------------------
+// Schemas — the JSON-safe wire shapes
+// ---------------------------------------------------------------------------
+
 /**
- * The shape of a {@link AgentCommon.Principal} as it appears *inside the
- * envelope* — UUIDs are serialized as strings (not `{ highBits, lowBits }`)
- * so the payload survives `JSON.stringify`. This format is bit-for-bit
- * compatible with the official `golem-ts-sdk` envelope.
+ * Each OIDC string-typed sub-claim is encoded as `T | null` on the
+ * wire (we explicitly emit `null` for absent fields), and tolerated
+ * as missing on decode (so payloads produced by other SDKs that
+ * simply omit absent claims still parse).
  */
-export type SerializedPrincipal =
-  | { readonly tag: "anonymous" }
-  | {
-      readonly tag: "agent"
-      readonly val: { readonly componentId: string; readonly agentId: string }
-    }
-  | { readonly tag: "golem-user"; readonly val: { readonly accountId: string } }
-  | {
-      readonly tag: "oidc"
-      readonly val: {
-        readonly sub: string
-        readonly issuer: string
-        readonly email: string | null
-        readonly name: string | null
-        readonly emailVerified: boolean | null
-        readonly givenName: string | null
-        readonly familyName: string | null
-        readonly picture: string | null
-        readonly preferredUsername: string | null
-        readonly claims: string
-      }
-    }
+const NullishString = Schema.optional(Schema.NullOr(Schema.String))
+const NullishBoolean = Schema.optional(Schema.NullOr(Schema.Boolean))
+
+/**
+ * Schema for the JSON-safe `Principal` shape (UUIDs as strings).
+ * Mirrors the runtime {@link AgentCommon.Principal} ADT but with all
+ * `bigint` UUID payloads stringified so the value survives
+ * `JSON.stringify` / `JSON.parse`.
+ */
+export const SerializedPrincipal = Schema.Union([
+  Schema.Struct({ tag: Schema.Literal("anonymous") }),
+  Schema.Struct({
+    tag: Schema.Literal("agent"),
+    val: Schema.Struct({
+      componentId: Schema.String,
+      agentId: Schema.String,
+    }),
+  }),
+  Schema.Struct({
+    tag: Schema.Literal("golem-user"),
+    val: Schema.Struct({ accountId: Schema.String }),
+  }),
+  Schema.Struct({
+    tag: Schema.Literal("oidc"),
+    val: Schema.Struct({
+      sub: Schema.String,
+      issuer: Schema.String,
+      email: NullishString,
+      name: NullishString,
+      emailVerified: NullishBoolean,
+      givenName: NullishString,
+      familyName: NullishString,
+      picture: NullishString,
+      preferredUsername: NullishString,
+      claims: Schema.String,
+    }),
+  }),
+])
+
+/** Type alias for the JSON-safe principal value. */
+export type SerializedPrincipal = typeof SerializedPrincipal.Type
+
+/**
+ * Schema for the full envelope: `{ version: 1, principal, state }`.
+ * The `state` slot is intentionally `Schema.Unknown` — the user's own
+ * Schema has already encoded it to a JSON value at the moment we
+ * build the envelope, and re-validation happens against the user's
+ * Schema after decode.
+ */
+const Envelope = Schema.Struct({
+  version: Schema.Literal(1),
+  principal: SerializedPrincipal,
+  state: Schema.Unknown,
+})
+
+const EnvelopeFromString = Schema.fromJsonString(Envelope)
+const PrincipalFromString = Schema.fromJsonString(SerializedPrincipal)
+
+const encodeEnvelope = Schema.encodeUnknownSync(EnvelopeFromString)
+const decodeEnvelopeFromString = Schema.decodeUnknownSync(EnvelopeFromString)
+const encodePrincipal = Schema.encodeUnknownSync(PrincipalFromString)
+const decodePrincipalFromString = Schema.decodeUnknownSync(PrincipalFromString)
+
+const encoder = new TextEncoder()
+const strictDecoder = new TextDecoder("utf-8", { fatal: true })
+
+const decodeUtf8 = (bytes: Uint8Array, ctx: string): string => {
+  try {
+    return strictDecoder.decode(bytes)
+  } catch (err) {
+    throw new SnapshotEnvelopeError(`${ctx}: payload is not valid UTF-8: ${String(err)}`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Principal: runtime ↔ wire conversion
+// ---------------------------------------------------------------------------
 
 /**
  * Convert a runtime `Principal` (with bigint UUIDs) into a JSON-safe
@@ -161,6 +229,10 @@ export const deserializePrincipal = (p: SerializedPrincipal): AgentCommon.Princi
   }
 }
 
+// ---------------------------------------------------------------------------
+// Encode
+// ---------------------------------------------------------------------------
+
 /**
  * Encode an `application/json` envelope. `state` is an arbitrary JSON
  * value (already produced by the user's Schema-driven encode step).
@@ -171,10 +243,13 @@ export const encodeJsonEnvelope = (
   principal: AgentCommon.Principal,
   state: unknown,
 ): ApiHost.Snapshot => {
-  const envelope = { version: 1, principal: serializePrincipal(principal), state }
-  const json = JSON.stringify(envelope)
+  const json = encodeEnvelope({
+    version: 1,
+    principal: serializePrincipal(principal),
+    state,
+  })
   return {
-    payload: new TextEncoder().encode(json),
+    payload: encoder.encode(json),
     mimeType: JSON_MIME,
   }
 }
@@ -189,8 +264,8 @@ export const encodeBinaryEnvelope = (
   principal: AgentCommon.Principal,
   userPayload: Uint8Array,
 ): ApiHost.Snapshot => {
-  const principalJson = JSON.stringify(serializePrincipal(principal))
-  const principalBytes = new TextEncoder().encode(principalJson)
+  const principalJson = encodePrincipal(serializePrincipal(principal))
+  const principalBytes = encoder.encode(principalJson)
   const total = 1 + 4 + principalBytes.length + userPayload.length
   const out = new Uint8Array(total)
   const view = new DataView(out.buffer)
@@ -200,6 +275,39 @@ export const encodeBinaryEnvelope = (
   out.set(userPayload, 5 + principalBytes.length)
   return { payload: out, mimeType: BINARY_MIME }
 }
+
+/**
+ * Encode a SQLite-aware `multipart/mixed` envelope. The `state` part
+ * carries `{ version: 1, principal, state }` as JSON; each entry in
+ * `databases` becomes a `db:<name>` part with `application/x-sqlite3`
+ * content-type. Bit-compatible with `golem-ts-sdk`.
+ */
+export const encodeMultipartJsonEnvelope = (
+  principal: AgentCommon.Principal,
+  state: unknown,
+  databases: ReadonlyArray<{ readonly name: string; readonly bytes: Uint8Array }>,
+): ApiHost.Snapshot => {
+  const stateJson = encodeEnvelope({
+    version: 1,
+    principal: serializePrincipal(principal),
+    state,
+  })
+  const stateBody = encoder.encode(stateJson)
+  const parts = [
+    { name: STATE_PART_NAME, contentType: JSON_MIME, body: stateBody },
+    ...databases.map((db) => ({
+      name: `${DB_PART_PREFIX}${db.name}`,
+      contentType: SQLITE_PART_MIME,
+      body: db.bytes,
+    })),
+  ]
+  const { data, boundary } = encodeMultipart(parts)
+  return { payload: data, mimeType: `${MULTIPART_MIME_PREFIX}; boundary=${boundary}` }
+}
+
+// ---------------------------------------------------------------------------
+// Decode
+// ---------------------------------------------------------------------------
 
 /**
  * Decoded JSON envelope. The `principal` is the recovered runtime
@@ -240,31 +348,6 @@ export interface DecodedMultipartEnvelope {
 export type DecodedEnvelope = DecodedJsonEnvelope | DecodedBinaryEnvelope | DecodedMultipartEnvelope
 
 /**
- * Encode a SQLite-aware `multipart/mixed` envelope. The `state` part
- * carries `{ version: 1, principal, state }` as JSON; each entry in
- * `databases` becomes a `db:<name>` part with `application/x-sqlite3`
- * content-type. Bit-compatible with `golem-ts-sdk`.
- */
-export const encodeMultipartJsonEnvelope = (
-  principal: AgentCommon.Principal,
-  state: unknown,
-  databases: ReadonlyArray<{ readonly name: string; readonly bytes: Uint8Array }>,
-): ApiHost.Snapshot => {
-  const envelope = { version: 1, principal: serializePrincipal(principal), state }
-  const stateBody = new TextEncoder().encode(JSON.stringify(envelope))
-  const parts = [
-    { name: STATE_PART_NAME, contentType: JSON_MIME, body: stateBody },
-    ...databases.map((db) => ({
-      name: `${DB_PART_PREFIX}${db.name}`,
-      contentType: SQLITE_PART_MIME,
-      body: db.bytes,
-    })),
-  ]
-  const { data, boundary } = encodeMultipart(parts)
-  return { payload: data, mimeType: `${MULTIPART_MIME_PREFIX}; boundary=${boundary}` }
-}
-
-/**
  * Decode a {@link ApiHost.Snapshot}. `fallbackPrincipal` is used when
  * the snapshot is the legacy binary v1 format which carries no
  * principal in its payload.
@@ -286,38 +369,21 @@ export const decodeEnvelope = (
   throw new UnsupportedSnapshotFormatError(mime)
 }
 
+const parseEnvelopeJson = (text: string, ctx: string) => {
+  try {
+    return decodeEnvelopeFromString(text)
+  } catch (err) {
+    throw new SnapshotEnvelopeError(`${ctx}: ${String((err as Error).message ?? err)}`)
+  }
+}
+
 const decodeJsonEnvelope = (payload: Uint8Array): DecodedJsonEnvelope => {
-  let text: string
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(payload)
-  } catch (err) {
-    throw new SnapshotEnvelopeError(`json envelope: payload is not valid UTF-8: ${String(err)}`)
-  }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch (err) {
-    throw new SnapshotEnvelopeError(`json envelope: payload is not valid JSON: ${String(err)}`)
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new SnapshotEnvelopeError(`json envelope: expected an object, got ${typeof parsed}`)
-  }
-  const obj = parsed as Record<string, unknown>
-  if (obj.version !== 1) {
-    throw new SnapshotEnvelopeError(
-      `json envelope: unsupported version ${String(obj.version)} (expected 1)`,
-    )
-  }
-  if (!("principal" in obj)) {
-    throw new SnapshotEnvelopeError(`json envelope: missing 'principal' field`)
-  }
-  if (!("state" in obj)) {
-    throw new SnapshotEnvelopeError(`json envelope: missing 'state' field`)
-  }
+  const text = decodeUtf8(payload, "json envelope")
+  const env = parseEnvelopeJson(text, "json envelope")
   return {
     kind: "json",
-    principal: deserializePrincipal(obj.principal as SerializedPrincipal),
-    state: obj.state,
+    principal: deserializePrincipal(env.principal),
+    state: env.state,
   }
 }
 
@@ -337,41 +403,9 @@ const decodeMultipartEnvelope = (payload: Uint8Array, mime: string): DecodedMult
   if (!statePart) {
     throw new SnapshotEnvelopeError(`multipart envelope: missing 'state' part`)
   }
-  let stateText: string
-  try {
-    stateText = new TextDecoder("utf-8", { fatal: true }).decode(statePart.body)
-  } catch (err) {
-    throw new SnapshotEnvelopeError(
-      `multipart envelope: 'state' part is not valid UTF-8: ${String(err)}`,
-    )
-  }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(stateText)
-  } catch (err) {
-    throw new SnapshotEnvelopeError(
-      `multipart envelope: 'state' part is not valid JSON: ${String(err)}`,
-    )
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new SnapshotEnvelopeError(
-      `multipart envelope: 'state' part expected an object, got ${typeof parsed}`,
-    )
-  }
-  const obj = parsed as Record<string, unknown>
-  if (obj.version !== 1) {
-    throw new SnapshotEnvelopeError(
-      `multipart envelope: unsupported state version ${String(obj.version)} (expected 1)`,
-    )
-  }
-  if (!("principal" in obj)) {
-    throw new SnapshotEnvelopeError(`multipart envelope: 'state' part missing 'principal' field`)
-  }
-  if (!("state" in obj)) {
-    throw new SnapshotEnvelopeError(`multipart envelope: 'state' part missing 'state' field`)
-  }
-  const principal = deserializePrincipal(obj.principal as SerializedPrincipal)
-  const state = obj.state
+  const stateText = decodeUtf8(statePart.body, "multipart envelope: 'state' part")
+  const env = parseEnvelopeJson(stateText, "multipart envelope: 'state' part")
+  const principal = deserializePrincipal(env.principal)
 
   const databases: Array<{ name: string; bytes: Uint8Array }> = []
   for (const part of parts) {
@@ -385,7 +419,7 @@ const decodeMultipartEnvelope = (payload: Uint8Array, mime: string): DecodedMult
     databases.push({ name: dbName, bytes: part.body })
   }
 
-  return { kind: "multipart", principal, state, databases }
+  return { kind: "multipart", principal, state: env.state, databases }
 }
 
 const decodeBinaryEnvelope = (
@@ -417,20 +451,13 @@ const decodeBinaryEnvelope = (
       )
     }
     const principalBytes = payload.slice(5, 5 + principalLen)
-    let principalJson: string
-    try {
-      principalJson = new TextDecoder("utf-8", { fatal: true }).decode(principalBytes)
-    } catch (err) {
-      throw new SnapshotEnvelopeError(
-        `binary envelope (v2): principal segment is not valid UTF-8: ${String(err)}`,
-      )
-    }
+    const principalText = decodeUtf8(principalBytes, "binary envelope (v2): principal segment")
     let serialized: SerializedPrincipal
     try {
-      serialized = JSON.parse(principalJson) as SerializedPrincipal
+      serialized = decodePrincipalFromString(principalText)
     } catch (err) {
       throw new SnapshotEnvelopeError(
-        `binary envelope (v2): principal segment is not valid JSON: ${String(err)}`,
+        `binary envelope (v2): principal segment is not a valid principal: ${String((err as Error).message ?? err)}`,
       )
     }
     return {

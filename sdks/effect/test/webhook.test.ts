@@ -117,9 +117,19 @@ describe("WebhookPayload", () => {
     }),
   )
 
-  it.effect("decode surfaces invalid JSON as WebhookDecodeError", () =>
+  it.effect("decode surfaces invalid JSON as Schema.SchemaError", () =>
     Effect.gen(function* () {
       const payload = new Webhook.WebhookPayload(new TextEncoder().encode("not json"))
+      const Event = Schema.Struct({ id: Schema.String })
+      const exit = yield* Effect.exit(payload.decode(Event))
+      expect(exit._tag).toBe("Failure")
+    }),
+  )
+
+  it.effect("decode surfaces invalid UTF-8 as WebhookDecodeError", () =>
+    Effect.gen(function* () {
+      // 0xff is not a valid leading UTF-8 byte; strict TextDecoder rejects it.
+      const payload = new Webhook.WebhookPayload(new Uint8Array([0xff, 0xff, 0xff]))
       const Event = Schema.Struct({ id: Schema.String })
       const exit = yield* Effect.exit(payload.decode(Event))
       expect(exit._tag).toBe("Failure")
