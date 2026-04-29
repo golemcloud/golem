@@ -27,11 +27,17 @@ use tracing::{debug, error, info, warn};
 #[derive(Clone, Debug)]
 pub struct PostgresPool {
     pool: sqlx::Pool<Postgres>,
+    /// Optional read-replica pool (e.g. Aurora reader endpoint).
+    /// When present, `with_ro` uses this pool; `with_rw` always uses `pool`.
+    reader_pool: Option<sqlx::Pool<Postgres>>,
 }
 
 impl PostgresPool {
     pub async fn new(pool: sqlx::Pool<Postgres>) -> Result<Self, anyhow::Error> {
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            reader_pool: None,
+        })
     }
 
     pub async fn configured(config: &DbPostgresConfig) -> Result<Self, anyhow::Error> {
@@ -41,20 +47,27 @@ impl PostgresPool {
             config.host, config.port, config.database, schema
         );
 
-        let pool = PgPoolOptions::new()
-            .max_connections(config.max_connections)
-            .after_connect(move |conn, _meta| {
-                let s = schema.clone();
-                Box::pin(async move {
-                    let sql = format!("SET SCHEMA '{s}';");
-                    conn.execute(sqlx::query(&sql)).await?;
-                    Ok(())
-                })
-            })
-            .connect_with(config.connect_options())
-            .await?;
+        let pool = build_pool(
+            config.max_connections,
+            schema.clone(),
+            config.connect_options(),
+        )
+        .await?;
 
-        PostgresPool::new(pool).await
+        let reader_pool = if let Some(reader_connect_options) = config.reader_connect_options() {
+            info!(
+                "DB Reader Pool: postgresql://{}:{}/{}?currentSchema={}",
+                config.reader_host.as_deref().unwrap_or(""),
+                config.port,
+                config.database,
+                schema
+            );
+            Some(build_pool(config.max_connections, schema, reader_connect_options).await?)
+        } else {
+            None
+        };
+
+        Ok(Self { pool, reader_pool })
     }
 
     pub fn with(&self, svc_name: &'static str, api_name: &'static str) -> PostgresLabelledApi {
@@ -66,6 +79,25 @@ impl PostgresPool {
     }
 }
 
+async fn build_pool(
+    max_connections: u32,
+    schema: String,
+    connect_options: sqlx::postgres::PgConnectOptions,
+) -> Result<sqlx::Pool<Postgres>, anyhow::Error> {
+    Ok(PgPoolOptions::new()
+        .max_connections(max_connections)
+        .after_connect(move |conn, _meta| {
+            let s = schema.clone();
+            Box::pin(async move {
+                let sql = format!("SET SCHEMA '{s}';");
+                conn.execute(sqlx::query(&sql)).await?;
+                Ok(())
+            })
+        })
+        .connect_with(connect_options)
+        .await?)
+}
+
 #[async_trait]
 impl super::Pool for PostgresPool {
     type LabelledApi = PostgresLabelledApi;
@@ -74,7 +106,12 @@ impl super::Pool for PostgresPool {
     type Args<'a> = PgArguments;
 
     fn with_ro(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi {
-        self.with(svc_name, api_name)
+        let pool = self.reader_pool.as_ref().unwrap_or(&self.pool).clone();
+        PostgresLabelledApi {
+            svc_name,
+            api_name,
+            pool,
+        }
     }
 
     fn with_rw(&self, svc_name: &'static str, api_name: &'static str) -> Self::LabelledApi {

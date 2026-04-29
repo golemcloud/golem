@@ -487,6 +487,7 @@ impl DbConfig {
             port: 5432,
             max_connections: 10,
             schema: None,
+            reader_host: None,
         })
     }
 }
@@ -536,6 +537,11 @@ pub struct DbPostgresConfig {
     pub port: u16,
     pub max_connections: u32,
     pub schema: Option<String>,
+    /// Optional read replica hostname (e.g. Aurora reader endpoint). When set,
+    /// read-only operations (`with_ro`) use a separate connection pool on this
+    /// host. Writes (`with_rw`) always use the primary `host`.
+    #[serde(default)]
+    pub reader_host: Option<String>,
 }
 
 impl DbPostgresConfig {
@@ -546,6 +552,18 @@ impl DbPostgresConfig {
             .database(&self.database)
             .username(&self.username)
             .password(&self.password)
+    }
+
+    /// Connect options for the reader host, inheriting all other fields.
+    pub fn reader_connect_options(&self) -> Option<sqlx::postgres::PgConnectOptions> {
+        self.reader_host.as_deref().map(|h| {
+            sqlx::postgres::PgConnectOptions::new()
+                .host(h)
+                .port(self.port)
+                .database(&self.database)
+                .username(&self.username)
+                .password(&self.password)
+        })
     }
 }
 
@@ -560,6 +578,9 @@ impl SafeDisplay for DbPostgresConfig {
         let _ = writeln!(&mut result, "max connections: {}", self.max_connections);
         if let Some(schema) = &self.schema {
             let _ = writeln!(&mut result, "schema: {schema}");
+        }
+        if let Some(reader_host) = &self.reader_host {
+            let _ = writeln!(&mut result, "reader host: {reader_host}");
         }
         result
     }

@@ -102,6 +102,7 @@ async fn start_plain_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) 
         password: "postgres".to_string(),
         schema: Some("test".to_string()),
         max_connections: 10,
+        reader_host: None,
     };
 
     (config, container)
@@ -140,6 +141,7 @@ async fn start_tls_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) {
         password: "postgres".to_string(),
         schema: Some("test_tls".to_string()),
         max_connections: 10,
+        reader_host: None,
     };
 
     (config, container)

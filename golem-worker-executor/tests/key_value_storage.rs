@@ -215,6 +215,7 @@ impl GetKeyValueStorage for PostgresKeyValueStorageWrapper {
                 .expect("Postgres connection string missing port"),
             max_connections: 10,
             schema: None,
+            reader_host: None,
         };
 
         let config = KeyValueStoragePostgresConfig { postgres };
@@ -290,6 +291,7 @@ impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
                 .expect("Postgres connection string missing port"),
             max_connections: 10,
             schema: None,
+            reader_host: None,
         };
         let postgres_config = KeyValueStoragePostgresConfig { postgres };
         let postgres_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
