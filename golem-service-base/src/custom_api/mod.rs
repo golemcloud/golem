@@ -269,6 +269,8 @@ pub struct CallAgentBehaviour {
     pub method_name: String,
     pub method_parameters: Vec<MethodParameter>,
     pub expected_agent_response: DataSchema,
+    #[desert(default)]
+    pub method_description: Option<String>,
 }
 
 #[derive(Debug, BinaryCodec)]

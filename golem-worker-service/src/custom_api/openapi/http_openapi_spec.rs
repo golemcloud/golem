@@ -153,9 +153,10 @@ fn add_route_to_paths(
     let path_item = paths.entry(path_str).or_default();
     let mut operation = Operation::default();
 
-    // Set operation_id for CallAgent routes
+    // Set operation_id and description for CallAgent routes
     if let RichRouteBehaviour::CallAgent(inner) = &route.behavior {
         operation.operation_id = Some(format!("{}-{}", inner.agent_type.0, inner.method_name));
+        operation.description = inner.method_description.clone();
     }
 
     let path_params_raw = match &route.behavior {
