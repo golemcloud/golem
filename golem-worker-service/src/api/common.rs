@@ -440,6 +440,9 @@ impl From<RequestHandlerError> for ApiEndpointError {
             RequestHandlerError::ResolvingRouteFailed(RouteResolverError::CouldNotBuildRouter) => {
                 Self::internal(api::error_code::INTERNAL_ROUTING_FAILURE, value)
             }
+            RequestHandlerError::AgentInvocationFailed(WorkerServiceError::InternalCallError(
+                CallWorkerExecutorError::MessageTooLarge(_),
+            )) => Self::payload_too_large(api::error_code::REQUEST_PAYLOAD_TOO_LARGE, value),
             RequestHandlerError::AgentInvocationFailed(_) => {
                 Self::internal(api::error_code::INTERNAL_AGENT_EXECUTION_FAILED, value)
             }
@@ -456,17 +459,36 @@ impl From<RequestHandlerError> for ApiEndpointError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::service::worker::CallWorkerExecutorError;
+    use crate::service::worker::{CallWorkerExecutorError, WorkerServiceError};
     use test_r::test;
     use tonic::{Code, Status};
 
-    #[test]
-    fn message_size_limit_status_maps_to_payload_too_large() {
-        let status = Status::new(
+    fn message_too_large_status() -> Status {
+        Status::new(
             Code::ResourceExhausted,
             "Error decompressing: size limit, of 4194304 bytes, exceeded while decompressing message",
+        )
+    }
+
+    #[test]
+    fn message_size_limit_status_maps_to_payload_too_large() {
+        let error = CallWorkerExecutorError::MessageTooLarge(message_too_large_status());
+
+        let api_error: ApiEndpointError = error.into();
+        match api_error {
+            ApiEndpointError::PayloadTooLarge(Json(body)) => {
+                assert_eq!(body.code, api::error_code::REQUEST_PAYLOAD_TOO_LARGE);
+            }
+            other => panic!("expected PayloadTooLarge, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn custom_api_message_too_large_maps_to_payload_too_large() {
+        let inner = WorkerServiceError::InternalCallError(
+            CallWorkerExecutorError::MessageTooLarge(message_too_large_status()),
         );
-        let error = CallWorkerExecutorError::MessageTooLarge(status);
+        let error = RequestHandlerError::AgentInvocationFailed(inner);
 
         let api_error: ApiEndpointError = error.into();
         match api_error {
