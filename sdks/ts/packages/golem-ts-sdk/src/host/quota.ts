@@ -130,13 +130,27 @@ export function acquireQuotaToken(resourceName: string, expectedUse: bigint): Qu
 
 /**
  * Reserve `amount` units, run `fn`, then commit the actual usage returned
- * by `fn`.  Commits zero if `fn` throws.
+ * by `fn`.  Commits zero if `fn` throws or the returned Promise rejects.
  *
  * Returns `Result.ok(value)` on success, or `Result.err(failedReservation)`
  * if the reservation could not be granted.
  *
- * Supports both sync and async callbacks — if `fn` returns a Promise, the
- * result is a `Promise<Result<T, FailedReservation>>`.
+ * @param token  - The token to reserve against.
+ * @param amount - Units to reserve.
+ * @param fn     - Async work to perform; must resolve with the actual units consumed.
+ */
+export function withReservation<R>(
+  token: QuotaToken,
+  amount: bigint,
+  fn: (reservation: Reservation) => Promise<{ used: bigint; value: R }>,
+): Promise<Result<R, FailedReservation>>;
+
+/**
+ * Reserve `amount` units, run `fn`, then commit the actual usage returned
+ * by `fn`.  Commits zero if `fn` throws.
+ *
+ * Returns `Result.ok(value)` on success, or `Result.err(failedReservation)`
+ * if the reservation could not be granted.
  *
  * @param token  - The token to reserve against.
  * @param amount - Units to reserve.
@@ -146,18 +160,25 @@ export function withReservation<R>(
   token: QuotaToken,
   amount: bigint,
   fn: (reservation: Reservation) => { used: bigint; value: R },
-): R {
+): Result<R, FailedReservation>;
+
+export function withReservation<R>(
+  token: QuotaToken,
+  amount: bigint,
+  fn: (
+    reservation: Reservation,
+  ) => { used: bigint; value: R } | Promise<{ used: bigint; value: R }>,
+): Result<R, FailedReservation> | Promise<Result<R, FailedReservation>> {
   const reserveResult = token.reserve(amount);
   if (reserveResult.isErr()) {
-    return Result.err(reserveResult.unwrapErr()) as R;
+    return Result.err(reserveResult.unwrapErr());
   }
   const reservation = reserveResult.unwrap();
   try {
     const result = fn(reservation);
     if (isPromiseLike(result)) {
       return result.then(
-        (resolved) => {
-          const { used, value } = resolved as { used: bigint; value: unknown };
+        ({ used, value }) => {
           reservation.commit(used);
           return Result.ok(value);
         },
@@ -165,11 +186,11 @@ export function withReservation<R>(
           reservation.commit(0n);
           throw e;
         },
-      ) as R;
+      );
     }
     const { used, value } = result;
     reservation.commit(used);
-    return Result.ok(value) as R;
+    return Result.ok(value);
   } catch (e) {
     reservation.commit(0n);
     throw e;

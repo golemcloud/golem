@@ -179,7 +179,7 @@ export async function createAgent(
       token = LOCAL_WELL_KNOWN_TOKEN;
       break;
     case 'cloud':
-      baseUrl = 'https://api.golem.cloud';
+      baseUrl = 'https://release.api.golem.cloud';
       token = server.token;
       break;
     case 'custom':
@@ -243,7 +243,7 @@ export async function invokeAgent(
       token = LOCAL_WELL_KNOWN_TOKEN;
       break;
     case 'cloud':
-      baseUrl = 'https://api.golem.cloud';
+      baseUrl = 'https://release.api.golem.cloud';
       token = server.token;
       break;
     case 'custom':

@@ -151,10 +151,12 @@ function getTypeFromTsMorphInternal(
     const innerType = unwrapAlias(rawInner);
 
     const typeLiteral = resolveStrictTypeLiteralNode(innerType);
-    if (!typeLiteral) throw 'Config type parameter must be a type literal';
+    if (typeLiteral == null)
+      throw `Config<T> type parameter must be a plain type literal (e.g. Config<{ key: string }>), got: ${innerType.getText()}`;
 
     const properties = extractConfigPropertiesFromTypeLiteral(typeLiteral, [], wellKnownTypes);
-    if (!properties) throw 'Config type parameter must be a type literal';
+    if (properties == null)
+      throw 'Config<T> type literal must only contain property signatures. Method signatures and index signatures are not supported.';
 
     return {
       kind: 'config',

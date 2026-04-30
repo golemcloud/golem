@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::cloud::token::TokenSubcommand;
+use crate::command::api_token::ApiTokenSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
@@ -24,20 +24,20 @@ use golem_client::model::TokenCreation;
 use golem_common::model::auth::TokenId;
 use std::sync::Arc;
 
-pub struct CloudTokenCommandHandler {
+pub struct ApiTokenCommandHandler {
     ctx: Arc<Context>,
 }
 
-impl CloudTokenCommandHandler {
+impl ApiTokenCommandHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self { ctx }
     }
 
-    pub async fn handle_command(&self, subcommand: TokenSubcommand) -> anyhow::Result<()> {
+    pub async fn handle_command(&self, subcommand: ApiTokenSubcommand) -> anyhow::Result<()> {
         match subcommand {
-            TokenSubcommand::List => self.cmd_list().await,
-            TokenSubcommand::New { expires_at } => self.cmd_new(expires_at).await,
-            TokenSubcommand::Delete { token_id } => self.cmd_delete(token_id).await,
+            ApiTokenSubcommand::List => self.cmd_list().await,
+            ApiTokenSubcommand::New { expires_at } => self.cmd_new(expires_at).await,
+            ApiTokenSubcommand::Delete { token_id } => self.cmd_delete(token_id).await,
         }
     }
 

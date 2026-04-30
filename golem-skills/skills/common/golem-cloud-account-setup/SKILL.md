@@ -42,7 +42,7 @@ Authentication happens automatically the first time you run a command against th
 To trigger authentication explicitly:
 
 ```shell
-golem -C cloud account get    # Triggers OAuth2 flow if not yet authenticated
+golem -C account get          # Triggers OAuth2 flow if not yet authenticated
 ```
 
 The CLI displays:
@@ -65,9 +65,9 @@ Follow the URL, authorize the application, and the CLI will complete automatical
 After authentication, you can manage your Golem Cloud account:
 
 ```shell
-golem -C cloud account get                                          # View account info
-golem -C cloud account update "My Name" "me@example.com"            # Update name/email
-golem -C cloud account new "Team Account" "team@example.com"        # Create additional account
+golem -C account get                                                # View account info
+golem -C account update "My Name" "me@example.com"                  # Update name/email
+golem -C account new "Team Account" "team@example.com"              # Create additional account
 ```
 
 ## Step 4: Create and Manage API Tokens
@@ -75,10 +75,10 @@ golem -C cloud account new "Team Account" "team@example.com"        # Create add
 For programmatic access (CI/CD, scripts), create static API tokens:
 
 ```shell
-golem -C cloud token list                                           # List existing tokens
-golem -C cloud token new                                            # Create a new token (default: expires 2100-01-01)
-golem -C cloud token new --expires-at 2025-12-31T00:00:00Z          # Create with custom expiry
-golem -C cloud token delete <TOKEN_ID>                              # Delete a token
+golem -C api-token list                                             # List existing tokens
+golem -C api-token new                                              # Create a new token (default: expires 2100-01-01)
+golem -C api-token new --expires-at 2025-12-31T00:00:00Z            # Create with custom expiry
+golem -C api-token delete <TOKEN_ID>                                # Delete a token
 ```
 
 Use a static token in a profile for non-interactive environments:
@@ -137,7 +137,7 @@ Golem Cloud also provides a web management console at [console.golem.cloud](http
 
 ```shell
 # 1. Authenticate with Golem Cloud (opens browser for GitHub OAuth2)
-golem -C cloud account get
+golem -C account get
 
 # 2. Deploy your application to the cloud
 golem -C deploy

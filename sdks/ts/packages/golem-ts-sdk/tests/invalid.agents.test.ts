@@ -15,7 +15,7 @@
 // Interface type indirectly tests primitive types, union, list etc
 
 import { describe, expect } from 'vitest';
-import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import { Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as AnalysedType from '../src/internal/mapping/types/analysedType';
 import { TypeScope } from '../src/internal/mapping/types/scope';
 import * as Either from '../src/newTypes/either';
@@ -289,6 +289,30 @@ test('Agent with with http endpoint path variables referring to Principal is rej
   await import('./agentWithInvalidHttpEndpoint2');
   expect(() => validateAgentByName('AgentWithInvalidHttpEndpoint2')).toThrowError(
     "HTTP endpoint path variable 'user' cannot be used for parameters of type 'Principal'",
+  );
+});
+
+test('Agent with unsupported type in config field is rejected with path in error message', async () => {
+  await expect(async () => {
+    await import('./agentWithInvalidConfig');
+  }).rejects.toThrowError(
+    'Failed to describe agent config: config property `unsupported`: Unsupported type `class` in config for parameter `unsupported`. Hint: Use object instead.',
+  );
+});
+
+test('Config type used as a field inside another Config produces a helpful error', () => {
+  const configType: import('@golemcloud/golem-ts-types-core').Type.Type = {
+    kind: 'config',
+    name: undefined,
+    owner: undefined,
+    optional: false,
+    properties: [],
+  };
+  const result = typeMapper(configType, TypeScope.object('myConfig', 'nested', false));
+  expect(Either.isLeft(result)).toBe(true);
+  assert(Either.isLeft(result));
+  expect(result.val).toBe(
+    'Unsupported type `Config` in myConfig for parameter `nested`. Hint: Use a plain type literal instead.',
   );
 });
 
