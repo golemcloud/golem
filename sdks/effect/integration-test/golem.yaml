@@ -86,13 +86,6 @@ components:
   effect-golem:agents:
     dir: components/agents
     templates: effect-golem-ts
-  # Separately-deployable Ignite component. The
-  # `golem:rdbms/ignite2@1.5.0` host binding may not be available in
-  # every Golem environment; deploy this component only when targeting
-  # an Ignite-aware worker pool.
-  effect-golem:ignite-agent:
-    dir: components/ignite-agent
-    templates: effect-golem-ts
 
 # Per-agent default config values for the local source. The secret
 # `connectionAddress` field is provisioned via `secretDefaults` below

@@ -20,15 +20,25 @@ A TypeScript library for writing [Golem](https://golem.cloud) agents on top of [
 
 Unit tests (`npm test`) only cover the SDK in isolation against host mocks. They cannot catch issues that only surface inside the real Golem WASM runtime — e.g. `JSON.stringify` on bigint UUIDs, missing exports from the embedded `effect-golem` bundle, type-mismatch between WIT bindings and our generated host stubs, runtime principal serialization, oplog/snapshot interaction, etc.
 
-After **every** non-trivial change you must run a full local-deploy + invoke loop on a running `golem server run` instance. The minimum drill:
+After **every** non-trivial change you must run the integration suite. The canonical drill:
 
 1. `npm test && npm run typecheck && npm run lint && npm run format:check` — gate the SDK changes.
 2. `npm run build:bundle` — refresh `dist/index.mjs` (the integration-test consumes `effect-golem` via `file:..` symlink, so this is what the embedded code sees).
 3. `WASI_SDK_PATH=/opt/wasi-sdk npm run build-agent-template` — rebuilds `wasm/agent_guest.wasm` so the new `dist/index.mjs` is embedded inside the base WASM. **Required whenever `dist/index.mjs` changes**, otherwise components will load against the old SDK and fail with "Could not find export X in module 'effect-golem'" or stale-behaviour bugs.
-4. `cd integration-test && golem -L build && golem -L -Y deploy` — rebuild + deploy the test components.
-5. Invoke at least one method per affected feature, e.g. `golem -L agent invoke -n 'Counter("x")' increment`.
-6. For snapshotting changes specifically: drive enough invocations to trigger a save (the integration-test Counter uses `everyN(10)`), inspect with `golem -L agent oplog 'Counter("x")'` (look for a `SNAPSHOT` entry containing principal + state JSON, **no** `Exception during awaiting call result for saveSnapshot.save`), then exercise the load path with `golem -L -Y agent update --await 'Counter("x")' manual` and re-`invoke` to confirm state was preserved.
-7. If anything fails inside the runtime, treat it as a real bug and fix the SDK — do **not** ship green unit tests + red integration runs.
+4. `cd integration-test && npm install && npm run test:integration` — runs the harness under `test-infra/`. The harness brings up `docker compose` (Postgres + MySQL + Ignite), starts a fresh `golem server run`, runs `golem build && deploy`, then iterates the registered cases sequentially. **Preflight FAILS if a server is already on port 9881** — stop the existing server first, or pass `--no-server` to reuse it.
+
+The harness exposes per-feature flags via `tsx test-infra/run.ts ...`:
+
+- `--list` — print the case registry.
+- `--filter <regex>` — run a subset (e.g. `--filter '^(counter|kv)$'`).
+- `--no-build` — skip `golem build && deploy`.
+- `--no-infra` — skip docker compose lifecycle (use when DBs are already up).
+- `--no-server` — assume an external `golem server run` (use when iterating).
+- `--stop-on-first-failure`.
+
+The current registry covers: `counter`, `caller`, `host-features`, `booking-saga`, `quota`, `kv`, `blob`, `webhook`, `websocket`, `sqlite-counter`, `pg-counter`, `mysql-counter`, `ignite-counter`, `inventory-saga`. Each case is a self-contained Effect program under `test-infra/cases/<name>.ts`; add new cases by registering them in `test-infra/cases/index.ts`.
+
+If anything fails inside the runtime, treat it as a real bug and fix the SDK — do **not** ship green unit tests + red integration runs.
 
 ## Host injection seam (`src/host/`)
 

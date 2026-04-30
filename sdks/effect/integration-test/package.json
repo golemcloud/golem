@@ -6,20 +6,26 @@
     "infra:up": "docker compose -f test-infra/compose.yaml up -d",
     "infra:down": "docker compose -f test-infra/compose.yaml down",
     "infra:logs": "docker compose -f test-infra/compose.yaml logs -f postgres",
-    "test:rdbms": "node test-infra/run-rdbms-tests.mjs"
+    "test:integration": "tsx test-infra/run.ts",
+    "test:integration:list": "tsx test-infra/run.ts --list",
+    "test:rdbms": "tsx test-infra/run.ts --filter '^(pg|mysql|ignite|sqlite)-counter$'"
   },
   "dependencies": {
     "effect": "4.0.0-beta.57",
     "effect-golem": "file:.."
   },
   "devDependencies": {
+    "@effect/platform-node": "4.0.0-beta.57",
     "@rollup/plugin-commonjs": "^28.0.6",
     "@rollup/plugin-json": "^6.1.0",
     "@rollup/plugin-node-resolve": "^16.0.1",
     "@rollup/plugin-typescript": "^12.1.4",
     "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
     "rollup": "^4.50.1",
     "tslib": "^2.8.1",
-    "typescript": "^5.7.2"
+    "tsx": "^4.20.4",
+    "typescript": "^5.7.2",
+    "ws": "^8.18.0"
   }
 }

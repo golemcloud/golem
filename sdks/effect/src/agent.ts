@@ -716,18 +716,19 @@ export const dispatchGetDefinition = async (): Promise<AgentCommon.AgentType> =>
 
 /**
  * Resolve the `SqliteHostExtClient` impl out of the production
- * {@link userRuntimeLayer} once and return its three sync methods so
- * the snapshot dispatcher's imperative `for ... of` loops can keep
- * their structure. Mirrors the same pattern used for the
- * {@link EnvironmentClient} / {@link AgentHostClient} lookup at the
- * top of {@link dispatchLoadSnapshot}.
+ * {@link userRuntimeLayer} synchronously. The save-snapshot dispatcher's
+ * auto+sqlite path is fully synchronous on purpose (see the long
+ * comment at the top of {@link dispatchSaveSnapshot}), so this helper
+ * has to be too. `userRuntime.runSync` is safe here because the
+ * underlying layers (`SqliteHostExtLive` etc.) are pure
+ * `Layer.succeed`s — no async work happens during resolution.
  */
-const resolveSqliteHostExt = async (): Promise<{
+const resolveSqliteHostExtSync = (): {
   serializeDatabaseSync: (db: DatabaseSync) => Uint8Array
   restoreDatabaseSync: (db: DatabaseSync, bytes: Uint8Array) => void
   isAutocommitDatabaseSync: (db: DatabaseSync) => boolean
-}> =>
-  await runUserPromise(
+} =>
+  userRuntime.runSync(
     Effect.gen(function* () {
       const ext = yield* SqliteHostExtClient
       return {
@@ -739,12 +740,92 @@ const resolveSqliteHostExt = async (): Promise<{
   )
 
 /**
+ * Encode the auto-snapshot path synchronously. Pulled out as a
+ * standalone helper so {@link dispatchSaveSnapshot} can return its
+ * result *without* a wrapping `async` (which would force the
+ * wasm-rquickjs runtime to await a Promise — see the dispatcher
+ * comment for why that matters).
+ */
+const encodeAutoSnapshot = (
+  agent: ActiveAgent,
+  snap: Extract<BoundSnapshot, { kind: "auto" }>,
+): ApiHost.Snapshot => {
+  const state = Effect.runSync(Ref.get(snap.ref) as Effect.Effect<unknown, never>)
+  const encoded = Effect.runSync(
+    Schema.encodeUnknownEffect(snap.schema)(state) as Effect.Effect<unknown, Schema.SchemaError>,
+  )
+  if (snap.declaredDatabases.length === 0) {
+    return encodeJsonEnvelope(agent.principal, encoded)
+  }
+  const sqliteExt = resolveSqliteHostExtSync()
+  const dbParts: Array<{ name: string; bytes: Uint8Array }> = []
+  for (const dbName of snap.declaredDatabases) {
+    const handle = snap.databases.get(dbName)
+    if (handle === undefined) {
+      throw new SnapshotDatabaseMissingPartError(agent.name, dbName, "save")
+    }
+    if (!sqliteExt.isAutocommitDatabaseSync(handle)) {
+      throw new SnapshotDatabaseNotInAutocommitError(agent.name, dbName)
+    }
+    const rows = handle.prepare("PRAGMA database_list").all() as Array<{ name?: string }>
+    const extra = rows
+      .map((r) => String(r.name ?? ""))
+      .filter((n) => n !== "main" && n !== "temp" && n !== "")
+    if (extra.length > 0) {
+      throw new SnapshotDatabaseHasAttachmentsError(agent.name, dbName, extra)
+    }
+    dbParts.push({ name: dbName, bytes: sqliteExt.serializeDatabaseSync(handle) })
+  }
+  return encodeMultipartJsonEnvelope(agent.principal, encoded, dbParts)
+}
+
+/**
  * Implementation of `golem:api/save-snapshot.save`. Reads the active
  * agent's bound snapshot state, encodes it according to the active
- * variant (auto → JSON envelope; custom → binary v2 envelope), and
- * returns the resulting `Snapshot` to the host.
+ * variant (auto → JSON envelope or multipart/mixed when SQLite databases
+ * are declared; custom → binary v2 envelope), and returns the resulting
+ * `Snapshot` to the host.
+ *
+ * **Why the auto path is intentionally NOT `async`.** Empirically, the
+ * previous `async` implementation (which used `await runUserPromise(...)`
+ * to resolve the SqliteHostExt service) caused the host to trap with
+ * `wasm trap: cannot enter component instance` on every Nth invocation
+ * once `Snapshot.policy.everyN(N)` triggered a save. The trap landed
+ * in the oplog as an `ERROR` with `retry from: <previous-invoke-index>`
+ * and no `SNAPSHOT` entry was ever written; the host then waited a few
+ * seconds and retried the next invoke, so the user-visible state was
+ * preserved but no snapshot was captured.
+ *
+ * Note: this is NOT a host-side concurrency race. Golem's invocation
+ * loop strictly serializes invoke / save-snapshot calls — the next
+ * call only starts after the previous one fully returns (including
+ * all JS Promise resolution). So the trap originates *inside* the
+ * `save-snapshot.save` call itself, not from a parallel `invoke`
+ * arriving concurrently.
+ *
+ * The fix is to make the auto path execute as a single synchronous
+ * JS frame: the JS function returns a plain `Snapshot` value (not a
+ * Promise), so the wasm-rquickjs runtime takes the `non-Promise`
+ * branch in `call_js_export_internal` and never has to drive a JS
+ * Promise to completion across host imports. With this change the
+ * trap stops reproducing and the multipart `SNAPSHOT` entry is
+ * recorded normally — the SqliteCounter integration case asserts
+ * exactly this.
+ *
+ * The exact host-side reason `async` save + at-least-one-host-import
+ * combined to trap "cannot enter component instance" is not yet
+ * pinned down; both `host.currentContext()` (called by
+ * `withInvocationParent` inside the old `runUserPromise`) and the
+ * Promise return shape of the JS export are involved in the bad
+ * path, and removing both was sufficient to make the trap go away.
+ *
+ * The custom path still has to await the user's `Effect<Uint8Array,
+ * ...>` save handler, so it remains `async`. No integration case
+ * currently exercises a long-running custom save handler; if a
+ * trap shows up there too, we'll need to either restrict the user
+ * handler shape or push the host investigation further.
  */
-export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
+export const dispatchSaveSnapshot = (): ApiHost.Snapshot | Promise<ApiHost.Snapshot> => {
   if (activeAgent === null) {
     throw new Error("agent is not initialized; cannot save snapshot")
   }
@@ -757,34 +838,24 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
   }
   const snap = agent.snapshot
   if (snap.kind === "auto") {
-    const state = await Effect.runPromise(Ref.get(snap.ref) as Effect.Effect<unknown, never>)
-    const encoded = await Effect.runPromise(
-      Schema.encodeUnknownEffect(snap.schema)(state) as Effect.Effect<unknown, Schema.SchemaError>,
-    )
-    if (snap.declaredDatabases.length === 0) {
-      return encodeJsonEnvelope(agent.principal, encoded)
-    }
-    const sqliteExt = await resolveSqliteHostExt()
-    const dbParts: Array<{ name: string; bytes: Uint8Array }> = []
-    for (const dbName of snap.declaredDatabases) {
-      const handle = snap.databases.get(dbName)
-      if (handle === undefined) {
-        throw new SnapshotDatabaseMissingPartError(agent.name, dbName, "save")
-      }
-      if (!sqliteExt.isAutocommitDatabaseSync(handle)) {
-        throw new SnapshotDatabaseNotInAutocommitError(agent.name, dbName)
-      }
-      const rows = handle.prepare("PRAGMA database_list").all() as Array<{ name?: string }>
-      const extra = rows
-        .map((r) => String(r.name ?? ""))
-        .filter((n) => n !== "main" && n !== "temp" && n !== "")
-      if (extra.length > 0) {
-        throw new SnapshotDatabaseHasAttachmentsError(agent.name, dbName, extra)
-      }
-      dbParts.push({ name: dbName, bytes: sqliteExt.serializeDatabaseSync(handle) })
-    }
-    return encodeMultipartJsonEnvelope(agent.principal, encoded, dbParts)
+    return encodeAutoSnapshot(agent, snap)
   }
+  return dispatchSaveCustomSnapshot(agent, compiled, snap)
+}
+
+/**
+ * Custom (`Snapshot.custom(...)`) save path: must run the user's
+ * `Effect<Uint8Array, ...>` handler under the same runtime layer the
+ * dispatcher uses for `invoke`, so it stays inherently async. Pulled
+ * into a standalone async helper so {@link dispatchSaveSnapshot}
+ * itself can stay non-async for the auto path (see the long comment
+ * on the dispatcher).
+ */
+const dispatchSaveCustomSnapshot = async (
+  agent: ActiveAgent,
+  compiled: CompiledAgent,
+  snap: Extract<BoundSnapshot, { kind: "custom" }>,
+): Promise<ApiHost.Snapshot> => {
   let saveProgram: Effect.Effect<Uint8Array, unknown, never> = snap.handlers.save.pipe(
     Effect.provideService(Principal, agent.principal),
   ) as Effect.Effect<Uint8Array, unknown, never>
@@ -933,7 +1004,7 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
           }
         }
         // Restore each DB in place via the wasm-rquickjs extension.
-        const sqliteExt = await resolveSqliteHostExt()
+        const sqliteExt = resolveSqliteHostExtSync()
         for (const part of decoded.databases) {
           const handle = bound.databases.get(part.name)!
           sqliteExt.restoreDatabaseSync(handle, part.bytes)

@@ -11,10 +11,6 @@
  * - There is no nested `withTransaction`: the IgniteClient adapter
  *   explicitly fails on savepoints. The agent's `transferAdd`
  *   transaction is single-level so this constraint does not bite us.
- *
- * This component is deployed separately because the
- * `golem:rdbms/ignite2@1.5.0` host binding may be missing from some
- * Golem environments.
  */
 import { Effect, Redacted, Schema } from "effect"
 import { defineAgent, defineConfig, method, Snapshot } from "effect-golem"
@@ -64,7 +60,13 @@ export const IgniteCounter = defineAgent({
       const cfg = yield* IgniteCounterConfig
       const dsnRedacted = yield* cfg.igniteConnectionAddress.get
       const dsnString = Redacted.value(dsnRedacted)
-      const sql = yield* IgniteClient.make({ connectionAddress: dsnString })
+      // Apache Ignite returns column names UPPERCASE by default; the
+      // agent code reads `r.count` / `r.id` (lowercase), so plug in a
+      // lowercasing result-name transform to bridge the convention gap.
+      const sql = yield* IgniteClient.make({
+        connectionAddress: dsnString,
+        transformResultNames: (s) => s.toLowerCase(),
+      })
       // Idempotent DDL.
       yield* sql`CREATE TABLE IF NOT EXISTS ignite_counters (id VARCHAR PRIMARY KEY, count INT)`
       // Ignite-specific upsert.

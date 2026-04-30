@@ -1,20 +1,13 @@
 # Docker Compose configuration for the integration-test RDBMS suite.
 #
-# Brings up Postgres 16 and MySQL 8 instances on the host ports
-# specified by `PG_PORT` (default 5432) and `MYSQL_PORT` (default
-# 3306). Data is persisted to named volumes so consecutive runs reuse
-# the same dataset; run `npm run infra:down -v` to wipe.
+# Brings up Postgres 16, MySQL 8 and Apache Ignite 2 instances on the
+# host ports specified by `PG_PORT` (default 5432), `MYSQL_PORT`
+# (default 3306) and `IGNITE_PORT` (default 10800). Data is persisted
+# to named volumes so consecutive runs reuse the same dataset; run
+# `npm run infra:down -v` to wipe.
 #
 # Healthchecks are configured so test scripts can wait for each
 # service to be healthy before running invocations.
-#
-# Apache Ignite is intentionally NOT included here: the
-# `golem:rdbms/ignite2@1.5.0` host binding may be missing from some
-# Golem environments and the IgniteCounter component is deployed as
-# a separately-gated artifact under `components/ignite-agent/`.
-# Operators that have an Ignite-aware Golem worker pool should run an
-# Ignite cluster out-of-band and configure
-# `IgniteCounter.connectionAddress` accordingly.
 #
 # Usage (from integration-test/):
 #   npm run infra:up      # docker compose up -d
@@ -63,8 +56,39 @@ services:
       retries: 30
     restart: unless-stopped
 
+  # Apache Ignite 2.x — the binary thin-client protocol that Golem's
+  # `golem:rdbms/ignite2@1.5.0` host bindings speak listens on port
+  # 10800 by default. The image's default config enables the thin
+  # client connector with no auth.
+  ignite:
+    image: apacheignite/ignite:2.16.0
+    container_name: effect-golem-ignite
+    environment:
+      # `-DIGNITE_ALLOW_DML_INSIDE_TRANSACTION=true` opts into the
+      # experimental "DML inside a transaction over a TRANSACTIONAL
+      # cache" code path. Without it, `transferAdd` (multi-step
+      # UPDATE inside `withTransaction`) traps with
+      #   QueryExecutionFailure: 50000: DML statements are not
+      #   allowed inside a transaction over cache(s) with
+      #   TRANSACTIONAL atomicity mode
+      JVM_OPTS: "-Xms256m -Xmx512m -DIGNITE_ALLOW_DML_INSIDE_TRANSACTION=true"
+    ports:
+      - "${IGNITE_PORT:-10800}:10800"
+    volumes:
+      - effect-golem-ignite-data:/storage
+    healthcheck:
+      # The image ships bash; /dev/tcp lets us probe the thin-client
+      # listener without installing extra tools.
+      test: ["CMD-SHELL", "bash -c '(echo > /dev/tcp/127.0.0.1/10800) >/dev/null 2>&1' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    restart: unless-stopped
+
 volumes:
   effect-golem-pg-data:
     name: effect-golem-pg-data
   effect-golem-mysql-data:
     name: effect-golem-mysql-data
+  effect-golem-ignite-data:
+    name: effect-golem-ignite-data

@@ -150,7 +150,9 @@ describe("snapshot + sqlite databases", () => {
 
   it("save fails fast if the user declared a DB but never attached it", async () => {
     await guest.initialize("SqliteForgetfulAttach", { tag: "tuple", val: [] }, oidcZoe)
-    await expect(dispatchSaveSnapshot()).rejects.toThrow(/SnapshotDatabaseMissingPartError/)
+    // Auto-snapshot save throws synchronously — see the long comment on
+    // dispatchSaveSnapshot for why the auto path must stay non-async.
+    expect(() => dispatchSaveSnapshot()).toThrow(/SnapshotDatabaseMissingPartError/)
   })
 
   it("save fails when isAutocommitDatabaseSync returns false", async () => {
@@ -165,7 +167,7 @@ describe("snapshot + sqlite databases", () => {
       { tag: "tuple", val: [{ tag: "component-model", val: xWv }] },
       oidcZoe,
     )
-    await expect(dispatchSaveSnapshot()).rejects.toThrow(/SnapshotDatabaseNotInAutocommitError/)
+    expect(() => dispatchSaveSnapshot()).toThrow(/SnapshotDatabaseNotInAutocommitError/)
   })
 
   it("rejects an unknown 'db:<name>' part on load", async () => {
