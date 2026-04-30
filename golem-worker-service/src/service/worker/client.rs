@@ -43,7 +43,8 @@ use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, RevertWorkerTarget};
 use golem_common::model::{
-    AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
+    AgentFilter, AgentFingerprint, AgentId, AgentStatus, FilterComparator, IdempotencyKey,
+    PromiseId, ScanCursor,
 };
 use golem_common::model::{AgentInvocationOutput, AgentInvocationResult, InvocationStatus};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -70,7 +71,7 @@ pub trait WorkerClient: Send + Sync {
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
-    ) -> WorkerResult<AgentId>;
+    ) -> WorkerResult<(AgentId, AgentFingerprint)>;
 
     async fn connect(
         &self,
@@ -423,10 +424,10 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
-    ) -> WorkerResult<AgentId> {
+    ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         let agent_id_clone = agent_id.clone();
         let account_id_clone = account_id;
-        self.call_worker_executor(
+        let fingerprint = self.call_worker_executor(
             agent_id.clone(),
             "create_worker",
             move |worker_executor_client| {
@@ -449,20 +450,37 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     }),
                 )
             },
-            |response| match response.into_inner() {
-                workerexecutor::v1::CreateWorkerResponse {
-                    result: Some(workerexecutor::v1::create_worker_response::Result::Success(_)),
-                } => Ok(()),
-                workerexecutor::v1::CreateWorkerResponse {
-                    result: Some(workerexecutor::v1::create_worker_response::Result::Failure(err)),
-                } => Err(err.into()),
-                workerexecutor::v1::CreateWorkerResponse { .. } => Err("Empty response".into()),
+            |response| {
+                use workerexecutor::v1::create_worker_success_response::Fingerprint;
+                match response.into_inner() {
+                    workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(workerexecutor::v1::create_worker_response::Result::Success(
+                            workerexecutor::v1::CreateWorkerSuccessResponse {
+                                fingerprint: Some(Fingerprint::FingerprintUuid(u)),
+                            },
+                        )),
+                    } => Ok(AgentFingerprint::Uuid(u.into())),
+                    workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(workerexecutor::v1::create_worker_response::Result::Success(
+                            workerexecutor::v1::CreateWorkerSuccessResponse {
+                                fingerprint: Some(Fingerprint::FingerprintTimestamp(ts)),
+                            },
+                        )),
+                    } => ts
+                        .try_into()
+                        .map(AgentFingerprint::Timestamp)
+                        .map_err(|_| "Invalid fingerprint timestamp".into()),
+                    workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(workerexecutor::v1::create_worker_response::Result::Failure(err)),
+                    } => Err(err.into()),
+                    workerexecutor::v1::CreateWorkerResponse { .. } => Err("Empty response".into()),
+                }
             },
             WorkerServiceError::InternalCallError,
         )
         .await?;
 
-        Ok(agent_id.clone())
+        Ok((agent_id.clone(), fingerprint))
     }
 
     async fn connect(

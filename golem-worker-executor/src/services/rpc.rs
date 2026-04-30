@@ -45,7 +45,8 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
+    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
+    Timestamp,
 };
 
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -219,7 +220,10 @@ impl From<RpcError> for crate::preview2::golem::agent::host::RpcError {
     }
 }
 
-pub trait RpcDemand: Send + Sync {}
+pub trait RpcDemand: Send + Sync {
+    /// The fingerprint of the target worker this demand was established for.
+    fn fingerprint(&self) -> AgentFingerprint;
+}
 
 pub struct RemoteInvocationRpc {
     worker_proxy: Arc<dyn WorkerProxy>,
@@ -237,16 +241,21 @@ impl RemoteInvocationRpc {
 
 struct LoggingDemand {
     agent_id: AgentId,
+    fingerprint: AgentFingerprint,
 }
 
 impl LoggingDemand {
-    pub fn new(agent_id: AgentId) -> Self {
+    pub fn new(agent_id: AgentId, fingerprint: AgentFingerprint) -> Self {
         log::debug!("Initializing RPC connection for worker {agent_id}");
-        Self { agent_id }
+        Self { agent_id, fingerprint }
     }
 }
 
-impl RpcDemand for LoggingDemand {}
+impl RpcDemand for LoggingDemand {
+    fn fingerprint(&self) -> AgentFingerprint {
+        self.fingerprint
+    }
+}
 
 impl Drop for LoggingDemand {
     fn drop(&mut self) {
@@ -269,9 +278,8 @@ impl Rpc for RemoteInvocationRpc {
         debug!("Ensuring remote target worker exists");
 
         let principal = caller_agent_principal(self_agent_id);
-        let demand = LoggingDemand::new(owned_agent_id.agent_id());
 
-        self.worker_proxy
+        let fingerprint = self.worker_proxy
             .start(
                 owned_agent_id,
                 self_agent_id,
@@ -283,7 +291,7 @@ impl Rpc for RemoteInvocationRpc {
             )
             .await?;
 
-        Ok(Box::new(demand))
+        Ok(Box::new(LoggingDemand::new(owned_agent_id.agent_id(), fingerprint)))
     }
 
     async fn invoke_and_await(
@@ -776,7 +784,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await?;
 
-            let _worker = Worker::get_or_create_running(
+            let worker = Worker::get_or_create_running(
                 self,
                 owned_agent_id,
                 Some(self_env.to_vec()),
@@ -790,8 +798,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             )
             .await?;
 
-            let demand = LoggingDemand::new(owned_agent_id.agent_id());
-            Ok(Box::new(demand))
+            let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+            Ok(Box::new(LoggingDemand::new(owned_agent_id.agent_id(), fingerprint)))
         } else {
             self.remote_rpc
                 .create_demand(
@@ -950,5 +958,3 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         }
     }
 }
-
-impl RpcDemand for () {}

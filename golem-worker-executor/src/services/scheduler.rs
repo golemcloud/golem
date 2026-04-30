@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction};
+use golem_common::model::{AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction, Timestamp};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
@@ -335,20 +335,44 @@ impl SchedulerServiceDefault {
                     account_id: _,
                     owned_agent_id,
                     invocation,
+                    target_worker_fingerprint,
                 } => {
-                    // TODO: We probably need more error handling here and retry the action when we fail to enqueue the invocation.
-                    // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
-                    let result = self
-                        .worker_access
-                        .enqueue_invocation(&owned_agent_id, *invocation)
-                        .await;
-
-                    if let Err(e) = result {
-                        error!(
-                            agent_id = owned_agent_id.to_string(),
-                            "Failed to invoke worker with scheduled invocation: {e}"
-                        );
+                    // If the action was scheduled with a fingerprint guard, verify that the
+                    // current worker instance is the same one that was targeted. A mismatch
+                    // means the original worker was deleted and recreated — drop the stale
+                    // invocation silently.
+                    let stale = if let Some(expected_fingerprint) = target_worker_fingerprint {
+                        match self.worker_service.get(&owned_agent_id).await {
+                            Some(meta) => {
+                                meta.initial_worker_metadata.fingerprint != expected_fingerprint
+                            }
+                            // Worker no longer exists — drop.
+                            None => true,
+                        }
+                    } else {
+                        false
                     };
+
+                    if stale {
+                        info!(
+                            agent_id = owned_agent_id.to_string(),
+                            "Dropping stale scheduled invocation: target worker was deleted and recreated"
+                        );
+                    } else {
+                        // TODO: We probably need more error handling here and retry the action when we fail to enqueue the invocation.
+                        // We don't really care that it completes here, but it needs to be persisted in the invocation queue.
+                        let result = self
+                            .worker_access
+                            .enqueue_invocation(&owned_agent_id, *invocation)
+                            .await;
+
+                        if let Err(e) = result {
+                            error!(
+                                agent_id = owned_agent_id.to_string(),
+                                "Failed to invoke worker with scheduled invocation: {e}"
+                            );
+                        }
+                    }
                 }
                 ScheduledAction::Resume {
                     agent_created_by: _,

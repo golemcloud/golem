@@ -1707,6 +1707,7 @@ mod test {
                         HashSet::new(),
                         Vec::new(),
                         None,
+                        None,
                     ),
                     expected_status: status.clone(),
                 }],
@@ -2684,6 +2685,7 @@ mod test {
                 0,
                 Default::default(),
                 vec![],
+                None,
                 None,
             ),
         )

@@ -825,6 +825,8 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 original_phantom_id: params
                     .original_phantom_id
                     .map(|uuid| uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)),
+                // instance_id is an internal field not exposed in the WIT interface
+                instance_id: None,
             }),
             oplog::OplogEntry::HostCall(params) => Ok(Self::HostCall {
                 timestamp: timestamp_from_datetime(params.timestamp),

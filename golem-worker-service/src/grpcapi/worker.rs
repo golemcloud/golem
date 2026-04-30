@@ -32,7 +32,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
-use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::grpc::proto_agent_id_string;
 use golem_service_base::model::auth::AuthCtx;
@@ -62,12 +62,20 @@ impl GrpcWorkerService for WorkerGrpcApi {
             .instrument(record.span.clone())
             .await
         {
-            Ok((agent_id, component_version)) => record.succeed(
-                launch_new_worker_response::Result::Success(LaunchNewWorkerSuccessResponse {
-                    agent_id: Some(agent_id.into()),
-                    component_version: component_version.into(),
-                }),
-            ),
+            Ok((agent_id, component_version, fingerprint)) => {
+                use golem_api_grpc::proto::golem::worker::v1::launch_new_worker_success_response::Fingerprint;
+                let proto_fingerprint = match fingerprint {
+                    AgentFingerprint::Uuid(u) => Fingerprint::FingerprintUuid(u.into()),
+                    AgentFingerprint::Timestamp(ts) => Fingerprint::FingerprintTimestamp(ts.into()),
+                };
+                record.succeed(
+                    launch_new_worker_response::Result::Success(LaunchNewWorkerSuccessResponse {
+                        agent_id: Some(agent_id.into()),
+                        component_version: component_version.into(),
+                        fingerprint: Some(proto_fingerprint),
+                    }),
+                )
+            }
             Err(error) => record.fail(
                 launch_new_worker_response::Result::Error(error.clone()),
                 &mut WorkerTraceErrorKind(&error),
@@ -306,7 +314,7 @@ impl WorkerGrpcApi {
     async fn launch_new_worker(
         &self,
         request: LaunchNewWorkerRequest,
-    ) -> Result<(AgentId, ComponentRevision), GrpcAgentError> {
+    ) -> Result<(AgentId, ComponentRevision, AgentFingerprint), GrpcAgentError> {
         let auth: AuthCtx = request
             .auth_ctx
             .ok_or(bad_request_error("auth_ctx not found"))?
@@ -330,7 +338,7 @@ impl WorkerGrpcApi {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| bad_request_error(format!("failed converting config: {e}")))?;
 
-        let latest_component_revision = self
+        let (latest_component_revision, fingerprint) = self
             .worker_service
             .create(
                 &agent_id,
@@ -343,7 +351,7 @@ impl WorkerGrpcApi {
             )
             .await?;
 
-        Ok((agent_id, latest_component_revision))
+        Ok((agent_id, latest_component_revision, fingerprint))
     }
 
     async fn complete_promise(

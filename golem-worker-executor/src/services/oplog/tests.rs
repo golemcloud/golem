@@ -28,7 +28,9 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{AgentError, LogLevel};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentInvocationPayload, RetryConfig};
-use golem_common::model::{AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId};
+use golem_common::model::{
+    AgentFingerprint, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
+};
 use golem_common::redis::RedisPool;
 use golem_common::tracing::{TracingConfig, init_tracing};
 use golem_service_base::db::sqlite::SqlitePool;
@@ -57,6 +59,25 @@ impl Tracing {
 #[test_dep]
 fn tracing() -> Tracing {
     Tracing::init()
+}
+
+fn make_agent_metadata(
+    agent_id: AgentId,
+    created_by: AccountId,
+    environment_id: EnvironmentId,
+) -> AgentMetadata {
+    AgentMetadata {
+        agent_id,
+        env: vec![],
+        environment_id,
+        created_by,
+        config: Vec::new(),
+        created_at: Timestamp::now_utc(),
+        parent: None,
+        last_known_status: AgentStatusRecord::default(),
+        original_phantom_id: None,
+        fingerprint: AgentFingerprint::Timestamp(Timestamp::now_utc()),
+    }
 }
 
 fn default_last_known_status() -> read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord> {
@@ -98,7 +119,7 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -159,7 +180,7 @@ async fn open_add_and_read_back_many(_tracing: &Tracing) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -227,7 +248,7 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
         )
@@ -302,7 +323,7 @@ async fn open_add_and_read_back_many_ephemeral(_tracing: &Tracing) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
         )
@@ -370,7 +391,7 @@ async fn ephemeral_read_many_committed_only(_tracing: &Tracing) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
         )
@@ -433,7 +454,7 @@ async fn ephemeral_read_many_uncommitted_only(_tracing: &Tracing) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
         )
@@ -493,7 +514,7 @@ async fn ephemeral_read_many_partial_range(_tracing: &Tracing) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
         )
@@ -594,7 +615,7 @@ async fn ephemeral_read_many_across_archive_layers(_tracing: &Tracing) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
         )
@@ -708,7 +729,7 @@ async fn ephemeral_read_many_zero_returns_empty(_tracing: &Tracing) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Ephemeral),
         )
@@ -745,7 +766,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -930,7 +951,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1192,7 +1213,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1220,7 +1241,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             .open(
                 &owned_agent_id,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1246,7 +1267,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1331,7 +1352,7 @@ async fn read_from_archive_impl(use_blob: bool) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1371,7 +1392,7 @@ async fn read_from_archive_impl(use_blob: bool) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1475,6 +1496,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         initial_total_linear_memory_size: 0,
         initial_active_plugins: HashSet::new(),
         original_phantom_id: None,
+        instance_id: None
     }
     .rounded();
 
@@ -1482,7 +1504,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         .create(
             &owned_agent_id,
             create_entry.clone(),
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1616,7 +1638,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1649,7 +1671,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1670,7 +1692,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             .open(
                 &owned_agent_id,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1698,7 +1720,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             .open(
                 &owned_agent_id,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1733,7 +1755,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1754,7 +1776,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             .open(
                 &owned_agent_id,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1782,7 +1804,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             .open(
                 &owned_agent_id,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -1930,7 +1952,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -1972,7 +1994,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -2071,7 +2093,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
             .open(
                 &owned_agent_id,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -2094,7 +2116,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -2123,7 +2145,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
             .open(
                 &owned_agent_id,
                 None,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -2139,7 +2161,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .open(
             &owned_agent_id,
             None,
-            AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -2215,6 +2237,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             HashSet::new(),
             Vec::new(),
             None,
+            None,
         );
 
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
@@ -2222,7 +2245,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             .create(
                 &owned_agent_id,
                 create_entry,
-                AgentMetadata::default(agent_id.clone(), account_id, environment_id),
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
                 default_last_known_status(),
                 default_execution_status(AgentMode::Durable),
             )
@@ -2359,7 +2382,7 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
                 start: OplogIndex::from_u64(0),
                 end: OplogIndex::from_u64(0),
             }),
-            AgentMetadata::default(worker_id.clone(), account_id, environment_id),
+            make_agent_metadata(worker_id.clone(), account_id, environment_id),
             default_last_known_status(),
             default_execution_status(AgentMode::Durable),
         )
@@ -2397,7 +2420,7 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
                     .open(
                         &owned_agent_id,
                         None,
-                        AgentMetadata::default(worker_id.clone(), account_id, environment_id),
+                        make_agent_metadata(worker_id.clone(), account_id, environment_id),
                         default_last_known_status(),
                         default_execution_status(AgentMode::Durable),
                     )

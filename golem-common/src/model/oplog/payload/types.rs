@@ -22,8 +22,8 @@ use crate::model::oplog::{
 };
 use crate::model::worker::TypedAgentConfigEntry;
 use crate::model::{
-    AccountId, AgentId, AgentInvocation, AgentMetadata, AgentStatus, IdempotencyKey, OwnedAgentId,
-    RdbmsPoolKey, ScheduleId, ScheduledAction,
+    AccountId, AgentFingerprint, AgentId, AgentInvocation, AgentMetadata, AgentStatus,
+    IdempotencyKey, OwnedAgentId, RdbmsPoolKey, ScheduleId, ScheduledAction,
 };
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
@@ -1341,7 +1341,7 @@ pub enum SerializableWebsocketError {
 }
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution())]
+#[desert(evolution(FieldAdded("target_worker_fingerprint", None)))]
 #[wit_transparent]
 pub struct SerializableScheduledInvocation {
     pub timestamp: i64,
@@ -1355,6 +1355,7 @@ pub struct SerializableScheduledInvocation {
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub spans: Vec<Vec<PublicSpanData>>,
+    pub target_worker_fingerprint: Option<AgentFingerprint>,
 }
 
 impl SerializableScheduledInvocation {
@@ -1364,6 +1365,7 @@ impl SerializableScheduledInvocation {
                 account_id,
                 owned_agent_id,
                 invocation,
+                target_worker_fingerprint,
             } => match *invocation {
                 AgentInvocation::AgentMethod {
                     idempotency_key,
@@ -1383,6 +1385,7 @@ impl SerializableScheduledInvocation {
                     spans: encode_span_data(&invocation_context.to_oplog_data()),
                     trace_id: invocation_context.trace_id,
                     trace_states: invocation_context.trace_states,
+                    target_worker_fingerprint,
                 }),
                 other => Err(format!(
                     "ScheduleId contains a non-method invocation: {:?}",
@@ -1414,6 +1417,7 @@ impl SerializableScheduledInvocation {
                     invocation_context,
                     principal: self.principal,
                 }),
+                target_worker_fingerprint: self.target_worker_fingerprint,
             },
         }
     }

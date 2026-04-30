@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, OwnedAgentId, ShardId,
+    AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord, OwnedAgentId, ShardId,
 };
 use std::sync::Arc;
 use tracing::debug;
@@ -158,6 +158,7 @@ impl WorkerService for DefaultWorkerService {
                     initial_active_plugins,
                     local_agent_config,
                     original_phantom_id,
+                    instance_id,
                 },
             )) => {
                 let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
@@ -179,6 +180,14 @@ impl WorkerService for DefaultWorkerService {
                         panic!("failed enriching local agent config for {owned_agent_id}: {err}")
                     });
 
+                // Derive the fingerprint from the oplog instance_id:
+                //   - new agents have a UUID stored in the oplog → use it directly
+                //   - old agents (before this field existed) fall back to Timestamp(created_at)
+                let fingerprint = match instance_id {
+                    Some(id) => AgentFingerprint::Uuid(id),
+                    None => AgentFingerprint::Timestamp(timestamp),
+                };
+
                 let initial_worker_metadata = AgentMetadata {
                     agent_id,
                     env,
@@ -196,6 +205,7 @@ impl WorkerService for DefaultWorkerService {
                         ..AgentStatusRecord::default()
                     },
                     original_phantom_id,
+                    fingerprint,
                 };
 
                 let status_value: Option<Result<AgentStatusRecord, String>> = self

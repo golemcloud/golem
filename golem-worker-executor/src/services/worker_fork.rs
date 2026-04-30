@@ -52,7 +52,7 @@ use golem_common::model::oplog::{
     HostResponseGolemApiFork, OplogEntry, OplogIndex, OplogIndexRange,
 };
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
-use golem_common::model::{AgentMetadata, Timestamp};
+use golem_common::model::{AgentFingerprint, AgentMetadata, Timestamp};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
@@ -533,6 +533,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             parent: None,
             last_known_status: initial_source_worker_metadata.last_known_status.clone(),
             original_phantom_id: initial_source_worker_metadata.original_phantom_id,
+            fingerprint: AgentFingerprint::Uuid(Uuid::new_v4()),  // new instance, new fingerprint
         };
 
         let source_oplog = source_worker_instance.oplog();
@@ -668,6 +669,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 local_agent_config,
                 agent_id: _,
                 original_phantom_id,
+                ..
             } => Some(OplogEntry::Create {
                 timestamp,
                 agent_id: agent_id.clone(),
@@ -681,6 +683,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 initial_active_plugins,
                 local_agent_config,
                 original_phantom_id,
+                // The forked worker gets a fresh instance_id so its scheduled invocations
+                // are independent of the source worker's fingerprint.
+                instance_id: Some(Uuid::new_v4()),
             }),
             _ => None,
         }

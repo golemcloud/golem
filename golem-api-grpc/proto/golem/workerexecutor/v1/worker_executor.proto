@@ -131,9 +131,16 @@ message CreateWorkerRequest {
   optional golem.worker.InvocationContext invocation_context = 9;
 }
 
+message CreateWorkerSuccessResponse {
+  oneof fingerprint {
+    golem.common.UUID fingerprint_uuid = 1;
+    google.protobuf.Timestamp fingerprint_timestamp = 2;
+  }
+}
+
 message CreateWorkerResponse {
   oneof result {
-    golem.common.Empty success = 1;
+    CreateWorkerSuccessResponse success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }

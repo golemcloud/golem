@@ -260,6 +260,9 @@ fn get_oplog_entry_from_public_oplog_entry(
                 .map(|x| x.environment_plugin_grant_id)
                 .collect(),
             original_phantom_id,
+            // `instance_id` is not part of the public oplog representation. This is only needed for scheduling,
+            // so the debugging service is fine without it. The fallback is to use the created_at timestamp as an unique identifier
+            instance_id: None,
         }),
         PublicOplogEntry::HostCall(HostCallParams {
             timestamp,

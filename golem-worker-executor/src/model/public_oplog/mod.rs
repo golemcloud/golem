@@ -242,6 +242,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 initial_active_plugins,
                 local_agent_config,
                 original_phantom_id,
+                ..
             } => {
                 let metadata = components
                     .get_metadata(

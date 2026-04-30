@@ -65,6 +65,7 @@ use raw_imports::*;
 // - public: fields of the PublicOplogEntry case
 oplog_entry! {
     /// The first entry of every oplog
+    #[desert(evolution(FieldAdded("instance_id", None)))]
     Create {
         hint: false
         wit_raw_type: "raw-create-parameters"
@@ -80,7 +81,8 @@ oplog_entry! {
             initial_total_linear_memory_size: u64,
             initial_active_plugins: HashSet<EnvironmentPluginGrantId>,
             local_agent_config: Vec<UntypedAgentConfigEntry>,
-            original_phantom_id: Option<Uuid>
+            original_phantom_id: Option<Uuid>,
+            instance_id: Option<Uuid>
         }
         public {
             agent_id: AgentId,

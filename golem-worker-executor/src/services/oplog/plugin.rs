@@ -1652,7 +1652,7 @@ fn oplog_processor_idempotency_key(
 mod tests {
     use super::*;
     use golem_common::base_model::component_metadata::KnownExports;
-    use golem_common::model::Timestamp;
+    use golem_common::model::{AgentFingerprint, Timestamp};
     use golem_common::model::account::AccountId;
     use golem_common::model::application::ApplicationId;
     use golem_common::model::component::{
@@ -2078,6 +2078,7 @@ mod tests {
             parent: None,
             last_known_status: status.clone(),
             original_phantom_id: None,
+            fingerprint: AgentFingerprint::Uuid(Uuid::now_v7())
         };
 
         let status_lock =
