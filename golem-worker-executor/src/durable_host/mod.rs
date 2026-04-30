@@ -2497,21 +2497,30 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     }
 
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        if &self.state.current_span_id == span_id {
-            self.state.current_span_id = self
-                .state
+        let parent_id = if &self.state.current_span_id == span_id {
+            self.state
                 .invocation_context
                 .get(span_id)
                 .unwrap()
                 .parent()
                 .map(|p| p.span_id().clone())
-                .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
+        } else {
+            None
+        };
+
+        if let Some(parent_id) = parent_id
+            && self.state.invocation_context.get(&parent_id).is_ok()
+        {
+            self.state.current_span_id = parent_id;
         }
         let _ = self
             .state
             .invocation_context
             .finish_span(span_id)
             .map_err(WorkerExecutorError::runtime);
+        self.state
+            .invocation_context
+            .repair_current_and_root(&mut self.state.current_span_id);
         Ok(())
     }
 

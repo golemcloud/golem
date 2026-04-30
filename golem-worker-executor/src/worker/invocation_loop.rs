@@ -1181,6 +1181,24 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .await;
         self.store.data_mut().end_call_snapshotting_function();
 
+        if let Some(outcome) = periodic_snapshot_failure_outcome(&result) {
+            match &result {
+                Ok(InvokeResult::Failed { .. }) => {
+                    warn!(
+                        "Periodic snapshot save function failed; restarting worker to recover the store"
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        "Periodic snapshot save invocation error: {err}; restarting worker to recover the store"
+                    );
+                }
+                _ => unreachable!(),
+            }
+
+            return outcome;
+        }
+
         match result {
             Ok(InvokeResult::Succeeded {
                 result: AgentInvocationResult::SaveSnapshot { snapshot },
@@ -1219,10 +1237,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 warn!("Periodic snapshot returned unexpected result format");
                 CommandOutcome::Continue
             }
-            Ok(InvokeResult::Failed { .. }) => {
-                warn!("Periodic snapshot save function failed");
-                CommandOutcome::Continue
-            }
             Ok(InvokeResult::Exited { .. }) => {
                 warn!("Worker exited during periodic snapshot save");
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
@@ -1231,16 +1245,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 warn!("Worker interrupted during periodic snapshot save");
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }
-            Err(err) => {
-                warn!("Periodic snapshot save invocation error: {err}");
-                CommandOutcome::Continue
-            }
+            Ok(InvokeResult::Failed { .. }) | Err(_) => unreachable!(),
         }
     }
 }
 
 /// Outcome of processing a single command within the inner invocation loop
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum CommandOutcome {
     /// Break from both the inner and outer loops, there is no way to retry anything
     BreakOuterLoop,
@@ -1257,6 +1268,17 @@ enum PeriodicSnapshotAction {
     NotNeeded,
     DueNow,
     Wait(Duration),
+}
+
+fn periodic_snapshot_failure_outcome(
+    result: &Result<InvokeResult, WorkerExecutorError>,
+) -> Option<CommandOutcome> {
+    match result {
+        Ok(InvokeResult::Failed { .. }) | Err(_) => {
+            Some(CommandOutcome::BreakInnerLoop(RetryDecision::Immediate))
+        }
+        _ => None,
+    }
 }
 
 fn snapshot_baseline_timestamp(
@@ -1288,8 +1310,15 @@ fn snapshot_action_at(
 
 #[cfg(test)]
 mod tests {
-    use super::{PeriodicSnapshotAction, snapshot_action_at, snapshot_baseline_timestamp};
-    use golem_common::model::Timestamp;
+    use super::{
+        CommandOutcome, PeriodicSnapshotAction, periodic_snapshot_failure_outcome,
+        snapshot_action_at, snapshot_baseline_timestamp,
+    };
+    use crate::worker::RetryDecision;
+    use crate::worker::invocation::InvokeResult;
+    use golem_common::model::oplog::AgentError;
+    use golem_common::model::{OplogIndex, Timestamp};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::time::Duration;
     use test_r::test;
 
@@ -1322,6 +1351,30 @@ mod tests {
         assert_eq!(
             action,
             PeriodicSnapshotAction::Wait(Duration::from_millis(1_750))
+        );
+    }
+
+    #[test]
+    fn periodic_snapshot_failed_invocation_triggers_immediate_recovery() {
+        let result = Ok(InvokeResult::Failed {
+            consumed_fuel: 0,
+            error: AgentError::InternalError("boom".to_string()),
+            retry_from: OplogIndex::INITIAL,
+        });
+
+        assert_eq!(
+            periodic_snapshot_failure_outcome(&result),
+            Some(CommandOutcome::BreakInnerLoop(RetryDecision::Immediate))
+        );
+    }
+
+    #[test]
+    fn periodic_snapshot_invocation_error_triggers_immediate_recovery() {
+        let result = Err(WorkerExecutorError::runtime("boom"));
+
+        assert_eq!(
+            periodic_snapshot_failure_outcome(&result),
+            Some(CommandOutcome::BreakInnerLoop(RetryDecision::Immediate))
         );
     }
 }

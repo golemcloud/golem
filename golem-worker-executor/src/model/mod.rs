@@ -726,6 +726,33 @@ impl InvocationContext {
         }
     }
 
+    pub fn repair_current_and_root(&mut self, current_span_id: &mut SpanId) {
+        if self.spans.is_empty() {
+            let root = InvocationContextSpan::local().build();
+            *current_span_id = root.span_id().clone();
+            self.root = root.clone();
+            self.spans.insert(root.span_id().clone(), root);
+            return;
+        }
+
+        if !self.spans.contains_key(self.root.span_id()) {
+            self.root = self
+                .spans
+                .values()
+                .find(|span| {
+                    span.parent()
+                        .map(|parent| !self.spans.contains_key(parent.span_id()))
+                        .unwrap_or(true)
+                })
+                .cloned()
+                .unwrap_or_else(|| self.spans.values().next().unwrap().clone());
+        }
+
+        if !self.spans.contains_key(current_span_id) {
+            *current_span_id = self.root.span_id().clone();
+        }
+    }
+
     fn span(&self, span_id: &SpanId) -> Result<&Arc<InvocationContextSpan>, String> {
         self.spans
             .get(span_id)
@@ -1060,5 +1087,27 @@ mod tests {
         assert_eq!(z, Some(vec![s("33"), s("3")]));
         assert_eq!(w, None);
         assert_eq!(a, Some(vec![s("00"), s("0")]));
+    }
+
+    #[test]
+    fn repair_current_and_root_after_removing_switched_stack() {
+        let mut ctx = InvocationContext::new(Some(example_trace_id_1()));
+        let base_root_id = ctx.root.span_id().clone();
+
+        let stack = example_stack_1();
+        let (switched_ctx, _current_id) = InvocationContext::from_stack(stack).unwrap();
+        ctx.switch_to(switched_ctx);
+
+        ctx.finish_span(&example_span_id_6()).unwrap();
+        ctx.finish_span(&example_span_id_5()).unwrap();
+        ctx.finish_span(&example_span_id_2()).unwrap();
+        ctx.finish_span(&example_span_id_1()).unwrap();
+
+        let mut current_span_id = example_span_id_1();
+        ctx.repair_current_and_root(&mut current_span_id);
+
+        assert_eq!(ctx.root.span_id(), &base_root_id);
+        assert_eq!(current_span_id, base_root_id);
+        assert!(ctx.get(&current_span_id).is_ok());
     }
 }
