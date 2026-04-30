@@ -278,12 +278,15 @@ impl SchedulerServiceDefault {
                 ScheduledAction::ArchiveOplog {
                     account_id,
                     owned_agent_id,
+                    agent_mode,
                     last_oplog_index,
                     next_after,
                 } => {
-                    if self.oplog_service.exists(&owned_agent_id).await {
-                        let current_last_index =
-                            self.oplog_service.get_last_index(&owned_agent_id).await;
+                    if self.oplog_service.exists(&owned_agent_id, agent_mode).await {
+                        let current_last_index = self
+                            .oplog_service
+                            .get_last_index(&owned_agent_id, agent_mode)
+                            .await;
                         if current_last_index == last_oplog_index {
                             // Need to create the `Worker` instance to avoid race conditions
                             match self.worker_access.open_oplog(&owned_agent_id).await {
@@ -302,6 +305,7 @@ impl SchedulerServiceDefault {
                                                 ScheduledAction::ArchiveOplog {
                                                     account_id,
                                                     owned_agent_id,
+                                                    agent_mode,
                                                     last_oplog_index,
                                                     next_after,
                                                 },

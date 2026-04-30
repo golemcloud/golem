@@ -59,6 +59,7 @@ use self::component::ComponentId;
 use self::component::{AgentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
 use self::worker::TypedAgentConfigEntry;
+use crate::base_model::agent::AgentMode;
 use crate::base_model::agent::ParsedAgentId;
 use crate::base_model::agent::Principal;
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -327,9 +328,11 @@ pub enum ScheduledAction {
     /// Archives all entries from the first non-empty layer of an oplog to the next layer,
     /// if the last oplog index did not change. If there are more layers below, schedules
     /// a next action to archive the next layer.
+    #[desert(evolution(FieldAdded("agent_mode", AgentMode::Durable)))]
     ArchiveOplog {
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         last_oplog_index: OplogIndex,
         next_after: Duration,
     },
@@ -518,6 +521,7 @@ pub struct AgentMetadata {
     pub parent: Option<AgentId>,
     pub last_known_status: AgentStatusRecord,
     pub original_phantom_id: Option<Uuid>,
+    pub agent_mode: AgentMode,
 }
 
 impl AgentMetadata {
@@ -536,6 +540,7 @@ impl AgentMetadata {
             parent: None,
             last_known_status: AgentStatusRecord::default(),
             original_phantom_id: None,
+            agent_mode: AgentMode::Durable,
         }
     }
 
@@ -590,6 +595,9 @@ impl AgentFilter {
             }
             AgentFilter::Status(AgentStatusFilter { comparator, value }) => {
                 comparator.matches(&metadata.last_known_status.status, &value)
+            }
+            AgentFilter::Mode(AgentModeFilter { comparator, value }) => {
+                comparator.matches(&metadata.agent_mode, &value)
             }
             AgentFilter::Not(AgentNotFilter { filter }) => !filter.matches(metadata),
             AgentFilter::And(AgentAndFilter { filters }) => {

@@ -18,7 +18,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
 use golem_common::model::agent::{DataValue, ElementValues};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -68,16 +68,24 @@ pub async fn get_public_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     agent_type_name: Option<&AgentTypeName>,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
 ) -> Result<PublicOplogChunk, String> {
     let raw_entries = oplog_service
-        .read(owned_agent_id, initial_oplog_index, count as u64)
+        .read(
+            owned_agent_id,
+            agent_mode,
+            initial_oplog_index,
+            count as u64,
+        )
         .await;
 
-    let last_index = oplog_service.get_last_index(owned_agent_id).await;
+    let last_index = oplog_service
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
 
     let mut entries = Vec::new();
     let mut current_component_revision = initial_component_revision;
@@ -98,6 +106,7 @@ pub async fn get_public_oplog_chunk(
             oplog_service.clone(),
             components.clone(),
             owned_agent_id,
+            agent_mode,
             agent_type_name,
             current_component_revision,
         )
@@ -126,6 +135,7 @@ pub async fn search_public_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     agent_type_name: Option<&AgentTypeName>,
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
@@ -144,6 +154,7 @@ pub async fn search_public_oplog(
             component_service.clone(),
             oplog_service.clone(),
             owned_agent_id,
+            agent_mode,
             agent_type_name,
             current_component_revision,
             current_index,
@@ -180,15 +191,18 @@ pub async fn search_public_oplog(
 pub async fn find_component_revision_at(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     start: OplogIndex,
 ) -> Result<ComponentRevision, WorkerExecutorError> {
     let mut initial_component_revision = ComponentRevision::INITIAL;
-    let last_oplog_index = oplog_service.get_last_index(owned_agent_id).await;
+    let last_oplog_index = oplog_service
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
     let mut current = OplogIndex::INITIAL;
     while current < start && current <= last_oplog_index {
         // NOTE: could be reading in pages for optimization
         let entry = oplog_service
-            .read(owned_agent_id, current, 1)
+            .read(owned_agent_id, agent_mode, current, 1)
             .await
             .iter()
             .next()
@@ -212,6 +226,7 @@ pub trait PublicOplogEntryOps: Sized {
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
     ) -> Result<Self, String>;
@@ -225,6 +240,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
     ) -> Result<Self, String> {
@@ -288,10 +304,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 durable_function_type,
             } => {
                 let host_request: HostRequest = oplog_service
-                    .download_payload(owned_agent_id, request)
+                    .download_payload(owned_agent_id, agent_mode, request)
                     .await?;
                 let host_response: HostResponse = oplog_service
-                    .download_payload(owned_agent_id, response)
+                    .download_payload(owned_agent_id, agent_mode, response)
                     .await?;
 
                 // Enriching data
@@ -324,7 +340,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 invocation_context,
             } => {
                 let invocation_payload: AgentInvocationPayload = oplog_service
-                    .download_payload(owned_agent_id, payload)
+                    .download_payload(owned_agent_id, agent_mode, payload)
                     .await?;
 
                 let invocation_context_stack = InvocationContextStack::from_oplog_data(
@@ -359,7 +375,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 component_revision: entry_component_revision,
             } => {
                 let invocation_result: AgentInvocationResult = oplog_service
-                    .download_payload(owned_agent_id, result)
+                    .download_payload(owned_agent_id, agent_mode, result)
                     .await?;
 
                 let public_result = agent_invocation_result_to_public(
@@ -438,7 +454,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 invocation_context,
             } => {
                 let invocation_payload: AgentInvocationPayload = oplog_service
-                    .download_payload(owned_agent_id, payload)
+                    .download_payload(owned_agent_id, agent_mode, payload)
                     .await?;
 
                 let invocation_context_stack = InvocationContextStack::from_oplog_data(
@@ -479,7 +495,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         payload, mime_type, ..
                     } => {
                         let bytes = oplog_service
-                            .download_payload(owned_agent_id, payload)
+                            .download_payload(owned_agent_id, agent_mode, payload)
                             .await?;
                         PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                             payload: bytes,
@@ -744,7 +760,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 data,
                 mime_type,
             } => {
-                let bytes: Vec<u8> = oplog_service.download_payload(owned_agent_id, data).await?;
+                let bytes: Vec<u8> = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, data)
+                    .await?;
 
                 let snapshot_data = raw_snapshot_to_public(RawSnapshotData {
                     data: bytes,

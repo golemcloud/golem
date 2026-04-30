@@ -20,6 +20,7 @@ use crate::model::public_oplog::{
     find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::model::{LastError, ReadFileResult};
+use crate::services::component::resolve_agent_mode;
 use crate::services::events::Event;
 use crate::services::worker_activator::{
     DefaultWorkerActivator, LazyWorkerActivator, WorkerActivator,
@@ -162,6 +163,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn ensure_not_failed(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         metadata: &AgentMetadata,
     ) -> Result<(), WorkerExecutorError> {
         match &metadata.last_known_status.status {
@@ -169,6 +171,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let error_and_retry_count = Ctx::get_last_error_and_retry_count(
                     self,
                     owned_agent_id,
+                    agent_mode,
                     &metadata.last_known_status,
                 )
                 .await;
@@ -189,6 +192,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let error_and_retry_count = Ctx::get_last_error_and_retry_count(
                     self,
                     owned_agent_id,
+                    agent_mode,
                     &metadata.last_known_status,
                 )
                 .await;
@@ -740,7 +744,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        self.ensure_not_failed(&owned_agent_id, &metadata).await?;
+        self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, &metadata)
+            .await?;
 
         match &metadata.last_known_status.status {
             AgentStatus::Suspended | AgentStatus::Interrupted | AgentStatus::Idle => {
@@ -845,7 +850,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_agent_id).await;
 
         if let Some(metadata) = &metadata {
-            self.ensure_not_failed(&owned_agent_id, metadata).await?;
+            self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, metadata)
+                .await?;
         }
 
         let invocation_context = request
@@ -919,9 +925,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        let last_error_and_retry_count =
-            Ctx::get_last_error_and_retry_count(self, &owned_agent_id, &metadata.last_known_status)
-                .await;
+        let last_error_and_retry_count = Ctx::get_last_error_and_retry_count(
+            self,
+            &owned_agent_id,
+            metadata.agent_mode,
+            &metadata.last_known_status,
+        )
+        .await;
 
         Self::create_proto_metadata(metadata, last_error_and_retry_count)
     }
@@ -997,6 +1007,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let last_error_and_retry_count = Ctx::get_last_error_and_retry_count(
                 self,
                 &worker_metadata.owned_agent_id(),
+                worker_metadata.agent_mode,
                 &worker_metadata.last_known_status,
             )
             .await;
@@ -1197,7 +1208,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_agent_id.agent_id(),
             ))?;
 
-        self.ensure_not_failed(&owned_agent_id, &metadata).await?;
+        self.ensure_not_failed(&owned_agent_id, metadata.agent_mode, &metadata)
+            .await?;
 
         if metadata.last_known_status.status != AgentStatus::Interrupted {
             let event_service = Worker::get_or_create_suspended(
@@ -1239,6 +1251,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_type_name =
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
+        let component_service = self.component_service();
+        let agent_mode = resolve_agent_mode(&*component_service, &owned_agent_id).await;
+
         let chunk = match request.cursor {
             Some(cursor) => {
                 let current_component_revision =
@@ -1249,9 +1264,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     })?;
 
                 get_public_oplog_chunk(
-                    self.component_service(),
+                    component_service.clone(),
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_mode,
                     agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1265,14 +1281,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             None => {
                 let start = OplogIndex::from_u64(request.from_oplog_index);
-                let initial_component_revision =
-                    find_component_revision_at(self.oplog_service(), &owned_agent_id, start)
-                        .await?;
-
-                get_public_oplog_chunk(
-                    self.component_service(),
+                let initial_component_revision = find_component_revision_at(
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_mode,
+                    start,
+                )
+                .await?;
+
+                get_public_oplog_chunk(
+                    component_service.clone(),
+                    self.oplog_service(),
+                    &owned_agent_id,
+                    agent_mode,
                     agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
@@ -1326,6 +1347,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_type_name =
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
+        let component_service = self.component_service();
+        let agent_mode = resolve_agent_mode(&*component_service, &owned_agent_id).await;
+
         let chunk = match request.cursor {
             Some(cursor) => {
                 let current_component_revision =
@@ -1336,9 +1360,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     })?;
 
                 search_public_oplog(
-                    self.component_service(),
+                    component_service.clone(),
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_mode,
                     agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1353,13 +1378,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             None => {
                 let start = OplogIndex::INITIAL;
-                let initial_component_revision =
-                    find_component_revision_at(self.oplog_service(), &owned_agent_id, start)
-                        .await?;
-                search_public_oplog(
-                    self.component_service(),
+                let initial_component_revision = find_component_revision_at(
                     self.oplog_service(),
                     &owned_agent_id,
+                    agent_mode,
+                    start,
+                )
+                .await?;
+                search_public_oplog(
+                    component_service.clone(),
+                    self.oplog_service(),
+                    &owned_agent_id,
+                    agent_mode,
                     agent_type_name.as_ref(),
                     initial_component_revision,
                     start,

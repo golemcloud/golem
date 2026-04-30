@@ -27,6 +27,7 @@ use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
 use crate::preview2::{Pollable, golem_api_1_x};
+use crate::services::component::resolve_agent_mode;
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker_proxy::WorkerProxyError;
@@ -983,8 +984,14 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         let owned_agent_id = OwnedAgentId::new(self.owned_agent_id.environment_id(), &agent_id);
 
         let start = OplogIndex::from_u64(start);
-        let initial_component_version =
-            find_component_revision_at(self.state.oplog_service(), &owned_agent_id, start).await?;
+        let agent_mode = resolve_agent_mode(&*self.state.component_service, &owned_agent_id).await;
+        let initial_component_version = find_component_revision_at(
+            self.state.oplog_service(),
+            &owned_agent_id,
+            agent_mode,
+            start,
+        )
+        .await?;
 
         let entry = GetOplogEntry::new(owned_agent_id, start, initial_component_version, 100);
         let resource = self.as_wasi_view().table().push(entry)?;
@@ -1003,10 +1010,13 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 
+        let agent_mode = resolve_agent_mode(&*component_service, &entry.owned_agent_id).await;
+
         let chunk = get_public_oplog_chunk(
             component_service,
             oplog_service,
             &entry.owned_agent_id,
+            agent_mode,
             agent_type.as_ref(),
             entry.current_component_revision,
             entry.next_oplog_index,
@@ -1174,8 +1184,14 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         let owned_agent_id = OwnedAgentId::new(self.owned_agent_id.environment_id(), &agent_id);
 
         let start = OplogIndex::INITIAL;
-        let initial_component_version =
-            find_component_revision_at(self.state.oplog_service(), &owned_agent_id, start).await?;
+        let agent_mode = resolve_agent_mode(&*self.state.component_service, &owned_agent_id).await;
+        let initial_component_version = find_component_revision_at(
+            self.state.oplog_service(),
+            &owned_agent_id,
+            agent_mode,
+            start,
+        )
+        .await?;
 
         let entry =
             SearchOplogEntry::new(owned_agent_id, start, initial_component_version, 100, text);
@@ -1202,10 +1218,13 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 
+        let agent_mode = resolve_agent_mode(&*component_service, &entry.owned_agent_id).await;
+
         let chunk = search_public_oplog(
             component_service,
             oplog_service,
             &entry.owned_agent_id,
+            agent_mode,
             agent_type.as_ref(),
             entry.current_component_revision,
             entry.next_oplog_index,
@@ -1341,6 +1360,8 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
             Err(e) => return Ok(Err(e.to_string())),
         };
 
+        let agent_mode = resolve_agent_mode(&*component_service, &owned_agent_id).await;
+
         let mut result = Vec::with_capacity(entries.len());
         for (index, wit_entry) in entries {
             let entry = match OplogEntry::try_from(wit_entry) {
@@ -1359,6 +1380,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                 oplog_service.clone(),
                 component_service.clone(),
                 &owned_agent_id,
+                agent_mode,
                 agent_type.as_ref(),
                 current_revision,
             )

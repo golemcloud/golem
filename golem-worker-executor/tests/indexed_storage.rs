@@ -15,6 +15,7 @@
 use async_trait::async_trait;
 use golem_common::config::{DbPostgresConfig, RedisConfig};
 use golem_common::model::AgentId;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::redis::RedisPool;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -255,14 +256,18 @@ fn ns() -> IndexedStorageNamespaces {
                 component_id: ComponentId::new(),
                 agent_id: "test".to_string(),
             },
+            agent_mode: AgentMode::Durable,
         },
         ns_other: IndexedStorageNamespace::OpLog {
             agent_id: AgentId {
                 component_id: ComponentId::new(),
                 agent_id: "test2".to_string(),
             },
+            agent_mode: AgentMode::Durable,
         },
-        meta: IndexedStorageMetaNamespace::Oplog,
+        meta: IndexedStorageMetaNamespace::Oplog {
+            agent_mode: AgentMode::Durable,
+        },
     }
 }
 
@@ -274,6 +279,7 @@ fn ns2() -> IndexedStorageNamespaces {
                 component_id: ComponentId::new(),
                 agent_id: "test".to_string(),
             },
+            agent_mode: AgentMode::Durable,
             level: 1,
         },
         ns_other: IndexedStorageNamespace::CompressedOpLog {
@@ -281,9 +287,13 @@ fn ns2() -> IndexedStorageNamespaces {
                 component_id: ComponentId::new(),
                 agent_id: "test2".to_string(),
             },
+            agent_mode: AgentMode::Durable,
             level: 1,
         },
-        meta: IndexedStorageMetaNamespace::CompressedOplog { level: 1 },
+        meta: IndexedStorageMetaNamespace::CompressedOplog {
+            agent_mode: AgentMode::Durable,
+            level: 1,
+        },
     }
 }
 

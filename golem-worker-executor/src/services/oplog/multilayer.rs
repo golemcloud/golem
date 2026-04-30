@@ -22,7 +22,7 @@ use crate::services::oplog::multilayer::BackgroundTransferMessage::{
     TransferFromLower, TransferFromPrimary,
 };
 use crate::services::oplog::{
-    CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, downcast_oplog,
+    CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService, downcast_oplog, scan_modes,
 };
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
@@ -49,32 +49,48 @@ use tracing::{Instrument, Level, Span, debug, error, info, span, warn};
 #[async_trait]
 pub trait OplogArchiveService: Debug + Send + Sync {
     /// Opens an oplog archive for reading and writing
-    async fn open(&self, owned_agent_id: &OwnedAgentId) -> Arc<dyn OplogArchive + Send + Sync>;
+    async fn open(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Arc<dyn OplogArchive + Send + Sync>;
 
     /// Deletes the oplog archive for a worker completely
-    async fn delete(&self, owned_agent_id: &OwnedAgentId);
+    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode);
 
     /// Read an arbitrary section of the oplog archive without opening it for writing
     async fn read(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry>;
 
     /// Checks if an oplog archive exists for a worker
-    async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool;
+    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool;
 
+    /// Scans the oplog archive for all workers belonging to the given component, in a paginated way.
+    ///
+    /// `modes` selects which agent modes to scan. `Some(mode)` scans only that mode;
+    /// `None` scans both modes (durable and ephemeral). When scanning multiple modes the
+    /// active mode is encoded into the returned `ScanCursor` so the caller resumes the same
+    /// pagination correctly.
     async fn scan_for_component(
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
+        modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError>;
 
     /// Gets the last stored oplog entry's id in the archive
-    async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex;
+    async fn get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogIndex;
 }
 
 /// Interface for secondary oplog archives - requires less functionality than the primary archive
@@ -232,13 +248,14 @@ impl MultiLayerOplogService {
     async fn filter_ids_existing_on_lower_layers(
         &self,
         unfiltered_ids: Vec<OwnedAgentId>,
+        agent_mode: AgentMode,
         from: usize,
     ) -> Result<Vec<OwnedAgentId>, WorkerExecutorError> {
         let mut ids = Vec::new();
         for id in unfiltered_ids {
             let mut exists_in_lower = false;
             for lower_layer in &self.lower.iter().as_slice()[from..] {
-                if lower_layer.exists(&id).await {
+                if lower_layer.exists(&id, agent_mode).await {
                     exists_in_lower = true;
                     break;
                 }
@@ -267,6 +284,7 @@ impl Clone for MultiLayerOplogService {
 #[derive(Clone)]
 struct CreateOplogConstructor {
     owned_agent_id: OwnedAgentId,
+    agent_mode: AgentMode,
     initial_entry: Option<OplogEntry>,
     primary: Arc<dyn OplogService>,
     service: MultiLayerOplogService,
@@ -277,8 +295,10 @@ struct CreateOplogConstructor {
 }
 
 impl CreateOplogConstructor {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         initial_entry: Option<OplogEntry>,
         primary: Arc<dyn OplogService>,
         service: MultiLayerOplogService,
@@ -289,6 +309,7 @@ impl CreateOplogConstructor {
     ) -> Self {
         Self {
             owned_agent_id,
+            agent_mode,
             initial_entry,
             primary,
             service,
@@ -303,10 +324,14 @@ impl CreateOplogConstructor {
 #[async_trait]
 impl OplogConstructor for CreateOplogConstructor {
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
-        let agent_mode = self.execution_status.read().agent_mode();
+        let agent_mode = self.agent_mode;
         let last_oplog_index = match self.last_oplog_index {
             Some(idx) => idx,
-            None => self.service.get_last_index(&self.owned_agent_id).await,
+            None => {
+                self.service
+                    .get_last_index(&self.owned_agent_id, agent_mode)
+                    .await
+            }
         };
 
         let account_id = self.initial_worker_metadata.created_by;
@@ -317,6 +342,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     self.primary
                         .create(
                             &self.owned_agent_id,
+                            agent_mode,
                             initial_entry,
                             self.initial_worker_metadata,
                             self.last_known_status,
@@ -327,6 +353,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     self.primary
                         .open(
                             &self.owned_agent_id,
+                            agent_mode,
                             Some(last_oplog_index),
                             self.initial_worker_metadata,
                             self.last_known_status,
@@ -336,6 +363,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 };
                 MultiLayerOplog::new(
                     self.owned_agent_id,
+                    agent_mode,
                     account_id,
                     primary,
                     self.service,
@@ -349,6 +377,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 let lower = EphemeralOplog::build_lower_layers(
                     &self.service.lower,
                     &self.owned_agent_id,
+                    agent_mode,
                     account_id,
                     self.service.entry_count_limit,
                     &tx,
@@ -371,6 +400,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 Arc::new(
                     EphemeralOplog::new(
                         self.owned_agent_id,
+                        agent_mode,
                         last_oplog_index,
                         self.service.max_operations_before_commit_ephemeral,
                         self.primary.clone(),
@@ -391,6 +421,7 @@ impl OplogService for MultiLayerOplogService {
     async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -401,6 +432,7 @@ impl OplogService for MultiLayerOplogService {
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
                     owned_agent_id.clone(),
+                    agent_mode,
                     Some(initial_entry),
                     self.primary.clone(),
                     self.clone(),
@@ -416,6 +448,7 @@ impl OplogService for MultiLayerOplogService {
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -426,6 +459,7 @@ impl OplogService for MultiLayerOplogService {
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
                     owned_agent_id.clone(),
+                    agent_mode,
                     None,
                     self.primary.clone(),
                     self.clone(),
@@ -438,11 +472,18 @@ impl OplogService for MultiLayerOplogService {
             .await
     }
 
-    async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
-        let mut result = self.primary.get_last_index(owned_agent_id).await;
+    async fn get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogIndex {
+        let mut result = self
+            .primary
+            .get_last_index(owned_agent_id, agent_mode)
+            .await;
         if result == OplogIndex::NONE {
             for layer in &self.lower {
-                let idx = layer.get_last_index(owned_agent_id).await;
+                let idx = layer.get_last_index(owned_agent_id, agent_mode).await;
                 if idx != OplogIndex::NONE {
                     result = idx;
                     break;
@@ -452,16 +493,17 @@ impl OplogService for MultiLayerOplogService {
         result
     }
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId) {
-        self.primary.delete(owned_agent_id).await;
+    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+        self.primary.delete(owned_agent_id, agent_mode).await;
         for layer in &self.lower {
-            layer.delete(owned_agent_id).await
+            layer.delete(owned_agent_id, agent_mode).await
         }
     }
 
     async fn read(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -469,7 +511,7 @@ impl OplogService for MultiLayerOplogService {
 
         let mut result = BTreeMap::new();
         let mut remaining: u64 = min(
-            u64::from(self.get_last_index(owned_agent_id).await.next())
+            u64::from(self.get_last_index(owned_agent_id, agent_mode).await.next())
                 .saturating_sub(u64::from(idx)),
             n,
         );
@@ -477,7 +519,10 @@ impl OplogService for MultiLayerOplogService {
             return result;
         };
 
-        let partial_result = self.primary.read(owned_agent_id, idx, remaining).await;
+        let partial_result = self
+            .primary
+            .read(owned_agent_id, agent_mode, idx, remaining)
+            .await;
         let full_match = match partial_result.first_key_value() {
             None => false,
             Some((first_idx, _)) => {
@@ -490,7 +535,7 @@ impl OplogService for MultiLayerOplogService {
 
         if !full_match {
             for layer in &self.lower {
-                let partial_result = layer.read(owned_agent_id, idx, remaining).await;
+                let partial_result = layer.read(owned_agent_id, agent_mode, idx, remaining).await;
                 let full_match = match partial_result.first_key_value() {
                     None => false,
                     Some((first_idx, _)) => {
@@ -509,13 +554,13 @@ impl OplogService for MultiLayerOplogService {
         result
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool {
-        if self.primary.exists(owned_agent_id).await {
+    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
+        if self.primary.exists(owned_agent_id, agent_mode).await {
             return true;
         }
 
         for layer in &self.lower {
-            if layer.exists(owned_agent_id).await {
+            if layer.exists(owned_agent_id, agent_mode).await {
                 return true;
             }
         }
@@ -527,25 +572,35 @@ impl OplogService for MultiLayerOplogService {
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
+        modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
+        // For multi-layer scans the active mode is encoded into the inner cursor;
+        // the layer field selects which layer is being scanned. We pass modes
+        // through to each layer, which decodes/encodes the mode bit itself.
         match cursor.layer {
             0 => {
+                let raw_cursor_val = cursor.cursor;
                 let (new_cursor, unfiltered_ids) = self
                     .primary
-                    .scan_for_component(environment_id, component_id, cursor, count)
+                    .scan_for_component(environment_id, component_id, modes, cursor, count)
                     .await?;
 
+                // The active mode for the just-scanned page is whatever the
+                // primary used (we replicate the same decode here so we know
+                // which mode to filter against on lower layers).
+                let (active_mode, _) = scan_modes(modes, raw_cursor_val);
                 let ids = self
-                    .filter_ids_existing_on_lower_layers(unfiltered_ids, 0)
+                    .filter_ids_existing_on_lower_layers(unfiltered_ids, active_mode, 0)
                     .await?;
 
                 if new_cursor.is_active_layer_finished() {
-                    // Continuing with the first lower layer
+                    // Continuing with the first lower layer; preserve any mode
+                    // bits encoded by the primary scan in the cursor value.
                     Ok((
                         ScanCursor {
-                            cursor: 0,
+                            cursor: new_cursor.cursor,
                             layer: 1,
                         },
                         ids,
@@ -556,17 +611,20 @@ impl OplogService for MultiLayerOplogService {
                 }
             }
             layer if layer <= self.lower.len().get() => {
+                let raw_cursor_val = cursor.cursor;
                 let (new_cursor, unfiltered_ids) = self.lower[layer - 1]
-                    .scan_for_component(environment_id, component_id, cursor, count)
+                    .scan_for_component(environment_id, component_id, modes, cursor, count)
                     .await?;
+
+                let (active_mode, _) = scan_modes(modes, raw_cursor_val);
                 let ids = self
-                    .filter_ids_existing_on_lower_layers(unfiltered_ids, layer)
+                    .filter_ids_existing_on_lower_layers(unfiltered_ids, active_mode, layer)
                     .await?;
                 if new_cursor.is_active_layer_finished() && (layer + 1) <= self.lower.len().get() {
-                    // Continuing with the next lower layer
+                    // Continuing with the next lower layer; preserve mode bits.
                     Ok((
                         ScanCursor {
-                            cursor: 0,
+                            cursor: new_cursor.cursor,
                             layer: layer + 1,
                         },
                         ids,
@@ -575,7 +633,7 @@ impl OplogService for MultiLayerOplogService {
                     // Finished scanning the last layer
                     Ok((
                         ScanCursor {
-                            cursor: 0,
+                            cursor: new_cursor.cursor,
                             layer: 0,
                         },
                         ids,
@@ -594,25 +652,31 @@ impl OplogService for MultiLayerOplogService {
     async fn upload_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         data: Vec<u8>,
     ) -> Result<RawOplogPayload, String> {
-        self.primary.upload_raw_payload(owned_agent_id, data).await
+        self.primary
+            .upload_raw_payload(owned_agent_id, agent_mode, data)
+            .await
     }
 
     async fn download_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.primary
-            .download_raw_payload(owned_agent_id, payload_id, md5_hash)
+            .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
             .await
     }
 }
 
 pub struct MultiLayerOplog {
     owned_agent_id: OwnedAgentId,
+    #[allow(dead_code)] // retained for diagnostics and future use
+    agent_mode: AgentMode,
     primary: Arc<dyn Oplog>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     multi_layer_oplog_service: MultiLayerOplogService,
@@ -627,6 +691,7 @@ impl MultiLayerOplog {
     #[allow(clippy::new_ret_no_self)]
     pub async fn new(
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         account_id: AccountId,
         primary: Arc<dyn Oplog>,
         multi_layer_oplog_service: MultiLayerOplogService,
@@ -637,7 +702,7 @@ impl MultiLayerOplog {
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
         for (i, layer) in multi_layer_oplog_service.lower.iter().enumerate() {
             if i != (multi_layer_oplog_service.lower.len().get() - 1) {
-                let raw = layer.open(&owned_agent_id).await;
+                let raw = layer.open(&owned_agent_id, agent_mode).await;
                 let instrumented = Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
@@ -653,7 +718,7 @@ impl MultiLayerOplog {
                     .await,
                 ));
             } else {
-                let raw = layer.open(&owned_agent_id).await;
+                let raw = layer.open(&owned_agent_id, agent_mode).await;
                 lower.push(Arc::new(InstrumentedOplogArchive::new(
                     raw,
                     account_id,
@@ -671,6 +736,7 @@ impl MultiLayerOplog {
         );
         let result = Arc::new(Self {
             owned_agent_id: owned_agent_id.clone(),
+            agent_mode,
             primary: primary.clone(),
             lower: lower.clone(),
             multi_layer_oplog_service: multi_layer_oplog_service.clone(),
@@ -685,6 +751,7 @@ impl MultiLayerOplog {
         result.set_background_transfer(tokio::spawn(
             Self::background_transfer(
                 owned_agent_id,
+                agent_mode,
                 Arc::downgrade(&result_oplog),
                 lower,
                 multi_layer_oplog_service,
@@ -706,6 +773,7 @@ impl MultiLayerOplog {
 
     async fn background_transfer(
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         primary: Weak<dyn Oplog>,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         multi_layer_oplog_service: MultiLayerOplogService,
@@ -728,6 +796,7 @@ impl MultiLayerOplog {
                     if let Some(primary) = primary.upgrade() {
                         let transfer = BackgroundTransferFromPrimary::new(
                             owned_agent_id.clone(),
+                            agent_mode,
                             last_transferred_idx,
                             multi_layer_oplog_service.clone(),
                             primary.clone(),
@@ -1116,6 +1185,7 @@ impl OplogArchive for WrappedOplogArchive {
 
 struct BackgroundTransferFromPrimary {
     owned_agent_id: OwnedAgentId,
+    agent_mode: AgentMode,
     last_transferred_idx: OplogIndex,
     multi_layer_oplog_service: MultiLayerOplogService,
     primary: Arc<dyn Oplog>,
@@ -1125,6 +1195,7 @@ struct BackgroundTransferFromPrimary {
 impl BackgroundTransferFromPrimary {
     pub fn new(
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         last_transferred_idx: OplogIndex,
         multi_layer_oplog_service: MultiLayerOplogService,
         primary: Arc<dyn Oplog>,
@@ -1132,6 +1203,7 @@ impl BackgroundTransferFromPrimary {
     ) -> Self {
         Self {
             owned_agent_id,
+            agent_mode,
             last_transferred_idx,
             multi_layer_oplog_service,
             primary,
@@ -1145,7 +1217,11 @@ impl BackgroundTransfer for BackgroundTransferFromPrimary {
     async fn read_source(&self) -> Vec<(OplogIndex, OplogEntry)> {
         self.multi_layer_oplog_service
             .primary
-            .read_prefix(&self.owned_agent_id, self.last_transferred_idx)
+            .read_prefix(
+                &self.owned_agent_id,
+                self.agent_mode,
+                self.last_transferred_idx,
+            )
             .await
             .into_iter()
             .collect()

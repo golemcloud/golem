@@ -27,6 +27,7 @@ use crate::durable_host::recover_stderr_logs;
 use crate::metrics::storage::record_filesystem_pool_released;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, ReadFileResult, TrapType};
 use crate::services::active_workers::RegisteredConcurrentAccount;
+use crate::services::component::resolve_agent_mode;
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
@@ -1845,6 +1846,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .oplog_service()
                     .open(
                         owned_agent_id,
+                        agent_mode,
                         None,
                         initial_worker_metadata.clone(),
                         read_only_lock::tokio::ReadOnlyLock::new(current_status.clone()),
@@ -1954,6 +1956,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     parent,
                     last_known_status: initial_status.clone(),
                     original_phantom_id: agent_id.as_ref().and_then(|id| id.phantom_id),
+                    agent_mode,
                 };
 
                 // Alternatively, we could just write the oplog entry and recompute the initial_worker_metadata from it.
@@ -1990,6 +1993,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .oplog_service()
                     .create(
                         owned_agent_id,
+                        agent_mode,
                         initial_oplog_entry,
                         initial_worker_metadata.clone(),
                         read_only_lock::tokio::ReadOnlyLock::new(initial_status.clone()),
@@ -2121,6 +2125,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ScheduledAction::ArchiveOplog {
                         account_id,
                         owned_agent_id: self.owned_agent_id.clone(),
+                        agent_mode: self.agent_mode(),
                         last_oplog_index,
                         next_after: archive_interval,
                     },
@@ -2756,7 +2761,7 @@ enum InvocationResult {
 }
 
 impl InvocationResult {
-    pub async fn cache<T: HasOplog + HasOplogService + HasConfig>(
+    pub async fn cache<T: HasOplog + HasOplogService + HasConfig + HasComponentService>(
         &mut self,
         owned_agent_id: &OwnedAgentId,
         services: &T,
@@ -2787,7 +2792,10 @@ impl InvocationResult {
                 OplogEntry::Error {
                     error, retry_from, ..
                 } => {
-                    let stderr = recover_stderr_logs(services, owned_agent_id, oplog_idx).await;
+                    let agent_mode =
+                        resolve_agent_mode(&*services.component_service(), owned_agent_id).await;
+                    let stderr =
+                        recover_stderr_logs(services, owned_agent_id, agent_mode, oplog_idx).await;
                     Err(FailedInvocationResult {
                         trap_type: TrapType::Error { error, retry_from },
                         stderr,

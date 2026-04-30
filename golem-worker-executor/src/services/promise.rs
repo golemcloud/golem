@@ -19,7 +19,7 @@ use crate::services::golem_config;
 use crate::services::oplog;
 use crate::services::worker;
 use crate::services::worker_activator::WorkerActivator;
-use crate::services::{HasConfig, HasOplogService};
+use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
@@ -391,11 +391,13 @@ impl<Ctx: WorkerCtx> DefaultPromiseWorkerAccess<Ctx> {
     }
 }
 
-/// Adapter to satisfy the `HasOplogService + HasConfig` bounds required by
-/// `calculate_last_known_status` without pulling in the full `All<Ctx>`.
+/// Adapter to satisfy the `HasOplogService + HasConfig + HasComponentService`
+/// bounds required by `calculate_last_known_status` without pulling in the
+/// full `All<Ctx>`.
 struct StatusDeps {
     oplog_service: Arc<dyn oplog::OplogService>,
     config: Arc<golem_config::GolemConfig>,
+    component_service: Arc<dyn component::ComponentService>,
 }
 
 impl HasOplogService for StatusDeps {
@@ -407,6 +409,12 @@ impl HasOplogService for StatusDeps {
 impl HasConfig for StatusDeps {
     fn config(&self) -> Arc<golem_config::GolemConfig> {
         self.config.clone()
+    }
+}
+
+impl HasComponentService for StatusDeps {
+    fn component_service(&self) -> Arc<dyn component::ComponentService> {
+        self.component_service.clone()
     }
 }
 
@@ -439,6 +447,7 @@ impl<Ctx: WorkerCtx> PromiseWorkerAccess for DefaultPromiseWorkerAccess<Ctx> {
             let status_deps = StatusDeps {
                 oplog_service: self.oplog_service.clone(),
                 config: self.config.clone(),
+                component_service: self.component_service.clone(),
             };
             let last_known_status = calculate_last_known_status(
                 &status_deps,

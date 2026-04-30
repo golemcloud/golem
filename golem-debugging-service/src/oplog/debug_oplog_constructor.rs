@@ -15,6 +15,7 @@
 use crate::debug_session::{DebugSessionId, DebugSessions};
 use crate::oplog::debug_oplog::DebugOplog;
 use async_trait::async_trait;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId};
 use golem_common::read_only_lock;
@@ -25,6 +26,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct CreateDebugOplogConstructor {
     owned_agent_id: OwnedAgentId,
+    agent_mode: AgentMode,
     initial_entry: Option<OplogEntry>,
     last_oplog_index: Option<OplogIndex>,
     inner: Arc<dyn OplogService + Send + Sync>,
@@ -37,6 +39,7 @@ pub struct CreateDebugOplogConstructor {
 impl CreateDebugOplogConstructor {
     pub fn new(
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         initial_entry: Option<OplogEntry>,
         last_oplog_index: Option<OplogIndex>,
         inner: Arc<dyn OplogService + Send + Sync>,
@@ -47,6 +50,7 @@ impl CreateDebugOplogConstructor {
     ) -> Self {
         Self {
             owned_agent_id,
+            agent_mode,
             initial_entry,
             last_oplog_index,
             inner,
@@ -65,6 +69,7 @@ impl OplogConstructor for CreateDebugOplogConstructor {
             self.inner
                 .create(
                     &self.owned_agent_id,
+                    self.agent_mode,
                     initial_entry,
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
@@ -75,6 +80,7 @@ impl OplogConstructor for CreateDebugOplogConstructor {
             self.inner
                 .open(
                     &self.owned_agent_id,
+                    self.agent_mode,
                     self.last_oplog_index,
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),

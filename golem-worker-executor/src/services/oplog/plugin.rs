@@ -29,7 +29,7 @@ use async_lock::Mutex;
 use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{ParsedAgentId, Principal};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal};
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -497,6 +497,7 @@ impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for PerExecutorOplogProcessorPlugin
 #[derive(Clone)]
 struct CreateOplogConstructor {
     owned_agent_id: OwnedAgentId,
+    agent_mode: AgentMode,
     initial_entry: Option<OplogEntry>,
     inner: Arc<dyn OplogService>,
     last_oplog_index: Option<OplogIndex>,
@@ -510,8 +511,10 @@ struct CreateOplogConstructor {
 }
 
 impl CreateOplogConstructor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
         initial_entry: Option<OplogEntry>,
         inner: Arc<dyn OplogService>,
         last_oplog_index: Option<OplogIndex>,
@@ -525,6 +528,7 @@ impl CreateOplogConstructor {
     ) -> Self {
         Self {
             owned_agent_id,
+            agent_mode,
             initial_entry,
             inner,
             last_oplog_index,
@@ -544,12 +548,17 @@ impl OplogConstructor for CreateOplogConstructor {
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
         let last_oplog_index = match self.last_oplog_index {
             Some(idx) => idx,
-            None => self.inner.get_last_index(&self.owned_agent_id).await,
+            None => {
+                self.inner
+                    .get_last_index(&self.owned_agent_id, self.agent_mode)
+                    .await
+            }
         };
         let inner = if let Some(initial_entry) = self.initial_entry {
             self.inner
                 .create(
                     &self.owned_agent_id,
+                    self.agent_mode,
                     initial_entry,
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
@@ -560,6 +569,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.inner
                 .open(
                     &self.owned_agent_id,
+                    self.agent_mode,
                     Some(last_oplog_index),
                     self.initial_worker_metadata.clone(),
                     self.last_known_status.clone(),
@@ -625,6 +635,7 @@ impl OplogService for ForwardingOplogService {
     async fn create(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         initial_entry: OplogEntry,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -635,6 +646,7 @@ impl OplogService for ForwardingOplogService {
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
                     owned_agent_id.clone(),
+                    agent_mode,
                     Some(initial_entry),
                     self.inner.clone(),
                     Some(OplogIndex::INITIAL),
@@ -653,6 +665,7 @@ impl OplogService for ForwardingOplogService {
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<AgentStatusRecord>,
@@ -663,6 +676,7 @@ impl OplogService for ForwardingOplogService {
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
                     owned_agent_id.clone(),
+                    agent_mode,
                     None,
                     self.inner.clone(),
                     last_oplog_index,
@@ -678,55 +692,65 @@ impl OplogService for ForwardingOplogService {
             .await
     }
 
-    async fn get_last_index(&self, owned_agent_id: &OwnedAgentId) -> OplogIndex {
-        self.inner.get_last_index(owned_agent_id).await
+    async fn get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> OplogIndex {
+        self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 
-    async fn delete(&self, owned_agent_id: &OwnedAgentId) {
-        self.inner.delete(owned_agent_id).await
+    async fn delete(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+        self.inner.delete(owned_agent_id, agent_mode).await
     }
 
     async fn read(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.inner.read(owned_agent_id, idx, n).await
+        self.inner.read(owned_agent_id, agent_mode, idx, n).await
     }
 
-    async fn exists(&self, owned_agent_id: &OwnedAgentId) -> bool {
-        self.inner.exists(owned_agent_id).await
+    async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
+        self.inner.exists(owned_agent_id, agent_mode).await
     }
 
     async fn scan_for_component(
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
+        modes: Option<AgentMode>,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
         self.inner
-            .scan_for_component(environment_id, component_id, cursor, count)
+            .scan_for_component(environment_id, component_id, modes, cursor, count)
             .await
     }
 
     async fn upload_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         data: Vec<u8>,
     ) -> Result<RawOplogPayload, String> {
-        self.inner.upload_raw_payload(owned_agent_id, data).await
+        self.inner
+            .upload_raw_payload(owned_agent_id, agent_mode, data)
+            .await
     }
 
     async fn download_raw_payload(
         &self,
         owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         self.inner
-            .download_raw_payload(owned_agent_id, payload_id, md5_hash)
+            .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
             .await
     }
 }
@@ -2078,6 +2102,7 @@ mod tests {
             parent: None,
             last_known_status: status.clone(),
             original_phantom_id: None,
+            agent_mode: AgentMode::Durable,
         };
 
         let status_lock =

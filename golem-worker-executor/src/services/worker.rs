@@ -14,8 +14,9 @@
 
 use super::component::ComponentService;
 use super::golem_config::GolemConfig;
-use super::{HasConfig, HasOplogService};
+use super::{HasComponentService, HasConfig, HasOplogService};
 use crate::metrics::workers::record_worker_call;
+use crate::services::component::resolve_agent_mode;
 use crate::services::oplog::OplogService;
 use crate::services::shard::ShardService;
 use crate::storage::keyvalue::{
@@ -50,6 +51,16 @@ pub trait WorkerService: Send + Sync {
 
     async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId);
 
+    /// Updates the cached status for the worker.
+    ///
+    /// `agent_mode` is intentionally caller-provided here:
+    /// - this is a hot path (called on every status update / commit),
+    /// - callers typically already know the authoritative mode for the worker
+    ///   (e.g. via `Worker::agent_mode()`), so re-resolving via
+    ///   `resolve_agent_mode` would just add a metadata lookup on every call,
+    /// - resolving here would also rely on latest-revision metadata, which is
+    ///   only correct under the assumption that an agent type's mode does not
+    ///   change across component revisions.
     async fn update_cached_status(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -128,13 +139,14 @@ impl WorkerService for DefaultWorkerService {
     async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
         record_worker_call("get");
 
-        if !self.oplog_service.exists(owned_agent_id).await {
+        let agent_mode = resolve_agent_mode(&*self.component_service, owned_agent_id).await;
+        if !self.oplog_service.exists(owned_agent_id, agent_mode).await {
             return None;
         }
 
         let initial_oplog_entry = self
             .oplog_service
-            .read(owned_agent_id, OplogIndex::INITIAL, 1)
+            .read(owned_agent_id, agent_mode, OplogIndex::INITIAL, 1)
             .await
             .into_iter()
             .next();
@@ -196,6 +208,7 @@ impl WorkerService for DefaultWorkerService {
                         ..AgentStatusRecord::default()
                     },
                     original_phantom_id,
+                    agent_mode,
                 };
 
                 let status_value: Option<Result<AgentStatusRecord, String>> = self
@@ -221,12 +234,8 @@ impl WorkerService for DefaultWorkerService {
                         )
                         .await;
 
-                        self.update_cached_status(
-                            owned_agent_id,
-                            &last_known_status,
-                            AgentMode::Durable,
-                        )
-                        .await;
+                        self.update_cached_status(owned_agent_id, &last_known_status, agent_mode)
+                            .await;
 
                         Some(last_known_status)
                     }
@@ -258,7 +267,8 @@ impl WorkerService for DefaultWorkerService {
     async fn remove(&self, owned_agent_id: &OwnedAgentId) {
         record_worker_call("remove");
 
-        self.oplog_service.delete(owned_agent_id).await;
+        let agent_mode = resolve_agent_mode(&*self.component_service, owned_agent_id).await;
+        self.oplog_service.delete(owned_agent_id, agent_mode).await;
         self.remove_cached_status(owned_agent_id).await;
 
         let shard_assignment = self
@@ -368,6 +378,12 @@ impl HasOplogService for DefaultWorkerService {
 impl HasConfig for DefaultWorkerService {
     fn config(&self) -> Arc<GolemConfig> {
         self.config.clone()
+    }
+}
+
+impl HasComponentService for DefaultWorkerService {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
+        self.component_service.clone()
     }
 }
 

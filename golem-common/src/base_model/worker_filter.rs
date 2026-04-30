@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::{AgentStatus, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -250,6 +251,31 @@ impl Display for AgentOrFilter {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
+pub struct AgentModeFilter {
+    pub comparator: FilterComparator,
+    pub value: AgentMode,
+}
+
+impl AgentModeFilter {
+    pub fn new(comparator: FilterComparator, value: AgentMode) -> Self {
+        Self { comparator, value }
+    }
+}
+
+impl Display for AgentModeFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "mode {} {}", self.comparator, self.value)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
 pub struct AgentNotFilter {
     pub filter: Box<AgentFilter>,
 }
@@ -286,6 +312,7 @@ pub enum AgentFilter {
     Or(AgentOrFilter),
     Not(AgentNotFilter),
     Config(AgentConfigVarsFilter),
+    Mode(AgentModeFilter),
 }
 
 impl AgentFilter {
@@ -347,6 +374,10 @@ impl AgentFilter {
         AgentFilter::CreatedAt(AgentCreatedAtFilter::new(comparator, value))
     }
 
+    pub fn new_mode(comparator: FilterComparator, value: AgentMode) -> Self {
+        AgentFilter::Mode(AgentModeFilter::new(comparator, value))
+    }
+
     pub fn from(filters: Vec<String>) -> Result<AgentFilter, String> {
         let mut fs = Vec::new();
         for f in filters {
@@ -386,6 +417,9 @@ impl Display for AgentFilter {
             AgentFilter::Or(filter) => {
                 write!(f, "{filter}")
             }
+            AgentFilter::Mode(filter) => {
+                write!(f, "{filter}")
+            }
         }
     }
 }
@@ -412,6 +446,14 @@ impl FromStr for AgentFilter {
                         .map_err(|e| format!("Invalid filter value: {e}"))?,
                 )),
                 "status" => Ok(AgentFilter::new_status(comparator.parse()?, value.parse()?)),
+                "mode" => {
+                    let mode = match value.to_lowercase().as_str() {
+                        "durable" => AgentMode::Durable,
+                        "ephemeral" => AgentMode::Ephemeral,
+                        _ => value.parse()?,
+                    };
+                    Ok(AgentFilter::new_mode(comparator.parse()?, mode))
+                }
                 "created_at" | "createdAt" => Ok(AgentFilter::new_created_at(
                     comparator.parse()?,
                     value.parse()?,

@@ -1,8 +1,9 @@
 use crate::services::active_workers::ActiveWorkers;
+use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
 use crate::services::worker::WorkerService;
-use crate::services::{HasConfig, HasOplogService, HasWorkerService};
+use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -84,6 +85,7 @@ pub trait WorkerEnumerationService: Send + Sync {
 pub struct DefaultWorkerEnumerationService {
     worker_service: Arc<dyn WorkerService>,
     oplog_service: Arc<dyn OplogService>,
+    component_service: Arc<dyn ComponentService>,
     golem_config: Arc<GolemConfig>,
 }
 
@@ -91,11 +93,13 @@ impl DefaultWorkerEnumerationService {
     pub fn new(
         worker_service: Arc<dyn WorkerService>,
         oplog_service: Arc<dyn OplogService>,
+        component_service: Arc<dyn ComponentService>,
         golem_config: Arc<GolemConfig>,
     ) -> Self {
         Self {
             worker_service,
             oplog_service,
+            component_service,
             golem_config,
         }
     }
@@ -113,7 +117,7 @@ impl DefaultWorkerEnumerationService {
 
         let (new_cursor, keys) = self
             .oplog_service
-            .scan_for_component(environment_id, component_id, cursor, count)
+            .scan_for_component(environment_id, component_id, None, cursor, count)
             .instrument(tracing::info_span!("scan_for_component"))
             .await?;
 
@@ -170,6 +174,12 @@ impl HasWorkerService for DefaultWorkerEnumerationService {
 impl HasConfig for DefaultWorkerEnumerationService {
     fn config(&self) -> Arc<GolemConfig> {
         self.golem_config.clone()
+    }
+}
+
+impl HasComponentService for DefaultWorkerEnumerationService {
+    fn component_service(&self) -> Arc<dyn ComponentService> {
+        self.component_service.clone()
     }
 }
 
