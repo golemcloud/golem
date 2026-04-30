@@ -13,10 +13,11 @@
 // limitations under the License.
 
 use crate::app::template::AppTemplateName;
+use crate::command::account::AccountSubcommand;
 use crate::command::agent_type::AgentTypeSubcommand;
 use crate::command::api::ApiSubcommand;
 use crate::command::api::agent_secret::AgentSecretSubcommand;
-use crate::command::cloud::CloudSubcommand;
+use crate::command::api_token::ApiTokenSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::environment::EnvironmentSubcommand;
 use crate::command::exec::ExecSubcommand;
@@ -75,9 +76,10 @@ impl GolemCliCommand {
             &GolemCliCommand::command(),
             &CliMetadataFilter {
                 command_path_prefix_exclude: vec![
+                    vec!["account"],
                     vec!["api"], // TODO: recheck after code-first routes is implemented
+                    vec!["api-token"],
                     vec!["clean"],
-                    vec!["cloud"],
                     vec!["completion"],
                     vec!["generate-bridge"],
                     vec!["new"],
@@ -757,10 +759,15 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ServerSubcommand,
     },
-    /// Manage Golem Cloud accounts and projects
-    Cloud {
+    /// Manage Golem accounts
+    Account {
         #[clap(subcommand)]
-        subcommand: CloudSubcommand,
+        subcommand: AccountSubcommand,
+    },
+    /// Manage Golem API tokens
+    ApiToken {
+        #[clap(subcommand)]
+        subcommand: ApiTokenSubcommand,
     },
     /// Manage agent secrets
     AgentSecret {
@@ -1742,82 +1749,62 @@ pub mod profile {
     }
 }
 
-pub mod cloud {
-    use crate::command::cloud::account::AccountSubcommand;
-    use crate::command::cloud::token::TokenSubcommand;
+pub mod api_token {
+    use crate::args::parse_instant;
+    use chrono::{DateTime, Utc};
+    use clap::Subcommand;
+    use golem_common::model::auth::TokenId;
+
+    #[derive(Debug, Subcommand)]
+    pub enum ApiTokenSubcommand {
+        /// List tokens
+        List,
+        /// Create new token
+        New {
+            /// Expiration date of the generated token
+            #[arg(long, value_parser = parse_instant, default_value = "2100-01-01T00:00:00Z")]
+            expires_at: DateTime<Utc>,
+        },
+        /// Delete an existing token
+        Delete {
+            /// Token ID
+            token_id: TokenId,
+        },
+    }
+}
+
+pub mod account {
+    use crate::command::shared_args::AccountIdOptionalArg;
     use clap::Subcommand;
 
     #[derive(Debug, Subcommand)]
-    pub enum CloudSubcommand {
-        /// Manage Cloud Account
-        Account {
-            #[clap(subcommand)]
-            subcommand: AccountSubcommand,
+    pub enum AccountSubcommand {
+        /// Get information about the account
+        Get {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
         },
-        /// Manage Cloud Tokens
-        Token {
-            #[clap(subcommand)]
-            subcommand: TokenSubcommand,
+        /// Update some information about the account
+        Update {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+            /// Set the account's name
+            account_name: Option<String>,
+            /// Set the account's email address
+            account_email: Option<String>,
         },
-    }
-
-    pub mod token {
-        use crate::args::parse_instant;
-        use chrono::{DateTime, Utc};
-        use clap::Subcommand;
-        use golem_common::model::auth::TokenId;
-
-        #[derive(Debug, Subcommand)]
-        pub enum TokenSubcommand {
-            /// List tokens
-            List,
-            /// Create new token
-            New {
-                /// Expiration date of the generated token
-                #[arg(long, value_parser = parse_instant, default_value = "2100-01-01T00:00:00Z")]
-                expires_at: DateTime<Utc>,
-            },
-            /// Delete an existing token
-            Delete {
-                /// Token ID
-                token_id: TokenId,
-            },
-        }
-    }
-
-    pub mod account {
-        use crate::command::shared_args::AccountIdOptionalArg;
-        use clap::Subcommand;
-
-        #[derive(Debug, Subcommand)]
-        pub enum AccountSubcommand {
-            /// Get information about the account
-            Get {
-                #[command(flatten)]
-                account_id: AccountIdOptionalArg,
-            },
-            /// Update some information about the account
-            Update {
-                #[command(flatten)]
-                account_id: AccountIdOptionalArg,
-                /// Set the account's name
-                account_name: Option<String>,
-                /// Set the account's email address
-                account_email: Option<String>,
-            },
-            /// Add a new account
-            New {
-                /// The new account's name
-                account_name: String,
-                /// The new account's email address
-                account_email: String,
-            },
-            /// Delete the account
-            Delete {
-                #[command(flatten)]
-                account_id: AccountIdOptionalArg,
-            },
-        }
+        /// Add a new account
+        New {
+            /// The new account's name
+            account_name: String,
+            /// The new account's email address
+            account_email: String,
+        },
+        /// Delete the account
+        Delete {
+            #[command(flatten)]
+            account_id: AccountIdOptionalArg,
+        },
     }
 }
 
