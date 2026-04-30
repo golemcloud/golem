@@ -326,17 +326,27 @@ impl<'a> Lexer<'a> {
             })?;
             Ok((Token::FloatLit(v), start, self.pos))
         } else if negative {
-            let v: i64 = text.parse().map_err(|e| LexError {
-                position: start,
-                message: format!("invalid integer: {e}"),
-            })?;
-            Ok((Token::IntLit(v), start, self.pos))
+            match text.parse::<i64>() {
+                Ok(v) => Ok((Token::IntLit(v), start, self.pos)),
+                Err(_) => {
+                    let v: f64 = text.parse().map_err(|e| LexError {
+                        position: start,
+                        message: format!("invalid integer: {e}"),
+                    })?;
+                    Ok((Token::FloatLit(v), start, self.pos))
+                }
+            }
         } else {
-            let v: u64 = text.parse().map_err(|e| LexError {
-                position: start,
-                message: format!("invalid integer: {e}"),
-            })?;
-            Ok((Token::UintLit(v), start, self.pos))
+            match text.parse::<u64>() {
+                Ok(v) => Ok((Token::UintLit(v), start, self.pos)),
+                Err(_) => {
+                    let v: f64 = text.parse().map_err(|e| LexError {
+                        position: start,
+                        message: format!("invalid integer: {e}"),
+                    })?;
+                    Ok((Token::FloatLit(v), start, self.pos))
+                }
+            }
         }
     }
 
