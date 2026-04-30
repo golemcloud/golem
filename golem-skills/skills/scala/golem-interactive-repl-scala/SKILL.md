@@ -7,7 +7,7 @@ description: "Using the Golem REPL for interactive testing and scripting of agen
 
 The `golem repl` command starts an interactive REPL for testing and scripting agents. It supports both an **interactive mode** and a **script execution mode**.
 
-**There is no Scala REPL language** in Golem 1.5. Use the **TypeScript REPL** (the default) to interact with your Scala agents — all agent types are available as TypeScript classes regardless of the agent's source language.
+**There is no Scala REPL language** in Golem. Use the **TypeScript REPL** (the default) to interact with your Scala agents — all agent types are available as TypeScript classes regardless of the agent's source language.
 
 ## Interactive Mode
 
@@ -64,8 +64,7 @@ golem repl --script-file test.ts --yes
 
 | Language | Flag | Interactive | Script | Notes |
 |----------|------|-------------|--------|-------|
-| TypeScript | (default) | ✅ | ✅ | Recommended — works with all agent languages |
-| Rust | `--language rust` | ✅ | ✅ | Slow interactive (recompiles); scripts are practical |
+| TypeScript | (default) | ✅ | ✅ | The only REPL — works with all agent languages |
 
 No Scala REPL is available yet. The TypeScript REPL is recommended for interacting with Scala agents.
 
