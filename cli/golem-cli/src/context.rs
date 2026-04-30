@@ -490,8 +490,7 @@ impl Context {
                                 .unwrap_or_default()
                         }
                         CustomServerAuth::Static { static_token } => {
-                            let renderer =
-                                crate::command_handler::template::EnvVarRenderer::new();
+                            let renderer = crate::command_handler::template::EnvVarRenderer::new();
                             let resolved_token =
                                 renderer.render_str(static_token).map_err(|err| {
                                     let missing =

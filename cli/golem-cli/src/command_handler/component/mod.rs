@@ -871,10 +871,7 @@ impl ComponentCommandHandler {
                     config: materialize_agent_config_entries(agent_type, resolved_agent.config()),
                     files_source: component.source().to_path_buf(),
                     files: resolved_agent.files().to_vec(),
-                    plugins: resolve_plugin_parameters(
-                        component_name,
-                        resolved_agent.plugins(),
-                    )?,
+                    plugins: resolve_plugin_parameters(component_name, resolved_agent.plugins())?,
                 },
             );
         }
