@@ -164,6 +164,7 @@ declare module 'golem:api/oplog@1.5.0' {
     initialActivePlugins: PluginInstallationDescription[];
     localAgentConfig: LocalAgentConfigEntry[];
     originalPhantomId?: Uuid;
+    instanceId: Uuid;
   };
   export type HostCallParameters = {
     timestamp: Datetime;
@@ -537,8 +538,7 @@ declare module 'golem:api/oplog@1.5.0' {
     initialActivePlugins: EnvironmentPluginGrantId[];
     localAgentConfig: RawLocalAgentConfigEntry[];
     originalPhantomId?: Uuid;
-    /** Per-instance UUID. None for agents created before this field was introduced. */
-    instanceId?: Uuid;
+    instanceId: Uuid;
   };
   export type RawHostCallParameters = {
     timestamp: Datetime;
