@@ -490,7 +490,24 @@ impl Context {
                                 .unwrap_or_default()
                         }
                         CustomServerAuth::Static { static_token } => {
-                            AuthenticationConfig::static_token(static_token.clone())
+                            let renderer =
+                                crate::command_handler::template::EnvVarRenderer::new();
+                            let resolved_token =
+                                renderer.render_str(static_token).map_err(|err| {
+                                    let missing =
+                                        renderer.missing_env_vars(static_token, &err);
+                                    if missing.is_empty() {
+                                        anyhow!(
+                                            "Failed to substitute environment variable(s) in auth.staticToken: {err}"
+                                        )
+                                    } else {
+                                        anyhow!(
+                                            "Failed to substitute environment variable(s) ({}) in auth.staticToken: {err}",
+                                            missing.join(", ")
+                                        )
+                                    }
+                                })?;
+                            AuthenticationConfig::static_token(resolved_token)
                         }
                     };
 

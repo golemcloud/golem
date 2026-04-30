@@ -27,6 +27,7 @@ use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action,
 use crate::model::GuestLanguage;
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
+use crate::model::app_raw;
 use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
     ComponentRevisionSelection, ComponentView, SelectedComponents,
@@ -870,7 +871,10 @@ impl ComponentCommandHandler {
                     config: materialize_agent_config_entries(agent_type, resolved_agent.config()),
                     files_source: component.source().to_path_buf(),
                     files: resolved_agent.files().to_vec(),
-                    plugins: resolved_agent.plugins().to_vec(),
+                    plugins: resolve_plugin_parameters(
+                        component_name,
+                        resolved_agent.plugins(),
+                    )?,
                 },
             );
         }
@@ -1307,6 +1311,89 @@ fn resolve_env_vars(
             component_name.as_str().log_color_highlight()
         ),
         validation.build(resolved_env),
+        None,
+    )
+}
+
+fn resolve_plugin_parameters(
+    component_name: &ComponentName,
+    plugins: &[app_raw::PluginInstallation],
+) -> anyhow::Result<Vec<app_raw::PluginInstallation>> {
+    let renderer = crate::command_handler::template::EnvVarRenderer::new();
+
+    let mut resolved_plugins = Vec::with_capacity(plugins.len());
+    let mut validation = ValidationBuilder::new();
+    validation.with_context(
+        vec![("component", component_name.to_string())],
+        |validation| {
+            for plugin in plugins {
+                validation.with_context(
+                    vec![
+                        ("plugin", plugin.name.clone()),
+                        ("version", plugin.version.clone()),
+                    ],
+                    |validation| {
+                        let mut resolved_parameters = HashMap::with_capacity(plugin.parameters.len());
+                        for key in plugin.parameters.keys().sorted() {
+                            let value = plugin.parameters.get(key).unwrap();
+                            match renderer.render_str(value) {
+                                Ok(resolved_value) => {
+                                    resolved_parameters.insert(key.clone(), resolved_value);
+                                }
+                                Err(err) => {
+                                    let missing_env_vars = renderer.missing_env_vars(value, &err);
+                                    let error_message = if missing_env_vars.is_empty() {
+                                        format!(
+                                            "Failed to substitute environment variable(s) for plugin parameter {}",
+                                            key.log_color_highlight()
+                                        )
+                                    } else {
+                                        format!(
+                                            "Failed to substitute environment variable(s) ({}) for plugin parameter {}",
+                                            missing_env_vars
+                                                .iter()
+                                                .map(|key| key.log_color_highlight())
+                                                .join(", "),
+                                            key.log_color_highlight()
+                                        )
+                                    };
+                                    let mut context = vec![
+                                        ("key", key.to_string()),
+                                        ("template", value.to_string()),
+                                        (
+                                            "error",
+                                            err.to_string()
+                                                .log_color_error_highlight()
+                                                .to_string(),
+                                        ),
+                                    ];
+                                    if !missing_env_vars.is_empty() {
+                                        context.push(("missing", missing_env_vars.join(", ")));
+                                    }
+                                    validation.with_context(context, |validation| {
+                                        validation.add_error(error_message)
+                                    });
+                                }
+                            }
+                        }
+                        resolved_plugins.push(app_raw::PluginInstallation {
+                            account: plugin.account.clone(),
+                            name: plugin.name.clone(),
+                            version: plugin.version.clone(),
+                            parameters: resolved_parameters,
+                        });
+                    },
+                );
+            }
+        },
+    );
+
+    validated_to_anyhow(
+        &format!(
+            "Failed to prepare plugin parameters for component: {}",
+            component_name.as_str().log_color_highlight()
+        ),
+        validation.build(resolved_plugins),
         None,
     )
 }
