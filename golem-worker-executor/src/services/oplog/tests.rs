@@ -1539,6 +1539,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             component_id: ComponentId(Uuid::new_v4()),
             agent_id: "test".to_string(),
         },
+        agent_mode: AgentMode::Durable,
         component_revision: ComponentRevision::new(1).unwrap(),
         env: vec![],
         local_agent_config: Vec::new(),
@@ -2366,6 +2367,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
         };
         let create_entry = OplogEntry::create(
             agent_id.clone(),
+            AgentMode::Durable,
             ComponentRevision::new(1).unwrap(),
             Vec::new(),
             environment_id,
@@ -2740,6 +2742,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
 
     let durable_create = OplogEntry::create(
         agent_id.clone(),
+        AgentMode::Durable,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
         environment_id,
@@ -2754,6 +2757,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
     .rounded();
     let ephemeral_create = OplogEntry::create(
         agent_id.clone(),
+        AgentMode::Ephemeral,
         ComponentRevision::new(2).unwrap(),
         Vec::new(),
         environment_id,
@@ -2861,6 +2865,7 @@ async fn make_workers(
         };
         let create_entry = OplogEntry::create(
             agent_id.clone(),
+            mode,
             ComponentRevision::new(1).unwrap(),
             Vec::new(),
             environment_id,

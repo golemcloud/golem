@@ -16,7 +16,6 @@ use super::component::ComponentService;
 use super::golem_config::GolemConfig;
 use super::{HasComponentService, HasConfig, HasOplogService};
 use crate::metrics::workers::record_worker_call;
-use crate::services::component::resolve_agent_mode;
 use crate::services::oplog::OplogService;
 use crate::services::shard::ShardService;
 use crate::storage::keyvalue::{
@@ -51,16 +50,25 @@ pub trait WorkerService: Send + Sync {
 
     async fn remove_cached_status(&self, owned_agent_id: &OwnedAgentId);
 
+    /// Returns the persisted [`AgentMode`] for the worker, if it exists.
+    ///
+    /// The mode is decided at worker create time and persisted in the `Create` oplog entry.
+    /// This method consults a per-agent KV cache and, on cache miss, probes both oplog
+    /// namespaces (durable and ephemeral) and back-fills the cache. Returns `None` if
+    /// no oplog exists in either namespace.
+    async fn get_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode>;
+
+    /// Persists the [`AgentMode`] of a freshly-created worker into the per-agent KV cache.
+    /// Should be called once at worker create time.
+    async fn set_cached_agent_mode(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode);
+
     /// Updates the cached status for the worker.
     ///
     /// `agent_mode` is intentionally caller-provided here:
     /// - this is a hot path (called on every status update / commit),
     /// - callers typically already know the authoritative mode for the worker
-    ///   (e.g. via `Worker::agent_mode()`), so re-resolving via
-    ///   `resolve_agent_mode` would just add a metadata lookup on every call,
-    /// - resolving here would also rely on latest-revision metadata, which is
-    ///   only correct under the assumption that an agent type's mode does not
-    ///   change across component revisions.
+    ///   (e.g. via `Worker::agent_mode()`), so re-resolving via the per-agent
+    ///   mode cache would add an unnecessary lookup on every call.
     async fn update_cached_status(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -122,8 +130,29 @@ impl DefaultWorkerService {
         format!("worker:status:{}", agent_id.to_redis_key())
     }
 
+    fn agent_mode_key(agent_id: &AgentId) -> String {
+        format!("worker:agent_mode:{}", agent_id.to_redis_key())
+    }
+
     fn running_in_shard_key(shard_id: &ShardId) -> String {
         format!("worker:running_in_shard:{shard_id}")
+    }
+
+    async fn remove_cached_agent_mode(&self, owned_agent_id: &OwnedAgentId) {
+        record_worker_call("remove_cached_agent_mode");
+
+        self.key_value_storage
+            .with("worker", "remove_cached_agent_mode")
+            .del(
+                KeyValueStorageNamespace::Worker {
+                    agent_id: owned_agent_id.agent_id(),
+                },
+                &Self::agent_mode_key(&owned_agent_id.agent_id),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to remove cached agent mode for {owned_agent_id}: {err}")
+            });
     }
 
     fn should_track_for_assignment_recovery(status: &AgentStatusRecord) -> bool {
@@ -139,10 +168,7 @@ impl WorkerService for DefaultWorkerService {
     async fn get(&self, owned_agent_id: &OwnedAgentId) -> Option<GetWorkerMetadataResult> {
         record_worker_call("get");
 
-        let agent_mode = resolve_agent_mode(&*self.component_service, owned_agent_id).await;
-        if !self.oplog_service.exists(owned_agent_id, agent_mode).await {
-            return None;
-        }
+        let agent_mode = self.get_agent_mode(owned_agent_id).await?;
 
         let initial_oplog_entry = self
             .oplog_service
@@ -159,6 +185,7 @@ impl WorkerService for DefaultWorkerService {
                 _,
                 OplogEntry::Create {
                     agent_id,
+                    agent_mode: persisted_agent_mode,
                     component_revision,
                     env,
                     environment_id,
@@ -172,6 +199,8 @@ impl WorkerService for DefaultWorkerService {
                     original_phantom_id,
                 },
             )) => {
+                debug_assert_eq!(persisted_agent_mode, agent_mode);
+                let agent_mode = persisted_agent_mode;
                 let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
                 let component_metadata = self
                     .component_service
@@ -230,6 +259,7 @@ impl WorkerService for DefaultWorkerService {
                         let last_known_status = calculate_last_known_status_for_existing_worker(
                             self,
                             owned_agent_id,
+                            agent_mode,
                             None,
                         )
                         .await;
@@ -267,9 +297,11 @@ impl WorkerService for DefaultWorkerService {
     async fn remove(&self, owned_agent_id: &OwnedAgentId) {
         record_worker_call("remove");
 
-        let agent_mode = resolve_agent_mode(&*self.component_service, owned_agent_id).await;
-        self.oplog_service.delete(owned_agent_id, agent_mode).await;
+        if let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await {
+            self.oplog_service.delete(owned_agent_id, agent_mode).await;
+        }
         self.remove_cached_status(owned_agent_id).await;
+        self.remove_cached_agent_mode(owned_agent_id).await;
 
         let shard_assignment = self
             .shard_service
@@ -304,6 +336,69 @@ impl WorkerService for DefaultWorkerService {
             .await
             .unwrap_or_else(|err| {
                 panic!("failed to remove worker status in the KV storage: {err}")
+            });
+    }
+
+    async fn get_agent_mode(&self, owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
+        record_worker_call("get_agent_mode");
+
+        let cached: Option<AgentMode> = self
+            .key_value_storage
+            .with_entity("worker", "get_agent_mode", "agent_mode")
+            .get(
+                KeyValueStorageNamespace::Worker {
+                    agent_id: owned_agent_id.agent_id(),
+                },
+                &Self::agent_mode_key(&owned_agent_id.agent_id),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to get cached agent mode for {owned_agent_id}: {err}")
+            });
+
+        if let Some(mode) = cached {
+            return Some(mode);
+        }
+
+        // Cache miss: probe both oplog namespaces.
+        let probed = if self
+            .oplog_service
+            .exists(owned_agent_id, AgentMode::Durable)
+            .await
+        {
+            Some(AgentMode::Durable)
+        } else if self
+            .oplog_service
+            .exists(owned_agent_id, AgentMode::Ephemeral)
+            .await
+        {
+            Some(AgentMode::Ephemeral)
+        } else {
+            None
+        };
+
+        if let Some(mode) = probed {
+            self.set_cached_agent_mode(owned_agent_id, mode).await;
+        }
+
+        probed
+    }
+
+    async fn set_cached_agent_mode(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) {
+        record_worker_call("set_cached_agent_mode");
+
+        self.key_value_storage
+            .with_entity("worker", "set_cached_agent_mode", "agent_mode")
+            .set(
+                KeyValueStorageNamespace::Worker {
+                    agent_id: owned_agent_id.agent_id(),
+                },
+                &Self::agent_mode_key(&owned_agent_id.agent_id),
+                &agent_mode,
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!("failed to set cached agent mode for {owned_agent_id}: {err}")
             });
     }
 

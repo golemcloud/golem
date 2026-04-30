@@ -18,9 +18,7 @@ use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_common::cache::SimpleCache;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
-use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
@@ -83,56 +81,6 @@ pub trait ComponentService: Send + Sync {
     /// Invalidates all cached component metadata.
     async fn invalidate_all(&self) {
         self.invalidate_latest_deployed_metadata().await
-    }
-}
-
-/// Resolves the [`AgentMode`] for a given agent identifier by looking up the
-/// agent type metadata via [`ComponentService::get_metadata`].
-///
-/// Returns [`AgentMode::Durable`] if the agent id does not encode an agent type
-/// (non-agent worker), if the agent type is not present in the component
-/// metadata, or if metadata retrieval fails. The conservative durable fallback
-/// matches the previous behaviour from before mode resolution was introduced.
-///
-/// IMPORTANT: this looks up the *latest* component revision (`None` revision).
-/// This is only correct under the invariant that an agent type's `mode` does
-/// not change across component revisions; otherwise existing workers could be
-/// routed to the wrong oplog namespace after a revision change. If/when mode
-/// changes need to be supported, callers must instead resolve the mode from
-/// the worker's `Create` oplog entry (i.e. its initial revision) and persist
-/// it on the metadata record.
-pub async fn resolve_agent_mode(
-    component_service: &dyn ComponentService,
-    owned_agent_id: &OwnedAgentId,
-) -> AgentMode {
-    let agent_type_name =
-        match ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id) {
-            Ok(name) => name,
-            Err(_) => return AgentMode::Durable,
-        };
-
-    let component_id = owned_agent_id.agent_id.component_id;
-    match component_service.get_metadata(component_id, None).await {
-        Ok(component) => match component.metadata.find_agent_type_by_name(&agent_type_name) {
-            Some(at) => at.mode,
-            None => {
-                warn!(
-                    agent_id = %owned_agent_id,
-                    agent_type = %agent_type_name,
-                    component_id = %component_id,
-                    "Agent type not found in component metadata when resolving agent mode; defaulting to durable"
-                );
-                AgentMode::Durable
-            }
-        },
-        Err(err) => {
-            warn!(
-                agent_id = %owned_agent_id,
-                error = %err.to_safe_string(),
-                "Failed to resolve agent mode via component metadata; defaulting to durable"
-            );
-            AgentMode::Durable
-        }
     }
 }
 

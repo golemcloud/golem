@@ -133,6 +133,7 @@ impl DefaultWorkerEnumerationService {
                     let last_known_status = calculate_last_known_status_for_existing_worker(
                         self,
                         &owned_agent_id,
+                        worker_metadata.initial_worker_metadata.agent_mode,
                         worker_metadata.last_known_status,
                     )
                     .instrument(tracing::info_span!("calculate_last_known_status"))

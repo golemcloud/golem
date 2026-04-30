@@ -17,6 +17,7 @@ mod oplog_macro;
 pub(crate) mod public_types;
 
 use crate::base_model::account::AccountId;
+use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::{SpanId, TraceId};
@@ -71,6 +72,7 @@ oplog_entry! {
         wit_public_type: "create-parameters"
         raw {
             agent_id: AgentId,
+            agent_mode: AgentMode,
             component_revision: ComponentRevision,
             env: Vec<(String, String)>,
             environment_id: EnvironmentId,
@@ -84,6 +86,7 @@ oplog_entry! {
         }
         public {
             agent_id: AgentId,
+            agent_mode: AgentMode,
             component_revision: ComponentRevision,
             env: BTreeMap<String, String>,
             created_by: AccountId,

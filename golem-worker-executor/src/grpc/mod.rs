@@ -20,7 +20,6 @@ use crate::model::public_oplog::{
     find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::model::{LastError, ReadFileResult};
-use crate::services::component::resolve_agent_mode;
 use crate::services::events::Event;
 use crate::services::worker_activator::{
     DefaultWorkerActivator, LazyWorkerActivator, WorkerActivator,
@@ -1076,6 +1075,38 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
+        // Reject mode-changing updates: the target component revision must keep the worker's
+        // agent type at the same `agent_mode` that the worker was created with. Changing the
+        // mode would route subsequent oplog reads/writes to a different namespace and silently
+        // lose the worker's history.
+        let target_component_metadata = self
+            .component_service()
+            .get_metadata(owned_agent_id.agent_id.component_id, Some(target_revision))
+            .await?;
+
+        if let Ok(agent_id) = ParsedAgentId::parse(
+            &owned_agent_id.agent_id.agent_id,
+            &target_component_metadata.metadata,
+        ) && let Some(target_agent_type) = target_component_metadata
+            .metadata
+            .find_agent_type_by_name(&agent_id.agent_type)
+        {
+            let persisted_mode = metadata.agent_mode;
+            if target_agent_type.mode != persisted_mode {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "Cannot update worker {} from {:?} to component revision {}: the agent type \
+                     '{}' has mode {:?} in the target revision but the worker was created with \
+                     mode {:?}. Changing an agent type's mode across revisions is not supported.",
+                    owned_agent_id,
+                    persisted_mode,
+                    target_revision,
+                    agent_id.agent_type,
+                    target_agent_type.mode,
+                    persisted_mode,
+                )));
+            }
+        }
+
         let disable_wakeup = request.disable_wakeup;
 
         match request.mode() {
@@ -1252,7 +1283,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
-        let agent_mode = resolve_agent_mode(&*component_service, &owned_agent_id).await;
+        let agent_mode = self
+            .worker_service()
+            .get_agent_mode(&owned_agent_id)
+            .await
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request(format!(
+                    "agent {owned_agent_id} does not exist"
+                ))
+            })?;
 
         let chunk = match request.cursor {
             Some(cursor) => {
@@ -1348,7 +1387,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
-        let agent_mode = resolve_agent_mode(&*component_service, &owned_agent_id).await;
+        let agent_mode = self
+            .worker_service()
+            .get_agent_mode(&owned_agent_id)
+            .await
+            .ok_or_else(|| {
+                WorkerExecutorError::invalid_request(format!(
+                    "agent {owned_agent_id} does not exist"
+                ))
+            })?;
 
         let chunk = match request.cursor {
             Some(cursor) => {

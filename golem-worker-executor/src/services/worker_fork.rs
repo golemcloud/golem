@@ -659,6 +659,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         match entry {
             OplogEntry::Create {
                 timestamp,
+                agent_mode,
                 component_revision,
                 env,
                 environment_id,
@@ -673,6 +674,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             } => Some(OplogEntry::Create {
                 timestamp,
                 agent_id: agent_id.clone(),
+                agent_mode,
                 component_revision,
                 env,
                 environment_id,

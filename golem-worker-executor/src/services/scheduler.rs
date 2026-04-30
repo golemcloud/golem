@@ -511,6 +511,17 @@ mod tests {
 
         async fn remove_cached_status(&self, _owned_agent_id: &OwnedAgentId) {}
 
+        async fn get_agent_mode(&self, _owned_agent_id: &OwnedAgentId) -> Option<AgentMode> {
+            None
+        }
+
+        async fn set_cached_agent_mode(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+        ) {
+        }
+
         async fn update_cached_status(
             &self,
             _owned_agent_id: &OwnedAgentId,

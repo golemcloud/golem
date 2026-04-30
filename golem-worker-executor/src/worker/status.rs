@@ -1,9 +1,9 @@
-use crate::services::component::resolve_agent_mode;
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use async_recursion::async_recursion;
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::AgentInvocationPayload;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
@@ -23,12 +23,13 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 pub async fn calculate_last_known_status_for_existing_worker<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
 ) -> AgentStatusRecord
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
-    calculate_last_known_status(this, owned_agent_id, last_known)
+    calculate_last_known_status(this, owned_agent_id, agent_mode, last_known)
         .await
         .expect("Failed to calculate oplog index for existing worker")
 }
@@ -38,6 +39,7 @@ where
 pub async fn calculate_last_known_status<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     last_known: Option<AgentStatusRecord>,
 ) -> Option<AgentStatusRecord>
 where
@@ -45,8 +47,6 @@ where
 {
     let last_known = last_known.unwrap_or_default();
 
-    let component_service = this.component_service();
-    let agent_mode = resolve_agent_mode(&*component_service, owned_agent_id).await;
     let last_oplog_index = this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
@@ -72,6 +72,7 @@ where
         let final_status = update_status_with_new_entries(
             this,
             owned_agent_id,
+            agent_mode,
             last_known,
             new_entries,
             &this.config().retry,
@@ -81,7 +82,7 @@ where
         if let Some(final_status) = final_status {
             Some(final_status)
         } else {
-            calculate_last_known_status(this, owned_agent_id, None).await
+            calculate_last_known_status(this, owned_agent_id, agent_mode, None).await
         }
     }
 }
@@ -90,6 +91,7 @@ where
 pub async fn update_status_with_new_entries<T: HasOplogService + HasComponentService + Sync>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     last_known: AgentStatusRecord,
     new_entries: BTreeMap<OplogIndex, OplogEntry>,
     // TODO: changing the retry policy will cause inconsistencies when reading existing oplogs.
@@ -151,6 +153,7 @@ pub async fn update_status_with_new_entries<T: HasOplogService + HasComponentSer
     let pending_invocations = calculate_pending_invocations(
         this,
         owned_agent_id,
+        agent_mode,
         last_known.pending_invocations,
         &new_entries,
     )
@@ -490,11 +493,10 @@ fn calculate_skipped_regions(
 async fn calculate_pending_invocations<T: HasOplogService + HasComponentService + Sync>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
     initial: Vec<TimestampedAgentInvocation>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Vec<TimestampedAgentInvocation> {
-    let component_service = this.component_service();
-    let agent_mode = resolve_agent_mode(&*component_service, owned_agent_id).await;
     let mut result = initial;
     for entry in entries.values() {
         // Here we are handling two categories of oplog entries:
@@ -1682,7 +1684,9 @@ mod test {
             entries: vec![],
         };
 
-        let result = calculate_last_known_status(&test_case, &owned_agent_id, None).await;
+        let result =
+            calculate_last_known_status(&test_case, &owned_agent_id, AgentMode::Durable, None)
+                .await;
         assert2::assert!(let None = result);
     }
 
@@ -1710,6 +1714,7 @@ mod test {
                 entries: vec![TestEntry {
                     oplog_entry: OplogEntry::create(
                         owned_agent_id.agent_id(),
+                        AgentMode::Durable,
                         component_revision,
                         vec![],
                         owned_agent_id.environment_id(),
@@ -2285,6 +2290,7 @@ mod test {
             let final_status = calculate_last_known_status_for_existing_worker(
                 &test_case,
                 &test_case.owned_agent_id,
+                AgentMode::Durable,
                 last_known_status,
             )
             .await;
@@ -2740,6 +2746,7 @@ mod test {
             OplogIndex::from_u64(idx),
             OplogEntry::create(
                 agent_id,
+                AgentMode::Durable,
                 ComponentRevision::INITIAL,
                 vec![],
                 EnvironmentId::new(),

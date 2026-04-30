@@ -27,7 +27,6 @@ use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
 use crate::preview2::{Pollable, golem_api_1_x};
-use crate::services::component::resolve_agent_mode;
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker_proxy::WorkerProxyError;
@@ -525,6 +524,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         target_version: u64,
         mode: golem_api_1_x::host::UpdateMode,
     ) -> anyhow::Result<()> {
+        // NOTE: Mode-changing updates are rejected by the target worker-executor's gRPC
+        // `update_worker` handler. The error returned by `worker_proxy.update` below
+        // propagates back to the caller agent as a regular update error, so no additional
+        // local check is needed here.
         let mut durability =
             Durability::<GolemApiUpdateWorker>::new(self, DurableFunctionType::WriteRemote).await?;
 
@@ -637,6 +640,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 if let Some(status) = calculate_last_known_status(
                     &self.state,
                     &owned_agent_id,
+                    metadata.agent_mode,
                     result.last_known_status,
                 )
                 .await
@@ -984,7 +988,12 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         let owned_agent_id = OwnedAgentId::new(self.owned_agent_id.environment_id(), &agent_id);
 
         let start = OplogIndex::from_u64(start);
-        let agent_mode = resolve_agent_mode(&*self.state.component_service, &owned_agent_id).await;
+        let agent_mode = self
+            .state
+            .worker_service
+            .get_agent_mode(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("agent {} does not exist", owned_agent_id))?;
         let initial_component_version = find_component_revision_at(
             self.state.oplog_service(),
             &owned_agent_id,
@@ -1010,7 +1019,12 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 
-        let agent_mode = resolve_agent_mode(&*component_service, &entry.owned_agent_id).await;
+        let agent_mode = self
+            .state
+            .worker_service
+            .get_agent_mode(&entry.owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("agent {} does not exist", entry.owned_agent_id))?;
 
         let chunk = get_public_oplog_chunk(
             component_service,
@@ -1184,7 +1198,12 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         let owned_agent_id = OwnedAgentId::new(self.owned_agent_id.environment_id(), &agent_id);
 
         let start = OplogIndex::INITIAL;
-        let agent_mode = resolve_agent_mode(&*self.state.component_service, &owned_agent_id).await;
+        let agent_mode = self
+            .state
+            .worker_service
+            .get_agent_mode(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("agent {} does not exist", owned_agent_id))?;
         let initial_component_version = find_component_revision_at(
             self.state.oplog_service(),
             &owned_agent_id,
@@ -1218,7 +1237,12 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
 
-        let agent_mode = resolve_agent_mode(&*component_service, &entry.owned_agent_id).await;
+        let agent_mode = self
+            .state
+            .worker_service
+            .get_agent_mode(&entry.owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("agent {} does not exist", entry.owned_agent_id))?;
 
         let chunk = search_public_oplog(
             component_service,
@@ -1360,7 +1384,15 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
             Err(e) => return Ok(Err(e.to_string())),
         };
 
-        let agent_mode = resolve_agent_mode(&*component_service, &owned_agent_id).await;
+        let agent_mode = match self
+            .state
+            .worker_service
+            .get_agent_mode(&owned_agent_id)
+            .await
+        {
+            Some(mode) => mode,
+            None => return Ok(Err(format!("agent {owned_agent_id} does not exist"))),
+        };
 
         let mut result = Vec::with_capacity(entries.len());
         for (index, wit_entry) in entries {

@@ -3001,6 +3001,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             let latest_worker_status = calculate_last_known_status_for_existing_worker(
                 this,
                 &owned_agent_id,
+                worker.initial_worker_metadata.agent_mode,
                 worker.last_known_status,
             )
             .await;

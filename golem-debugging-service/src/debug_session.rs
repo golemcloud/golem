@@ -234,6 +234,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::Create(CreateParams {
             timestamp,
             agent_id,
+            agent_mode,
             component_revision,
             env,
             environment_id,
@@ -247,6 +248,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         }) => Ok(OplogEntry::Create {
             timestamp,
             agent_id,
+            agent_mode,
             component_revision,
             env: env.into_iter().collect(),
             environment_id,

@@ -5,6 +5,7 @@ package golem.worker;
 import "golem/common/account_id.proto";
 import "golem/common/environment.proto";
 import "golem/common/uuid.proto";
+import "golem/component/agent.proto";
 import "golem/component/plugin.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/public_oplog.proto";
@@ -139,6 +140,7 @@ message RawCreateParameters {
   repeated golem.component.EnvironmentPluginGrantId initial_active_plugins = 9;
   repeated bytes local_agent_config = 10;
   optional golem.common.UUID original_phantom_id = 11;
+  golem.component.AgentMode agent_mode = 12;
 }
 
 message RawHostCallParameters {

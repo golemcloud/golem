@@ -248,6 +248,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Create {
                 timestamp,
                 agent_id,
+                agent_mode,
                 component_revision,
                 env,
                 environment_id,
@@ -284,6 +285,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 Ok(PublicOplogEntry::Create(CreateParams {
                     timestamp,
                     agent_id,
+                    agent_mode,
                     component_revision,
                     env: env.into_iter().collect(),
                     environment_id,

@@ -267,6 +267,7 @@ impl RegistryInvalidationEvent {
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[repr(i32)]
+#[wit(name = "agent-mode", owner = "golem:api@1.5.0/oplog")]
 pub enum AgentMode {
     Durable = 0,
     Ephemeral = 1,
