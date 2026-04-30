@@ -427,48 +427,50 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     ) -> WorkerResult<(AgentId, AgentFingerprint)> {
         let agent_id_clone = agent_id.clone();
         let account_id_clone = account_id;
-        let fingerprint = self.call_worker_executor(
-            agent_id.clone(),
-            "create_worker",
-            move |worker_executor_client| {
-                let agent_id = agent_id_clone.clone();
-                Box::pin(
-                    worker_executor_client.create_worker(CreateWorkerRequest {
-                        agent_id: Some(agent_id.into()),
-                        env: environment_variables.clone(),
-                        config: config
-                            .clone()
-                            .into_iter()
-                            .map(golem_api_grpc::proto::golem::worker::AgentConfigEntryDto::from)
-                            .collect(),
-                        component_owner_account_id: Some(account_id_clone.into()),
-                        environment_id: Some(environment_id.into()),
-                        ignore_already_existing,
-                        auth_ctx: Some(auth_ctx.clone().into()),
-                        principal: principal.clone(),
-                        invocation_context: invocation_context.clone(),
-                    }),
-                )
-            },
-            |response| {
-                use workerexecutor::v1::create_worker_success_response::Fingerprint;
-                match response.into_inner() {
+        let fingerprint = self
+            .call_worker_executor(
+                agent_id.clone(),
+                "create_worker",
+                move |worker_executor_client| {
+                    let agent_id = agent_id_clone.clone();
+                    Box::pin(
+                        worker_executor_client.create_worker(CreateWorkerRequest {
+                            agent_id: Some(agent_id.into()),
+                            env: environment_variables.clone(),
+                            config: config
+                                .clone()
+                                .into_iter()
+                                .map(
+                                    golem_api_grpc::proto::golem::worker::AgentConfigEntryDto::from,
+                                )
+                                .collect(),
+                            component_owner_account_id: Some(account_id_clone.into()),
+                            environment_id: Some(environment_id.into()),
+                            ignore_already_existing,
+                            auth_ctx: Some(auth_ctx.clone().into()),
+                            principal: principal.clone(),
+                            invocation_context: invocation_context.clone(),
+                        }),
+                    )
+                },
+                |response| match response.into_inner() {
                     workerexecutor::v1::CreateWorkerResponse {
-                        result: Some(workerexecutor::v1::create_worker_response::Result::Success(
-                            workerexecutor::v1::CreateWorkerSuccessResponse {
-                                fingerprint: Some(Fingerprint::FingerprintUuid(u)),
-                            },
-                        )),
+                        result:
+                            Some(workerexecutor::v1::create_worker_response::Result::Success(
+                                workerexecutor::v1::CreateWorkerSuccessResponse {
+                                    instance_id: Some(u),
+                                },
+                            )),
                     } => Ok(AgentFingerprint(u.into())),
                     workerexecutor::v1::CreateWorkerResponse {
-                        result: Some(workerexecutor::v1::create_worker_response::Result::Failure(err)),
+                        result:
+                            Some(workerexecutor::v1::create_worker_response::Result::Failure(err)),
                     } => Err(err.into()),
                     workerexecutor::v1::CreateWorkerResponse { .. } => Err("Empty response".into()),
-                }
-            },
-            WorkerServiceError::InternalCallError,
-        )
-        .await?;
+                },
+                WorkerServiceError::InternalCallError,
+            )
+            .await?;
 
         Ok((agent_id.clone(), fingerprint))
     }

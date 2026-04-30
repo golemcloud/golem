@@ -132,10 +132,7 @@ message CreateWorkerRequest {
 }
 
 message CreateWorkerSuccessResponse {
-  oneof fingerprint {
-    golem.common.UUID fingerprint_uuid = 1;
-    google.protobuf.Timestamp fingerprint_timestamp = 2;
-  }
+  golem.common.UUID instance_id = 1;
 }
 
 message CreateWorkerResponse {

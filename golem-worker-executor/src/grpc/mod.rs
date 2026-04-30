@@ -2021,22 +2021,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .instrument(record.span.clone())
             .await
         {
-            Ok(fingerprint) => {
-                use golem::workerexecutor::v1::create_worker_success_response::Fingerprint;
-                record.succeed(Ok(Response::new(
-                    golem::workerexecutor::v1::CreateWorkerResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::create_worker_response::Result::Success(
-                                golem::workerexecutor::v1::CreateWorkerSuccessResponse {
-                                    fingerprint: Some(Fingerprint::FingerprintUuid(
-                                        fingerprint.0.into(),
-                                    )),
-                                },
-                            ),
+            Ok(fingerprint) => record.succeed(Ok(Response::new(
+                golem::workerexecutor::v1::CreateWorkerResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::create_worker_response::Result::Success(
+                            golem::workerexecutor::v1::CreateWorkerSuccessResponse {
+                                instance_id: Some(fingerprint.0.into()),
+                            },
                         ),
-                    },
-                )))
-            }
+                    ),
+                },
+            ))),
             Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::CreateWorkerResponse {

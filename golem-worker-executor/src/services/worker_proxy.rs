@@ -302,14 +302,12 @@ impl WorkerProxy for RemoteWorkerProxy {
 
         match response.result {
             Some(launch_new_worker_response::Result::Success(success)) => {
-                use golem_api_grpc::proto::golem::worker::v1::launch_new_worker_success_response::Fingerprint;
-                let fingerprint = match success.fingerprint {
-                    Some(Fingerprint::FingerprintUuid(u)) => AgentFingerprint(u.into()),
-                    // Timestamp variant and missing fingerprint should not occur with new servers;
-                    // generate a fresh UUID as a safe fallback.
-                    _ => AgentFingerprint::new(),
-                };
-                Ok(fingerprint)
+                let instance_id = success.instance_id.ok_or_else(|| {
+                    WorkerProxyError::InternalError(WorkerExecutorError::unknown(
+                        "Missing instance_id in LaunchNewWorker response",
+                    ))
+                })?;
+                Ok(AgentFingerprint(instance_id.into()))
             }
             Some(launch_new_worker_response::Result::Error(error)) => match error.error {
                 Some(agent_error::Error::AlreadyExists(_)) => Ok(AgentFingerprint::new()),

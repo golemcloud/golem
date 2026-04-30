@@ -2078,7 +2078,7 @@ mod tests {
             parent: None,
             last_known_status: status.clone(),
             original_phantom_id: None,
-            fingerprint: AgentFingerprint(Uuid::now_v7()),
+            fingerprint: AgentFingerprint::new(),
         };
 
         let status_lock =

@@ -61,10 +61,7 @@ message LaunchNewWorkerResponse {
 message LaunchNewWorkerSuccessResponse {
   golem.worker.AgentId agentId = 1;
   uint64 component_version = 2;
-  oneof fingerprint {
-    golem.common.UUID fingerprint_uuid = 3;
-    google.protobuf.Timestamp fingerprint_timestamp = 4;
-  }
+  golem.common.UUID instance_id = 3;
 }
 
 message CompletePromiseRequest {
