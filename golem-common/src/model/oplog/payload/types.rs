@@ -1341,7 +1341,7 @@ pub enum SerializableWebsocketError {
 }
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec, IntoValue, FromValue)]
-#[desert(evolution(FieldAdded("target_worker_fingerprint", None)))]
+#[desert(evolution())]
 #[wit_transparent]
 pub struct SerializableScheduledInvocation {
     pub timestamp: i64,
@@ -1355,7 +1355,7 @@ pub struct SerializableScheduledInvocation {
     pub trace_id: TraceId,
     pub trace_states: Vec<String>,
     pub spans: Vec<Vec<PublicSpanData>>,
-    pub target_worker_fingerprint: Option<AgentFingerprint>,
+    pub target_worker_fingerprint: AgentFingerprint,
 }
 
 impl SerializableScheduledInvocation {

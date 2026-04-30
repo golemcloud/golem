@@ -573,7 +573,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let entry = self.table().get(&this)?;
             let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
             let remote_agent_id = payload.remote_agent_id.clone();
-            let target_fingerprint = payload.target_fingerprint;
+            let target_worker_fingerprint = payload.target_fingerprint;
 
             let input_untyped: UntypedDataValue = input.into();
 
@@ -612,7 +612,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     invocation_context: stack,
                     principal: Principal::anonymous(),
                 }),
-                target_worker_fingerprint: Some(target_fingerprint),
+                target_worker_fingerprint,
             };
 
             let result = self

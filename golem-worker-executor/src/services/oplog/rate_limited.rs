@@ -413,7 +413,7 @@ mod tests {
             parent: None,
             last_known_status: AgentStatusRecord::default(),
             original_phantom_id: None,
-            fingerprint: AgentFingerprint::Timestamp(Timestamp::now_utc()),
+            fingerprint: AgentFingerprint::new(),
         }
     }
 

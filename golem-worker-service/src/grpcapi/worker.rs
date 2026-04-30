@@ -64,17 +64,13 @@ impl GrpcWorkerService for WorkerGrpcApi {
         {
             Ok((agent_id, component_version, fingerprint)) => {
                 use golem_api_grpc::proto::golem::worker::v1::launch_new_worker_success_response::Fingerprint;
-                let proto_fingerprint = match fingerprint {
-                    AgentFingerprint::Uuid(u) => Fingerprint::FingerprintUuid(u.into()),
-                    AgentFingerprint::Timestamp(ts) => Fingerprint::FingerprintTimestamp(ts.into()),
-                };
-                record.succeed(
-                    launch_new_worker_response::Result::Success(LaunchNewWorkerSuccessResponse {
+                record.succeed(launch_new_worker_response::Result::Success(
+                    LaunchNewWorkerSuccessResponse {
                         agent_id: Some(agent_id.into()),
                         component_version: component_version.into(),
-                        fingerprint: Some(proto_fingerprint),
-                    }),
-                )
+                        fingerprint: Some(Fingerprint::FingerprintUuid(fingerprint.0.into())),
+                    },
+                ))
             }
             Err(error) => record.fail(
                 launch_new_worker_response::Result::Error(error.clone()),

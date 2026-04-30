@@ -1075,6 +1075,7 @@ mod test {
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
     use test_r::test;
+    use uuid::Uuid;
 
     #[test]
     async fn empty() {
@@ -1707,7 +1708,7 @@ mod test {
                         HashSet::new(),
                         Vec::new(),
                         None,
-                        None,
+                        Uuid::new_v4(),
                     ),
                     expected_status: status.clone(),
                 }],
@@ -2686,7 +2687,7 @@ mod test {
                 Default::default(),
                 vec![],
                 None,
-                None,
+                Uuid::now_v7(),
             ),
         )
     }

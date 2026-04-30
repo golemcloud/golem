@@ -459,17 +459,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                                 fingerprint: Some(Fingerprint::FingerprintUuid(u)),
                             },
                         )),
-                    } => Ok(AgentFingerprint::Uuid(u.into())),
-                    workerexecutor::v1::CreateWorkerResponse {
-                        result: Some(workerexecutor::v1::create_worker_response::Result::Success(
-                            workerexecutor::v1::CreateWorkerSuccessResponse {
-                                fingerprint: Some(Fingerprint::FingerprintTimestamp(ts)),
-                            },
-                        )),
-                    } => ts
-                        .try_into()
-                        .map(AgentFingerprint::Timestamp)
-                        .map_err(|_| "Invalid fingerprint timestamp".into()),
+                    } => Ok(AgentFingerprint(u.into())),
                     workerexecutor::v1::CreateWorkerResponse {
                         result: Some(workerexecutor::v1::create_worker_response::Result::Failure(err)),
                     } => Err(err.into()),

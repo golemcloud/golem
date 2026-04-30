@@ -1037,11 +1037,6 @@ async fn worker_recreation(
 
 /// When a worker is deleted and a new worker is created with the same agent ID, any
 /// scheduled invocations that targeted the original worker must NOT fire on the new instance.
-///
-/// The wasm-rpc scheduling path stores a `target_worker_fingerprint` (a UUID generated at
-/// worker creation time) alongside the scheduled action. The scheduler compares this fingerprint
-/// against the current worker's fingerprint before dispatching; a mismatch causes the invocation
-/// to be silently dropped.
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
@@ -1070,7 +1065,7 @@ async fn stale_scheduled_invocation_dropped_after_worker_recreation(
         .await?;
 
     // Schedule the invocation. At this point `target_worker_fingerprint` is set to the
-    // server's UUID fingerprint inside the KV sorted-set entry.
+    // server's UUID fingerprint inside the KV store.
     user.invoke_and_await_agent(
         &component,
         &client_parsed,

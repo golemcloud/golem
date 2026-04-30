@@ -1776,7 +1776,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     Some(scheduled_time) => {
                         let worker = self.get_or_create_pending(&request).await?;
                         let target_worker_fingerprint =
-                            Some(worker.get_initial_worker_metadata().fingerprint);
+                            worker.get_initial_worker_metadata().fingerprint;
                         self.scheduler_service()
                             .schedule(
                                 scheduled_time,
@@ -2023,18 +2023,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             Ok(fingerprint) => {
                 use golem::workerexecutor::v1::create_worker_success_response::Fingerprint;
-                let proto_fingerprint = match fingerprint {
-                    AgentFingerprint::Uuid(u) => Fingerprint::FingerprintUuid(u.into()),
-                    AgentFingerprint::Timestamp(ts) => {
-                        Fingerprint::FingerprintTimestamp(ts.into())
-                    }
-                };
                 record.succeed(Ok(Response::new(
                     golem::workerexecutor::v1::CreateWorkerResponse {
                         result: Some(
                             golem::workerexecutor::v1::create_worker_response::Result::Success(
                                 golem::workerexecutor::v1::CreateWorkerSuccessResponse {
-                                    fingerprint: Some(proto_fingerprint),
+                                    fingerprint: Some(Fingerprint::FingerprintUuid(
+                                        fingerprint.0.into(),
+                                    )),
                                 },
                             ),
                         ),

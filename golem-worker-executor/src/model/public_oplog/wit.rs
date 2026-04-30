@@ -56,6 +56,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                 initial_active_plugins,
                 local_agent_config,
                 original_phantom_id,
+                instance_id,
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: agent_id.into(),
@@ -78,6 +79,7 @@ impl From<PublicOplogEntry> for oplog::PublicOplogEntry {
                     })
                     .collect(),
                 original_phantom_id: original_phantom_id.map(|id| id.into()),
+                instance_id: instance_id.into(),
             }),
             PublicOplogEntry::HostCall(HostCallParams {
                 timestamp,
@@ -825,8 +827,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 original_phantom_id: params
                     .original_phantom_id
                     .map(|uuid| uuid::Uuid::from_u64_pair(uuid.high_bits, uuid.low_bits)),
-                // instance_id is an internal field not exposed in the WIT interface
-                instance_id: None,
+                instance_id: uuid::Uuid::from_u64_pair(
+                    params.instance_id.high_bits,
+                    params.instance_id.low_bits,
+                ),
             }),
             oplog::OplogEntry::HostCall(params) => Ok(Self::HostCall {
                 timestamp: timestamp_from_datetime(params.timestamp),

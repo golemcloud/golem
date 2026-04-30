@@ -27,10 +27,10 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{AgentError, LogLevel};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::model::{
     AgentFingerprint, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
 };
+use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::redis::RedisPool;
 use golem_common::tracing::{TracingConfig, init_tracing};
 use golem_service_base::db::sqlite::SqlitePool;
@@ -76,7 +76,7 @@ fn make_agent_metadata(
         parent: None,
         last_known_status: AgentStatusRecord::default(),
         original_phantom_id: None,
-        fingerprint: AgentFingerprint::Timestamp(Timestamp::now_utc()),
+        fingerprint: AgentFingerprint::new(),
     }
 }
 
@@ -1496,7 +1496,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         initial_total_linear_memory_size: 0,
         initial_active_plugins: HashSet::new(),
         original_phantom_id: None,
-        instance_id: None
+        instance_id: Uuid::new_v4(),
     }
     .rounded();
 
@@ -2237,7 +2237,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             HashSet::new(),
             Vec::new(),
             None,
-            None,
+            Uuid::new_v4(),
         );
 
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);

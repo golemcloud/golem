@@ -153,7 +153,8 @@ impl WorkerService {
             )
             .await?;
 
-        let (_, fingerprint) = self.worker_client
+        let (_, fingerprint) = self
+            .worker_client
             .create(
                 agent_id,
                 environment_variables,
@@ -1405,7 +1406,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(agent_id.clone());
-            Ok((agent_id.clone(), AgentFingerprint::Uuid(Uuid::now_v7())))
+            Ok((agent_id.clone(), AgentFingerprint::new()))
         }
 
         async fn connect(

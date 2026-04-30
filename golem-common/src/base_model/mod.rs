@@ -165,72 +165,36 @@ impl FromValue for Timestamp {
     }
 }
 
+/// A stable, per-instance fingerprint for a worker, generated as a random UUID at creation time.
+/// Globally unique across recreations of the same agent ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[serde(tag = "type", content = "value", rename_all = "camelCase")]
-pub enum AgentFingerprint {
-    /// Randomly generated at worker creation time.  Globally unique across recreations.
-    Uuid(Uuid),
-    /// Fallback for workers created before `AgentFingerprint` was introduced.
-    /// The timestamp is the worker's `created_at` from the oplog `Create` entry.
-    Timestamp(Timestamp),
+#[cfg_attr(
+    feature = "full",
+    derive(
+        desert_rust::BinaryCodec,
+        golem_wasm_derive::IntoValue,
+        golem_wasm_derive::FromValue,
+    )
+)]
+#[cfg_attr(feature = "full", desert(transparent))]
+#[serde(transparent)]
+pub struct AgentFingerprint(pub Uuid);
+
+impl Default for AgentFingerprint {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AgentFingerprint {
+    pub fn new() -> Self {
+        AgentFingerprint(Uuid::now_v7())
+    }
 }
 
 impl Display for AgentFingerprint {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AgentFingerprint::Uuid(u) => write!(f, "uuid:{u}"),
-            AgentFingerprint::Timestamp(t) => write!(f, "ts:{t}"),
-        }
-    }
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::IntoValue for AgentFingerprint {
-    fn into_value(self) -> golem_wasm::Value {
-        match self {
-            AgentFingerprint::Uuid(u) => {
-                golem_wasm::Value::Variant {
-                    case_idx: 0,
-                    case_value: Some(Box::new(u.into_value())),
-                }
-            }
-            AgentFingerprint::Timestamp(ts) => golem_wasm::Value::Variant {
-                case_idx: 1,
-                case_value: Some(Box::new(golem_wasm::Value::U64(ts.to_millis()))),
-            },
-        }
-    }
-
-    fn get_type() -> golem_wasm::analysis::AnalysedType {
-        use golem_wasm::analysis::analysed_type;
-        analysed_type::variant(vec![
-            analysed_type::case("uuid", Uuid::get_type()),
-            analysed_type::case("timestamp", u64::get_type()),
-        ])
-    }
-}
-
-#[cfg(feature = "full")]
-impl golem_wasm::FromValue for AgentFingerprint {
-    fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
-        match value {
-            golem_wasm::Value::Variant {
-                case_idx: 0,
-                case_value: Some(inner),
-            } => Ok(AgentFingerprint::Uuid(Uuid::from_value(*inner)?)),
-            golem_wasm::Value::Variant {
-                case_idx: 1,
-                case_value: Some(inner),
-            } => match *inner {
-                golem_wasm::Value::U64(millis) => {
-                    Ok(AgentFingerprint::Timestamp(Timestamp::from(millis)))
-                }
-                other => Err(format!("Expected U64 for Timestamp fingerprint, got {other:?}")),
-            },
-            other => Err(format!("Expected Variant for AgentFingerprint, got {other:?}")),
-        }
+        write!(f, "{}", self.0)
     }
 }
 

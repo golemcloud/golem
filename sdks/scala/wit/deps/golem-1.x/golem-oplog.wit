@@ -106,7 +106,8 @@ interface oplog {
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<plugin-installation-description>,
         local-agent-config: list<local-agent-config-entry>,
-        original-phantom-id: option<uuid>
+        original-phantom-id: option<uuid>,
+        instance-id: uuid
     }
 
     record host-call-parameters {
@@ -454,8 +455,7 @@ interface oplog {
         initial-active-plugins: list<environment-plugin-grant-id>,
         local-agent-config: list<raw-local-agent-config-entry>,
         original-phantom-id: option<uuid>,
-        /// Per-instance UUID. None for agents created before this field was introduced.
-        instance-id: option<uuid>
+        instance-id: uuid
     }
 
     record raw-host-call-parameters {

@@ -37,7 +37,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
-    InvocationStatus, OwnedAgentId, PromiseId, Timestamp,
+    InvocationStatus, OwnedAgentId, PromiseId,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::GrpcClient;
@@ -304,16 +304,15 @@ impl WorkerProxy for RemoteWorkerProxy {
             Some(launch_new_worker_response::Result::Success(success)) => {
                 use golem_api_grpc::proto::golem::worker::v1::launch_new_worker_success_response::Fingerprint;
                 let fingerprint = match success.fingerprint {
-                    Some(Fingerprint::FingerprintUuid(u)) => AgentFingerprint::Uuid(u.into()),
-                    Some(Fingerprint::FingerprintTimestamp(ts)) => {
-                        AgentFingerprint::Timestamp(ts.try_into().unwrap_or_else(|_| Timestamp::now_utc()))
-                    }
-                    None => AgentFingerprint::Timestamp(Timestamp::now_utc()),
+                    Some(Fingerprint::FingerprintUuid(u)) => AgentFingerprint(u.into()),
+                    // Timestamp variant and missing fingerprint should not occur with new servers;
+                    // generate a fresh UUID as a safe fallback.
+                    _ => AgentFingerprint::new(),
                 };
                 Ok(fingerprint)
             }
             Some(launch_new_worker_response::Result::Error(error)) => match error.error {
-                Some(agent_error::Error::AlreadyExists(_)) => Ok(AgentFingerprint::Timestamp(Timestamp::now_utc())),
+                Some(agent_error::Error::AlreadyExists(_)) => Ok(AgentFingerprint::new()),
                 _ => Err(error.into()),
             },
             None => Err(WorkerProxyError::InternalError(

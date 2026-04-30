@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::agent::Principal;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction, Timestamp};
+use golem_common::model::{AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
@@ -337,20 +337,13 @@ impl SchedulerServiceDefault {
                     invocation,
                     target_worker_fingerprint,
                 } => {
-                    // If the action was scheduled with a fingerprint guard, verify that the
-                    // current worker instance is the same one that was targeted. A mismatch
-                    // means the original worker was deleted and recreated — drop the stale
+                    // A mismatch means the original worker was deleted and recreated — drop the stale
                     // invocation silently.
-                    let stale = if let Some(expected_fingerprint) = target_worker_fingerprint {
-                        match self.worker_service.get(&owned_agent_id).await {
-                            Some(meta) => {
-                                meta.initial_worker_metadata.fingerprint != expected_fingerprint
-                            }
-                            // Worker no longer exists — drop.
-                            None => true,
+                    let stale = match self.worker_service.get(&owned_agent_id).await {
+                        Some(meta) => {
+                            meta.initial_worker_metadata.fingerprint != target_worker_fingerprint
                         }
-                    } else {
-                        false
+                        None => true,
                     };
 
                     if stale {

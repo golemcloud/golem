@@ -25,16 +25,11 @@ use super::{
     StringAttributeValue, WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use crate::base_model::OplogIndex;
-use crate::model::AgentInvocationResult;
 use crate::model::Empty;
 use crate::model::agent::DataValue;
-use crate::model::agent::UntypedDataValue;
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::payload::OplogPayload;
-use crate::model::oplog::payload::host_functions::{
-    HostFunctionName, host_request_from_value_and_type, host_response_from_value_and_type,
-};
 use crate::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, BeginRemoteWriteParams,
@@ -315,6 +310,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .collect::<Result<Vec<_>, _>>()?,
                 ),
                 original_phantom_id: create.original_phantom_id.map(|id| id.into()),
+                instance_id: create
+                    .instance_id
+                    .map(|id| id.into())
+                    .ok_or("Missing instance_id in Create entry")?,
             })),
             oplog_entry::Entry::HostCall(host_call) => {
                 Ok(PublicOplogEntry::HostCall(HostCallParams {
@@ -759,6 +758,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                             .map(Into::into)
                             .collect(),
                         original_phantom_id: create.original_phantom_id.map(|id| id.into()),
+                        instance_id: Some(create.instance_id.into()),
                     },
                 )),
             },
@@ -2419,7 +2419,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .map(|e| crate::serialization::serialize(&e))
                     .collect::<Result<Vec<_>, _>>()?,
                 original_phantom_id: original_phantom_id.map(Into::into),
-                instance_id: instance_id.map(Into::into),
+                instance_id: Some(instance_id.into()),
             }),
             OplogEntry::HostCall {
                 function_name,
@@ -2750,10 +2750,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     let proto_uuid: golem_api_grpc::proto::golem::common::Uuid = u;
                     uuid::Uuid::from(proto_uuid)
                 });
-                let instance_id: Option<uuid::Uuid> = p.instance_id.map(|u| {
-                    let proto_uuid: golem_api_grpc::proto::golem::common::Uuid = u;
-                    uuid::Uuid::from(proto_uuid)
-                });
+                let instance_id: uuid::Uuid = p
+                    .instance_id
+                    .map(uuid::Uuid::from)
+                    .ok_or("Missing instance_id in Create entry")?;
                 Ok(OplogEntry::Create {
                     timestamp,
                     agent_id,

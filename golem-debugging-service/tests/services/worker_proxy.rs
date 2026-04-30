@@ -13,7 +13,9 @@ use golem_common::model::agent::{AgentInvocationMode, Principal, UntypedDataValu
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::{AgentConfigEntryDto, RevertWorkerTarget};
-use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, InvocationStatus, OwnedAgentId, PromiseId};
+use golem_common::model::{
+    AgentFingerprint, AgentId, IdempotencyKey, InvocationStatus, OwnedAgentId, PromiseId,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};

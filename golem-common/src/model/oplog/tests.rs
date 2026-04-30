@@ -93,6 +93,7 @@ fn create_serialization_poem_serde_equivalence() {
             parameters: BTreeMap::new(),
         }]),
         original_phantom_id: None,
+        instance_id: Uuid::new_v4(),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

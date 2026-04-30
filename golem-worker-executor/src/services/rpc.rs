@@ -46,7 +46,6 @@ use golem_common::model::oplog::types::SerializableRpcError;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
-    Timestamp,
 };
 
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -247,7 +246,10 @@ struct LoggingDemand {
 impl LoggingDemand {
     pub fn new(agent_id: AgentId, fingerprint: AgentFingerprint) -> Self {
         log::debug!("Initializing RPC connection for worker {agent_id}");
-        Self { agent_id, fingerprint }
+        Self {
+            agent_id,
+            fingerprint,
+        }
     }
 }
 
@@ -279,7 +281,8 @@ impl Rpc for RemoteInvocationRpc {
 
         let principal = caller_agent_principal(self_agent_id);
 
-        let fingerprint = self.worker_proxy
+        let fingerprint = self
+            .worker_proxy
             .start(
                 owned_agent_id,
                 self_agent_id,
@@ -291,7 +294,10 @@ impl Rpc for RemoteInvocationRpc {
             )
             .await?;
 
-        Ok(Box::new(LoggingDemand::new(owned_agent_id.agent_id(), fingerprint)))
+        Ok(Box::new(LoggingDemand::new(
+            owned_agent_id.agent_id(),
+            fingerprint,
+        )))
     }
 
     async fn invoke_and_await(
@@ -799,7 +805,10 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .await?;
 
             let fingerprint = worker.get_initial_worker_metadata().fingerprint;
-            Ok(Box::new(LoggingDemand::new(owned_agent_id.agent_id(), fingerprint)))
+            Ok(Box::new(LoggingDemand::new(
+                owned_agent_id.agent_id(),
+                fingerprint,
+            )))
         } else {
             self.remote_rpc
                 .create_demand(

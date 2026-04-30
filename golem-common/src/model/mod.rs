@@ -341,12 +341,11 @@ pub enum ScheduledAction {
     /// mismatch means the original worker was deleted and a new one was created with the same
     /// ID — the invocation is silently dropped. `None` means fire unconditionally (used for
     /// legacy entries and non-wasm-rpc invocations).
-    #[desert(evolution(FieldAdded("target_worker_fingerprint", None)))]
     Invoke {
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
         invocation: Box<AgentInvocation>,
-        target_worker_fingerprint: Option<AgentFingerprint>,
+        target_worker_fingerprint: AgentFingerprint,
     },
     /// Resume the agent
     Resume {
