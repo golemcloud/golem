@@ -18,10 +18,7 @@ use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
-use gag::BufferRedirect;
 use std::collections::HashMap;
-use std::io::Read;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::{LazyLock, Mutex};
@@ -274,64 +271,6 @@ impl CommandExt for Command {
 
         Ok(status)
     }
-}
-
-pub enum HiddenOutput {
-    Stdout,
-    Stderr,
-    All,
-    None,
-}
-
-impl HiddenOutput {
-    pub fn hide_stderr_if(cond: bool) -> Self {
-        if cond { Self::Stderr } else { Self::None }
-    }
-
-    fn should_hide_stdout(&self) -> bool {
-        matches!(self, Self::Stdout | Self::All)
-    }
-    fn should_hide_stderr(&self) -> bool {
-        matches!(self, Self::Stderr | Self::All)
-    }
-}
-
-pub fn with_hidden_output_unless_error<F, R>(hidden_output: HiddenOutput, f: F) -> anyhow::Result<R>
-where
-    F: FnOnce() -> anyhow::Result<R>,
-{
-    let stdout_redirect = (hidden_output.should_hide_stdout())
-        .then(|| BufferRedirect::stdout().ok())
-        .flatten();
-
-    let stderr_redirect = (hidden_output.should_hide_stderr())
-        .then(|| BufferRedirect::stderr().ok())
-        .flatten();
-
-    let result = f();
-
-    if result.is_err() {
-        if let Some(mut redirect) = stdout_redirect {
-            let mut output = Vec::new();
-            let read_result = redirect.read_to_end(&mut output);
-            drop(redirect);
-            read_result.expect("Failed to read stdout from redirect");
-            std::io::stdout()
-                .write_all(output.as_slice())
-                .expect("Failed to write captured stdout");
-        }
-        if let Some(mut redirect) = stderr_redirect {
-            let mut output = Vec::new();
-            let read_result = redirect.read_to_end(&mut output);
-            drop(redirect);
-            read_result.expect("Failed to read stderr from redirect");
-            std::io::stderr()
-                .write_all(output.as_slice())
-                .expect("Failed to write captured stderr");
-        }
-    }
-
-    result
 }
 
 #[cfg(test)]
