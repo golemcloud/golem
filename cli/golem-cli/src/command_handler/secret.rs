@@ -275,17 +275,10 @@ impl SecretCommandHandler {
         secret_type: &AnalysedType,
         source_language: &SourceLanguage,
     ) -> anyhow::Result<serde_json::Value> {
-        // Try language-specific parser first
-        if let Ok(vat) = parse_value_for_language(input, secret_type, source_language)
-            && let Ok(json) = vat.to_json_value()
-        {
-            return Ok(json);
-        }
-        // Fall back to raw JSON
-        match serde_json::from_str(input) {
+        match parse_secret_value_to_json(input, secret_type, source_language) {
             Ok(json) => Ok(json),
-            Err(err) => {
-                log_error(format!("Secret value is not valid: {err}"));
+            Err(msg) => {
+                log_error(msg);
                 bail!(NonSuccessfulExit);
             }
         }
@@ -315,5 +308,286 @@ impl SecretCommandHandler {
         });
 
         Ok(())
+    }
+}
+
+fn parse_secret_value_to_json(
+    input: &str,
+    secret_type: &AnalysedType,
+    source_language: &SourceLanguage,
+) -> Result<serde_json::Value, String> {
+    // Try language-specific parser first
+    if let Ok(vat) = parse_value_for_language(input, secret_type, source_language)
+        && let Ok(json) = vat.to_json_value()
+    {
+        return Ok(json);
+    }
+    // Fall back to raw JSON
+    match serde_json::from_str(input) {
+        Ok(json) => Ok(json),
+        Err(err) => {
+            // If the expected type is a plain string and the input is not valid JSON,
+            // treat the raw input as the string value (ergonomic fallback).
+            if matches!(secret_type, AnalysedType::Str(_)) {
+                Ok(serde_json::Value::String(input.to_string()))
+            } else {
+                Err(format!("Secret value is not valid: {err}"))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use super::*;
+    use crate::command::{GolemCliCommand, GolemCliSubcommand};
+    use clap::Parser;
+    use golem_wasm::analysis::{
+        NameTypePair, TypeBool, TypeF64, TypeList, TypeOption, TypeRecord, TypeS32, TypeStr, TypeU32,
+    };
+
+    fn str_type() -> AnalysedType {
+        AnalysedType::Str(TypeStr)
+    }
+
+    fn u32_type() -> AnalysedType {
+        AnalysedType::U32(TypeU32)
+    }
+
+    fn option_u32_type() -> AnalysedType {
+        AnalysedType::Option(TypeOption {
+            name: None,
+            owner: None,
+            inner: Box::new(AnalysedType::U32(TypeU32)),
+        })
+    }
+
+    fn list_u32_type() -> AnalysedType {
+        AnalysedType::List(TypeList {
+            name: None,
+            owner: None,
+            inner: Box::new(AnalysedType::U32(TypeU32)),
+        })
+    }
+
+    fn lang() -> SourceLanguage {
+        SourceLanguage::Other(String::new())
+    }
+
+    // --- String type ---
+
+    #[test]
+    fn bare_string_accepted_for_str_type() {
+        let result = parse_secret_value_to_json("sk-abc123", &str_type(), &lang());
+        assert_eq!(result, Ok(serde_json::Value::String("sk-abc123".to_string())));
+    }
+
+    #[test]
+    fn json_quoted_string_accepted_for_str_type() {
+        let result = parse_secret_value_to_json(r#""sk-abc123""#, &str_type(), &lang());
+        assert_eq!(result, Ok(serde_json::Value::String("sk-abc123".to_string())));
+    }
+
+    #[test]
+    fn bare_string_with_spaces_accepted_for_str_type() {
+        let result = parse_secret_value_to_json("hello world", &str_type(), &lang());
+        assert_eq!(result, Ok(serde_json::Value::String("hello world".to_string())));
+    }
+
+    #[test]
+    fn bare_string_api_key_like_accepted_for_str_type() {
+        let result = parse_secret_value_to_json("sk-abc123.endpoint/v2", &str_type(), &lang());
+        assert_eq!(
+            result,
+            Ok(serde_json::Value::String("sk-abc123.endpoint/v2".to_string()))
+        );
+    }
+
+    // --- Numeric types ---
+
+    #[test]
+    fn valid_json_number_accepted_for_u32_type() {
+        let result = parse_secret_value_to_json("42", &u32_type(), &lang());
+        assert_eq!(result, Ok(serde_json::json!(42)));
+    }
+
+    #[test]
+    fn negative_number_accepted_for_s32_type() {
+        let result = parse_secret_value_to_json("-7", &AnalysedType::S32(TypeS32), &lang());
+        assert_eq!(result, Ok(serde_json::json!(-7)));
+    }
+
+    #[test]
+    fn decimal_accepted_for_f64_type() {
+        let result = parse_secret_value_to_json("3.14", &AnalysedType::F64(TypeF64), &lang());
+        assert_eq!(result, Ok(serde_json::json!(3.14)));
+    }
+
+    // --- Bool type ---
+
+    #[test]
+    fn bool_true_accepted() {
+        let result = parse_secret_value_to_json("true", &AnalysedType::Bool(TypeBool), &lang());
+        assert_eq!(result, Ok(serde_json::json!(true)));
+    }
+
+    #[test]
+    fn bool_false_accepted() {
+        let result = parse_secret_value_to_json("false", &AnalysedType::Bool(TypeBool), &lang());
+        assert_eq!(result, Ok(serde_json::json!(false)));
+    }
+
+    // --- Option type ---
+
+    #[test]
+    fn option_null_accepted() {
+        let result = parse_secret_value_to_json("null", &option_u32_type(), &lang());
+        assert_eq!(result, Ok(serde_json::json!(null)));
+    }
+
+    #[test]
+    fn option_inner_value_accepted() {
+        let result = parse_secret_value_to_json("42", &option_u32_type(), &lang());
+        assert_eq!(result, Ok(serde_json::json!(42)));
+    }
+
+    // --- List type ---
+
+    #[test]
+    fn list_json_array_accepted() {
+        let result = parse_secret_value_to_json("[1,2,3]", &list_u32_type(), &lang());
+        assert_eq!(result, Ok(serde_json::json!([1, 2, 3])));
+    }
+
+    // --- Record type ---
+
+    #[test]
+    fn record_json_object_accepted() {
+        let rec_type = AnalysedType::Record(TypeRecord {
+            name: None,
+            owner: None,
+            fields: vec![
+                NameTypePair {
+                    name: "host".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
+                    name: "port".to_string(),
+                    typ: AnalysedType::U32(TypeU32),
+                },
+            ],
+        });
+        let result =
+            parse_secret_value_to_json(r#"{"host":"localhost","port":5432}"#, &rec_type, &lang());
+        assert_eq!(
+            result,
+            Ok(serde_json::json!({"host": "localhost", "port": 5432}))
+        );
+    }
+
+    // --- Language-specific: Rust dialect ---
+
+    #[test]
+    fn rust_dialect_some_option_accepted() {
+        let result =
+            parse_secret_value_to_json("Some(42)", &option_u32_type(), &SourceLanguage::Rust);
+        assert_eq!(result, Ok(serde_json::json!(42)));
+    }
+
+    #[test]
+    fn rust_dialect_none_option_accepted() {
+        let result =
+            parse_secret_value_to_json("None", &option_u32_type(), &SourceLanguage::Rust);
+        assert_eq!(result, Ok(serde_json::json!(null)));
+    }
+
+    // --- Error cases ---
+
+    #[test]
+    fn bare_word_rejected_for_non_string_type() {
+        let result = parse_secret_value_to_json("notANumber", &u32_type(), &lang());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Secret value is not valid"));
+    }
+
+    // --- CLI argument ordering ---
+
+    fn extract_create_args(cmd: GolemCliCommand) -> (String, Option<String>) {
+        match cmd.subcommand {
+            GolemCliSubcommand::AgentSecret {
+                subcommand:
+                    AgentSecretSubcommand::Create {
+                        secret_type,
+                        secret_value,
+                        ..
+                    },
+            } => (secret_type, secret_value),
+            _ => panic!("expected AgentSecret Create"),
+        }
+    }
+
+    #[test]
+    fn create_type_before_value_parses() {
+        let cmd = GolemCliCommand::try_parse_from([
+            "golem-cli",
+            "agent-secret",
+            "create",
+            "apiKey",
+            "--secret-type",
+            "String",
+            "--secret-value",
+            "sk-abc123",
+        ])
+        .expect("parse failed");
+        let (typ, val) = extract_create_args(cmd);
+        assert_eq!(typ, "String");
+        assert_eq!(val.as_deref(), Some("sk-abc123"));
+    }
+
+    #[test]
+    fn create_value_before_type_parses() {
+        let cmd = GolemCliCommand::try_parse_from([
+            "golem-cli",
+            "agent-secret",
+            "create",
+            "apiKey",
+            "--secret-value",
+            "sk-abc123",
+            "--secret-type",
+            "String",
+        ])
+        .expect("parse failed");
+        let (typ, val) = extract_create_args(cmd);
+        assert_eq!(typ, "String");
+        assert_eq!(val.as_deref(), Some("sk-abc123"));
+    }
+
+    #[test]
+    fn create_both_orderings_produce_same_args() {
+        let order1 = GolemCliCommand::try_parse_from([
+            "golem-cli",
+            "agent-secret",
+            "create",
+            "apiKey",
+            "--secret-type",
+            "String",
+            "--secret-value",
+            "sk-abc123",
+        ])
+        .unwrap();
+        let order2 = GolemCliCommand::try_parse_from([
+            "golem-cli",
+            "agent-secret",
+            "create",
+            "apiKey",
+            "--secret-value",
+            "sk-abc123",
+            "--secret-type",
+            "String",
+        ])
+        .unwrap();
+        assert_eq!(extract_create_args(order1), extract_create_args(order2));
     }
 }
