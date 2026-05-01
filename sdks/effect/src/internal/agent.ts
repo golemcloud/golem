@@ -329,7 +329,7 @@ interface CompiledAgent {
     SnapshotDef
   >
   readonly constructorBindings: ReadonlyArray<ParamBinding>
-  /** Backwards-compatible legacy view: only component-model wire bindings. */
+  /** Filtered view of {@link constructorBindings}: only component-model wire bindings. */
   readonly constructorCodecs: ReadonlyArray<ParamCodec>
   readonly methodCodecs: ReadonlyMap<string, MethodCodec<MethodParams, Schema.Top, Schema.Top>>
   readonly agentType: AgentCommon.AgentType

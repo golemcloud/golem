@@ -4,11 +4,9 @@
  * `provideUserRuntime` helper) and shared across every dispatch entry
  * (`initialize`, `invoke`, `save-snapshot`, `load-snapshot`).
  *
- * Each constituent layer is a thin wrapper around the same WIT
- * specifier import the SDK already used; production resolution is
- * unchanged. Tests substitute fakes via `Layer.succeed(Tag, fake)` /
- * `Effect.provide(eff, fakeLayer)` rather than the legacy
- * `__setX/__resetX` indirection.
+ * Each constituent layer is a thin wrapper around a single WIT
+ * specifier import. Tests substitute fakes via
+ * `Layer.succeed(Tag, fake)` / `Effect.provide(eff, fakeLayer)`.
  *
  * @internal — not re-exported from `src/index.ts`.
  */

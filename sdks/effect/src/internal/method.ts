@@ -404,7 +404,7 @@ export type ParamBinding =
         ) => Effect.Effect<any, Schema.SchemaError | import("../Element.js").ElementValueKindError>
       }
       /**
-       * Element shim used by legacy `wireBindings` traversals — the real
+       * Element shim used by generic `wireBindings` traversals — the real
        * encode/decode lives on `multimodal.encode/decode` and consumes the
        * full `DataValue` (not a single `ElementValue`).
        */
@@ -531,8 +531,9 @@ export const compileMethodSpec = <
         // marker — actual encoding/decoding goes through the binding's
         // own `multimodal.encode/decode` paths in `invokeDataValue` and
         // the client. We store the inner shape as a component-model nil
-        // here so legacy callers don't crash; the live `bindings` array
-        // exposes the multimodal compiled bundle separately.
+        // here so generic `wireBindings.map(...)` callers don't crash;
+        // the live `bindings` array exposes the multimodal compiled
+        // bundle separately.
         elementSchema: {
           tag: "component-model",
           val: { nodes: [{ type: { tag: "prim-bool-type" } }] },
@@ -573,8 +574,8 @@ export const compileMethodSpec = <
     const wireBindings = bindings.filter(
       (b): b is Extract<ParamBinding, { kind: "wire" }> => b.kind === "wire",
     )
-    // Backwards-compatible legacy view: only includes wire bindings whose
-    // element is a `component-model` (i.e. backed by a `WitCodec`).
+    // Filtered view of `bindings`: only wire bindings whose element is a
+    // `component-model` (i.e. backed by a `WitCodec`).
     const inputCodecs = wireBindings
       .filter((b): b is typeof b & { witCodec: WitCodec<Schema.Top> } => b.witCodec !== null)
       .map(({ name: n, witCodec }) => ({ name: n, codec: witCodec }))
