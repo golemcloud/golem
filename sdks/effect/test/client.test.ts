@@ -271,6 +271,150 @@ describe("AgentClient (durable)", () => {
       expect(failure.cause).toEqual({ tag: "remote-internal-error", val: "boom" })
     }),
   )
+
+  // The wasm-rquickjs host glue throws via `ctx.throw(IntoJs::into_js(err))`,
+  // and in some async / wrapper paths the QuickJS runtime re-wraps the
+  // bare tagged object inside a JS `Error` instance whose `.payload` (or
+  // `.cause`) carries the actual variant. Without unwrapping, every
+  // `denied / not-found / remote-internal-error / remote-agent-error`
+  // would collapse into a misleading `protocol-error` containing the
+  // Error's `.message` string — defeating typed-error pattern-matching
+  // on `failure.cause.tag`.
+  for (const tag of ["protocol-error", "denied", "not-found", "remote-internal-error"] as const) {
+    it.effect(`Error.payload-wrapped ${tag} is surfaced with the original tag preserved`, () =>
+      Effect.gen(function* () {
+        const { fake, layer } = yield* makeRpcRuntime
+        yield* fake.setResponder(() => {
+          const err = new Error(`${tag}: boom`)
+          ;(err as unknown as { payload: unknown }).payload = { tag, val: "boom" }
+          return { tag: "throw", error: err }
+        })
+        const result = yield* Effect.provide(
+          Effect.result(
+            Effect.gen(function* () {
+              const remote = yield* Counter.client.get({ initial: 0 })
+              return yield* remote.getValue({})
+            }) as Effect.Effect<unknown, any, never>,
+          ),
+          layer,
+        )
+        expect(result._tag).toBe("Failure")
+        if (result._tag !== "Failure") return
+        const failure: any = result.failure
+        expect(failure._tag).toBe("RpcCallError")
+        expect(failure.cause).toEqual({ tag, val: "boom" })
+      }),
+    )
+  }
+
+  it.effect("Error.cause-wrapped denied is surfaced with the original tag preserved", () =>
+    Effect.gen(function* () {
+      const { fake, layer } = yield* makeRpcRuntime
+      yield* fake.setResponder(() => {
+        const err = new Error("denied: nope")
+        ;(err as unknown as { cause: unknown }).cause = { tag: "denied", val: "nope" }
+        return { tag: "throw", error: err }
+      })
+      const result = yield* Effect.provide(
+        Effect.result(
+          Effect.gen(function* () {
+            const remote = yield* Counter.client.get({ initial: 0 })
+            return yield* remote.getValue({})
+          }) as Effect.Effect<unknown, any, never>,
+        ),
+        layer,
+      )
+      expect(result._tag).toBe("Failure")
+      if (result._tag !== "Failure") return
+      const failure: any = result.failure
+      expect(failure._tag).toBe("RpcCallError")
+      expect(failure.cause).toEqual({ tag: "denied", val: "nope" })
+    }),
+  )
+
+  it.effect(
+    "Error.payload-wrapped remote-agent-error preserves the structured AgentError val",
+    () =>
+      Effect.gen(function* () {
+        const { fake, layer } = yield* makeRpcRuntime
+        const agentError = {
+          tag: "custom-error",
+          val: { value: { tag: "tuple", val: [] }, schema: undefined },
+        }
+        yield* fake.setResponder(() => {
+          const err = new Error("remote-agent-error: typed failure")
+          ;(err as unknown as { payload: unknown }).payload = {
+            tag: "remote-agent-error",
+            val: agentError,
+          }
+          return { tag: "throw", error: err }
+        })
+        const result = yield* Effect.provide(
+          Effect.result(
+            Effect.gen(function* () {
+              const remote = yield* Counter.client.get({ initial: 0 })
+              return yield* remote.getValue({})
+            }) as Effect.Effect<unknown, any, never>,
+          ),
+          layer,
+        )
+        expect(result._tag).toBe("Failure")
+        if (result._tag !== "Failure") return
+        const failure: any = result.failure
+        expect(failure._tag).toBe("RpcCallError")
+        expect(failure.cause.tag).toBe("remote-agent-error")
+        expect(failure.cause.val).toEqual(agentError)
+      }),
+  )
+
+  it.effect("Error without a tagged payload/cause falls back to protocol-error", () =>
+    Effect.gen(function* () {
+      const { fake, layer } = yield* makeRpcRuntime
+      yield* fake.setResponder(() => ({
+        tag: "throw",
+        error: new Error("opaque host failure"),
+      }))
+      const result = yield* Effect.provide(
+        Effect.result(
+          Effect.gen(function* () {
+            const remote = yield* Counter.client.get({ initial: 0 })
+            return yield* remote.getValue({})
+          }) as Effect.Effect<unknown, any, never>,
+        ),
+        layer,
+      )
+      expect(result._tag).toBe("Failure")
+      if (result._tag !== "Failure") return
+      const failure: any = result.failure
+      expect(failure._tag).toBe("RpcCallError")
+      expect(failure.cause).toEqual({ tag: "protocol-error", val: "opaque host failure" })
+    }),
+  )
+
+  it.effect("Error whose .payload has an unknown tag falls back to protocol-error", () =>
+    Effect.gen(function* () {
+      const { fake, layer } = yield* makeRpcRuntime
+      yield* fake.setResponder(() => {
+        const err = new Error("looks tagged but isn't")
+        ;(err as unknown as { payload: unknown }).payload = { tag: "not-a-real-tag", val: "x" }
+        return { tag: "throw", error: err }
+      })
+      const result = yield* Effect.provide(
+        Effect.result(
+          Effect.gen(function* () {
+            const remote = yield* Counter.client.get({ initial: 0 })
+            return yield* remote.getValue({})
+          }) as Effect.Effect<unknown, any, never>,
+        ),
+        layer,
+      )
+      expect(result._tag).toBe("Failure")
+      if (result._tag !== "Failure") return
+      const failure: any = result.failure
+      expect(failure._tag).toBe("RpcCallError")
+      expect(failure.cause).toEqual({ tag: "protocol-error", val: "looks tagged but isn't" })
+    }),
+  )
 })
 
 describe("AgentClient overrides (config)", () => {

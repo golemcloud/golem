@@ -54,18 +54,60 @@ export type RemoteCallError =
 
 const rpcError = (cause: RpcError): RemoteCallError => ({ _tag: "RpcCallError", cause })
 
-const wrapHostThrow = (e: unknown): RemoteCallError => {
-  // The host wraps RpcError in a JS Error; if it's already shaped like
-  // an RpcError, pass it through; otherwise treat it as a protocol-level
-  // error.
-  if (
-    typeof e === "object" &&
-    e !== null &&
-    "tag" in e &&
-    typeof (e as { tag: unknown }).tag === "string"
-  ) {
-    return rpcError(e as RpcError)
+/**
+ * Closed set of `RpcError["tag"]` values. The `Set<RpcError["tag"]>`
+ * constructor type-checks the entries against the WIT-derived union,
+ * so the only way an extra tag slips in is a typo. Used by
+ * {@link extractRpcError} to gate the structural probe so we don't
+ * accidentally classify an unrelated `{tag: "..."}` payload as an
+ * `RpcError`.
+ *
+ * Same shape as `Websocket.WS_TAGS` and `RdbmsShared.RDBMS_ERROR_TAGS`.
+ */
+const RPC_TAGS = new Set<RpcError["tag"]>([
+  "protocol-error",
+  "denied",
+  "not-found",
+  "remote-internal-error",
+  "remote-agent-error",
+])
+
+const isTaggedRpcError = (e: unknown): e is RpcError => {
+  if (e === null || typeof e !== "object") return false
+  const obj = e as { tag?: unknown }
+  return typeof obj.tag === "string" && RPC_TAGS.has(obj.tag as RpcError["tag"])
+}
+
+/**
+ * Recover an `RpcError` from a host throw. The wasm-rquickjs host
+ * wrappers throw the WIT variant via `ctx.throw(IntoJs::into_js(err))`,
+ * which lands on the JS `catch` slot in one of three observed shapes:
+ *
+ *   1. the bare `{tag, val}` object (synchronous host calls);
+ *   2. a JS `Error` whose `.payload` is the bare object (some
+ *      rquickjs / wstd async paths re-wrap the exception);
+ *   3. a JS `Error` whose `.cause` is the bare object (alternate
+ *      wrapper path observed in the wild).
+ *
+ * Returns `undefined` if the thrown value matches none of those.
+ *
+ * Mirrors the same probe in `Websocket.extractWsError` and
+ * `RdbmsShared.extractTaggedError`.
+ */
+const extractRpcError = (e: unknown): RpcError | undefined => {
+  if (isTaggedRpcError(e)) return e
+  if (e instanceof Error) {
+    const payload = (e as unknown as { payload?: unknown }).payload
+    if (isTaggedRpcError(payload)) return payload
+    const cause = (e as unknown as { cause?: unknown }).cause
+    if (isTaggedRpcError(cause)) return cause
   }
+  return undefined
+}
+
+const wrapHostThrow = (e: unknown): RemoteCallError => {
+  const rpc = extractRpcError(e)
+  if (rpc !== undefined) return rpcError(rpc)
   return rpcError({ tag: "protocol-error", val: e instanceof Error ? e.message : String(e) })
 }
 
