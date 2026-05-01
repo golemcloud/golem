@@ -1,7 +1,23 @@
 {
   "name": "effect-golem",
   "version": "1.5.0",
-  "private": true,
+  "license": "Apache-2.0",
+  "description": "Write Golem agents on top of Effect v4: Effect Schema-typed methods, durable execution, snapshots, sagas, RPC, HTTP, webhooks, KV/blob, and RDBMS adapters compiled to a Golem WASM component.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/golemcloud/effect-golem.git"
+  },
+  "homepage": "https://github.com/golemcloud/effect-golem#readme",
+  "bugs": {
+    "url": "https://github.com/golemcloud/effect-golem/issues"
+  },
+  "keywords": [
+    "golem",
+    "effect",
+    "wasm",
+    "agent",
+    "durable-execution"
+  ],
   "type": "module",
   "main": "dist/index.mjs",
   "types": "dist/effect-golem.d.ts",
