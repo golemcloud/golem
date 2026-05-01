@@ -20,6 +20,8 @@
  *   `@effect/sql-sqlite-node` handles the same gap).
  * - `loadExtension` and custom user functions / aggregates (not safely
  *   exposed by `node:sqlite`).
+ *
+ * @since 0.1.0
  */
 
 import {
@@ -59,10 +61,18 @@ const sqlError = (cause: unknown, message: string, operation: string): SqlError 
  * `effect-golem`'s main bundle for `src/snapshot.ts`'s relative
  * import of `./sqlite.js`, and one in the standalone
  * `effect-golem/sqlite` sub-import) still agree on the same key.
+ *
+ * @since 0.1.0
+ * @category symbols
  */
 export const SqliteClientTypeId: unique symbol = Symbol.for(
   "effect-golem/SqliteClient",
 ) as SqliteClientTypeId
+
+/**
+ * @since 0.1.0
+ * @category symbols
+ */
 export type SqliteClientTypeId = typeof SqliteClientTypeId
 
 /**
@@ -95,6 +105,9 @@ const DEFAULT_CACHE_TTL: Duration.Input = "1 hour"
  * - {@link exec} — run one or more parameter-less SQL statements
  *   (DDL or batched seed inserts). Wraps `db.exec(...)`.
  * - {@link config} — the configuration this client was built with.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface SqliteClient extends Client.SqlClient {
   readonly [SqliteClientTypeId]: SqliteClientTypeId
@@ -105,7 +118,12 @@ export interface SqliteClient extends Client.SqlClient {
   readonly updateValues: never
 }
 
-/** Options accepted by {@link SqliteClient.make} / {@link SqliteClient.layer}. */
+/**
+ * Options accepted by {@link SqliteClient.make} / {@link SqliteClient.layer}.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface SqliteClientConfig {
   /** SQLite filename — `":memory:"` or a host filesystem path. */
   readonly filename: string
@@ -120,7 +138,12 @@ export interface SqliteClientConfig {
   readonly spanAttributes?: Record<string, unknown> | undefined
 }
 
-/** Options accepted by {@link SqliteClient.fromDatabase}. */
+/**
+ * Options accepted by {@link SqliteClient.fromDatabase}.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface FromDatabaseOptions {
   readonly transformResultNames?: ((str: string) => string) | undefined
   readonly transformQueryNames?: ((str: string) => string) | undefined
@@ -142,6 +165,9 @@ export interface FromDatabaseOptions {
  * Context tag for resolving an {@link SqliteClient} from the
  * environment. Both this tag and the upstream `Client.SqlClient` tag
  * are populated by {@link SqliteClient.layer}.
+ *
+ * @since 0.1.0
+ * @category host services
  */
 export class SqliteClientService extends Context.Service<SqliteClientService, SqliteClient>()(
   "effect-golem/SqliteClient",
@@ -397,7 +423,12 @@ const layer = (
     ),
   ).pipe(Layer.provide([Reactivity.layer, NodeSqliteLive]))
 
-/** Public namespace mirror used by `import { SqliteClient } from "effect-golem/sqlite"`. */
+/**
+ * Public namespace mirror used by `import { SqliteClient } from "effect-golem/sqlite"`.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const SqliteClient = {
   TypeId: SqliteClientTypeId,
   make,
@@ -410,7 +441,12 @@ export const SqliteClient = {
 // Helpers consumed by `src/snapshot.ts`
 // ---------------------------------------------------------------------------
 
-/** Probe an arbitrary value for the SqliteClient brand. */
+/**
+ * Probe an arbitrary value for the SqliteClient brand.
+ *
+ * @since 0.1.0
+ * @category guards
+ */
 export const isSqliteClient = (v: unknown): v is SqliteClient => {
   if (v === null) return false
   // The SqliteClient is callable (it extends `effect/unstable/sql`'s
@@ -428,6 +464,9 @@ export const isSqliteClient = (v: unknown): v is SqliteClient => {
  * {@link SqliteClient}. Used by `snapshot.ts` to capture the handle
  * for `serializeDatabaseSync` / `restoreDatabaseSync`. NOT part of the
  * public surface.
+ *
+ * @internal
+ * @since 0.1.0
  */
 export const __getUnderlyingDatabase = (client: SqliteClient): DatabaseSync => {
   const db = (client as unknown as Record<symbol, unknown>)[UnderlyingDbSymbol] as
@@ -439,5 +478,10 @@ export const __getUnderlyingDatabase = (client: SqliteClient): DatabaseSync => {
   return db
 }
 
-/** Re-export for tests / advanced users. */
+/**
+ * Re-export for tests / advanced users.
+ *
+ * @since 0.1.0
+ * @category re-exports
+ */
 export { isAutocommitDatabaseSync, serializeDatabaseSync } from "node:sqlite"

@@ -1,9 +1,3 @@
-import { Cause, Context, Effect, Ref, Scope } from "effect"
-import { atomically, DurabilityHostError } from "./durability-mode.js"
-import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
-import { OplogClient } from "./host/OplogClient.js"
-import { currentIndex, OplogHostError, setIndex } from "./oplog.js"
-
 /**
  * Effect-idiomatic saga / multi-step transaction module on top of the
  * Golem oplog primitives.
@@ -49,7 +43,15 @@ import { currentIndex, OplogHostError, setIndex } from "./oplog.js"
  * {@link NestedSagaError}: the host's atomic-region bracketing and
  * the in-fiber checkpoint stack are inherently sequential, and
  * nesting would silently corrupt the comp-stack drain order.
+ *
+ * @since 0.1.0
  */
+
+import { Cause, Context, Effect, Ref, Scope } from "effect"
+import { atomically, DurabilityHostError } from "./durability-mode.js"
+import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
+import { OplogClient } from "./host/OplogClient.js"
+import { currentIndex, OplogHostError, setIndex } from "./oplog.js"
 
 // ---------------------------------------------------------------------------
 // Internal fiber-local references
@@ -111,6 +113,9 @@ const CauseStoreRef = Context.Reference<CauseStoreValue | null>("effect-golem/sa
  * has a saga context active. Mirrors `NestedDurableFunctionError` in
  * spirit: the host's bracketing is sequential, so nesting cannot be
  * made safe without changing the wire model.
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class NestedSagaError {
   readonly _tag = "NestedSagaError"
@@ -130,6 +135,9 @@ export class NestedSagaError {
  *   The first failure is exposed as `compensationError`. Subsequent
  *   compensations still run (best-effort), but only the first failure
  *   is surfaced.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type TransactionFailure<E> =
   | { readonly _tag: "FailedAndRolledBackCompletely"; readonly error: E }
@@ -151,6 +159,8 @@ export type TransactionFailure<E> =
  *
  * Mirrors `@effect/workflow`'s `Workflow.withCompensation` shape:
  *
+ * **Example**
+ *
  * ```ts
  * yield* Saga.withCompensation(bookFlight, (booking, _cause) =>
  *   cancelFlight(booking.id).pipe(Effect.ignore),
@@ -165,6 +175,9 @@ export type TransactionFailure<E> =
  * the call is structurally safe.
  *
  * Available in both pipe-friendly and data-first overloads.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withCompensation: {
   <A, R2>(
@@ -234,6 +247,9 @@ const withCompensationImpl = <A, E, R, R2>(
  * inside an {@link infallibleTransaction} the captured error is
  * dropped because the infallible path never returns a value the
  * caller could inspect.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withFallibleCompensation: {
   <A, E2, R2>(
@@ -292,6 +308,8 @@ const withFallibleCompensationImpl = <A, E, R, E2, R2>(
  * and registers `compensate(input, output, cause)` via
  * {@link withCompensation}:
  *
+ * **Example**
+ *
  * ```ts
  * const bookFlight = Saga.operation({
  *   execute:    ({ flightId }: { flightId: string }) =>
@@ -306,6 +324,9 @@ const withFallibleCompensationImpl = <A, E, R, E2, R2>(
  * The compensation is infallible (`Effect<void, never, R2>`); use
  * {@link withFallibleCompensation} directly if you need the
  * partial-rollback signal.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const operation = <In, Out, E, R, R2>(input: {
   readonly execute: (input: In) => Effect.Effect<Out, E, R>
@@ -404,6 +425,9 @@ const rewindAndSuspend = (checkpoint: bigint): Effect.Effect<never, OplogHostErr
  * without triggering compensation.
  *
  * Nesting another saga inside the body raises {@link NestedSagaError}.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const fallibleTransaction = <A, E, R>(
   body: Effect.Effect<A, E, R>,
@@ -497,6 +521,9 @@ export const fallibleTransaction = <A, E, R>(
  *   compensation, matching the official SDKs.
  *
  * Nesting another saga inside the body raises {@link NestedSagaError}.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const infallibleTransaction = <A, R>(
   body: Effect.Effect<A, never, R>,

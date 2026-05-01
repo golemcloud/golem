@@ -5,38 +5,8 @@ import * as CoreTypes from "golem:core/types@1.5.0"
 import { decodeMultipart, encodeMultipart, extractBoundary } from "./multipart.js"
 
 /**
- * Snapshot envelope formats used by Golem agents.
- *
- * `effect-golem` is wire-compatible with the official `golem-ts-sdk`
- * snapshotting envelopes so that components built with either SDK can
- * be cross-loaded.
- *
- * Two formats are produced by `effect-golem`:
- *
- * - **JSON envelope** (`mimeType: "application/json"`) — used by the
- *   schema-driven `Snapshot.define(...)` variant. The payload is the
- *   UTF-8 encoding of `{ version: 1, principal, state }`, where `state`
- *   is the user-state JSON encoded by the user's Schema.
- * - **Binary envelope** (`mimeType: "application/octet-stream"`) — used
- *   by the user-managed `Snapshot.custom(...)` variant. The payload is
- *   `[u8 version=2][u32 BE princLen][princJson][userBytes]`.
- *
- * The decoder additionally accepts the legacy binary `version = 1`
- * format (no embedded principal — caller supplies a fallback) for
- * forward compatibility with snapshots produced by older `golem-ts-sdk`
- * components.
- *
- * `multipart/mixed` envelopes (used by the official SDK when SQLite
- * databases are present) are handled by
- * {@link encodeMultipartJsonEnvelope} on the encode side and detected
- * automatically by {@link decodeEnvelope} on the decode side.
- *
- * The wire-shape JSON parts of every envelope (the
- * `{version, principal, state}` object and the standalone principal
- * blob in binary v2) are defined as {@link Schema} types and parsed
- * via `Schema.fromJsonString` so all JSON validation flows through
- * the canonical Effect Schema parser — there is no hand-rolled JSON
- * shape checking in this module.
+ * @internal
+ * @since 0.1.0
  */
 
 /** A typed failure for envelope encode/decode operations. */

@@ -54,6 +54,8 @@
  * resources once the JS handle becomes unreachable. We deliberately
  * do **not** ship a `fromConnection` constructor for v1 because the
  * caller would have no way to clean up.
+ *
+ * @since 0.1.0
  */
 import {
   Context,
@@ -108,8 +110,16 @@ const ATTR_DB_SYSTEM_NAME = "db.system.name"
  * so multiple module copies (e.g. one bundled inside `effect-golem`
  * and one in the standalone `effect-golem/postgres` sub-import) still
  * agree on the same key.
+ *
+ * @since 0.1.0
+ * @category symbols
  */
 export const PgClientTypeId: unique symbol = Symbol.for("effect-golem/PgClient") as PgClientTypeId
+
+/**
+ * @since 0.1.0
+ * @category symbols
+ */
 export type PgClientTypeId = typeof PgClientTypeId
 
 const PgConnectionTxSymbol: unique symbol = Symbol.for(
@@ -120,11 +130,19 @@ const PgConnectionTxSymbol: unique symbol = Symbol.for(
 // Public types
 // ---------------------------------------------------------------------------
 
-/** How temporal values (timestamp/timestamptz/date/time) are decoded from rows. */
+/**
+ * How temporal values (timestamp/timestamptz/date/time) are decoded from rows.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type TemporalDecodeMode = "raw" | "date"
 
 /**
  * Configuration accepted by {@link PgClient.make} / {@link PgClient.layer}.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface PgClientConfig {
   /**
@@ -160,6 +178,9 @@ export interface PgClientConfig {
  * `yield* sql\`SELECT ...\`` queries, compose with `SqlSchema` /
  * `SqlResolver` / `Migrator`, and resolve the canonical
  * `Client.SqlClient` tag.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface PgClient extends Client.SqlClient {
   readonly [PgClientTypeId]: PgClientTypeId
@@ -176,6 +197,9 @@ export interface PgClient extends Client.SqlClient {
  * Context tag for resolving a {@link PgClient} from the environment.
  * Both this tag and the upstream `Client.SqlClient` tag are populated
  * by {@link PgClient.layer}.
+ *
+ * @since 0.1.0
+ * @category host services
  */
 export class PgClientService extends Context.Service<PgClientService, PgClient>()(
   "effect-golem/PgClient",
@@ -202,26 +226,46 @@ const pgParam = <T extends string, V>(kind: T, value: V): PgParam<T, V> => ({
 const isPgParam = (v: unknown): v is PgParam<string, unknown> =>
   typeof v === "object" && v !== null && (v as Record<symbol, unknown>)[PgParamTag] === true
 
-/** Pg-only range bound. */
+/**
+ * Pg-only range bound.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type PgBound<T> =
   | { readonly tag: "included"; readonly val: T }
   | { readonly tag: "excluded"; readonly val: T }
   | { readonly tag: "unbounded" }
 
-/** Pg-only range value: closed/open bounds on each side. */
+/**
+ * Pg-only range value: closed/open bounds on each side.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface PgRange<T> {
   readonly start: PgBound<T>
   readonly end: PgBound<T>
 }
 
-/** Pg-only sparse-vector value. */
+/**
+ * Pg-only sparse-vector value.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface PgSparseVec {
   readonly dim: number
   readonly indices: ReadonlyArray<number>
   readonly values: ReadonlyArray<number>
 }
 
-/** Pg-only IP address (struct mirrored from `golem:rdbms/types@1.5.0`). */
+/**
+ * Pg-only IP address (struct mirrored from `golem:rdbms/types@1.5.0`).
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type PgIp =
   | {
       readonly tag: "ipv4"
@@ -235,17 +279,25 @@ export type PgIp =
 /**
  * Hint used when constructing `Pg.range(...)` so the encoder knows
  * which range bound variant to emit.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type PgRangeElementHint = "int4" | "int8" | "num" | "ts" | "tstz" | "date"
 
 /**
  * Explicit parameter wrappers for rich Postgres types. Use inside
  * tagged-template literals to override the conservative default
- * mapping:
+ * mapping.
+ *
+ * **Example**
  *
  * ```ts
  * yield* sql`INSERT INTO t (id, data) VALUES (${Pg.uuid(id)}, ${Pg.jsonb({ foo: 1 })})`
  * ```
+ *
+ * @since 0.1.0
+ * @category codecs
  */
 export const Pg = {
   /** `json` — encoded as a JSON string. */
@@ -1150,6 +1202,9 @@ const layer = (
 
 /**
  * Public namespace mirror used by `import { PgClient } from "effect-golem/postgres"`.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const PgClient = {
   TypeId: PgClientTypeId,
@@ -1158,7 +1213,12 @@ export const PgClient = {
   PgClient: PgClientService,
 }
 
-/** Probe an arbitrary value for the PgClient brand. */
+/**
+ * Probe an arbitrary value for the PgClient brand.
+ *
+ * @since 0.1.0
+ * @category guards
+ */
 export const isPgClient = (v: unknown): v is PgClient => {
   if (v === null) return false
   const kind = typeof v

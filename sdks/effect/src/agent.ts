@@ -1,3 +1,6 @@
+/**
+ * @since 0.1.0
+ */
 import { Effect, Exit, Layer, ManagedRuntime, Ref, Schema, Scope } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
@@ -126,6 +129,9 @@ interface ParamCodec {
  * handler's required-services slot to include an agent-supplied config
  * service tag (provided by the dispatcher); defaults to `never` for
  * agents without `config`.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type Handlers<Methods extends Record<string, AnyMethodSpec>, CfgTag = never> = {
   readonly [K in keyof Methods]: Handler<Methods[K], CfgTag>
@@ -141,6 +147,9 @@ export type Handlers<Methods extends Record<string, AnyMethodSpec>, CfgTag = nev
  * classes — `class MyCfg extends defineConfig(...) {}` — remain
  * assignable. The runtime tag identity comes from the unique
  * `KeyClass` minted by `Context.Service` for each `defineConfig` call.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type ConfigDef<F extends ConfigFields> = ConfigClass<F>
 
@@ -148,6 +157,9 @@ export type ConfigDef<F extends ConfigFields> = ConfigClass<F>
  * Compute the `CfgTag` (R-slot identity) carried by a config field
  * record. `never` for agents without a `config` field — that collapses
  * the union below back to `Scope.Scope | Principal`.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type CfgTagOf<F> = [F] extends [never]
   ? never
@@ -167,6 +179,9 @@ export type CfgTagOf<F> = [F] extends [never]
  * CfgTag`. Defaults to `never`, so agents without a `config:` field
  * keep the original `R = Principal` exactly. The dispatcher always
  * provides the matching services at runtime.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type ImplArgs<C extends MethodParams, S, CfgTag = never> = [S] extends [never]
   ? readonly [input: MethodInput<C>]
@@ -189,6 +204,9 @@ export type ImplArgs<C extends MethodParams, S, CfgTag = never> = [S] extends [n
  * `Snapshot.custom({ policy })`. When present, `impl` receives a second
  * `SnapshotBinding<S>` argument and the agent's WIT
  * `snapshotting` metadata is `enabled` rather than `disabled`.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface AgentDefinition<
   C extends MethodParams,
@@ -250,6 +268,9 @@ export interface AgentDefinition<
  *
  * - durable agents expose `get`, `getPhantom`, and `newPhantom`.
  * - ephemeral agents expose only `getPhantom` and `newPhantom`.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type DefinedAgent<
   C extends MethodParams,
@@ -261,6 +282,24 @@ export type DefinedAgent<
   readonly client: AgentClient<C, Methods, M, F>
 }
 
+/**
+ * Define an agent type and register it eagerly with the runtime.
+ *
+ * **Details**
+ *
+ * Eager registration ensures simply importing an agent module makes
+ * the type discoverable by the host — no separate `registerAgent`
+ * call at the component entrypoint is required. The returned value
+ * mirrors the input definition and additionally exposes a typed
+ * {@link clientFor} `client` namespace for connecting to remote
+ * instances of this agent type.
+ *
+ * @see {@link registerAgent} for the lower-level registration-only
+ *      entry point.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const defineAgent = <
   C extends MethodParams,
   Methods extends Record<string, AnyMethodSpec>,
@@ -307,6 +346,12 @@ const registry = new Map<string, CompiledAgent>()
  * Register an agent definition with the runtime. Pure schema-walking work
  * — no `impl` is executed here, no per-instance state is created. Safe to
  * call at deploy time for type discovery.
+ *
+ * @see {@link defineAgent} for the eager-registration shorthand that
+ *      additionally returns a typed RPC client.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const registerAgent = <
   C extends MethodParams,
@@ -482,9 +527,14 @@ interface ActiveAgent {
 
 let activeAgent: ActiveAgent | null = null
 
-/** Close the active agent's scope (if any) so the next test can call
- *  `initialize` again. The registry of `defineAgent`-registered types is
- *  left intact (those are populated at module import time). */
+/**
+ * Close the active agent's scope (if any) so the next test can call
+ * `initialize` again. The registry of `defineAgent`-registered types
+ * is left intact (those are populated at module import time).
+ *
+ * @internal
+ * @since 0.1.0
+ */
 export const __resetAgents = async (): Promise<void> => {
   if (activeAgent !== null) {
     await Effect.runPromise(Scope.close(activeAgent.scope, Exit.void))
@@ -616,7 +666,12 @@ const initAgentInstance = async (
   return { scope, handlers, bindingHandle, selfAgentId }
 }
 
-/** Implementation of `agent-guest.guest.initialize`. */
+/**
+ * Implementation of `agent-guest.guest.initialize`.
+ *
+ * @since 0.1.0
+ * @category runtime hooks
+ */
 export const dispatchInitialize = async (
   agentTypeName: string,
   input: CoreTypes.DataValue,
@@ -653,7 +708,12 @@ export const dispatchInitialize = async (
   activeAgent = { name: agentTypeName, scope, handlers, principal, selfAgentId, snapshot }
 }
 
-/** Implementation of `agent-guest.guest.invoke`. */
+/**
+ * Implementation of `agent-guest.guest.invoke`.
+ *
+ * @since 0.1.0
+ * @category runtime hooks
+ */
 export const dispatchInvoke = async (
   methodName: string,
   input: CoreTypes.DataValue,
@@ -698,11 +758,21 @@ export const dispatchInvoke = async (
   return await runUserPromise(program)
 }
 
-/** Implementation of `agent-guest.guest.discoverAgentTypes`. */
+/**
+ * Implementation of `agent-guest.guest.discoverAgentTypes`.
+ *
+ * @since 0.1.0
+ * @category runtime hooks
+ */
 export const dispatchDiscoverAgentTypes = async (): Promise<Array<AgentCommon.AgentType>> =>
   Array.from(registry.values()).map((c) => c.agentType)
 
-/** Implementation of `agent-guest.guest.getDefinition`. */
+/**
+ * Implementation of `agent-guest.guest.getDefinition`.
+ *
+ * @since 0.1.0
+ * @category runtime hooks
+ */
 export const dispatchGetDefinition = async (): Promise<AgentCommon.AgentType> => {
   if (activeAgent === null) {
     throw new Error("agent is not initialized; cannot get definition")
@@ -824,6 +894,9 @@ const encodeAutoSnapshot = (
  * currently exercises a long-running custom save handler; if a
  * trap shows up there too, we'll need to either restrict the user
  * handler shape or push the host investigation further.
+ *
+ * @since 0.1.0
+ * @category runtime hooks
  */
 export const dispatchSaveSnapshot = (): ApiHost.Snapshot | Promise<ApiHost.Snapshot> => {
   if (activeAgent === null) {
@@ -885,6 +958,9 @@ const dispatchSaveCustomSnapshot = async (
  *    `load` Effect).
  * 5. Mark the agent active so subsequent `invoke`s see the restored
  *    state.
+ *
+ * @since 0.1.0
+ * @category runtime hooks
  */
 export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<void> => {
   if (activeAgent !== null) {

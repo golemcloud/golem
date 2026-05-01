@@ -1,17 +1,3 @@
-import type { NonEmptyReadonlyArray } from "effect/Array"
-import * as Channel from "effect/Channel"
-import * as Context from "effect/Context"
-import * as Deferred from "effect/Deferred"
-import type * as Duration from "effect/Duration"
-import * as Effect from "effect/Effect"
-import * as FiberSet from "effect/FiberSet"
-import * as Latch from "effect/Latch"
-import * as Layer from "effect/Layer"
-import * as Scope from "effect/Scope"
-import { Socket } from "effect/unstable/socket"
-import type * as WsClient from "golem:websocket/client@1.5.0"
-import { WebsocketClient } from "./host/WebsocketClient.js"
-
 /**
  * Effect-idiomatic façade over `golem:websocket/client@1.5.0`.
  *
@@ -43,7 +29,7 @@ import { WebsocketClient } from "./host/WebsocketClient.js"
  * is complete or has failed), so there is no separate "open" event
  * to await.
  *
- * Authoring example (fork the read loop, then write):
+ * **Example** (fork the read loop, then write)
  *
  * ```ts
  * import { Effect, Fiber } from "effect"
@@ -70,12 +56,28 @@ import { WebsocketClient } from "./host/WebsocketClient.js"
  * )
  * ```
  *
- * Or as a `Channel`:
+ * **Example** (as a `Channel`)
  *
  * ```ts
  * const channel = Websocket.makeChannel("wss://echo.example/ws")
  * ```
+ *
+ * @since 0.1.0
  */
+
+import type { NonEmptyReadonlyArray } from "effect/Array"
+import * as Channel from "effect/Channel"
+import * as Context from "effect/Context"
+import * as Deferred from "effect/Deferred"
+import type * as Duration from "effect/Duration"
+import * as Effect from "effect/Effect"
+import * as FiberSet from "effect/FiberSet"
+import * as Latch from "effect/Latch"
+import * as Layer from "effect/Layer"
+import * as Scope from "effect/Scope"
+import { Socket } from "effect/unstable/socket"
+import type * as WsClient from "golem:websocket/client@1.5.0"
+import { WebsocketClient } from "./host/WebsocketClient.js"
 
 // ---------------------------------------------------------------------------
 // Error mapping (golem:websocket error → Socket.SocketError)
@@ -229,6 +231,9 @@ const mapToSocketError = (
  *   host's `connect` is synchronous (it does not return until the
  *   handshake is complete or has failed), so there is no separate
  *   "open" event to await.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface ConnectOptions {
   readonly headers?: ReadonlyArray<readonly [string, string]> | undefined
@@ -251,6 +256,9 @@ const toHostHeaders = (
  * `WebsocketConnection`. Lower-level than {@link connect}; useful when
  * you want full control over the resource lifecycle (e.g. reusing a
  * persisted connection across invocations).
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const fromConnection = <RO>(
   acquire: Effect.Effect<WsClient.WebsocketConnection, Socket.SocketError, RO>,
@@ -401,6 +409,9 @@ export const fromConnection = <RO>(
  * - any other thrown error during `connect(...)` → `SocketError(SocketOpenError)`
  *
  * Wire-compatible with `golem-rust.WebsocketConnection::connect(...)`.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const connect = (
   url: string,
@@ -438,6 +449,9 @@ export const connect = (
  * activation and provides the resulting socket to the layer scope.
  * Equivalent to `Socket.layerWebSocket(...)` in the canonical
  * browser/Node setup.
+ *
+ * @since 0.1.0
+ * @category layers
  */
 export const layer = (
   url: string,
@@ -463,6 +477,9 @@ export const layer = (
  * canonical browser/Node setup. Combine with
  * `Stream.fromChannel(...)` / `Stream.pipeThroughChannel(...)` for
  * stream-based pipelines.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const makeChannel = <IE = never>(
   url: string,

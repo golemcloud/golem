@@ -51,6 +51,8 @@
  * `Db*` resource constructors / methods — there is no public `close`
  * on `DbConnection`. The adapter relies on the host's GC to free
  * resources once the JS handle becomes unreachable.
+ *
+ * @since 0.1.0
  */
 import {
   Context,
@@ -100,10 +102,18 @@ const ATTR_DB_SYSTEM_NAME = "db.system.name"
  * `Symbol.for` so multiple module copies (e.g. one bundled inside
  * `effect-golem` and one in the standalone `effect-golem/mysql`
  * sub-import) still agree on the same key.
+ *
+ * @since 0.1.0
+ * @category symbols
  */
 export const MySqlClientTypeId: unique symbol = Symbol.for(
   "effect-golem/MySqlClient",
 ) as MySqlClientTypeId
+
+/**
+ * @since 0.1.0
+ * @category symbols
+ */
 export type MySqlClientTypeId = typeof MySqlClientTypeId
 
 const MySqlConnectionTxSymbol: unique symbol = Symbol.for(
@@ -114,12 +124,20 @@ const MySqlConnectionTxSymbol: unique symbol = Symbol.for(
 // Public types
 // ---------------------------------------------------------------------------
 
-/** How temporal values (datetime/timestamp/date/time) are decoded from rows. */
+/**
+ * How temporal values (datetime/timestamp/date/time) are decoded from rows.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type TemporalDecodeMode = "raw" | "date"
 
 /**
  * Configuration accepted by {@link MySqlClient.make} /
  * {@link MySqlClient.layer}.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface MySqlClientConfig {
   /**
@@ -153,6 +171,9 @@ export interface MySqlClientConfig {
  * `yield* sql\`SELECT ...\`` queries, compose with `SqlSchema` /
  * `SqlResolver` / `Migrator`, and resolve the canonical
  * `Client.SqlClient` tag.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface MySqlClient extends Client.SqlClient {
   readonly [MySqlClientTypeId]: MySqlClientTypeId
@@ -169,6 +190,9 @@ export interface MySqlClient extends Client.SqlClient {
  * Context tag for resolving a {@link MySqlClient} from the environment.
  * Both this tag and the upstream `Client.SqlClient` tag are populated
  * by {@link MySqlClient.layer}.
+ *
+ * @since 0.1.0
+ * @category host services
  */
 export class MySqlClientService extends Context.Service<MySqlClientService, MySqlClient>()(
   "effect-golem/MySqlClient",
@@ -200,11 +224,16 @@ const isMySqlParam = (v: unknown): v is MySqlParam<string, unknown> =>
 /**
  * Explicit parameter wrappers for rich MySQL types. Use inside
  * tagged-template literals to override the conservative default
- * mapping:
+ * mapping.
+ *
+ * **Example**
  *
  * ```ts
  * yield* sql`INSERT INTO t (id, data) VALUES (${id}, ${MySql.json({ foo: 1 })})`
  * ```
+ *
+ * @since 0.1.0
+ * @category codecs
  */
 export const MySql = {
   /** `json` — encoded as a JSON string. */
@@ -894,6 +923,9 @@ const layer = (
 
 /**
  * Public namespace mirror used by `import { MySqlClient } from "effect-golem/mysql"`.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const MySqlClient = {
   TypeId: MySqlClientTypeId,
@@ -902,7 +934,12 @@ export const MySqlClient = {
   MySqlClient: MySqlClientService,
 }
 
-/** Probe an arbitrary value for the MySqlClient brand. */
+/**
+ * Probe an arbitrary value for the MySqlClient brand.
+ *
+ * @since 0.1.0
+ * @category guards
+ */
 export const isMySqlClient = (v: unknown): v is MySqlClient => {
   if (v === null) return false
   const kind = typeof v

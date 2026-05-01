@@ -1,12 +1,3 @@
-import { Cause, Effect, Scope } from "effect"
-import type * as ApiHost from "golem:api/host@1.5.0"
-import { revertAgent, RevertTarget, type AgentsHostError } from "./agents.js"
-import { AgentHostClient } from "./host/AgentHostClient.js"
-import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
-import { currentIndex, type OplogHostError } from "./oplog.js"
-import { OplogClient } from "./host/OplogClient.js"
-import { SelfAgentId } from "./self-agent-id.js"
-
 /**
  * Effect-idiomatic façade over the execution-mode controls on
  * `golem:api/host@1.5.0`:
@@ -17,7 +8,7 @@ import { SelfAgentId } from "./self-agent-id.js"
  * - explicit `oplog-commit` (replication barrier)
  * - `generate-idempotency-key` (oplog-bypass UUID generator)
  *
- * Authoring model:
+ * **Example**
  *
  * ```ts
  * import { Durability } from "effect-golem"
@@ -30,18 +21,35 @@ import { SelfAgentId } from "./self-agent-id.js"
  * Every call is wrapped in `Effect.try` and surfaces unexpected host
  * throws as {@link DurabilityHostError}; user-supplied numeric inputs
  * are validated with {@link DurabilityValidationError}.
+ *
+ * @since 0.1.0
  */
+import { Cause, Effect, Scope } from "effect"
+import type * as ApiHost from "golem:api/host@1.5.0"
+import { revertAgent, RevertTarget, type AgentsHostError } from "./agents.js"
+import { AgentHostClient } from "./host/AgentHostClient.js"
+import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
+import { currentIndex, type OplogHostError } from "./oplog.js"
+import { OplogClient } from "./host/OplogClient.js"
+import { SelfAgentId } from "./self-agent-id.js"
 
 // ---------------------------------------------------------------------------
 // Re-exported raw types
 // ---------------------------------------------------------------------------
 
+/**
+ * @since 0.1.0
+ * @category re-exports
+ */
 export type { OplogIndex, Uuid } from "golem:api/host@1.5.0"
 
 /**
  * Re-exported from `golem:api/host@1.5.0` as a type alias so the
  * value-level {@link PersistenceLevel} const namespace can keep the
  * un-suffixed name.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type PersistenceLevelValue = ApiHost.PersistenceLevel
 
@@ -61,7 +69,12 @@ type RawOplogIndex = ApiHost.OplogIndex
 // across modules.
 const sdkErrorBrand: unique symbol = Symbol.for("effect-golem/durable-function/sdk-error")
 
-/** Raised when a `golem:api/host@1.5.0` execution-mode call throws unexpectedly. */
+/**
+ * Raised when a `golem:api/host@1.5.0` execution-mode call throws unexpectedly.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class DurabilityHostError {
   readonly _tag = "DurabilityHostError"
   readonly [sdkErrorBrand] = true
@@ -71,7 +84,12 @@ export class DurabilityHostError {
   }
 }
 
-/** Raised when a user-supplied input to a durability call is out of range. */
+/**
+ * Raised when a user-supplied input to a durability call is out of range.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class DurabilityValidationError {
   readonly _tag = "DurabilityValidationError"
   readonly message: string
@@ -84,7 +102,12 @@ export class DurabilityValidationError {
 // Persistence level constructors (pure data)
 // ---------------------------------------------------------------------------
 
-/** Pure-data constructors for the WIT `persistence-level` variant. */
+/**
+ * Pure-data constructors for the WIT `persistence-level` variant.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const PersistenceLevel = {
   /** Persist nothing (treat the body as ephemeral, no replay/restore guarantees). */
   persistNothing: { tag: "persist-nothing" } as const,
@@ -111,7 +134,12 @@ void ({
 // Effect-typed host calls
 // ---------------------------------------------------------------------------
 
-/** Read the current persistence level. */
+/**
+ * Read the current persistence level.
+ *
+ * @since 0.1.0
+ * @category host bindings
+ */
 export const getPersistenceLevel: Effect.Effect<
   RawPersistenceLevel,
   DurabilityHostError,
@@ -124,7 +152,12 @@ export const getPersistenceLevel: Effect.Effect<
   })
 })
 
-/** Write the persistence level. Persists to the oplog. */
+/**
+ * Write the persistence level. Persists to the oplog.
+ *
+ * @since 0.1.0
+ * @category host bindings
+ */
 export const setPersistenceLevel = (
   level: RawPersistenceLevel,
 ): Effect.Effect<void, DurabilityHostError, DurabilityModeClient> =>
@@ -136,7 +169,12 @@ export const setPersistenceLevel = (
     })
   })
 
-/** Read the current idempotence mode. `true` = at-least-once; `false` = at-most-once. */
+/**
+ * Read the current idempotence mode. `true` = at-least-once; `false` = at-most-once.
+ *
+ * @since 0.1.0
+ * @category host bindings
+ */
 export const getIdempotenceMode: Effect.Effect<boolean, DurabilityHostError, DurabilityModeClient> =
   Effect.gen(function* () {
     const client = yield* DurabilityModeClient
@@ -146,7 +184,12 @@ export const getIdempotenceMode: Effect.Effect<boolean, DurabilityHostError, Dur
     })
   })
 
-/** Write the idempotence mode. */
+/**
+ * Write the idempotence mode.
+ *
+ * @since 0.1.0
+ * @category host bindings
+ */
 export const setIdempotenceMode = (
   idempotent: boolean,
 ): Effect.Effect<void, DurabilityHostError, DurabilityModeClient> =>
@@ -162,6 +205,9 @@ export const setIdempotenceMode = (
  * Block until the oplog has been written to at least `replicas`
  * replicas (or the maximum if `replicas` exceeds the maximum). The host
  * type is `u8`, so `replicas` is validated to fit `0..=255`.
+ *
+ * @since 0.1.0
+ * @category host bindings
  */
 export const oplogCommit = (
   replicas: number,
@@ -187,6 +233,9 @@ export const oplogCommit = (
  * `OplogIndex` to be passed back into {@link endOperation}. Prefer
  * {@link atomically} or {@link markAtomicOperationScoped} unless you
  * really need imperative control.
+ *
+ * @since 0.1.0
+ * @category host bindings
  */
 export const beginOperation: Effect.Effect<
   RawOplogIndex,
@@ -204,6 +253,9 @@ export const beginOperation: Effect.Effect<
  * Mark the end of the atomic region whose begin index is `begin`.
  * Idempotent on the host side: subsequent calls with the same index
  * are no-ops.
+ *
+ * @since 0.1.0
+ * @category host bindings
  */
 export const endOperation = (
   begin: RawOplogIndex,
@@ -221,6 +273,9 @@ export const endOperation = (
  * oplog so the same key is returned on replay — making the value safe
  * to use against external systems' idempotence checks (e.g. payment
  * gateways).
+ *
+ * @since 0.1.0
+ * @category host bindings
  */
 export const generateIdempotencyKey: Effect.Effect<
   ApiHost.Uuid,
@@ -242,6 +297,9 @@ export const generateIdempotencyKey: Effect.Effect<
  * Acquire-release pair that sets the persistence level on entry and
  * restores the previous value on scope close (success, failure or
  * interruption).
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const usePersistenceLevelScoped = (
   level: RawPersistenceLevel,
@@ -257,6 +315,9 @@ export const usePersistenceLevelScoped = (
  * Run `effect` with `level` temporarily installed as the persistence
  * level. Restores the previous level on success, error and
  * interruption.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withPersistenceLevel = <A, E, R>(
   level: RawPersistenceLevel,
@@ -267,6 +328,9 @@ export const withPersistenceLevel = <A, E, R>(
 /**
  * Acquire-release pair that sets the idempotence mode on entry and
  * restores the previous value on scope close.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const useIdempotenceModeScoped = (
   idempotent: boolean,
@@ -278,7 +342,12 @@ export const useIdempotenceModeScoped = (
     )
   })
 
-/** Run `effect` with `idempotent` temporarily installed as the idempotence mode. */
+/**
+ * Run `effect` with `idempotent` temporarily installed as the idempotence mode.
+ *
+ * @since 0.1.0
+ * @category combinators
+ */
 export const withIdempotenceMode = <A, E, R>(
   idempotent: boolean,
   effect: Effect.Effect<A, E, R>,
@@ -290,6 +359,9 @@ export const withIdempotenceMode = <A, E, R>(
  * acquire calls `mark-begin-operation`; on release (success, failure,
  * or interruption) calls `mark-end-operation` with the captured begin
  * index. Returns the begin index for callers that need it.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const markAtomicOperationScoped: Effect.Effect<
   RawOplogIndex,
@@ -302,6 +374,9 @@ export const markAtomicOperationScoped: Effect.Effect<
  * `Effect.scoped(markAtomicOperationScoped.pipe(Effect.andThen(effect)))`.
  * If `effect` fails or is interrupted, the host treats the region as
  * needing reexecution on the next replay.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const atomically = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -343,6 +418,8 @@ const revertAndSuspend = (
  * checkpoint, so any durable side effects performed inside `effect`
  * "never happened" from the post-revert perspective.
  *
+ * **Details**
+ *
  * Defects (`Effect.die` / unexpected throws) are **not** routed to
  * revert — they propagate as defects, matching the spirit of the
  * official SDKs' `unwrap-or-revert`.
@@ -351,6 +428,9 @@ const revertAndSuspend = (
  * typed failures are: oplog/agent host bookkeeping errors only — the
  * body's `E` channel is suppressed because the failure branch never
  * resumes (revert is followed by `Effect.never`).
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const unwrapOrRevert = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -376,6 +456,9 @@ export const unwrapOrRevert = <A, E, R>(
  * preserved on the `reverted` branch — this honestly reflects that
  * the body may have been interrupted (no `E` value) or failed with a
  * typed error.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type CheckpointResult<A, E> =
   | { readonly _tag: "ok"; readonly value: A }
@@ -387,10 +470,15 @@ export type CheckpointResult<A, E> =
  * index AND return `{ _tag: "reverted", cause }`. Defects are
  * propagated as defects (no revert).
  *
+ * **Details**
+ *
  * In real Golem runtimes the `revertAgent` call typically preempts
  * before the tagged result is observed; this combinator is most
  * useful inside test runtimes that do not preempt on revert and for
  * callers that want to inspect the post-revert state.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const checkpoint = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -425,6 +513,9 @@ export const checkpoint = <A, E, R>(
  * side effects that the durable revert cannot undo (e.g. an HTTP call
  * to a remote system). `acquire` failures bubble up directly without
  * compensation; defects bubble up unchanged.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const compensable = <A, B, E, R>(input: {
   readonly acquire: Effect.Effect<A, E, R>

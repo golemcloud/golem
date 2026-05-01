@@ -9,7 +9,7 @@
  * Golem host (calling them traps the worker). When the host
  * implements them, this module will be extended to cover them.
  *
- * Authoring example:
+ * **Example**
  *
  * ```ts
  * import { Effect, Schema } from "effect"
@@ -35,6 +35,8 @@
  *     }),
  * })
  * ```
+ *
+ * @since 0.1.0
  */
 
 import { Effect, Option, Scope, Schema } from "effect"
@@ -67,6 +69,9 @@ const traceOf = (e: unknown): string => {
  * stringified cause). Per the Golem source, this is opaque /
  * driver-specific (Redis / SQLite / Postgres / in-memory all produce
  * different formats) and should not be parsed.
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class KeyValueHostError {
   readonly _tag = "KeyValueHostError"
@@ -82,7 +87,12 @@ export class KeyValueHostError {
   }
 }
 
-/** Raised when {@link SchemaBucket} cannot parse a stored value as JSON. */
+/**
+ * Raised when {@link SchemaBucket} cannot parse a stored value as JSON.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class KeyValueDecodeError {
   readonly _tag = "KeyValueDecodeError"
   readonly message: string
@@ -99,12 +109,26 @@ export class KeyValueDecodeError {
  * `Symbol.for(...)` keyed identity stamp on every {@link Bucket}
  * instance. Lets cross-bundle code reliably check whether an unknown
  * value is a `Bucket` even when several copies of this module exist.
+ *
+ * @since 0.1.0
+ * @category symbols
  */
 export const BucketTypeId: unique symbol = Symbol.for(
   "effect-golem/keyvalue/Bucket",
 ) as BucketTypeId
+
+/**
+ * @since 0.1.0
+ * @category symbols
+ */
 export type BucketTypeId = typeof BucketTypeId
 
+/**
+ * Type guard: true when `u` is a {@link Bucket}.
+ *
+ * @since 0.1.0
+ * @category guards
+ */
 export const isBucket = (u: unknown): u is Bucket =>
   u !== null &&
   typeof u === "object" &&
@@ -120,6 +144,9 @@ export const isBucket = (u: unknown): u is Bucket =>
  *
  * The underlying WIT `bucket` resource has no explicit close method;
  * dropping the JS handle is enough.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface Bucket {
   readonly [BucketTypeId]: BucketTypeId
@@ -172,6 +199,9 @@ export interface Bucket {
  * Schema-typed view returned by {@link Bucket.forSchema}. Mirrors
  * `effect/platform/KeyValueStore.SchemaStore` so users coming from
  * `@effect/platform` see the same shape.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface SchemaBucket<S extends Schema.Top> {
   get(
@@ -335,6 +365,9 @@ const makeBucket = (host: HostBucket): Bucket => {
  * Failures from the host's `bucket.open-bucket` (for example, a
  * malformed name or backend rejection) surface as
  * {@link KeyValueHostError}.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const openBucket = (
   name: string,

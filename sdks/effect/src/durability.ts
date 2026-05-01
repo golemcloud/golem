@@ -15,6 +15,16 @@
  *
  * Both are re-exported here so users see a single unified
  * `Durability.*` namespace.
+ *
+ * @since 0.1.0
+ */
+/**
+ * @since 0.1.0
+ * @category re-exports
  */
 export * from "./durability-mode.js"
+/**
+ * @since 0.1.0
+ * @category re-exports
+ */
 export * from "./durable-function.js"

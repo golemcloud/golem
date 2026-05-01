@@ -1,9 +1,3 @@
-import { Effect, Schema } from "effect"
-import { AgentsHostError, Promises } from "./agents.js"
-import type { PromiseId } from "./agents.js"
-import { AgentHostClient } from "./host/AgentHostClient.js"
-import { PromiseClient } from "./host/PromiseClient.js"
-
 /**
  * Webhook integration on top of `golem:agent/host@1.5.0.create-webhook`.
  *
@@ -34,7 +28,7 @@ import { PromiseClient } from "./host/PromiseClient.js"
  * The webhook URL contains an HMAC-SHA256-signed promise reference;
  * the SDK never forges or verifies it (entirely host responsibility).
  *
- * Authoring example:
+ * **Example**
  *
  * ```ts
  * import { Effect, Schema } from "effect"
@@ -70,7 +64,15 @@ import { PromiseClient } from "./host/PromiseClient.js"
  *     }),
  * })
  * ```
+ *
+ * @since 0.1.0
  */
+
+import { Effect, Schema } from "effect"
+import { AgentsHostError, Promises } from "./agents.js"
+import type { PromiseId } from "./agents.js"
+import { AgentHostClient } from "./host/AgentHostClient.js"
+import { PromiseClient } from "./host/PromiseClient.js"
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -83,6 +85,9 @@ import { PromiseClient } from "./host/PromiseClient.js"
  *   call;
  * - the promise was created by a different component than the one
  *   calling `create-webhook`.
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class WebhookHostError {
   readonly _tag = "WebhookHostError"
@@ -101,6 +106,9 @@ const strictDecoder = new TextDecoder("utf-8", { fatal: true })
 /**
  * The HTTP POST body delivered to the webhook URL. Mirrors the
  * official SDKs' `WebhookRequestPayload` shape.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export class WebhookPayload {
   constructor(readonly bytes: Uint8Array) {}
@@ -149,6 +157,9 @@ export class WebhookPayload {
  * Raised when {@link WebhookPayload.decode} cannot decode the body as
  * UTF-8. JSON syntax errors and schema-level validation failures both
  * surface as `effect/Schema.SchemaError` instead.
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class WebhookDecodeError {
   readonly _tag = "WebhookDecodeError"
@@ -172,6 +183,9 @@ export class WebhookDecodeError {
  * `await` and `poll` are Effects rather than `PromiseLike` /
  * `IntoFuture` shims, so durability, oplog replay, and Effect-style
  * interruption all work for free.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface WebhookHandle {
   /** The public POST URL minted by the host. */
@@ -212,6 +226,9 @@ export interface WebhookHandle {
  *
  * Wire-compatible with `golem-ts-sdk.createWebhook()` /
  * `golem-rust.create_webhook()`.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const create: Effect.Effect<
   WebhookHandle,

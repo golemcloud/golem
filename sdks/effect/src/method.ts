@@ -1,3 +1,6 @@
+/**
+ * @since 0.1.0
+ */
 import { Effect, Pipeable, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
@@ -16,13 +19,26 @@ import { toWitCodec, type UnsupportedSchemaError, type WitCodec } from "./wit-co
  * compiles to a `component-model` element), an `ElementSpec<T>`
  * (unstructured-text/binary), or a `Multimodal<S>` (the param maps to
  * `DataSchema.multimodal`; only valid when it is the sole parameter).
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type MethodParam = Schema.Top | ElementSpec<any> | Multimodal<any>
 
-/** A record of named parameter shapes. */
+/**
+ * A record of named parameter shapes.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type MethodParams = Readonly<Record<string, MethodParam>>
 
-/** Decoded user-side type for one parameter. */
+/**
+ * Decoded user-side type for one parameter.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type ParamInputType<P extends MethodParam> =
   P extends Multimodal<infer S>
     ? import("./multimodal.js").MultimodalValue<S>
@@ -32,7 +48,12 @@ export type ParamInputType<P extends MethodParam> =
         ? P["Type"]
         : never
 
-/** Decoded shape of a method's named-input record. */
+/**
+ * Decoded shape of a method's named-input record.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type MethodInput<Params extends MethodParams> = {
   readonly [K in keyof Params]: ParamInputType<Params[K]>
 }
@@ -50,6 +71,9 @@ export type MethodInput<Params extends MethodParams> = {
  * combinators ({@link withHttp}, {@link withDescription},
  * {@link withPromptHint}) compose additively with the literal-options
  * form accepted by {@link method}.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface MethodSpec<
   in out Params extends MethodParams,
@@ -74,22 +98,82 @@ export interface MethodSpec<
 }
 
 /**
- * Build a `MethodSpec`. The `error` field defaults to `Schema.Void`
- * ("does not fail in a typed way").
+ * Build a {@link MethodSpec} from a literal options object.
+ *
+ * **Details**
+ *
+ * Every facet of a method can be declared inline on the input object —
+ * the same facets are also reachable via the pipeable combinators
+ * ({@link withHttp}, {@link withDescription}, {@link withPromptHint})
+ * for users who prefer Effect's `.pipe(...)` style.
+ *
+ * **Input fields**
+ *
+ * - `params` — a `Record<string, MethodParam>` describing the method's
+ *   inputs. Each entry is one of: a `Schema.Top` (regular value
+ *   parameter), an `ElementSpec<...>` ({@link UnstructuredText} /
+ *   {@link UnstructuredBinary} unstructured-data parameter), or a
+ *   {@link Multimodal} (multi-element parameter). The keys become the
+ *   `data-schema` element names emitted into the WIT metadata.
+ *
+ * - `success` — a `Schema.Top` describing the method's success value
+ *   (the `A` of the resulting `Effect<A, E, R>`).
+ *
+ * - `error` *(optional)* — a `Schema.Top` describing typed failures
+ *   (the `E` of the resulting `Effect<A, E, R>`). Defaults to
+ *   `Schema.Void`, meaning "does not fail in a typed way".
+ *
+ * - `description` *(optional)* — free-text description, surfaced as
+ *   `agent-method.description` in the discovered WIT metadata. Same
+ *   facet as {@link withDescription}.
+ *
+ * - `promptHint` *(optional)* — natural-language hint used by LLM
+ *   front-ends to decide when to call this method. Surfaced as
+ *   `agent-method.prompt-hint`. Same facet as {@link withPromptHint}.
+ *
+ * - `http` *(optional)* — a `ReadonlyArray<EndpointDef<...>>`
+ *   exposing this method through the host's HTTP server. Each
+ *   endpoint's path / query / header bindings must reference an entry
+ *   of `params` (enforced at the type level). Same facet as
+ *   {@link withHttp}; the literal form replaces, the combinator
+ *   appends.
+ *
+ * The returned spec is {@link Pipeable.Pipeable}, so additional
+ * cross-cutting facets can still be layered on with `.pipe(...)`
+ * after construction.
+ *
+ * **Example** (all fields inline)
  *
  * ```ts
- * const greet = method({ params: { name: Schema.String }, success: Schema.String })
+ * import { Http, method, Schema } from "effect-golem"
+ *
+ * const add = method({
+ *   params: { by: Schema.Number },
+ *   success: Schema.Number,
+ *   error: Schema.String,
+ *   description: "Add `by` to the counter",
+ *   promptHint: "Use this to increment the counter by a number",
+ *   http: [Http.post("/add"), Http.get("/add?by={by}")],
+ * })
  * ```
  *
- * The returned spec is {@link Pipeable.Pipeable}, so cross-cutting
- * facets can be layered on with `.pipe(...)`:
+ * **Example** (minimal, then `.pipe(...)` for the rest)
  *
  * ```ts
+ * import { Http, method, Schema, withDescription, withHttp } from "effect-golem"
+ *
  * method({ params: { by: Schema.Number }, success: Schema.Number }).pipe(
  *   withHttp(Http.post("/add"), Http.get("/add?by={by}")),
  *   withDescription("Add `by` to the counter"),
  * )
  * ```
+ *
+ * @see {@link withHttp} for the pipeable HTTP-endpoint combinator.
+ * @see {@link withDescription} for the pipeable description combinator.
+ * @see {@link withPromptHint} for the pipeable prompt-hint combinator.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const method: {
   <const Params extends MethodParams, Success extends Schema.Top, Error extends Schema.Top>(spec: {
@@ -147,6 +231,9 @@ export const method: {
  * Generic over the full input spec type, so when applied to a
  * {@link Method} (which carries a `body` and a `name`) those extra
  * fields are preserved in the returned value.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withHttp =
   <V extends string>(...endpoints: ReadonlyArray<EndpointDef<V>>) =>
@@ -169,6 +256,9 @@ export const withHttp =
  * Generic over the full input spec type, so when applied to a
  * {@link Method} (which carries a `body` and a `name`) those extra
  * fields are preserved in the returned value.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withDescription =
   (description: string) =>
@@ -183,6 +273,9 @@ export const withDescription =
  * Generic over the full input spec type, so when applied to a
  * {@link Method} (which carries a `body` and a `name`) those extra
  * fields are preserved in the returned value.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withPromptHint =
   (promptHint: string) =>
@@ -197,6 +290,9 @@ export const withPromptHint =
  * Inside `defineAgent` you should use `method(...)` for the spec and
  * provide the body inside the agent's `impl` block — that gives the body
  * access to per-instance state via closure.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface Method<
   in out Params extends MethodParams,
@@ -208,7 +304,12 @@ export interface Method<
   readonly body: (input: MethodInput<Params>) => Effect.Effect<Success["Type"], Error["Type"], R>
 }
 
-/** Standalone Method (spec + name + body), useful outside agents. */
+/**
+ * Standalone Method (spec + name + body), useful outside agents.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const defineMethod: {
   <
     const Params extends MethodParams,
@@ -240,6 +341,9 @@ export const defineMethod: {
  * does not leak), and an optional agent-specific config tag (defaulting
  * to `never`). The dispatcher always provides all of these via the
  * `userRuntimeLayer`.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type Handler<S extends MethodSpec<any, any, any>, CfgTag = never> = (
   input: MethodInput<S["params"]>,
@@ -253,6 +357,9 @@ export type Handler<S extends MethodSpec<any, any, any>, CfgTag = never> = (
  * Invoke a standalone {@link Method} with a *decoded* input record. Useful
  * for tests; production code goes through `invokeDataValue` (with an
  * explicit handler) at the Golem boundary.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const invoke = <
   Params extends MethodParams,
@@ -270,6 +377,9 @@ export const invoke = <
  * or a `multimodal` binding. Runtime-injected values such as
  * {@link Principal} are not modeled as bindings at all — they reach
  * user code as Effect services provided by the dispatcher.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type ParamBinding =
   | {
@@ -307,6 +417,9 @@ export type ParamBinding =
  * bindings, the success `WitCodec` (or `null` for unit-returning methods),
  * and the matching Golem `DataSchema`s. Compiled once via
  * {@link compileMethodSpec}, then re-used per call by {@link invokeDataValue}.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface MethodCodec<
   in out Params extends MethodParams,
@@ -335,6 +448,9 @@ const isVoidSchema = (s: Schema.Top): boolean => s.ast._tag === "Void"
  * Compile a record of named `MethodParam`s to a flat `ParamBinding[]`.
  * Reused by both `compileMethodSpec` (per-method) and `agent.ts`
  * (per-constructor) so the two share a single param-shape pipeline.
+ *
+ * @since 0.1.0
+ * @category codecs
  */
 export const compileParamBindings = (
   context: string,
@@ -368,7 +484,12 @@ export const compileParamBindings = (
     return bindings
   })
 
-/** Compile a method spec (name + params + success + error) to a MethodCodec. */
+/**
+ * Compile a method spec (name + params + success + error) to a MethodCodec.
+ *
+ * @since 0.1.0
+ * @category codecs
+ */
 export const compileMethodSpec = <
   Params extends MethodParams,
   Success extends Schema.Top,
@@ -474,7 +595,12 @@ export const compileMethodSpec = <
     }
   })
 
-/** Convenience: compile a standalone {@link Method}. */
+/**
+ * Convenience: compile a standalone {@link Method}.
+ *
+ * @since 0.1.0
+ * @category codecs
+ */
 export const compileMethod = <
   Params extends MethodParams,
   Success extends Schema.Top,
@@ -485,6 +611,14 @@ export const compileMethod = <
 ): Effect.Effect<MethodCodec<Params, Success, Error>, UnsupportedSchemaError> =>
   compileMethodSpec(m.name, m)
 
+/**
+ * Raised when {@link invokeDataValue} receives a `DataValue` whose
+ * shape does not match the compiled method codec — wrong tag, wrong
+ * arity, or an element of the wrong kind.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class InvalidDataValueError {
   readonly _tag = "InvalidDataValueError"
   constructor(readonly reason: string) {}
@@ -501,6 +635,9 @@ export class InvalidDataValueError {
  *   `component-model` variant carrying a `WitValue`.
  * - Output is the `tuple` variant, with 0 elements for a unit return type
  *   and 1 element otherwise.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const invokeDataValue = <
   Params extends MethodParams,

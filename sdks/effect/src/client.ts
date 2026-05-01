@@ -1,3 +1,6 @@
+/**
+ * @since 0.1.0
+ */
 import { Effect, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
@@ -30,10 +33,20 @@ import {
 
 type AnyMethodSpec = MethodSpec<any, any, any>
 
-/** Re-exported for users who want to pattern-match on RPC errors. */
+/**
+ * Re-exported for users who want to pattern-match on RPC errors.
+ *
+ * @since 0.1.0
+ * @category re-exports
+ */
 export type RpcError = AgentHost.RpcError
 
-/** Errors a `RemoteMethod` call can produce, before adding any user-typed error. */
+/**
+ * Errors a `RemoteMethod` call can produce, before adding any user-typed error.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export type RemoteCallError =
   | { readonly _tag: "RpcCallError"; readonly cause: RpcError }
   | { readonly _tag: "InvalidUuidError"; readonly value: string; readonly reason: string }
@@ -60,6 +73,9 @@ const wrapHostThrow = (e: unknown): RemoteCallError => {
  * A handle to a scheduled remote invocation. `cancel` is best-effort: if
  * the scheduled time has already passed and the invocation has started,
  * it is a no-op.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface ScheduledInvocation {
   readonly cancel: () => Effect.Effect<void>
@@ -97,6 +113,9 @@ export interface ScheduledInvocation {
  * `cancelableAwaitWith(...)` — is just `Effect.forkChild(method(input))`
  * plus `Fiber.interrupt(fiber)`; no separate API is required because
  * fiber-interrupt already chains to the host cancel.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface RemoteMethod<
   Params extends MethodParams,
@@ -111,18 +130,33 @@ export interface RemoteMethod<
   ) => Effect.Effect<ScheduledInvocation, RemoteCallError>
 }
 
-/** A typed remote handle to one agent instance. */
+/**
+ * A typed remote handle to one agent instance.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type RemoteAgent<Methods extends Record<string, AnyMethodSpec>> = {
   readonly [K in keyof Methods]: Methods[K] extends MethodSpec<infer P, infer S, infer E>
     ? RemoteMethod<P, S, E>
     : never
 }
 
-/** Same as {@link RemoteAgent} but additionally carries the generated phantom id. */
+/**
+ * Same as {@link RemoteAgent} but additionally carries the generated phantom id.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type PhantomRemoteAgent<Methods extends Record<string, AnyMethodSpec>> =
   RemoteAgent<Methods> & { readonly phantomId: string }
 
-/** Optional knobs accepted by every constructor variant. */
+/**
+ * Optional knobs accepted by every constructor variant.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface GetOptions<F extends ConfigFields = never> {
   readonly agentConfig?: ReadonlyArray<AgentCommon.TypedAgentConfigValue>
   /**
@@ -187,6 +221,9 @@ interface EphemeralClient<
  * agents are not addressable by constructor arguments alone, so `get`
  * is hidden at the type level; only `getPhantom` and `newPhantom`
  * remain.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type AgentClient<
   C extends MethodParams,
@@ -490,6 +527,9 @@ const parsePhantomId = (id: string): Effect.Effect<CoreTypes.Uuid, RemoteCallErr
  * returned client. The client does not require the agent to also be
  * `registerAgent`'d in the same component — pure consumers can use it
  * standalone.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const clientFor = <
   C extends MethodParams,

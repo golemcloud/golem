@@ -37,13 +37,20 @@ import { safeStringify } from "./logging.js"
  *   requests an explicit `parent` or `root: true` AND that hint
  *   conflicts with the host's stack, we fall back to a local
  *   `Tracer.NativeSpan` so the host stack is never corrupted.
+ *
+ * @since 0.1.0
  */
 
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
-/** Raised when one of the imperative `Tracing.*` host calls throws. */
+/**
+ * Raised when one of the imperative `Tracing.*` host calls throws.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class TracingHostError {
   readonly _tag = "TracingHostError"
   readonly message: string
@@ -265,6 +272,9 @@ const makeGolemTracer = (host: TracingHostShape): Tracer.Tracer =>
  * Provide the Golem host tracer for the wrapped program. Every
  * `Effect.withSpan` (and the built-in span events emitted by
  * `Logger.tracerLogger`, when enabled) flows through it.
+ *
+ * @since 0.1.0
+ * @category layers
  */
 export const layer: Layer.Layer<never, never, TracingHost> = Layer.effect(
   Tracer.Tracer,
@@ -278,7 +288,12 @@ export const layer: Layer.Layer<never, never, TracingHost> = Layer.effect(
 // Invocation-context helpers
 // ---------------------------------------------------------------------------
 
-/** A snapshot of `golem:api/context.currentContext()`. */
+/**
+ * A snapshot of `golem:api/context.currentContext()`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface InvocationContextSnapshot {
   readonly traceId: string
   readonly spanId: string
@@ -294,7 +309,12 @@ const snapshotOf = (host: TracingHostShape): InvocationContextSnapshot => {
   }
 }
 
-/** Read the host's current invocation context, wrapped in Effect. */
+/**
+ * Read the host's current invocation context, wrapped in Effect.
+ *
+ * @since 0.1.0
+ * @category getters
+ */
 export const currentContext: Effect.Effect<
   InvocationContextSnapshot,
   TracingHostError,
@@ -307,7 +327,12 @@ export const currentContext: Effect.Effect<
   })
 })
 
-/** Read the W3C Trace Context headers for the current invocation. */
+/**
+ * Read the W3C Trace Context headers for the current invocation.
+ *
+ * @since 0.1.0
+ * @category getters
+ */
 export const traceContextHeaders: Effect.Effect<
   ReadonlyArray<readonly [string, string]>,
   TracingHostError,
@@ -327,6 +352,9 @@ export const traceContextHeaders: Effect.Effect<
 /**
  * Toggle the host setting that controls whether outgoing HTTP requests
  * carry W3C Trace Context headers. Returns the previous setting.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const allowForwardingTraceContextHeaders = (
   allow: boolean,
@@ -343,6 +371,9 @@ export const allowForwardingTraceContextHeaders = (
  * Scoped variant of {@link allowForwardingTraceContextHeaders} — flips
  * the host setting for the surrounding `Scope`'s lifetime, then
  * restores the previous value on close.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const useForwardedHeaders = (
   allow: boolean,
@@ -366,6 +397,9 @@ export const useForwardedHeaders = (
  * Run `effect` with the host's outgoing-trace-header forwarding flag
  * temporarily set to `allow`; restores the previous value on success,
  * failure, or interruption.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withForwardedHeaders = <A, E, R>(
   allow: boolean,
@@ -389,6 +423,9 @@ export const withForwardedHeaders = <A, E, R>(
  * happens *inside* the layer scope (the dispatcher applies this
  * combinator before `Effect.provide(userRuntimeLayer)` strips the
  * dependency).
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withInvocationParent = <A, E, R>(
   effect: Effect.Effect<A, E, R>,

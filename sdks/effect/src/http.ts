@@ -13,7 +13,7 @@ import { withPipe } from "./pipeable.js"
  * routing structure via `discoverAgentTypes()` so the host knows how to
  * route incoming requests.
  *
- * Authoring model:
+ * **Example**
  *
  * ```ts
  * import { Http, defineAgent, method } from "effect-golem"
@@ -36,6 +36,8 @@ import { withPipe } from "./pipeable.js"
  *   impl: ...
  * })
  * ```
+ *
+ * @since 0.1.0
  */
 
 // ---------------------------------------------------------------------------
@@ -45,6 +47,9 @@ import { withPipe } from "./pipeable.js"
 /**
  * Internal representation of a single URL path segment, mirroring the
  * Golem WIT `path-segment` variant.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type PathSegment =
   | { readonly _tag: "Literal"; readonly value: string }
@@ -52,31 +57,71 @@ export type PathSegment =
   | { readonly _tag: "RestVar"; readonly name: string }
   | { readonly _tag: "SystemVar"; readonly name: SystemVariableName }
 
-/** System-variable names the Golem host injects into routes. */
+/**
+ * System-variable names the Golem host injects into routes.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type SystemVariableName = "agent-type" | "agent-version"
 
-/** Build a literal path segment, e.g. `Http.literal("api")`. */
+/**
+ * Build a literal path segment, e.g. `Http.literal("api")`.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const literal = (value: string): PathSegment => ({ _tag: "Literal", value })
 
-/** Build a path-variable segment, e.g. `Http.pathVar("id")`. */
+/**
+ * Build a path-variable segment, e.g. `Http.pathVar("id")`.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const pathVar = (name: string): PathSegment => ({ _tag: "PathVar", name })
 
-/** Build a catch-all (remaining-path) variable segment. Only valid as the last segment. */
+/**
+ * Build a catch-all (remaining-path) variable segment. Only valid as the last segment.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const restVar = (name: string): PathSegment => ({ _tag: "RestVar", name })
 
-/** `{agent-type}` — runtime-injected by the host. */
+/**
+ * `{agent-type}` — runtime-injected by the host.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const agentType = (): PathSegment => ({ _tag: "SystemVar", name: "agent-type" })
 
-/** `{agent-version}` — runtime-injected by the host. */
+/**
+ * `{agent-version}` — runtime-injected by the host.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const agentVersion = (): PathSegment => ({ _tag: "SystemVar", name: "agent-version" })
 
-/** Bind one HTTP query parameter to a method parameter. */
+/**
+ * Bind one HTTP query parameter to a method parameter.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface QueryVariable {
   readonly queryParam: string
   readonly varName: string
 }
 
-/** Bind one HTTP header to a method parameter. */
+/**
+ * Bind one HTTP header to a method parameter.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface HeaderVariable {
   readonly header: string
   readonly varName: string
@@ -90,6 +135,9 @@ export interface HeaderVariable {
  * The set of HTTP verbs supported by the Golem host. Standard verbs are
  * uppercased string literals; `{ custom: "VERB" }` carries non-standard
  * verbs verbatim through to `http-method.custom(string)`.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type HttpVerb =
   | "GET"
@@ -138,6 +186,9 @@ const isBodylessVerb = (v: HttpVerb): boolean =>
 /**
  * Typed failure surfaced by the parser and validator. Threaded into
  * `registerAgent`'s Effect alongside `UnsupportedSchemaError`.
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class HttpRouteError {
   readonly _tag = "HttpRouteError"
@@ -155,10 +206,20 @@ export class HttpRouteError {
 // - System variables are intentionally NOT excluded here; callers compose
 //   `Exclude<..., SystemVariableName>` when they want to drop them.
 
-/** Extract all path-variable names from a literal path template (system vars included). */
+/**
+ * Extract all path-variable names from a literal path template (system vars included).
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type PathVarsOf<S extends string> = ExtractVarsFromPath<SplitPathQuery<S>["path"]>
 
-/** Extract all query-variable values from a literal path template's `?…` portion. */
+/**
+ * Extract all query-variable values from a literal path template's `?…` portion.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type QueryVarsOf<S extends string> = ExtractVarsFromQuery<SplitPathQuery<S>["query"]>
 
 type SplitPathQuery<S extends string> = S extends `${infer P}?${infer Q}`
@@ -179,6 +240,9 @@ type ExtractVarsFromQuery<S extends string> = S extends `${string}={${infer V}}$
  * Extract the union of values from a `Record<string, string>` literal.
  * Returns `never` for empty records (`{}` should not widen the binding
  * union to `string`).
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type ValuesOf<R> = [keyof R] extends [never]
   ? never
@@ -206,6 +270,9 @@ declare const endpointVarsBrand: unique symbol
  * combinators ({@link withAuth}, {@link withCors},
  * {@link withPhantomAgent}, {@link withWebhookSuffix}) compose
  * additively with the literal-options form accepted by {@link mount}.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface MountDef<MountVars extends string> extends Pipeable.Pipeable {
   readonly [mountVarsBrand]?: MountVars
@@ -228,6 +295,9 @@ export interface MountDef<MountVars extends string> extends Pipeable.Pipeable {
  * combinators ({@link withAuth}, {@link withCors}, {@link withHeader},
  * {@link withHeaders}) compose additively with the literal-options
  * form accepted by {@link endpoint} and the verb shorthands.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface EndpointDef<EndpointVars extends string> extends Pipeable.Pipeable {
   readonly [endpointVarsBrand]?: EndpointVars
@@ -394,6 +464,9 @@ const parsePathString = (
  * Parse a mount path. Mount paths must NOT contain a query string (the
  * Golem WIT does not support mount-level query bindings) and must NOT
  * include a catch-all (`{*rest}`) segment.
+ *
+ * @since 0.1.0
+ * @category utils
  */
 export const parseMountPath = (
   raw: string,
@@ -422,6 +495,9 @@ export const parseMountPath = (
 /**
  * Parse an endpoint path. Returns the parsed path segments and the
  * inline query bindings discovered after `?…`.
+ *
+ * @since 0.1.0
+ * @category utils
  */
 export const parseEndpointPath = (raw: string): Effect.Effect<ParsedPath, HttpRouteError> =>
   Effect.gen(function* () {
@@ -461,7 +537,12 @@ const runParse = <A>(eff: Effect.Effect<A, HttpRouteError>): A => {
 // Public mount / endpoint factories
 // ---------------------------------------------------------------------------
 
-/** Options accepted by {@link mount}. */
+/**
+ * Options accepted by {@link mount}.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface MountOptions {
   /** When `true`, the host treats every endpoint as authentication-required. */
   readonly auth?: boolean
@@ -480,6 +561,9 @@ export interface MountOptions {
  * Declare an HTTP mount for an agent. The path may include `{var}` and
  * `{agent-type}` / `{agent-version}` segments; every `{var}` must
  * correspond to a constructor parameter on the agent.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const mount: <const Path extends string>(
   path: Path,
@@ -504,10 +588,18 @@ export const mount: <const Path extends string>(
  * An "empty record" sentinel that signals "no header bindings"; using
  * `{}` directly would trip `@typescript-eslint/no-empty-object-type`
  * and would also widen `ValuesOf<H>` to `string`.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type NoHeaderBindings = Readonly<Record<string, never>>
 
-/** Options accepted by {@link endpoint} and the verb shorthands. */
+/**
+ * Options accepted by {@link endpoint} and the verb shorthands.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface EndpointOptions<H extends Readonly<Record<string, string>> = NoHeaderBindings> {
   /**
    * Map of HTTP header name → method-parameter name. Header names are
@@ -548,6 +640,9 @@ const buildEndpoint = <H extends Readonly<Record<string, string>>>(
  * agent's mount prefix and may include `{var}`, `{*rest}`,
  * `{agent-type}`, `{agent-version}`, and inline `?key={var}&…` query
  * bindings.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const endpoint: <
   const Path extends string,
@@ -566,7 +661,12 @@ const verbHelper = (verb: HttpVerb) =>
   ): EndpointDef<Exclude<PathVarsOf<Path> | QueryVarsOf<Path>, SystemVariableName> | ValuesOf<H>> =>
     buildEndpoint(verb, path, opts) as never) as never
 
-/** Shorthand for `Http.endpoint("GET", path, opts?)`. */
+/**
+ * Shorthand for `Http.endpoint("GET", path, opts?)`.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const get: <
   const Path extends string,
   H extends Readonly<Record<string, string>> = NoHeaderBindings,
@@ -575,24 +675,69 @@ export const get: <
   opts?: EndpointOptions<H>,
 ) => EndpointDef<Exclude<PathVarsOf<Path> | QueryVarsOf<Path>, SystemVariableName> | ValuesOf<H>> =
   verbHelper("GET")
-/** Shorthand for `Http.endpoint("HEAD", path, opts?)`. */
+/**
+ * Shorthand for `Http.endpoint("HEAD", path, opts?)`.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const head: typeof get = verbHelper("HEAD")
-/** Shorthand for `Http.endpoint("POST", path, opts?)`. */
+/**
+ * Shorthand for `Http.endpoint("POST", path, opts?)`.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const post: typeof get = verbHelper("POST")
-/** Shorthand for `Http.endpoint("PUT", path, opts?)`. */
+/**
+ * Shorthand for `Http.endpoint("PUT", path, opts?)`.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const put: typeof get = verbHelper("PUT")
-/** Shorthand for `Http.endpoint("DELETE", path, opts?)`. */
+/**
+ * Shorthand for `Http.endpoint("DELETE", path, opts?)`.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const del: typeof get = verbHelper("DELETE")
-/** Shorthand for `Http.endpoint("PATCH", path, opts?)`. */
+/**
+ * Shorthand for `Http.endpoint("PATCH", path, opts?)`.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const patch: typeof get = verbHelper("PATCH")
-/** Shorthand for `Http.endpoint("OPTIONS", path, opts?)`. */
+/**
+ * Shorthand for `Http.endpoint("OPTIONS", path, opts?)`.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const options: typeof get = verbHelper("OPTIONS")
-/** Shorthand for `Http.endpoint("TRACE", path, opts?)`. */
+/**
+ * Shorthand for `Http.endpoint("TRACE", path, opts?)`.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const trace: typeof get = verbHelper("TRACE")
-/** Shorthand for `Http.endpoint("CONNECT", path, opts?)`. */
+/**
+ * Shorthand for `Http.endpoint("CONNECT", path, opts?)`.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const connect: typeof get = verbHelper("CONNECT")
 
-/** Shorthand for a custom (non-standard) HTTP verb. */
+/**
+ * Shorthand for a custom (non-standard) HTTP verb.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const custom: <
   const Path extends string,
   H extends Readonly<Record<string, string>> = NoHeaderBindings,
@@ -632,6 +777,9 @@ export const custom: <
  * value (mount default `false`; endpoint default `undefined` =
  * inherit-from-mount). Pipeable; `EndpointVars` / `MountVars` are
  * preserved unchanged.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withAuth =
   (auth: boolean) =>
@@ -647,6 +795,9 @@ export const withAuth =
  * of `HttpApiEndpoint.setCors` in `@effect/platform`. Use multiple
  * `withCors(...)` calls if you want the last one to win, or pass all
  * patterns to a single call.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withCors =
   (...patterns: ReadonlyArray<string>) =>
@@ -658,6 +809,9 @@ export const withCors =
  * Header names are case-insensitive at HTTP level; collisions after
  * lower-casing are rejected at registration time. Widens the
  * `EndpointVars` phantom to include the bound parameter name.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withHeader =
   <const Var extends string>(header: string, varName: Var) =>
@@ -671,6 +825,9 @@ export const withHeader =
  * Append multiple header → method-parameter bindings to an endpoint.
  * Equivalent to chaining a series of {@link withHeader} calls. Widens
  * the `EndpointVars` phantom to include every bound parameter name.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withHeaders =
   <const H extends Readonly<Record<string, string>>>(headers: H) =>
@@ -685,6 +842,9 @@ export const withHeaders =
 /**
  * Set the `phantom-agent` flag on a mount (one fresh agent instance per
  * HTTP request). Pipeable; `MountVars` is preserved unchanged.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withPhantomAgent =
   (phantom: boolean = true) =>
@@ -697,6 +857,9 @@ export const withPhantomAgent =
  * (`{*rest}`) are allowed. Webhook-suffix path variables are validated
  * against constructor-parameter names at registration time, so they
  * are NOT folded into the `MountVars` phantom.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withWebhookSuffix =
   (suffix: string) =>
@@ -723,7 +886,12 @@ const segmentToWit = (s: PathSegment): AgentCommon.PathSegment => {
   }
 }
 
-/** Compile a {@link MountDef} to the WIT `http-mount-details` record. */
+/**
+ * Compile a {@link MountDef} to the WIT `http-mount-details` record.
+ *
+ * @since 0.1.0
+ * @category metadata
+ */
 export const compileMount = (mountDef: MountDef<string>): AgentCommon.HttpMountDetails => ({
   pathPrefix: mountDef.pathPrefix.map(segmentToWit),
   authDetails: mountDef.authRequired ? { required: true } : undefined,
@@ -732,7 +900,12 @@ export const compileMount = (mountDef: MountDef<string>): AgentCommon.HttpMountD
   webhookSuffix: mountDef.webhookSuffix.map(segmentToWit),
 })
 
-/** Compile a single {@link EndpointDef} to a WIT `http-endpoint-details` record. */
+/**
+ * Compile a single {@link EndpointDef} to a WIT `http-endpoint-details` record.
+ *
+ * @since 0.1.0
+ * @category metadata
+ */
 export const compileEndpoint = (ep: EndpointDef<string>): AgentCommon.HttpEndpointDetails => ({
   httpMethod: verbToWit(ep.verb),
   pathSuffix: ep.pathSuffix.map(segmentToWit),
@@ -756,13 +929,21 @@ export const compileEndpoint = (ep: EndpointDef<string>): AgentCommon.HttpEndpoi
  * Result of `validateAgentHttp`: the compiled WIT mount (when present)
  * and a per-method-name list of compiled endpoints (always present;
  * empty for methods that did not declare any HTTP endpoints).
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface CompiledHttp {
   readonly mount: AgentCommon.HttpMountDetails | undefined
   readonly endpoints: ReadonlyMap<string, ReadonlyArray<AgentCommon.HttpEndpointDetails>>
 }
 
-/** Per-method input describing what the validator can see at registration time. */
+/**
+ * Per-method input describing what the validator can see at registration time.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface MethodHttpInput {
   readonly name: string
   readonly params: Readonly<Record<string, unknown>>
@@ -781,7 +962,12 @@ export interface MethodHttpInput {
   readonly stringBindableParams: ReadonlySet<string>
 }
 
-/** Per-agent input for `validateAgentHttp`. */
+/**
+ * Per-agent input for `validateAgentHttp`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface AgentHttpInput {
   readonly agentName: string
   readonly mount: MountDef<string> | undefined
@@ -960,6 +1146,9 @@ const verbLabel = (v: HttpVerb): string => (typeof v === "string" ? v : `custom(
  * Validate a complete agent's HTTP route metadata, producing the
  * compiled WIT records for everything that passes. Errors surface as
  * `HttpRouteError` typed failures.
+ *
+ * @since 0.1.0
+ * @category metadata
  */
 export const validateAgentHttp = (
   input: AgentHttpInput,
@@ -1065,6 +1254,9 @@ const validateMount = (
  * parameter, or header). Returns `true` for `Schema.String`,
  * `Schema.Number`, `Schema.BigInt`, `Schema.Boolean`, literal/enum
  * schemas, and any refinements/transformations layered on top of them.
+ *
+ * @since 0.1.0
+ * @category guards
  */
 export const isStringBindableSchema = (schema: Schema.Top): boolean =>
   isStringBindableAst(schema.ast)

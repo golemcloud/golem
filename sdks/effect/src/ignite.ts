@@ -47,6 +47,8 @@
  * Note: the `golem:rdbms/ignite2@1.5.0` host binding may be missing
  * in some Golem deployments; the integration-test agent for Ignite
  * is therefore deployed as a separate, gated component.
+ *
+ * @since 0.1.0
  */
 import {
   Context,
@@ -85,10 +87,18 @@ const ATTR_DB_SYSTEM_NAME = "db.system.name"
  * Unique symbol stamped on every {@link IgniteClient} instance so
  * consumers can reliably distinguish an Ignite client. Keyed via
  * `Symbol.for` so multiple module copies still agree on the same key.
+ *
+ * @since 0.1.0
+ * @category symbols
  */
 export const IgniteClientTypeId: unique symbol = Symbol.for(
   "effect-golem/IgniteClient",
 ) as IgniteClientTypeId
+
+/**
+ * @since 0.1.0
+ * @category symbols
+ */
 export type IgniteClientTypeId = typeof IgniteClientTypeId
 
 const IgniteConnectionTxSymbol: unique symbol = Symbol.for(
@@ -99,10 +109,20 @@ const IgniteConnectionTxSymbol: unique symbol = Symbol.for(
 // Public types
 // ---------------------------------------------------------------------------
 
-/** How temporal values (db-date / db-timestamp) are decoded from rows. */
+/**
+ * How temporal values (db-date / db-timestamp) are decoded from rows.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type TemporalDecodeMode = "raw" | "date"
 
-/** Configuration accepted by {@link IgniteClient.make} / {@link IgniteClient.layer}. */
+/**
+ * Configuration accepted by {@link IgniteClient.make} / {@link IgniteClient.layer}.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface IgniteClientConfig {
   /**
    * Ignite connection address — e.g.
@@ -135,6 +155,9 @@ export interface IgniteClientConfig {
  *
  * Note: `withTransaction` rejects nested calls with a
  * `SqlSyntaxError` because Ignite does not support savepoints.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface IgniteClient extends Client.SqlClient {
   readonly [IgniteClientTypeId]: IgniteClientTypeId
@@ -150,6 +173,9 @@ export interface IgniteClient extends Client.SqlClient {
  * Context tag for resolving an {@link IgniteClient} from the
  * environment. Both this tag and the upstream `Client.SqlClient` tag
  * are populated by {@link IgniteClient.layer}.
+ *
+ * @since 0.1.0
+ * @category host services
  */
 export class IgniteClientService extends Context.Service<IgniteClientService, IgniteClient>()(
   "effect-golem/IgniteClient",
@@ -178,15 +204,25 @@ const igniteParam = <T extends string, V>(kind: T, value: V): IgniteParam<T, V> 
 const isIgniteParam = (v: unknown): v is IgniteParam<string, unknown> =>
   typeof v === "object" && v !== null && (v as Record<symbol, unknown>)[IgniteParamTag] === true
 
-/** Ignite uuid — `[hi, lo]` 128-bit identifier. */
+/**
+ * Ignite uuid — `[hi, lo]` 128-bit identifier.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type IgniteUuid = string | { readonly hi: bigint; readonly lo: bigint } | [bigint, bigint]
 
 /**
  * Explicit parameter wrappers for rich Ignite types.
  *
+ * **Example**
+ *
  * ```ts
  * yield* sql`INSERT INTO t (id, ts) VALUES (${Ignite.uuid(id)}, ${Ignite.timestamp(BigInt(Date.now()), 0)})`
  * ```
+ *
+ * @since 0.1.0
+ * @category codecs
  */
 export const Ignite = {
   /** `db-uuid` — 36-char string OR `{hi,lo}` OR `[hi,lo]` tuple. */
@@ -811,6 +847,9 @@ const layer = (
 
 /**
  * Public namespace mirror used by `import { IgniteClient } from "effect-golem/ignite2"`.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const IgniteClient = {
   TypeId: IgniteClientTypeId,
@@ -819,7 +858,12 @@ export const IgniteClient = {
   IgniteClient: IgniteClientService,
 }
 
-/** Probe an arbitrary value for the IgniteClient brand. */
+/**
+ * Probe an arbitrary value for the IgniteClient brand.
+ *
+ * @since 0.1.0
+ * @category guards
+ */
 export const isIgniteClient = (v: unknown): v is IgniteClient => {
   if (v === null) return false
   const kind = typeof v

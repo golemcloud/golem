@@ -1,29 +1,3 @@
-import { Cause, Context, Effect, Exit, Layer, Result, Schema, Semaphore } from "effect"
-import type * as CoreTypes from "golem:core/types@1.5.0"
-import type * as DurabilityHost from "golem:durability/durability@1.5.0"
-import {
-  DurabilityHostError,
-  PersistenceLevel,
-  withPersistenceLevel,
-  type PersistenceLevelValue,
-} from "./durability-mode.js"
-import { DurabilityClient } from "./host/DurabilityClient.js"
-import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
-import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./wit-codec.js"
-
-/**
- * Nominal brand attached to every SDK-internal error class produced by
- * the durable-function wrapper. We use a `Symbol.for(...)` so the
- * brand survives module re-instantiation (e.g., across the bundled
- * vs. runtime copies of the SDK), and we detect SDK errors by
- * `instanceof`-style symbol presence rather than by `_tag` string —
- * that way a user-defined error that happens to share a `_tag`
- * cannot be mis-routed into the defect channel.
- *
- * @internal
- */
-const sdkErrorBrand: unique symbol = Symbol.for("effect-golem/durable-function/sdk-error")
-
 /**
  * Effect-idiomatic wrapper around `golem:durability/durability@1.5.0`,
  * mirroring the `Durability::new + is_live + persist + replay` triplet
@@ -31,7 +5,9 @@ const sdkErrorBrand: unique symbol = Symbol.for("effect-golem/durable-function/s
  *
  * The high-level entry point is {@link wrap} (and the infallible
  * variant {@link wrapInfallible}) which encodes a single durable host
- * call as one combinator:
+ * call as one combinator.
+ *
+ * **Example**
  *
  * ```ts
  * import { Durability, Schema } from "effect-golem"
@@ -46,7 +22,7 @@ const sdkErrorBrand: unique symbol = Symbol.for("effect-golem/durable-function/s
  *     error: QuoteErrorSchema,
  *   },
  *   { symbol: "AAPL" },
- *   makeRealCall(symbol),  // Effect<Quote, QuoteError>
+ *   makeRealCall(symbol), // Effect<Quote, QuoteError>
  * )
  * ```
  *
@@ -79,14 +55,61 @@ const sdkErrorBrand: unique symbol = Symbol.for("effect-golem/durable-function/s
  * {@link endDurableFunction} / {@link persistDurableFunctionInvocation}
  * / {@link readPersistedDurableFunctionInvocation}) to compose those
  * flows manually.
+ *
+ * @since 0.1.0
  */
+import { Cause, Context, Effect, Exit, Layer, Result, Schema, Semaphore } from "effect"
+import type * as CoreTypes from "golem:core/types@1.5.0"
+import type * as DurabilityHost from "golem:durability/durability@1.5.0"
+import {
+  DurabilityHostError,
+  PersistenceLevel,
+  withPersistenceLevel,
+  type PersistenceLevelValue,
+} from "./durability-mode.js"
+import { DurabilityClient } from "./host/DurabilityClient.js"
+import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
+import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./wit-codec.js"
+
+/**
+ * Nominal brand attached to every SDK-internal error class produced by
+ * the durable-function wrapper. We use a `Symbol.for(...)` so the
+ * brand survives module re-instantiation (e.g., across the bundled
+ * vs. runtime copies of the SDK), and we detect SDK errors by
+ * `instanceof`-style symbol presence rather than by `_tag` string —
+ * that way a user-defined error that happens to share a `_tag`
+ * cannot be mis-routed into the defect channel.
+ *
+ * @internal
+ */
+const sdkErrorBrand: unique symbol = Symbol.for("effect-golem/durable-function/sdk-error")
 
 // ---------------------------------------------------------------------------
 // Re-exported raw types
 // ---------------------------------------------------------------------------
 
+/**
+ * Re-export of the WIT `durable-function-type` variant.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type DurableFunctionType = DurabilityHost.DurableFunctionType
+
+/**
+ * Re-export of the WIT `durable-execution-state` record.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type DurableExecutionState = DurabilityHost.DurableExecutionState
+
+/**
+ * Re-export of the WIT `persisted-durable-function-invocation` record.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type PersistedDurableFunctionInvocation = DurabilityHost.PersistedDurableFunctionInvocation
 
 // `OplogIndex` is also exported from `./durability-mode.js` (the
@@ -104,6 +127,9 @@ type OplogIndex = DurabilityHost.OplogIndex
  * the recorded oplog has drifted from the user's code (e.g. a function
  * was renamed between deploys). Mirrors the panic Rust's
  * `validate_oplog_entry` raises, but as a typed Effect failure.
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class DurabilityReplayMismatchError {
   readonly _tag = "DurabilityReplayMismatchError"
@@ -126,6 +152,9 @@ export class DurabilityReplayMismatchError {
  * Raised when encoding/decoding the `ValueAndType` envelope through
  * the user-supplied schemas fails. The `phase` discriminates which
  * step blew up.
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class DurabilityDecodeError {
   readonly _tag = "DurabilityDecodeError"
@@ -148,6 +177,9 @@ export class DurabilityDecodeError {
  * would either corrupt replay (interleave entries) or deadlock on the
  * serialization permit. We surface the situation as a typed failure
  * so callers can refactor the offending nest.
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class NestedDurableFunctionError {
   readonly _tag = "NestedDurableFunctionError"
@@ -171,6 +203,9 @@ export class NestedDurableFunctionError {
  * `writeLocal`, `readRemote`, `writeRemote`) with {@link wrap}; the
  * batched/transaction variants are only accepted by the lower-level
  * escape hatches.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const FunctionType = {
   /** Local, read-only side effect (PRNG, FS read, …). */
@@ -209,7 +244,12 @@ void ({
   "write-remote-transaction": FunctionType.writeRemoteTransaction,
 } satisfies Record<DurableFunctionType["tag"], unknown>)
 
-/** Subset of {@link DurableFunctionType} accepted by {@link wrap}. */
+/**
+ * Subset of {@link DurableFunctionType} accepted by {@link wrap}.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type UnaryDurableFunctionType =
   | { tag: "read-local" }
   | { tag: "write-local" }
@@ -220,7 +260,12 @@ export type UnaryDurableFunctionType =
 // Effect-typed escape hatches (consume DurabilityClient via DI)
 // ---------------------------------------------------------------------------
 
-/** Emit a host metric/log line for a (iface, function) pair. */
+/**
+ * Emit a host metric/log line for a (iface, function) pair.
+ *
+ * @since 0.1.0
+ * @category host bindings
+ */
 export const observeFunctionCall = (
   iface: string,
   function_: string,
@@ -236,6 +281,9 @@ export const observeFunctionCall = (
 /**
  * Open a durable-function bracket and return the host-issued
  * {@link OplogIndex}. Pair with {@link endDurableFunction}.
+ *
+ * @since 0.1.0
+ * @category host bindings
  */
 export const beginDurableFunction = (
   functionType: DurableFunctionType,
@@ -251,6 +299,9 @@ export const beginDurableFunction = (
 /**
  * Close a durable-function bracket previously opened by
  * {@link beginDurableFunction}.
+ *
+ * @since 0.1.0
+ * @category host bindings
  */
 export const endDurableFunction = (
   functionType: DurableFunctionType,
@@ -265,7 +316,12 @@ export const endDurableFunction = (
     })
   })
 
-/** Read the host's current durable-execution state (live vs replay). */
+/**
+ * Read the host's current durable-execution state (live vs replay).
+ *
+ * @since 0.1.0
+ * @category host bindings
+ */
 export const currentDurableExecutionState: Effect.Effect<
   DurableExecutionState,
   DurabilityHostError,
@@ -282,13 +338,21 @@ export const currentDurableExecutionState: Effect.Effect<
  * Convenience: `true` if side effects should run live (executor is in
  * live mode OR persistence level is `persist-nothing`). Mirrors Rust's
  * `Durability::is_live()`.
+ *
+ * @since 0.1.0
+ * @category getters
  */
 export const isLive: Effect.Effect<boolean, DurabilityHostError, DurabilityClient> = Effect.map(
   currentDurableExecutionState,
   (s) => s.isLive || s.persistenceLevel.tag === "persist-nothing",
 )
 
-/** Persist a typed durable-function invocation entry to the oplog. */
+/**
+ * Persist a typed durable-function invocation entry to the oplog.
+ *
+ * @since 0.1.0
+ * @category host bindings
+ */
 export const persistDurableFunctionInvocation = (
   functionName: string,
   request: CoreTypes.ValueAndType,
@@ -304,7 +368,12 @@ export const persistDurableFunctionInvocation = (
     })
   })
 
-/** Read the next persisted durable-function invocation during replay. */
+/**
+ * Read the next persisted durable-function invocation during replay.
+ *
+ * @since 0.1.0
+ * @category host bindings
+ */
 export const readPersistedDurableFunctionInvocation: Effect.Effect<
   PersistedDurableFunctionInvocation,
   DurabilityHostError,
@@ -326,6 +395,9 @@ export const readPersistedDurableFunctionInvocation: Effect.Effect<
  * recorded into the oplog; bit-compatibility with the Rust SDK depends
  * on `requestSchema` matching whatever shape the Rust side emits
  * (typically `Schema.Struct({...})` with the same field names).
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface DurabilityWrapOptions<
   RequestS extends Schema.Top,
@@ -348,7 +420,12 @@ export interface DurabilityWrapOptions<
   readonly forcedCommit?: boolean
 }
 
-/** Configuration for {@link wrapInfallible} — no `error` schema. */
+/**
+ * Configuration for {@link wrapInfallible} — no `error` schema.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface DurabilityWrapInfallibleOptions<
   RequestS extends Schema.Top,
   SuccessS extends Schema.Top,
@@ -376,6 +453,7 @@ export interface DurabilityWrapInfallibleOptions<
  * old `__resetWrapStateForTest` indirection.
  *
  * @internal
+ * @since 0.1.0
  */
 export class WrapSemaphore extends Context.Service<WrapSemaphore, Semaphore.Semaphore>()(
   "effect-golem/durable-function/wrap-semaphore",
@@ -388,6 +466,7 @@ export class WrapSemaphore extends Context.Service<WrapSemaphore, Semaphore.Sema
  * tests get a fresh semaphore per provided layer.
  *
  * @internal
+ * @since 0.1.0
  */
 export const WrapSemaphoreLive: Layer.Layer<WrapSemaphore> = Layer.effect(
   WrapSemaphore,
@@ -418,6 +497,7 @@ const InsideWrapRef = Context.Reference<string | null>(
  * the body's error channel beyond the inner call's typed-error set).
  *
  * @internal
+ * @since 0.1.0
  */
 export const __forceInsideWrapForTest = <A, E, R>(
   outerName: string,
@@ -479,6 +559,9 @@ const runLiveBody = <A, E, R>(
  * Run `body` as a single durable function invocation. See the module
  * doc-comment for the full live/replay protocol and bit-compatibility
  * guarantees.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const wrap = <
   RequestS extends Schema.Top,
@@ -520,6 +603,9 @@ export const wrap = <
  * response envelope is a bare `success` value rather than a
  * `Result<A, E>`. Used by stream "begin" markers and other
  * never-failing durable points.
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const wrapInfallible = <RequestS extends Schema.Top, SuccessS extends Schema.Top, R>(
   opts: DurabilityWrapInfallibleOptions<RequestS, SuccessS>,

@@ -2,7 +2,7 @@
  * Effect-idiomatic wrapper around `wasi:blobstore/blobstore` +
  * `wasi:blobstore/container` + `wasi:blobstore/types`.
  *
- * Authoring example:
+ * **Example**
  *
  * ```ts
  * import { Effect, Schema, Stream } from "effect"
@@ -27,6 +27,8 @@
  *     }),
  * })
  * ```
+ *
+ * @since 0.1.0
  */
 
 import { Effect, Schema, Scope, Stream } from "effect"
@@ -49,6 +51,9 @@ const messageOf = (e: unknown): string => {
  * Raised when any host call into `wasi:blobstore/*` traps. Unlike
  * the keyvalue host the blobstore error type is a plain `string`
  * (per the WIT), so {@link trace} just carries that string verbatim.
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class BlobstoreHostError {
   readonly _tag = "BlobstoreHostError"
@@ -64,7 +69,12 @@ export class BlobstoreHostError {
   }
 }
 
-/** Raised when {@link SchemaContainer} cannot parse a stored object as JSON. */
+/**
+ * Raised when {@link SchemaContainer} cannot parse a stored object as JSON.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class BlobstoreDecodeError {
   readonly _tag = "BlobstoreDecodeError"
   readonly message: string
@@ -77,11 +87,30 @@ export class BlobstoreDecodeError {
 // TypeId
 // ---------------------------------------------------------------------------
 
+/**
+ * `Symbol.for(...)` keyed identity stamp on every {@link Container}
+ * instance. Lets cross-bundle code reliably check whether an unknown
+ * value is a `Container` even when several copies of this module exist.
+ *
+ * @since 0.1.0
+ * @category symbols
+ */
 export const ContainerTypeId: unique symbol = Symbol.for(
   "effect-golem/blobstore/Container",
 ) as ContainerTypeId
+
+/**
+ * @since 0.1.0
+ * @category symbols
+ */
 export type ContainerTypeId = typeof ContainerTypeId
 
+/**
+ * Type guard: true when `u` is a {@link Container}.
+ *
+ * @since 0.1.0
+ * @category guards
+ */
 export const isContainer = (u: unknown): u is Container =>
   u !== null &&
   typeof u === "object" &&
@@ -91,7 +120,12 @@ export const isContainer = (u: unknown): u is Container =>
 // Public types
 // ---------------------------------------------------------------------------
 
-/** Object identifier — `(containerName, objectName)` pair. */
+/**
+ * Object identifier — `(containerName, objectName)` pair.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface ObjectId {
   readonly container: string
   readonly object: string
@@ -106,6 +140,9 @@ export interface ObjectId {
  *
  * Note: in the host, this field is actually `last_modified_at` —
  * there is no separate creation time on object storage backends.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface ContainerMetadata {
   readonly name: string
@@ -119,6 +156,9 @@ export interface ContainerMetadata {
  * Golem host (S3 `LastModified` / filesystem `mtime`), in Unix
  * milliseconds — there is no separate creation time on object
  * storage backends.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface ObjectMetadata {
   readonly name: string
@@ -140,12 +180,23 @@ export interface ObjectMetadata {
  * The WIT spec says "Start and end offsets are inclusive". Until the
  * host fixes the in-memory/fs backends, ranged reads are not
  * portable — prefer reading whole objects.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface ByteRange {
   readonly start: bigint
   readonly end: bigint
 }
 
+/**
+ * Handle on an open blob container. Acquired via {@link createContainer},
+ * {@link getContainer} or {@link getOrCreateContainer} inside an Effect
+ * `Scope`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface Container {
   readonly [ContainerTypeId]: ContainerTypeId
   /** The container's name (cached at acquire time). */
@@ -188,7 +239,12 @@ export interface Container {
   forSchema<S extends Schema.Top>(schema: S): SchemaContainer<S>
 }
 
-/** Schema-typed view returned by {@link Container.forSchema}. */
+/**
+ * Schema-typed view returned by {@link Container.forSchema}.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface SchemaContainer<S extends Schema.Top> {
   getData(
     name: string,
@@ -357,6 +413,9 @@ const makeContainer = (host: HostContainer): Container => {
 /**
  * Create a new empty container. Fails with {@link BlobstoreHostError}
  * if a container with the same name already exists.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const createContainer = (
   name: string,
@@ -370,6 +429,9 @@ export const createContainer = (
 /**
  * Open an existing container by name. Fails with {@link BlobstoreHostError}
  * if the container does not exist.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const getContainer = (
   name: string,
@@ -386,6 +448,9 @@ export const getContainer = (
  *
  * Idempotent — safe to call from `defineAgent` `impl` after a
  * snapshot load.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const getOrCreateContainer = (
   name: string,
@@ -396,7 +461,12 @@ export const getOrCreateContainer = (
     return makeContainer(host)
   })
 
-/** True if a container with the given name exists. */
+/**
+ * True if a container with the given name exists.
+ *
+ * @since 0.1.0
+ * @category operations
+ */
 export const containerExists = (
   name: string,
 ): Effect.Effect<boolean, BlobstoreHostError, BlobstoreClient> =>
@@ -405,7 +475,12 @@ export const containerExists = (
     return yield* client.containerExists(name)
   })
 
-/** Delete a container and all of its objects. */
+/**
+ * Delete a container and all of its objects.
+ *
+ * @since 0.1.0
+ * @category operations
+ */
 export const deleteContainer = (
   name: string,
 ): Effect.Effect<void, BlobstoreHostError, BlobstoreClient> =>
@@ -414,7 +489,12 @@ export const deleteContainer = (
     return yield* client.deleteContainer(name)
   })
 
-/** Copy an object to the same or a different container. Overwrites the destination. */
+/**
+ * Copy an object to the same or a different container. Overwrites the destination.
+ *
+ * @since 0.1.0
+ * @category operations
+ */
 export const copyObject = (
   src: ObjectId,
   dest: ObjectId,
@@ -424,7 +504,12 @@ export const copyObject = (
     return yield* client.copyObject(src, dest)
   })
 
-/** Move (rename) an object to the same or a different container. Overwrites the destination. */
+/**
+ * Move (rename) an object to the same or a different container. Overwrites the destination.
+ *
+ * @since 0.1.0
+ * @category operations
+ */
 export const moveObject = (
   src: ObjectId,
   dest: ObjectId,

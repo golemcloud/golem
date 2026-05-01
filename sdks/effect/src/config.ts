@@ -1,3 +1,13 @@
+/**
+ * Effect-idiomatic façade over `golem:agent/host@1.5.0.get-config-value`
+ * plus the `WasmRpc` constructor's `agent-config` argument. Wire-compatible
+ * with the official `golem-ts-sdk` `Config<T>` / `Secret<T>`, `golem-rust`
+ * `#[derive(ConfigSchema)]`, Scala's `ConfigLoader.createLazyConfig`, and
+ * MoonBit's `#derive.config`.
+ *
+ * @since 0.1.0
+ */
+
 import { Context, Effect, Redacted, Schema, SchemaAST } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
@@ -10,6 +20,9 @@ type WitValue = CoreTypes.WitValue
  * A typed config-fetching failure surfaced through the {@link ConfigError}
  * Effect channel. Mirrors the rest of effect-golem's "errors as Effect
  * typed failures" convention (avoid throwing in Effect bodies).
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class ConfigError {
   readonly _tag = "ConfigError"
@@ -31,15 +44,26 @@ export class ConfigError {
  *   `{ get: Effect<Redacted<T>, ConfigError> }`),
  * - or a literal `Schema.Struct(...)` (recursed into, prefixing the
  *   path with the field's name).
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type ConfigField = Schema.Top
 
-/** Record of named config fields, supplied to {@link defineConfig}. */
+/**
+ * Record of named config fields, supplied to {@link defineConfig}.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type ConfigFields = Readonly<Record<string, ConfigField>>
 
 /**
  * Recursively map a {@link ConfigFields} record to its decoded
  * "config shape". See {@link ConfigError} for the failure channel.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type ConfigShape<F extends ConfigFields> = {
   readonly [K in keyof F]: F[K] extends Schema.Redacted<infer Inner>
@@ -57,6 +81,9 @@ export type ConfigShape<F extends ConfigFields> = {
  * `GetOptions.overrides` so callers cannot accidentally provide a
  * secret leaf via RPC overrides at compile time (a runtime guard
  * enforces the same invariant).
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type NonSecretOverride<F extends ConfigFields> = {
   readonly [K in keyof F as F[K] extends Schema.Redacted<any>
@@ -77,7 +104,12 @@ interface ConfigLeaf {
   readonly witCodec: WitCodec<Schema.Top>
 }
 
-/** Compiled bundle held alongside the {@link defineConfig}-class metadata. */
+/**
+ * Compiled bundle held alongside the {@link defineConfig}-class metadata.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface CompiledConfig {
   readonly declarations: ReadonlyArray<AgentCommon.AgentConfigDeclaration>
   readonly leaves: ReadonlyArray<ConfigLeaf>
@@ -123,6 +155,9 @@ const isPlainStructSchema = (s: Schema.Top): s is Schema.Struct<ConfigFields> =>
  * Walk the user-supplied config record. Produces a flat list of leaves
  * (each with its WIT type, decoder, and path) plus the matching
  * AgentConfigDeclaration array used during agent registration.
+ *
+ * @since 0.1.0
+ * @category metadata
  */
 export const compileConfig = (
   fields: ConfigFields,
@@ -307,6 +342,9 @@ export const compileConfig = (
  * {@link AgentDefinition} (and the runtime dispatcher) can discover the
  * compiled bundle, build per-invocation shapes, and type the
  * `overrides` channel of {@link AgentClient.GetOptions}.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface ConfigStatics<F extends ConfigFields> {
   readonly fields: F
@@ -333,20 +371,30 @@ export interface ConfigStatics<F extends ConfigFields> {
 /**
  * Marker class type returned by {@link defineConfig}.
  *
- * Concrete users do
+ * **Details**
  *
- * ```ts
- * class CounterConfig extends defineConfig("Counter.Config", { ... }) {}
- * ```
- *
- * which makes `CounterConfig` simultaneously a `Context.Service` tag
- * (yieldable to its {@link ConfigShape}) AND a constructor carrying the
- * static `fields` / `__compile` metadata.
+ * Concrete users extend the returned class — `CounterConfig` is then
+ * simultaneously a `Context.Service` tag (yieldable to its
+ * {@link ConfigShape}) AND a constructor carrying the static `fields`
+ * / `__compile` metadata.
  *
  * The Self parameter of the underlying `Context.Service` is left as
  * `any` so that user subclasses (the typical extension pattern shown
- * above) remain assignable; the runtime tag identity is the unique
+ * below) remain assignable; the runtime tag identity is the unique
  * `KeyClass` minted by `Context.Service<...>(name)` per call.
+ *
+ * **Example**
+ *
+ * ```ts
+ * import { defineConfig, Schema } from "effect-golem"
+ *
+ * class CounterConfig extends defineConfig("Counter.Config", {
+ *   greeting: Schema.String,
+ * }) {}
+ * ```
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type ConfigClass<F extends ConfigFields> = Context.ServiceClass<
   ConfigShape<F>,
@@ -359,11 +407,16 @@ export type ConfigClass<F extends ConfigFields> = Context.ServiceClass<
  * Build a `Context.Service` class whose payload is the recursively
  * mapped {@link ConfigShape} of the supplied fields.
  *
+ * **Details**
+ *
  * The returned class also carries (as static members) the original
  * `fields` record and a memoized `__compile` accessor so
  * {@link defineAgent} / {@link clientFor} can produce the matching
  * AgentConfigDeclarations and runtime shapes without re-walking the
  * schema.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const defineConfig = <const F extends ConfigFields>(
   name: string,
@@ -407,6 +460,8 @@ export const defineConfig = <const F extends ConfigFields>(
  * Encode a non-secret override record into the `TypedAgentConfigValue[]`
  * shape consumed by the WasmRpc constructor.
  *
+ * **Details**
+ *
  * Walks the override object alongside the compiled leaf table so that:
  * - any leaf marked as `secret` is rejected with a clear error (defense
  *   in depth on top of the type-level {@link NonSecretOverride} guard);
@@ -415,6 +470,9 @@ export const defineConfig = <const F extends ConfigFields>(
  *
  * Returns the encoded array; failure paths surface as
  * {@link UnsupportedSchemaError} or {@link ConfigError}.
+ *
+ * @since 0.1.0
+ * @category codecs
  */
 export const encodeOverrides = (
   compiled: CompiledConfig,

@@ -1,8 +1,3 @@
-import { Effect, Option, Stream } from "effect"
-import type * as ApiHost from "golem:api/host@1.5.0"
-import { AgentHostClient } from "./host/AgentHostClient.js"
-import { PromiseClient } from "./host/PromiseClient.js"
-
 /**
  * Effect-idiomatic façade over the agent-management subset of
  * `golem:api/host@1.5.0`:
@@ -19,13 +14,27 @@ import { PromiseClient } from "./host/PromiseClient.js"
  * validated with {@link AgentsValidationError}.
  *
  * For the running agent's own `AgentId` (free of host-call cost), use
- * the {@link SelfAgentId} Context service instead.
+ * the `SelfAgentId` Context service instead.
+ *
+ * @since 0.1.0
  */
+import { Effect, Option, Stream } from "effect"
+import type * as ApiHost from "golem:api/host@1.5.0"
+import { AgentHostClient } from "./host/AgentHostClient.js"
+import { PromiseClient } from "./host/PromiseClient.js"
 
 // ---------------------------------------------------------------------------
 // Re-exported raw types
 // ---------------------------------------------------------------------------
 
+/**
+ * Re-exported raw WIT types from `golem:api/host@1.5.0`. Surface the
+ * structural shapes so user code can pattern-match on `tag` / consume
+ * fields without importing the host module directly.
+ *
+ * @since 0.1.0
+ * @category re-exports
+ */
 export type {
   AgentAllFilter,
   AgentAnyFilter,
@@ -66,7 +75,12 @@ type RawOplogIndex = ApiHost.OplogIndex
 // Errors
 // ---------------------------------------------------------------------------
 
-/** Raised when a `golem:api/host@1.5.0` agent-management call throws. */
+/**
+ * Raised when a `golem:api/host@1.5.0` agent-management call throws.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class AgentsHostError {
   readonly _tag = "AgentsHostError"
   readonly message: string
@@ -75,7 +89,12 @@ export class AgentsHostError {
   }
 }
 
-/** Raised when a user-supplied input is out of range or malformed. */
+/**
+ * Raised when a user-supplied input is out of range or malformed.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class AgentsValidationError {
   readonly _tag = "AgentsValidationError"
   readonly message: string
@@ -109,7 +128,12 @@ const toUint64 = (
 // Revert-target builders
 // ---------------------------------------------------------------------------
 
-/** Pure-data constructors for the `revert-agent-target` variant. */
+/**
+ * Pure-data constructors for the `revert-agent-target` variant.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const RevertTarget = {
   toOplogIndex: (idx: RawOplogIndex): RawRevertAgentTarget => ({
     tag: "revert-to-oplog-index",
@@ -148,6 +172,9 @@ type FilterNode =
  * Immutable filter AST for {@link getAgents}. Compose with `.and(...)`
  * (intersection) and `.or(...)` (union); compile to the WIT
  * {@link RawAgentAnyFilter} via {@link toRawFilter}.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export class Filter {
   /** @internal */
@@ -269,7 +296,12 @@ const toDnf = (node: FilterNode): Array<Array<ApiHost.AgentPropertyFilter>> => {
   }
 }
 
-/** Compile a {@link Filter} to its WIT shape. */
+/**
+ * Compile a {@link Filter} to its WIT shape.
+ *
+ * @since 0.1.0
+ * @category combinators
+ */
 export const toRawFilter = (filter: Filter): RawAgentAnyFilter => ({
   filters: toDnf(filter.toNode()).map((conj) => ({ filters: conj })),
 })
@@ -284,6 +316,9 @@ const isFilter = (v: unknown): v is Filter => v instanceof Filter
  * Read the running agent's full metadata. Heavyweight (host call +
  * oplog entry per invocation); for just the agent-id, prefer the
  * `SelfAgentId` Context service.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const getSelfMetadata: Effect.Effect<RawAgentMetadata, AgentsHostError, AgentHostClient> =
   Effect.gen(function* () {
@@ -294,7 +329,12 @@ export const getSelfMetadata: Effect.Effect<RawAgentMetadata, AgentsHostError, A
     })
   })
 
-/** Read another agent's metadata, or `undefined` if it does not exist. */
+/**
+ * Read another agent's metadata, or `undefined` if it does not exist.
+ *
+ * @since 0.1.0
+ * @category operations
+ */
 export const getAgentMetadata = (
   id: RawAgentId,
 ): Effect.Effect<RawAgentMetadata | undefined, AgentsHostError, AgentHostClient> =>
@@ -306,7 +346,12 @@ export const getAgentMetadata = (
     })
   })
 
-/** Resolve a component reference to its `ComponentId`. */
+/**
+ * Resolve a component reference to its `ComponentId`.
+ *
+ * @since 0.1.0
+ * @category operations
+ */
 export const resolveComponentId = (
   componentReference: string,
 ): Effect.Effect<RawComponentId | undefined, AgentsHostError, AgentHostClient> =>
@@ -318,7 +363,12 @@ export const resolveComponentId = (
     })
   })
 
-/** Resolve a `(componentReference, agentName)` pair to an `AgentId`. */
+/**
+ * Resolve a `(componentReference, agentName)` pair to an `AgentId`.
+ *
+ * @since 0.1.0
+ * @category operations
+ */
 export const resolveAgentId = (
   componentReference: string,
   agentName: string,
@@ -331,7 +381,12 @@ export const resolveAgentId = (
     })
   })
 
-/** Strict variant of {@link resolveAgentId}. */
+/**
+ * Strict variant of {@link resolveAgentId}.
+ *
+ * @since 0.1.0
+ * @category operations
+ */
 export const resolveAgentIdStrict = (
   componentReference: string,
   agentName: string,
@@ -348,6 +403,9 @@ export const resolveAgentIdStrict = (
  * Initiate an update of the given agent to `targetRevision`. The
  * revision is validated to fit a `u64`. Returns immediately — the
  * actual update is asynchronous on the host side.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const updateAgent = (input: {
   readonly agentId: RawAgentId
@@ -363,7 +421,12 @@ export const updateAgent = (input: {
     })
   })
 
-/** Fork another agent at a given oplog index. */
+/**
+ * Fork another agent at a given oplog index.
+ *
+ * @since 0.1.0
+ * @category operations
+ */
 export const forkAgent = (input: {
   readonly source: RawAgentId
   readonly target: RawAgentId
@@ -377,7 +440,12 @@ export const forkAgent = (input: {
     })
   })
 
-/** Revert an agent to a previous state. */
+/**
+ * Revert an agent to a previous state.
+ *
+ * @since 0.1.0
+ * @category operations
+ */
 export const revertAgent = (
   agentId: RawAgentId,
   target: RawRevertAgentTarget,
@@ -394,6 +462,9 @@ export const revertAgent = (
  * Fork the current agent at the current execution point. Both the
  * original and the new ("forked") agent see this call return; inspect
  * the {@link RawForkResult} `tag` to discover which side you are on.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const fork: Effect.Effect<RawForkResult, AgentsHostError, AgentHostClient> = Effect.gen(
   function* () {
@@ -412,6 +483,9 @@ export const fork: Effect.Effect<RawForkResult, AgentsHostError, AgentHostClient
 /**
  * Stream all agents of the given component matching the optional
  * filter. Drives the host's `GetAgents` pager via `Stream.paginate`.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const getAgents = (input: {
   readonly componentId: RawComponentId
@@ -454,6 +528,9 @@ export const getAgents = (input: {
 /**
  * Raised when {@link Promises.complete} is called on a promise that
  * was already completed (the host returns `false`).
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class PromiseAlreadyCompletedError {
   readonly _tag = "PromiseAlreadyCompletedError"
@@ -468,6 +545,9 @@ export class PromiseAlreadyCompletedError {
  * `golem:api/host@1.5.0` promise API: a host-side shared rendezvous
  * channel where one fiber creates + awaits while another fiber (often
  * external) completes.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const Promises = {
   /** Create a new host promise. */

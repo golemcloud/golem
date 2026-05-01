@@ -1,3 +1,6 @@
+/**
+ * @since 0.1.0
+ */
 import { Effect, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
@@ -6,19 +9,39 @@ import { Uint8ArraySchema } from "./wit-types.js"
 
 // ---------- Wire-shape schemas (composable in component-model records) ----------
 
-/** Schema for `golem:core/types@1.5.0`.TextType. */
+/**
+ * Schema for `golem:core/types@1.5.0`.TextType.
+ *
+ * @since 0.1.0
+ * @category codecs
+ */
 export const TextType = Schema.Struct({ languageCode: Schema.String })
 
-/** Schema for `golem:core/types@1.5.0`.BinaryType. */
+/**
+ * Schema for `golem:core/types@1.5.0`.BinaryType.
+ *
+ * @since 0.1.0
+ * @category codecs
+ */
 export const BinaryType = Schema.Struct({ mimeType: Schema.String })
 
-/** Schema for `golem:core/types@1.5.0`.TextSource. */
+/**
+ * Schema for `golem:core/types@1.5.0`.TextSource.
+ *
+ * @since 0.1.0
+ * @category codecs
+ */
 export const TextSource = Schema.Struct({
   data: Schema.String,
   textType: Schema.optionalKey(TextType),
 })
 
-/** Schema for `golem:core/types@1.5.0`.BinarySource. */
+/**
+ * Schema for `golem:core/types@1.5.0`.BinarySource.
+ *
+ * @since 0.1.0
+ * @category codecs
+ */
 export const BinarySource = Schema.Struct({
   data: Uint8ArraySchema,
   binaryType: BinaryType,
@@ -28,6 +51,9 @@ export const BinarySource = Schema.Struct({
  * Schema for `golem:core/types@1.5.0`.TextReference — `url` (a plain
  * string URL) or `inline` (a `TextSource` carrying the data and an
  * optional `TextType` hint).
+ *
+ * @since 0.1.0
+ * @category codecs
  */
 export const TextReference = Schema.Union([
   Schema.Struct({ _tag: Schema.Literal("url"), val: Schema.String }),
@@ -36,6 +62,9 @@ export const TextReference = Schema.Union([
 
 /**
  * Schema for `golem:core/types@1.5.0`.BinaryReference — `url` or `inline`.
+ *
+ * @since 0.1.0
+ * @category codecs
  */
 export const BinaryReference = Schema.Union([
   Schema.Struct({ _tag: Schema.Literal("url"), val: Schema.String }),
@@ -48,10 +77,18 @@ export const BinaryReference = Schema.Union([
  * Domain-side shape of a `TextReference` (`Schema.TaggedUnion`-style).
  * The wire shape is the same — `Schema.Union` returns the same encoded
  * JS shape.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type TextReferenceValue = typeof TextReference.Type
 
-/** Domain-side shape of a `BinaryReference`. */
+/**
+ * Domain-side shape of a `BinaryReference`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type BinaryReferenceValue = typeof BinaryReference.Type
 
 /**
@@ -67,13 +104,21 @@ export type BinaryReferenceValue = typeof BinaryReference.Type
  * layer, so allowing them inside `Schema.Struct` etc. would be a
  * category error. Embed `TextReference` / `BinaryReference` schemas
  * instead when you need that.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface ElementSpec<T> {
   readonly _effectGolem: "ElementSpec"
   readonly element: ElementCodec<T>
 }
 
-/** Type-guard for `ElementSpec` carriers. */
+/**
+ * Type-guard for `ElementSpec` carriers.
+ *
+ * @since 0.1.0
+ * @category guards
+ */
 export const isElementSpec = (x: unknown): x is ElementSpec<unknown> =>
   typeof x === "object" &&
   x !== null &&
@@ -99,12 +144,22 @@ const passthroughReference = <V>(
 
 // ---------- Public factories ----------
 
-/** Restriction descriptor accepted by `UnstructuredText()`. */
+/**
+ * Restriction descriptor accepted by `UnstructuredText()`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface TextRestriction {
   readonly languageCode: string
 }
 
-/** Restriction descriptor accepted by `UnstructuredBinary()`. */
+/**
+ * Restriction descriptor accepted by `UnstructuredBinary()`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface BinaryRestriction {
   readonly mimeType: string
 }
@@ -115,6 +170,9 @@ export interface BinaryRestriction {
  * The parameter value at the user side is a `TextReferenceValue` (`url`
  * or `inline`). Restrictions, if provided, surface in the emitted
  * `ElementSchema`'s `restrictions` field.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const UnstructuredText = (opts?: {
   readonly restrictions?: ReadonlyArray<TextRestriction>
@@ -141,6 +199,9 @@ export const UnstructuredText = (opts?: {
 
 /**
  * Element spec for an unstructured binary input parameter.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const UnstructuredBinary = (opts?: {
   readonly restrictions?: ReadonlyArray<BinaryRestriction>

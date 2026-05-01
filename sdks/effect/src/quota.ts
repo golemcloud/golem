@@ -1,8 +1,3 @@
-import { Cause, Effect, Exit, Schema, SchemaGetter, Scope } from "effect"
-import * as QuotaHost from "golem:quota/types@1.5.0"
-import { QuotaClient } from "./host/QuotaClient.js"
-import { Int64, Uint32, Uint64 } from "./wit-types.js"
-
 /**
  * Effect-idiomatic façade over `golem:quota/types@1.5.0`.
  *
@@ -12,7 +7,7 @@ import { Int64, Uint32, Uint64 } from "./wit-types.js"
  * interaction as an Effect with typed failures and uses Effect's
  * `Scope` to make reservation lifetimes leak-safe by construction.
  *
- * Authoring model:
+ * **Example**
  *
  * ```ts
  * import { Quota } from "effect-golem"
@@ -43,7 +38,13 @@ import { Int64, Uint32, Uint64 } from "./wit-types.js"
  * The Schema codec for `QuotaToken` (and `QuotaTokenRecord`) keeps
  * working unchanged — passing a token across an RPC boundary continues
  * to use `toRecord` / `fromRecord` under the hood.
+ *
+ * @since 0.1.0
  */
+import { Cause, Effect, Exit, Schema, SchemaGetter, Scope } from "effect"
+import * as QuotaHost from "golem:quota/types@1.5.0"
+import { QuotaClient } from "./host/QuotaClient.js"
+import { Int64, Uint32, Uint64 } from "./wit-types.js"
 
 // ---------------------------------------------------------------------------
 // Re-exported runtime handle types
@@ -60,6 +61,9 @@ import { Int64, Uint32, Uint64 } from "./wit-types.js"
  * different namespaces. TypeScript merges the two: `QuotaToken` in a
  * type position refers to the host class instance; `QuotaToken` in a
  * value position refers to the schema codec.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type QuotaToken = QuotaHost.QuotaToken
 
@@ -68,13 +72,25 @@ export type QuotaToken = QuotaHost.QuotaToken
  * and given to the body of {@link withReservation}; commit usage with
  * {@link commit}, or let the surrounding `Scope` close (drop ≡
  * `commit(0)` per the WIT contract).
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface Reservation {
   readonly [ReservationTypeId]: typeof ReservationTypeId
 }
 
-/** Brand symbol identifying SDK-owned reservations. */
+/**
+ * Brand symbol identifying SDK-owned reservations.
+ *
+ * @since 0.1.0
+ * @category symbols
+ */
 export const ReservationTypeId: unique symbol = Symbol.for("@effect-golem/quota/Reservation")
+/**
+ * @since 0.1.0
+ * @category symbols
+ */
 export type ReservationTypeId = typeof ReservationTypeId
 
 interface ReservationImpl extends Reservation {
@@ -99,9 +115,14 @@ const makeReservation = (raw: QuotaHost.Reservation): ReservationImpl => ({
  * resource's enforcement policy is `reject`. Mirrors WIT
  * `failed-reservation`.
  *
+ * **Details**
+ *
  * `estimatedWaitNanos` is set only when the host can estimate how long
  * the caller would need to wait for capacity (rate-limited resources);
  * `undefined` for `reject` enforcement on quota-based resources.
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class FailedReservationError {
   readonly _tag = "FailedReservationError"
@@ -133,6 +154,9 @@ export class FailedReservationError {
  * dropping a reservation that the host has already invalidated,
  * committing twice, calling `split` / `merge` with arguments that the
  * host rejects with a panic.
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class QuotaHostError {
   readonly _tag = "QuotaHostError"
@@ -152,18 +176,31 @@ export class QuotaHostError {
 /**
  * Schema for `golem:core/types@1.5.0`.Uuid — a 128-bit value carried as
  * two 64-bit halves.
+ *
+ * @since 0.1.0
+ * @category codecs
  */
 export const Uuid = Schema.Struct({
   highBits: Uint64,
   lowBits: Uint64,
 })
 
-/** Schema for `golem:api/host@1.5.0`.EnvironmentId. */
+/**
+ * Schema for `golem:api/host@1.5.0`.EnvironmentId.
+ *
+ * @since 0.1.0
+ * @category codecs
+ */
 export const EnvironmentId = Schema.Struct({
   uuid: Uuid,
 })
 
-/** Schema for `wasi:clocks/wall-clock@0.2.3`.Datetime. */
+/**
+ * Schema for `wasi:clocks/wall-clock@0.2.3`.Datetime.
+ *
+ * @since 0.1.0
+ * @category codecs
+ */
 export const Datetime = Schema.Struct({
   seconds: Int64,
   nanoseconds: Uint32,
@@ -172,6 +209,9 @@ export const Datetime = Schema.Struct({
 /**
  * Schema for the wire shape of a `QuotaToken` — the record returned by
  * `QuotaToken.toRecord()` and accepted by `QuotaToken.fromRecord()`.
+ *
+ * @since 0.1.0
+ * @category codecs
  */
 export const QuotaTokenRecord = Schema.Struct({
   environmentId: EnvironmentId,
@@ -186,8 +226,13 @@ export const QuotaTokenRecord = Schema.Struct({
  * runtime `QuotaToken` instance; the `Encoded` form is `QuotaTokenRecord`,
  * which the codec then maps onto the corresponding WIT record.
  *
+ * **Details**
+ *
  * Bridging is done by `QuotaToken.fromRecord` / `QuotaToken.toRecord` —
  * the official host class invariants are preserved end-to-end.
+ *
+ * @since 0.1.0
+ * @category codecs
  */
 export const QuotaToken: Schema.Codec<
   QuotaHost.QuotaToken,
@@ -224,10 +269,15 @@ const isFailedReservation = (e: unknown): e is QuotaHost.FailedReservation =>
  * Acquire a quota token for the given resource. Mirrors the reference
  * SDKs' `acquireQuotaToken(name, expectedUse)`.
  *
+ * **Details**
+ *
  * - `resourceName` must match a key declared in the agent's manifest
  *   `resourceDefaults`.
  * - `expectedUse` is the typical units per reservation; the host uses
  *   it to derive credit rate / max-credit for fair scheduling.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const acquireQuotaToken = (
   resourceName: string,
@@ -247,9 +297,14 @@ export const acquireQuotaToken = (
  * closing the scope without an explicit {@link commit} is equivalent
  * to `commit(0)` (per the WIT contract).
  *
+ * **Details**
+ *
  * Fails with {@link FailedReservationError} when the resource's
  * enforcement policy is `reject` (`throttle` / `terminate` policies are
  * handled inside the host before `reserve` returns).
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const reserve = (
   token: QuotaToken,
@@ -287,6 +342,8 @@ export const reserve = (
 /**
  * Commit actual usage. Mirrors WIT `reservation.commit(used)`:
  *
+ * **Details**
+ *
  * - `used < reserved` → unused capacity is returned to the pool.
  * - `used > reserved` → the excess is deducted from the token's
  *    remaining allocation as "debt".
@@ -294,6 +351,9 @@ export const reserve = (
  * Calling `commit` twice on the same reservation fails with
  * {@link QuotaHostError}. Calling it once consumes the reservation; the
  * surrounding scope's finalizer becomes a no-op.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const commit = (
   reservation: Reservation,
@@ -322,6 +382,9 @@ export const commit = (
  * divided proportionally. The host TRAPS if `childExpectedUse` exceeds
  * the parent's current `expectedUse` — that surfaces as a
  * {@link QuotaHostError}.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const split = (
   token: QuotaToken,
@@ -340,6 +403,9 @@ export const split = (
  * refer to different resources — that surfaces as a
  * {@link QuotaHostError}. After a successful merge, `other` is
  * consumed and must not be used again.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const merge = (
   token: QuotaToken,
@@ -360,11 +426,14 @@ export const merge = (
  * reservation falls back to `commit(0)` via the surrounding scope
  * finalizer.
  *
+ * **Details**
+ *
  * The body must return `{ used, value }`. The `used` field is the
  * actual consumption to commit (typically derived from the body's
  * result); `value` is the value `withReservation` resolves to.
  *
- * @example
+ * **Example**
+ *
  * ```ts
  * const result = yield* Quota.withReservation(token, 4000n, (_r) =>
  *   Effect.gen(function* () {
@@ -373,6 +442,9 @@ export const merge = (
  *   }),
  * )
  * ```
+ *
+ * @since 0.1.0
+ * @category combinators
  */
 export const withReservation = <A, E, R>(
   token: QuotaToken,
@@ -399,6 +471,10 @@ export const withReservation = <A, E, R>(
 // the Effect-typed wrappers above instead).
 // ---------------------------------------------------------------------------
 
+/**
+ * @since 0.1.0
+ * @category re-exports
+ */
 export type {
   FailedReservation,
   QuotaTokenRecord as RawQuotaTokenRecord,

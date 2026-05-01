@@ -1,3 +1,6 @@
+/**
+ * @since 0.1.0
+ */
 import { Effect, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
@@ -21,6 +24,9 @@ import type { WitCodec } from "./wit-codec.js"
  * Keeping the codec narrow at this layer means the rest of the SDK
  * (method/agent/client) speaks a single uniform shape per parameter slot
  * regardless of which element kind it is.
+ *
+ * @since 0.1.0
+ * @category codecs
  */
 export interface ElementCodec<T> {
   /** The schema as it appears inside a `DataSchema.tuple` / `DataSchema.multimodal`. */
@@ -37,6 +43,9 @@ export interface ElementCodec<T> {
  * Raised by `ElementCodec.decode` when the incoming `ElementValue.tag`
  * doesn't match what the codec expects (e.g. a `component-model` codec
  * receives an `unstructured-text` value).
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class ElementValueKindError {
   readonly _tag = "ElementValueKindError"
@@ -50,6 +59,9 @@ export class ElementValueKindError {
 /**
  * Lift a `WitCodec<S>` to the `ElementCodec<S["Type"]>` that wraps the
  * underlying `WitValue` in `{ tag: "component-model", val: ... }`.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const componentModelElement = <S extends Schema.Top>(
   witCodec: WitCodec<S>,

@@ -28,6 +28,8 @@ import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./wit-codec.j
  * (via `wasi:cli/environment` / `golem:agent/host.parse-agent-id`),
  * runs the constructor with those parameters, then applies the
  * snapshot.
+ *
+ * @since 0.1.0
  */
 
 // ---------------------------------------------------------------------------
@@ -38,6 +40,9 @@ import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./wit-codec.j
  * Snapshotting policy mirroring the WIT
  * `golem:agent/common.snapshotting-config` variant. `manual` is an
  * alias for `default` (the official TS SDK names it that way).
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type SnapshotPolicy =
   | { readonly _tag: "Default" }
@@ -51,7 +56,13 @@ const policyPeriodic = (duration: Duration.Input): SnapshotPolicy => ({
 })
 const policyEveryN = (n: number): SnapshotPolicy => ({ _tag: "EveryN", n })
 
-/** Namespace of policy constructors used inside `Snapshot.define` / `Snapshot.custom`. */
+/**
+ * Namespace of policy constructors used inside `Snapshot.define` /
+ * `Snapshot.custom`.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const policy = {
   /** Host-default snapshotting cadence. */
   default: policyDefault,
@@ -109,7 +120,13 @@ const policyToWit = (
 // Typed errors
 // ---------------------------------------------------------------------------
 
-/** Surfaced from `registerAgent` for malformed `Snapshot.define`/`Snapshot.custom` shapes. */
+/**
+ * Surfaced from `registerAgent` for malformed
+ * `Snapshot.define`/`Snapshot.custom` shapes.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class InvalidSnapshotError {
   readonly _tag = "InvalidSnapshotError"
   readonly message: string
@@ -118,7 +135,13 @@ export class InvalidSnapshotError {
   }
 }
 
-/** Raised when an agent declared `snapshot` but `impl` never called `init`/`register`. */
+/**
+ * Raised when an agent declared `snapshot` but `impl` never called
+ * `init`/`register`.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class SnapshotNotBoundError {
   readonly _tag = "SnapshotNotBoundError"
   readonly message: string
@@ -127,7 +150,13 @@ export class SnapshotNotBoundError {
   }
 }
 
-/** Raised when `init`/`register` is called more than once during a single agent lifetime. */
+/**
+ * Raised when `init`/`register` is called more than once during a
+ * single agent lifetime.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class SnapshotAlreadyBoundError {
   readonly _tag = "SnapshotAlreadyBoundError"
   readonly message: string
@@ -136,7 +165,13 @@ export class SnapshotAlreadyBoundError {
   }
 }
 
-/** Raised when `attachDatabase` is called more than once for the same name. */
+/**
+ * Raised when `attachDatabase` is called more than once for the same
+ * name.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class SnapshotDatabaseDuplicateAttachError {
   readonly _tag = "SnapshotDatabaseDuplicateAttachError"
   readonly message: string
@@ -152,6 +187,9 @@ export class SnapshotDatabaseDuplicateAttachError {
  * Raised when, at save or load time, a declared database name has no
  * corresponding `attachDatabase` call (save) or no corresponding part
  * in the loaded envelope (load).
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class SnapshotDatabaseMissingPartError {
   readonly _tag = "SnapshotDatabaseMissingPartError"
@@ -172,6 +210,9 @@ export class SnapshotDatabaseMissingPartError {
  * Raised at load time when a snapshot envelope contains a `db:<name>`
  * part whose `<name>` is not in the agent's declared `databases`
  * tuple.
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class SnapshotDatabaseUnknownPartError {
   readonly _tag = "SnapshotDatabaseUnknownPartError"
@@ -187,6 +228,9 @@ export class SnapshotDatabaseUnknownPartError {
 /**
  * Raised at save time when a declared database has an open transaction
  * (`isAutocommitDatabaseSync` returns false).
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class SnapshotDatabaseNotInAutocommitError {
   readonly _tag = "SnapshotDatabaseNotInAutocommitError"
@@ -202,6 +246,9 @@ export class SnapshotDatabaseNotInAutocommitError {
 /**
  * Raised at save time when a declared database has ATTACHed schemas
  * beyond the default `main`/`temp` (PRAGMA database_list).
+ *
+ * @since 0.1.0
+ * @category errors
  */
 export class SnapshotDatabaseHasAttachmentsError {
   readonly _tag = "SnapshotDatabaseHasAttachmentsError"
@@ -238,6 +285,9 @@ const DB_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
  * `attachDatabase(name, db)` call. When `databases` is non-empty the
  * envelope on the wire becomes `multipart/mixed` with one
  * `application/x-sqlite3` part per declared database.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface AutoSnapshotDef<S extends Schema.Top, DBs extends ReadonlyArray<string> = []> {
   readonly _tag: "AutoSnapshotDef"
@@ -253,13 +303,22 @@ export interface AutoSnapshotDef<S extends Schema.Top, DBs extends ReadonlyArray
  *
  * The user is responsible for serializing/deserializing their own state
  * through the `register({ save, load })` call inside `impl`.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface CustomSnapshotDef {
   readonly _tag: "CustomSnapshotDef"
   readonly policy: SnapshotPolicy
 }
 
-/** Either flavour of snapshot definition that may appear on `AgentDefinition.snapshot`. */
+/**
+ * Either flavour of snapshot definition that may appear on
+ * `AgentDefinition.snapshot`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type SnapshotDef = AutoSnapshotDef<Schema.Top, ReadonlyArray<string>> | CustomSnapshotDef
 
 /**
@@ -276,6 +335,9 @@ export type SnapshotDef = AutoSnapshotDef<Schema.Top, ReadonlyArray<string>> | C
  * `load` may also yield from the agent's config `Context.Service`
  * (when one is declared via `defineAgent({ config: ... })`). Auto
  * bindings ignore `R` because they don't run user effects on save.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type SnapshotBinding<S, R = Principal> =
   S extends AutoSnapshotDef<infer Sc, infer DBs>
@@ -284,10 +346,20 @@ export type SnapshotBinding<S, R = Principal> =
       ? CustomSnapshotBinding<R>
       : never
 
-/** Acceptable second argument to `attachDatabase`. */
+/**
+ * Acceptable second argument to `attachDatabase`.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type AttachableDatabase = SqliteClient | DatabaseSync
 
-/** Auto-variant binding: yields a `Ref` initialised by the user. */
+/**
+ * Auto-variant binding: yields a `Ref` initialised by the user.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface AutoSnapshotBinding<S extends Schema.Top, DBs extends ReadonlyArray<string> = []> {
   /**
    * Allocate the snapshotted `Ref.Ref<State>` with the supplied
@@ -317,6 +389,9 @@ export interface AutoSnapshotBinding<S extends Schema.Top, DBs extends ReadonlyA
  * dispatcher specialises this to `Principal | CfgTagOf<F>` when the
  * surrounding agent declares a `config:` field, so user save/load
  * effects can also yield from that config `Context.Service`.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface CustomSnapshotBinding<R = Principal> {
   /**
@@ -343,6 +418,9 @@ export interface CustomSnapshotBinding<R = Principal> {
  * Any service NOT in this `R` (a user-defined service unknown to the
  * dispatcher) must be supplied by the user with `Effect.provideService` /
  * `Effect.provide` BEFORE the effect reaches `register({...})`.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface CustomSnapshotHandlers<R = Principal> {
   readonly save: Effect.Effect<Uint8Array, unknown, R>
@@ -368,6 +446,9 @@ export interface CustomSnapshotHandlers<R = Principal> {
  * `snap.attachDatabase(name, db)` before `impl` returns. The set of
  * accepted names is reflected at compile time in the binding's
  * `attachDatabase` first argument.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const define = <S extends Schema.Top, const DBs extends ReadonlyArray<string> = []>(spec: {
   readonly schema: S
@@ -391,6 +472,9 @@ export const define = <S extends Schema.Top, const DBs extends ReadonlyArray<str
  * User-managed snapshot definition: the user provides per-instance
  * `save`/`load` effects from inside `impl` via the
  * {@link CustomSnapshotBinding} that the dispatcher passes in.
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const custom = (spec: { readonly policy: SnapshotPolicy }): CustomSnapshotDef => ({
   _tag: "CustomSnapshotDef",
@@ -401,7 +485,12 @@ export const custom = (spec: { readonly policy: SnapshotPolicy }): CustomSnapsho
 // Compiled bundle (consumed by agent.ts)
 // ---------------------------------------------------------------------------
 
-/** Compiled view of the user's snapshot definition. */
+/**
+ * Compiled view of the user's snapshot definition.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type CompiledSnapshot =
   | {
       readonly kind: "auto"
@@ -428,6 +517,9 @@ export type CompiledSnapshot =
  * Compile a {@link SnapshotDef} produced by `Snapshot.define` /
  * `Snapshot.custom`. Walks the schema (auto path), validates the
  * policy, and produces the WIT-side `snapshotting-config`.
+ *
+ * @since 0.1.0
+ * @category metadata
  */
 export const compileSnapshot = (
   agentName: string,
@@ -477,6 +569,9 @@ export const compileSnapshot = (
  * Read by the dispatcher after `impl` returns; carries the actual Ref
  * (auto) or save/load effects (custom) the user bound from inside
  * `impl`.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type BoundSnapshot =
   | {
@@ -504,6 +599,9 @@ export type BoundSnapshot =
  * Dispatcher-internal: a binding object plus a way to read whatever the
  * user bound. The same shape underlies both `init` (auto) and
  * `register` (custom).
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface BindingHandle {
   readonly binding: SnapshotBinding<SnapshotDef>
@@ -516,6 +614,9 @@ export interface BindingHandle {
  * `impl` as its second argument; after `impl` resolves, the dispatcher
  * calls `read()` to capture whatever the user bound (or `null` if
  * nothing was bound — that's a `SnapshotNotBoundError`).
+ *
+ * @since 0.1.0
+ * @category constructors
  */
 export const createBinding = (agentName: string, compiled: CompiledSnapshot): BindingHandle => {
   let bound: BoundSnapshot | null = null

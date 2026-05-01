@@ -1,3 +1,6 @@
+/**
+ * @since 0.1.0
+ */
 import { Context } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 
@@ -9,10 +12,34 @@ import type * as AgentCommon from "golem:agent/common@1.5.0"
  * ambient `golem:agent/common@1.5.0` module directly. (Named
  * `PrincipalValue` to avoid a clash with the {@link Principal} service
  * class below — `yield* Principal` returns a `PrincipalValue`.)
+ *
+ * @since 0.1.0
+ * @category models
  */
 export type PrincipalValue = AgentCommon.Principal
+
+/**
+ * OIDC-authenticated principal variant of {@link PrincipalValue}.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type OidcPrincipal = AgentCommon.OidcPrincipal
+
+/**
+ * Agent-to-agent principal variant of {@link PrincipalValue}.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type AgentPrincipal = AgentCommon.AgentPrincipal
+
+/**
+ * Golem-user principal variant of {@link PrincipalValue}.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export type GolemUserPrincipal = AgentCommon.GolemUserPrincipal
 
 /**
@@ -28,7 +55,13 @@ export type GolemUserPrincipal = AgentCommon.GolemUserPrincipal
  *   may differ from the initialize-time principal, e.g. when other
  *   callers reach a durable agent instance).
  *
- * Usage:
+ * The dispatcher always provides this service before running user code,
+ * so depending on it from inside an agent never leaks into the public
+ * `R` slot of method/constructor signatures. In tests that bypass the
+ * dispatcher you must provide it explicitly with
+ * `Effect.provideService(Principal, …)`.
+ *
+ * **Example**
  *
  * ```ts
  * impl: () =>
@@ -44,11 +77,8 @@ export type GolemUserPrincipal = AgentCommon.GolemUserPrincipal
  *   })
  * ```
  *
- * The dispatcher always provides this service before running user code,
- * so depending on it from inside an agent never leaks into the public
- * `R` slot of method/constructor signatures. In tests that bypass the
- * dispatcher you must provide it explicitly with
- * `Effect.provideService(Principal, …)`.
+ * @since 0.1.0
+ * @category host services
  */
 export class Principal extends Context.Service<Principal, AgentCommon.Principal>()(
   "effect-golem/Principal",

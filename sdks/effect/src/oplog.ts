@@ -16,12 +16,20 @@ import { OplogClient } from "./host/OplogClient.js"
  * Streaming variants (`read`, `search`) drive the host's pager classes
  * via `Stream.unfoldEffect` so callers can pipeline arbitrarily large
  * oplogs without buffering everything in memory.
+ *
+ * @since 0.1.0
  */
 
 // ---------------------------------------------------------------------------
 // Re-exported raw types
 // ---------------------------------------------------------------------------
 
+/**
+ * Re-exported raw WIT types from `golem:api/oplog@1.5.0`.
+ *
+ * @since 0.1.0
+ * @category re-exports
+ */
 export type {
   AgentId,
   ComponentRevision,
@@ -42,7 +50,12 @@ type RawOplogEntry = OplogHost.OplogEntry
 // Errors
 // ---------------------------------------------------------------------------
 
-/** Raised when a `golem:api/oplog@1.5.0` (or oplog-index host call) throws. */
+/**
+ * Raised when a `golem:api/oplog@1.5.0` (or oplog-index host call) throws.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class OplogHostError {
   readonly _tag = "OplogHostError"
   readonly message: string
@@ -55,7 +68,12 @@ export class OplogHostError {
 // Effect-typed host calls
 // ---------------------------------------------------------------------------
 
-/** Read the current position in the persistent oplog. */
+/**
+ * Read the current position in the persistent oplog.
+ *
+ * @since 0.1.0
+ * @category operations
+ */
 export const currentIndex: Effect.Effect<RawOplogIndex, OplogHostError, OplogClient> = Effect.gen(
   function* () {
     const client = yield* OplogClient
@@ -70,6 +88,9 @@ export const currentIndex: Effect.Effect<RawOplogIndex, OplogHostError, OplogCli
  * Imperative time-travel: rewind execution to a previous oplog index.
  * Marked dangerous — most app code should not need this. Mirrors the
  * official SDK's `setOplogIndex`.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const setIndex = (idx: RawOplogIndex): Effect.Effect<void, OplogHostError, OplogClient> =>
   Effect.gen(function* () {
@@ -83,6 +104,9 @@ export const setIndex = (idx: RawOplogIndex): Effect.Effect<void, OplogHostError
 /**
  * Resolve raw oplog entries into the public-shape entries by replaying
  * payload references and attaching component metadata.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const enrich = (input: {
   readonly environmentId: RawEnvironmentId
@@ -112,13 +136,21 @@ export const enrich = (input: {
  * Low-level handle around the host's `GetOplog` pager. Useful when
  * callers want explicit control over batching; otherwise prefer
  * {@link read}.
+ *
+ * @since 0.1.0
+ * @category models
  */
 export interface OplogReader {
   /** Fetch the next chunk of entries, or `undefined` when exhausted. */
   readonly next: Effect.Effect<ReadonlyArray<RawPublicOplogEntry> | undefined, OplogHostError>
 }
 
-/** Construct a `GetOplog` pager. */
+/**
+ * Construct a `GetOplog` pager.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const reader = (input: {
   readonly agentId: RawAgentId
   readonly start: RawOplogIndex
@@ -144,6 +176,9 @@ export const reader = (input: {
  * Stream the agent's oplog starting from `start`. The host's pager
  * yields chunks until exhausted; this effect flattens them into a
  * single stream of entries.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const read = (input: {
   readonly agentId: RawAgentId
@@ -167,7 +202,12 @@ export const read = (input: {
 // Paged search (`SearchOplog`)
 // ---------------------------------------------------------------------------
 
-/** Low-level handle around the host's `SearchOplog` pager. */
+/**
+ * Low-level handle around the host's `SearchOplog` pager.
+ *
+ * @since 0.1.0
+ * @category models
+ */
 export interface OplogSearchReader {
   readonly next: Effect.Effect<
     ReadonlyArray<readonly [RawOplogIndex, RawPublicOplogEntry]> | undefined,
@@ -175,7 +215,12 @@ export interface OplogSearchReader {
   >
 }
 
-/** Construct a `SearchOplog` pager. */
+/**
+ * Construct a `SearchOplog` pager.
+ *
+ * @since 0.1.0
+ * @category constructors
+ */
 export const searchReader = (input: {
   readonly agentId: RawAgentId
   readonly text: string
@@ -204,6 +249,9 @@ export const searchReader = (input: {
 /**
  * Stream the host's full-text search results over the agent's oplog,
  * yielding `(index, entry)` tuples.
+ *
+ * @since 0.1.0
+ * @category operations
  */
 export const search = (input: {
   readonly agentId: RawAgentId

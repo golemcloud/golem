@@ -5,6 +5,9 @@
  * Not part of the public API — sub-modules consume these via relative
  * imports. Kept deliberately small: only the pieces that genuinely
  * repeat across all three RDBMS host bindings live here.
+ *
+ * @internal
+ * @since 0.1.0
  */
 import {
   AuthenticationError,

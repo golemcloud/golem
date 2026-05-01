@@ -1,3 +1,6 @@
+/**
+ * @since 0.1.0
+ */
 import { Effect, HashMap, Option, Result, Schema, SchemaAST, SchemaGetter } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
@@ -23,6 +26,14 @@ type WitValue = CoreTypes.WitValue
 // `Symbol.for(...)` guarantees the same runtime symbol across modules.
 const sdkErrorBrand: unique symbol = Symbol.for("effect-golem/durable-function/sdk-error")
 
+/**
+ * Raised by {@link toWitCodec} (and by registration helpers that compile
+ * a user schema to a `WitType`) when an Effect Schema construct cannot
+ * be represented in the WIT type system.
+ *
+ * @since 0.1.0
+ * @category errors
+ */
 export class UnsupportedSchemaError {
   readonly _tag = "UnsupportedSchemaError"
   readonly [sdkErrorBrand] = true
@@ -51,6 +62,9 @@ interface TransformPair {
  * - `codec`           — `Codec<domainType, WitValue>`, composed via
  *                       Effect-Schema combinators on top of the user's own
  *                       schema, so refinements/transformations are honoured
+ *
+ * @since 0.1.0
+ * @category codecs
  */
 export interface WitCodec<S extends Schema.Top> {
   readonly schema: S
@@ -1020,6 +1034,9 @@ const walk = (
  * into one `Codec<S["Type"], WitValue>`. Refinements / transformations
  * inside the user's schema run as part of the outer codec, so we get
  * validation and good error messages for free.
+ *
+ * @since 0.1.0
+ * @category codecs
  */
 export const toWitCodec = <S extends Schema.Top>(
   schema: S,
