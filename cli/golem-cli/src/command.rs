@@ -1908,7 +1908,8 @@ pub fn help_target_to_command(target: ShowClapHelpTarget) -> Command {
 mod test {
 
     use crate::command::{
-        GolemCliCommand, builtin_exec_subcommands, help_target_to_subcommand_names,
+        GolemCliCommand, GolemCliSubcommand, builtin_exec_subcommands,
+        help_target_to_subcommand_names,
     };
     use crate::error::ShowClapHelpTarget;
     use clap::builder::StyledStr;
@@ -2130,6 +2131,109 @@ mod test {
     #[test]
     fn builtin_app_subcommands_no_panic() {
         println!("{:?}", builtin_exec_subcommands())
+    }
+
+    #[test]
+    fn update_agents_accepts_auto_as_update_mode_alias() {
+        use crate::model::worker::AgentUpdateMode;
+        use clap::Parser;
+
+        let result =
+            GolemCliCommand::try_parse_from(["golem", "update-agents", "--update-mode", "auto"]);
+        assert!(
+            result.is_ok(),
+            "Failed to parse --update-mode auto: {:?}",
+            result.err()
+        );
+        let cmd = result.unwrap();
+        match cmd.subcommand {
+            GolemCliSubcommand::UpdateAgents { update_mode, .. } => {
+                assert_eq!(update_mode, AgentUpdateMode::Automatic);
+            }
+            _ => panic!("Expected UpdateAgents subcommand"),
+        }
+    }
+
+    #[test]
+    fn update_agents_still_accepts_automatic_as_update_mode() {
+        use crate::model::worker::AgentUpdateMode;
+        use clap::Parser;
+
+        let result = GolemCliCommand::try_parse_from([
+            "golem",
+            "update-agents",
+            "--update-mode",
+            "automatic",
+        ]);
+        assert!(
+            result.is_ok(),
+            "Failed to parse --update-mode automatic: {:?}",
+            result.err()
+        );
+        let cmd = result.unwrap();
+        match cmd.subcommand {
+            GolemCliSubcommand::UpdateAgents { update_mode, .. } => {
+                assert_eq!(update_mode, AgentUpdateMode::Automatic);
+            }
+            _ => panic!("Expected UpdateAgents subcommand"),
+        }
+    }
+
+    #[test]
+    fn component_update_agents_accepts_auto_as_update_mode_alias() {
+        use crate::model::worker::AgentUpdateMode;
+        use clap::Parser;
+
+        let result = GolemCliCommand::try_parse_from([
+            "golem",
+            "component",
+            "update-agents",
+            "--update-mode",
+            "auto",
+        ]);
+        assert!(
+            result.is_ok(),
+            "Failed to parse component update-agents --update-mode auto: {:?}",
+            result.err()
+        );
+        let cmd = result.unwrap();
+        match cmd.subcommand {
+            GolemCliSubcommand::Component {
+                subcommand:
+                    crate::command::component::ComponentSubcommand::UpdateAgents { update_mode, .. },
+            } => {
+                assert_eq!(update_mode, AgentUpdateMode::Automatic);
+            }
+            _ => panic!("Expected Component UpdateAgents subcommand"),
+        }
+    }
+
+    #[test]
+    fn agent_update_accepts_auto_as_mode_alias() {
+        use crate::model::worker::AgentUpdateMode;
+        use clap::Parser;
+
+        let result = GolemCliCommand::try_parse_from([
+            "golem",
+            "agent",
+            "update",
+            "SomeAgent(\"x\")",
+            "auto",
+        ]);
+        assert!(
+            result.is_ok(),
+            "Failed to parse agent update <id> auto: {:?}",
+            result.err()
+        );
+        let cmd = result.unwrap();
+        match cmd.subcommand {
+            GolemCliSubcommand::Agent {
+                subcommand: crate::command::worker::AgentSubcommand::Update { mode, .. },
+            } => {
+                assert_eq!(mode, Some(AgentUpdateMode::Automatic));
+            }
+            _ => panic!("Expected Agent Update subcommand"),
+        }
     }
 
     #[test]
