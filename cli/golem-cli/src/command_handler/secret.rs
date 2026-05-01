@@ -345,7 +345,8 @@ mod tests {
     use crate::command::{GolemCliCommand, GolemCliSubcommand};
     use clap::Parser;
     use golem_wasm::analysis::{
-        NameTypePair, TypeBool, TypeF64, TypeList, TypeOption, TypeRecord, TypeS32, TypeStr, TypeU32,
+        NameTypePair, TypeBool, TypeF64, TypeList, TypeOption, TypeRecord, TypeS32, TypeStr,
+        TypeU32,
     };
 
     fn str_type() -> AnalysedType {
@@ -381,19 +382,28 @@ mod tests {
     #[test]
     fn bare_string_accepted_for_str_type() {
         let result = parse_secret_value_to_json("sk-abc123", &str_type(), &lang());
-        assert_eq!(result, Ok(serde_json::Value::String("sk-abc123".to_string())));
+        assert_eq!(
+            result,
+            Ok(serde_json::Value::String("sk-abc123".to_string()))
+        );
     }
 
     #[test]
     fn json_quoted_string_accepted_for_str_type() {
         let result = parse_secret_value_to_json(r#""sk-abc123""#, &str_type(), &lang());
-        assert_eq!(result, Ok(serde_json::Value::String("sk-abc123".to_string())));
+        assert_eq!(
+            result,
+            Ok(serde_json::Value::String("sk-abc123".to_string()))
+        );
     }
 
     #[test]
     fn bare_string_with_spaces_accepted_for_str_type() {
         let result = parse_secret_value_to_json("hello world", &str_type(), &lang());
-        assert_eq!(result, Ok(serde_json::Value::String("hello world".to_string())));
+        assert_eq!(
+            result,
+            Ok(serde_json::Value::String("hello world".to_string()))
+        );
     }
 
     #[test]
@@ -401,7 +411,9 @@ mod tests {
         let result = parse_secret_value_to_json("sk-abc123.endpoint/v2", &str_type(), &lang());
         assert_eq!(
             result,
-            Ok(serde_json::Value::String("sk-abc123.endpoint/v2".to_string()))
+            Ok(serde_json::Value::String(
+                "sk-abc123.endpoint/v2".to_string()
+            ))
         );
     }
 
@@ -421,8 +433,8 @@ mod tests {
 
     #[test]
     fn decimal_accepted_for_f64_type() {
-        let result = parse_secret_value_to_json("3.14", &AnalysedType::F64(TypeF64), &lang());
-        assert_eq!(result, Ok(serde_json::json!(3.14)));
+        let result = parse_secret_value_to_json("3.66", &AnalysedType::F64(TypeF64), &lang());
+        assert_eq!(result, Ok(serde_json::json!(3.66)));
     }
 
     // --- Bool type ---
@@ -498,8 +510,7 @@ mod tests {
 
     #[test]
     fn rust_dialect_none_option_accepted() {
-        let result =
-            parse_secret_value_to_json("None", &option_u32_type(), &SourceLanguage::Rust);
+        let result = parse_secret_value_to_json("None", &option_u32_type(), &SourceLanguage::Rust);
         assert_eq!(result, Ok(serde_json::json!(null)));
     }
 
