@@ -12,7 +12,7 @@ import { Context, Effect, Redacted, Schema, SchemaAST } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import { ConfigClient } from "./host/ConfigClient.js"
-import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./wit-codec.js"
+import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./WitCodec.js"
 
 type WitValue = CoreTypes.WitValue
 

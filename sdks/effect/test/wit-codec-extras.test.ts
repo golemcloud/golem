@@ -1,6 +1,6 @@
 import { describe, it, expect } from "@effect/vitest"
 import { Effect, HashMap, Option, Result, Schema } from "effect"
-import { toWitCodec } from "../src/wit-codec.js"
+import { toWitCodec } from "../src/WitCodec.js"
 import {
   Float32,
   Int8,
@@ -11,7 +11,7 @@ import {
   Uint16,
   Uint32,
   Uint64,
-} from "../src/wit-types.js"
+} from "../src/WitTypes.js"
 
 const roundtrip = <S extends Schema.Codec<any, any, never, never>>(s: S, value: S["Type"]) =>
   Effect.gen(function* () {

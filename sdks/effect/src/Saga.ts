@@ -48,10 +48,10 @@
  */
 
 import { Cause, Context, Effect, Ref, Scope } from "effect"
-import { atomically, DurabilityHostError } from "./durability-mode.js"
+import { atomically, DurabilityHostError } from "./DurabilityMode.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { OplogClient } from "./host/OplogClient.js"
-import { currentIndex, OplogHostError, setIndex } from "./oplog.js"
+import { currentIndex, OplogHostError, setIndex } from "./Oplog.js"
 
 // ---------------------------------------------------------------------------
 // Internal fiber-local references

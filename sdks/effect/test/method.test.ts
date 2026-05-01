@@ -9,9 +9,9 @@ import {
   withDescription,
   withHttp,
   withPromptHint,
-} from "../src/method.js"
-import { get, post } from "../src/http.js"
-import { toWitCodec } from "../src/wit-codec.js"
+} from "../src/Method.js"
+import { get, post } from "../src/Http.js"
+import { toWitCodec } from "../src/WitCodec.js"
 
 const Person = Schema.Struct({
   name: Schema.String,

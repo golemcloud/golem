@@ -1,7 +1,7 @@
 import { describe, it, expect } from "@effect/vitest"
 import { Effect, Result, Schema } from "effect"
-import { toWitCodec, UnsupportedSchemaError } from "../src/wit-codec.js"
-import { Int32, withVariantCaseName } from "../src/wit-types.js"
+import { toWitCodec, UnsupportedSchemaError } from "../src/WitCodec.js"
+import { Int32, withVariantCaseName } from "../src/WitTypes.js"
 
 const compile = (s: Schema.Top) => toWitCodec(s as any)
 
@@ -158,7 +158,7 @@ describe("Schema.Union → WIT variant", () => {
 
   it.effect("rejects unions containing typed arrays (unknown shape)", () =>
     Effect.gen(function* () {
-      const { Uint8ArraySchema } = yield* Effect.promise(() => import("../src/wit-types.js"))
+      const { Uint8ArraySchema } = yield* Effect.promise(() => import("../src/WitTypes.js"))
       const U = Schema.Union([Uint8ArraySchema as any, Schema.String])
       const r = yield* tryCompile(U)
       expect(Result.isFailure(r)).toBe(true)

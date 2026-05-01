@@ -1,9 +1,9 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Option, Redacted, Schema } from "effect"
-import { ConfigError, compileConfig, defineConfig, encodeOverrides } from "../src/config.js"
-import type { CompiledConfig } from "../src/config.js"
+import { ConfigError, compileConfig, defineConfig, encodeOverrides } from "../src/Config.js"
+import type { CompiledConfig } from "../src/Config.js"
 import { ConfigClient } from "../src/host/ConfigClient.js"
-import { toWitCodec } from "../src/wit-codec.js"
+import { toWitCodec } from "../src/WitCodec.js"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 
 type WitType = CoreTypes.WitType

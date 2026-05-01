@@ -12,7 +12,7 @@ import {
   UnknownError,
 } from "effect/unstable/sql/SqlError"
 import { PostgresHostClient } from "../src/host/PostgresHostClient.js"
-import { Pg, PgClient } from "../src/postgres.js"
+import { Pg, PgClient } from "../src/Postgres.js"
 import * as MockPg from "./mocks/golem-rdbms-postgres.js"
 import {
   __getExecuteLog,

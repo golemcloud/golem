@@ -22,8 +22,8 @@
  * `.test.ts`.
  */
 
-import * as Quota from "../src/quota.js"
-import * as Unstructured from "../src/unstructured.js"
+import * as Quota from "../src/Quota.js"
+import * as Unstructured from "../src/Unstructured.js"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import type * as QuotaHost from "golem:quota/types@1.5.0"
 

@@ -6,7 +6,7 @@ import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import type * as AgentHost from "golem:agent/host@1.5.0"
 import { parseUuid, uuidToString } from "golem:core/types@1.5.0"
-import type { AgentDefinition } from "./agent.js"
+import type { AgentDefinition } from "./Agent.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import {
   RpcClient,
@@ -22,14 +22,14 @@ import {
   type MethodParams,
   type MethodSpec,
   type ParamBinding,
-} from "./method.js"
-import { type UnsupportedSchemaError } from "./wit-codec.js"
+} from "./Method.js"
+import { type UnsupportedSchemaError } from "./WitCodec.js"
 import {
   ConfigError,
   encodeOverrides,
   type ConfigFields,
   type NonSecretOverride,
-} from "./config.js"
+} from "./Config.js"
 
 type AnyMethodSpec = MethodSpec<any, any, any>
 

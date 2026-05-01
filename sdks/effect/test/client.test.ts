@@ -1,8 +1,8 @@
 import { describe, expect, it, beforeEach } from "@effect/vitest"
 import { Cause, Effect, Exit, Fiber, Layer, Schema } from "effect"
-import { defineAgent } from "../src/agent.js"
-import { method } from "../src/method.js"
-import { defineConfig } from "../src/config.js"
+import { defineAgent } from "../src/Agent.js"
+import { method } from "../src/Method.js"
+import { defineConfig } from "../src/Config.js"
 import { DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import * as RpcFake from "./host/RpcFake.js"
 import { __resetIdempotency } from "./mocks/golem-api-host.js"
@@ -37,14 +37,14 @@ const Worker = defineAgent({
 
 const decodeWv = <S extends Schema.Top>(s: S, wv: any): Effect.Effect<S["Type"], unknown> =>
   Effect.gen(function* () {
-    const { toWitCodec } = yield* Effect.promise(() => import("../src/wit-codec.js"))
+    const { toWitCodec } = yield* Effect.promise(() => import("../src/WitCodec.js"))
     const codec = yield* toWitCodec(s)
     return yield* Schema.decodeEffect(codec.codec)(wv) as Effect.Effect<S["Type"], unknown, never>
   })
 
 const encodeWv = <S extends Schema.Top>(s: S, value: S["Type"]): Effect.Effect<any, unknown> =>
   Effect.gen(function* () {
-    const { toWitCodec } = yield* Effect.promise(() => import("../src/wit-codec.js"))
+    const { toWitCodec } = yield* Effect.promise(() => import("../src/WitCodec.js"))
     const codec = yield* toWitCodec(s)
     return yield* Schema.encodeEffect(codec.codec)(value) as Effect.Effect<any, unknown, never>
   })

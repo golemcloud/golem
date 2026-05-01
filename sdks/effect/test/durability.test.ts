@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Effect, Exit, Layer } from "effect"
-import * as Durability from "../src/durability.js"
+import * as Durability from "../src/Durability.js"
 import { DurabilityModeClient, DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 

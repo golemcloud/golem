@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Effect, Exit, Layer, Tracer } from "effect"
 import { TracingHost, TracingHostLive } from "../src/host/TracingHost.js"
-import * as Tracing from "../src/tracing.js"
+import * as Tracing from "../src/Tracing.js"
 import * as ContextMock from "./mocks/golem-api-context.js"
 
 beforeEach(() => {

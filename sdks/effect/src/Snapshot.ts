@@ -1,9 +1,9 @@
 import { Duration, Effect, Ref, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type { DatabaseSync } from "node:sqlite"
-import type { Principal } from "./principal.js"
-import { __getUnderlyingDatabase, isSqliteClient, type SqliteClient } from "./sqlite.js"
-import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./wit-codec.js"
+import type { Principal } from "./Principal.js"
+import { __getUnderlyingDatabase, isSqliteClient, type SqliteClient } from "./Sqlite.js"
+import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./WitCodec.js"
 
 /**
  * Per-agent snapshotting configuration.

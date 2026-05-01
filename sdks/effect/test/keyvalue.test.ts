@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Option, Schema } from "effect"
 import type * as Scope from "effect/Scope"
-import * as KeyValue from "../src/keyvalue.js"
+import * as KeyValue from "../src/KeyValue.js"
 import { KeyValueClient } from "../src/host/KeyValueClient.js"
 import * as KvFake from "./host/KeyValueFake.js"
 

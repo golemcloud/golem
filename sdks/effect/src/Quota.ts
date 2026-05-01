@@ -44,7 +44,7 @@
 import { Cause, Effect, Exit, Schema, SchemaGetter, Scope } from "effect"
 import * as QuotaHost from "golem:quota/types@1.5.0"
 import { QuotaClient } from "./host/QuotaClient.js"
-import { Int64, Uint32, Uint64 } from "./wit-types.js"
+import { Int64, Uint32, Uint64 } from "./WitTypes.js"
 
 // ---------------------------------------------------------------------------
 // Re-exported runtime handle types

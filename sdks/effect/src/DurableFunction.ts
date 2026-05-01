@@ -66,10 +66,10 @@ import {
   PersistenceLevel,
   withPersistenceLevel,
   type PersistenceLevelValue,
-} from "./durability-mode.js"
+} from "./DurabilityMode.js"
 import { DurabilityClient } from "./host/DurabilityClient.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
-import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./wit-codec.js"
+import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./WitCodec.js"
 
 /**
  * Nominal brand attached to every SDK-internal error class produced by
@@ -112,7 +112,7 @@ export type DurableExecutionState = DurabilityHost.DurableExecutionState
  */
 export type PersistedDurableFunctionInvocation = DurabilityHost.PersistedDurableFunctionInvocation
 
-// `OplogIndex` is also exported from `./durability-mode.js` (the
+// `OplogIndex` is also exported from `./DurabilityMode.js` (the
 // `golem:api/host@1.5.0` re-export); the two are structurally
 // identical so the consumer-facing barrel keeps one canonical export.
 type OplogIndex = DurabilityHost.OplogIndex

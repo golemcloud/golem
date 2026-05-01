@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Layer, Exit, Fiber, Stream } from "effect"
-import * as Agents from "../src/agents.js"
+import * as Agents from "../src/Agents.js"
 import { AgentHostClient, AgentHostLive } from "../src/host/AgentHostClient.js"
 import { PromiseLive } from "../src/host/PromiseClient.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"

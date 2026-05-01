@@ -1,7 +1,7 @@
 import { Cause, Context, Effect, Exit, Layer, Option, Tracer, type Scope } from "effect"
 import type * as ContextHost from "golem:api/context@1.5.0"
 import { TracingHost, type TracingHostShape } from "./host/TracingHost.js"
-import { safeStringify } from "./logging.js"
+import { safeStringify } from "./Logging.js"
 
 /**
  * Effect-idiomatic façade over `golem:api/context@1.5.0`.

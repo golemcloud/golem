@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Exit, Layer, Result, Schema } from "effect"
-import * as Durability from "../src/durability.js"
-import { WrapSemaphore, WrapSemaphoreLive } from "../src/durable-function.js"
+import * as Durability from "../src/Durability.js"
+import { WrapSemaphore, WrapSemaphoreLive } from "../src/DurableFunction.js"
 import { DurabilityClient, DurabilityLive } from "../src/host/DurabilityClient.js"
 import { DurabilityModeClient, DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
-import { toWitCodec } from "../src/wit-codec.js"
+import { toWitCodec } from "../src/WitCodec.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 import * as DurabilityMock from "./mocks/golem-durability.js"
 

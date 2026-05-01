@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
-import { toWitCodec } from "../src/wit-codec.js"
-import { Char } from "../src/wit-types.js"
+import { toWitCodec } from "../src/WitCodec.js"
+import { Char } from "../src/WitTypes.js"
 
 const roundtrip = (s: Schema.Top, v: unknown) =>
   Effect.gen(function* () {

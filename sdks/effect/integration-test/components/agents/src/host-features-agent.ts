@@ -150,7 +150,7 @@ export const HostFeatures = defineAgent({
 
         readOplog: ({ count }) =>
           Effect.gen(function* () {
-            const self = yield* SelfAgentId
+            const self = yield* SelfAgentId.SelfAgentId
             const tags = yield* Stream.runCollect(
               Oplog.read({ agentId: self, start: 0n }).pipe(
                 Stream.map((entry) => entry.tag),
@@ -162,7 +162,7 @@ export const HostFeatures = defineAgent({
 
         searchOplog: ({ query, count }) =>
           Effect.gen(function* () {
-            const self = yield* SelfAgentId
+            const self = yield* SelfAgentId.SelfAgentId
             const tags = yield* Stream.runCollect(
               Oplog.search({ agentId: self, text: query }).pipe(
                 Stream.map(([, entry]) => entry.tag),

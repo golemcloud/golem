@@ -1,11 +1,11 @@
 import { describe, expect, it, beforeEach } from "@effect/vitest"
 import { Effect, Fiber, Redacted, Ref, Schema } from "effect"
-import { defineAgent, __resetAgents } from "../src/agent.js"
-import { method } from "../src/method.js"
-import { guest } from "../src/exports.js"
-import { Principal, type PrincipalValue } from "../src/principal.js"
-import { toWitCodec } from "../src/wit-codec.js"
-import { defineConfig } from "../src/config.js"
+import { defineAgent, __resetAgents } from "../src/Agent.js"
+import { method } from "../src/Method.js"
+import { guest } from "../src/Exports.js"
+import { Principal, type PrincipalValue } from "../src/Principal.js"
+import { toWitCodec } from "../src/WitCodec.js"
+import { defineConfig } from "../src/Config.js"
 import {
   __resetGetConfigValueImpl as __resetGetConfigValueForTest,
   __setGetConfigValueImpl as __setGetConfigValueForTest,

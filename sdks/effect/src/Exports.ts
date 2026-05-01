@@ -11,7 +11,7 @@ import {
   dispatchInvoke,
   dispatchLoadSnapshot,
   dispatchSaveSnapshot,
-} from "./agent.js"
+} from "./Agent.js"
 
 /**
  * Shape of the `golem:agent/guest@1.5.0` interface that the base WASM

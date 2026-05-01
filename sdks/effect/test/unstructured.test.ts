@@ -1,12 +1,12 @@
 import { describe, it, expect } from "@effect/vitest"
 import { Effect, Schema } from "effect"
-import { compileMethodSpec, invokeDataValue, method } from "../src/method.js"
+import { compileMethodSpec, invokeDataValue, method } from "../src/Method.js"
 import {
   UnstructuredBinary,
   UnstructuredText,
   type BinaryReferenceValue,
   type TextReferenceValue,
-} from "../src/unstructured.js"
+} from "../src/Unstructured.js"
 
 describe("UnstructuredText element", () => {
   it.effect("emits an unstructured-text element schema and round-trips inline text", () =>

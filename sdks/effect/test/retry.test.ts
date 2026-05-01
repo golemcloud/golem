@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Duration, Effect, Exit, Layer } from "effect"
 import { RetryClient } from "../src/host/RetryClient.js"
-import * as Retry from "../src/retry.js"
+import * as Retry from "../src/Retry.js"
 import * as RetryMock from "./mocks/golem-api-retry.js"
 
 beforeEach(() => {

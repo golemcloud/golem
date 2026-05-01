@@ -69,8 +69,8 @@
  */
 
 import { Effect, Schema } from "effect"
-import { AgentsHostError, Promises } from "./agents.js"
-import type { PromiseId } from "./agents.js"
+import { AgentsHostError, Promises } from "./Agents.js"
+import type { PromiseId } from "./Agents.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { PromiseClient } from "./host/PromiseClient.js"
 

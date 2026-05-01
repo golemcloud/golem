@@ -4,15 +4,15 @@
 import { Effect, Pipeable, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
-import { componentModelElement, ElementValueKindError, type ElementCodec } from "./element.js"
+import { componentModelElement, ElementValueKindError, type ElementCodec } from "./Element.js"
 import type { HostServices } from "./host/HostLive.js"
-import type { EndpointDef } from "./http.js"
-import { isMultimodal, type Multimodal, type MultimodalShape } from "./multimodal.js"
-import { withPipe } from "./pipeable.js"
-import { Principal } from "./principal.js"
-import { SelfAgentId } from "./self-agent-id.js"
-import { isElementSpec, type ElementSpec } from "./unstructured.js"
-import { toWitCodec, type UnsupportedSchemaError, type WitCodec } from "./wit-codec.js"
+import type { EndpointDef } from "./Http.js"
+import { isMultimodal, type Multimodal, type MultimodalShape } from "./Multimodal.js"
+import { withPipe } from "./Pipeable.js"
+import { Principal } from "./Principal.js"
+import { SelfAgentId } from "./SelfAgentId.js"
+import { isElementSpec, type ElementSpec } from "./Unstructured.js"
+import { toWitCodec, type UnsupportedSchemaError, type WitCodec } from "./WitCodec.js"
 
 /**
  * A method/constructor parameter is either an ordinary `Schema.Top` (which
@@ -41,7 +41,7 @@ export type MethodParams = Readonly<Record<string, MethodParam>>
  */
 export type ParamInputType<P extends MethodParam> =
   P extends Multimodal<infer S>
-    ? import("./multimodal.js").MultimodalValue<S>
+    ? import("./Multimodal.js").MultimodalValue<S>
     : P extends ElementSpec<infer T>
       ? T
       : P extends Schema.Top
@@ -401,7 +401,7 @@ export type ParamBinding =
         readonly encode: (value: any) => Effect.Effect<CoreTypes.DataValue, Schema.SchemaError>
         readonly decode: (
           dv: CoreTypes.DataValue,
-        ) => Effect.Effect<any, Schema.SchemaError | import("./element.js").ElementValueKindError>
+        ) => Effect.Effect<any, Schema.SchemaError | import("./Element.js").ElementValueKindError>
       }
       /**
        * Element shim used by legacy `wireBindings` traversals — the real

@@ -12,7 +12,7 @@
  *
  * Resource handles are *not* exposed; the service surface is purely
  * by-value (records of `Effect`-returning methods). The public
- * {@link import("../keyvalue.js").Bucket} type wraps a
+ * {@link import("../KeyValue.js").Bucket} type wraps a
  * {@link HostBucket} returned from `openBucket` and adds the
  * `BucketTypeId` stamp + the schema-typed `forSchema` view.
  *
@@ -20,7 +20,7 @@
  */
 import { Context, Effect, Layer, Option } from "effect"
 import type * as Scope from "effect/Scope"
-import { KeyValueHostError } from "../keyvalue.js"
+import { KeyValueHostError } from "../KeyValue.js"
 import * as KvBatch from "wasi:keyvalue/eventual-batch@0.1.0"
 import * as KvEventual from "wasi:keyvalue/eventual@0.1.0"
 import * as KvTypes from "wasi:keyvalue/types@0.1.0"

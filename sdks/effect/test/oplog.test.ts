@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Effect, Exit, Layer, Stream } from "effect"
 import { OplogClient, OplogLive } from "../src/host/OplogClient.js"
-import * as Oplog from "../src/oplog.js"
+import * as Oplog from "../src/Oplog.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 import * as OplogMock from "./mocks/golem-api-oplog.js"
 

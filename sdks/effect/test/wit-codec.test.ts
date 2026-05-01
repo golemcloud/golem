@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
-import { toWitCodec } from "../src/wit-codec.js"
+import { toWitCodec } from "../src/WitCodec.js"
 
 const Person = Schema.Struct({
   name: Schema.String,

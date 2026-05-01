@@ -26,12 +26,12 @@
  */
 import { Cause, Effect, Scope } from "effect"
 import type * as ApiHost from "golem:api/host@1.5.0"
-import { revertAgent, RevertTarget, type AgentsHostError } from "./agents.js"
+import { revertAgent, RevertTarget, type AgentsHostError } from "./Agents.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
-import { currentIndex, type OplogHostError } from "./oplog.js"
+import { currentIndex, type OplogHostError } from "./Oplog.js"
 import { OplogClient } from "./host/OplogClient.js"
-import { SelfAgentId } from "./self-agent-id.js"
+import { SelfAgentId } from "./SelfAgentId.js"
 
 // ---------------------------------------------------------------------------
 // Re-exported raw types

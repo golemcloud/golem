@@ -22,9 +22,9 @@
  * @since 0.1.0
  * @category re-exports
  */
-export * from "./durability-mode.js"
+export * from "./DurabilityMode.js"
 /**
  * @since 0.1.0
  * @category re-exports
  */
-export * from "./durable-function.js"
+export * from "./DurableFunction.js"

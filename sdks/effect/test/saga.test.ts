@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Exit, Fiber, Layer } from "effect"
 import { DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import { OplogLive } from "../src/host/OplogClient.js"
-import * as Saga from "../src/saga.js"
+import * as Saga from "../src/Saga.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 
 const hostLayer = Layer.mergeAll(OplogLive, DurabilityModeLive)

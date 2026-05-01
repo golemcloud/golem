@@ -4,7 +4,7 @@
 import { Effect, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
-import type { WitCodec } from "./wit-codec.js"
+import type { WitCodec } from "./WitCodec.js"
 
 /**
  * `ElementCodec<T>` is the boundary between an Effect Schema-driven user

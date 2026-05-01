@@ -102,7 +102,7 @@ export const Counter = defineAgent({
     Effect.gen(function* () {
       yield* Effect.logInfo("Counter constructed").pipe(Effect.annotateLogs({ counter: name }))
       const state = yield* snap.init({ count: 0 })
-      const ownerPrincipal = yield* Principal
+      const ownerPrincipal = yield* Principal.Principal
       const ownerTag =
         ownerPrincipal.tag === "oidc" ? `oidc:${ownerPrincipal.val.sub}` : ownerPrincipal.tag
       return {
@@ -129,7 +129,7 @@ export const Counter = defineAgent({
         owner: () => Effect.succeed(ownerTag),
         caller: () =>
           Effect.gen(function* () {
-            const p = yield* Principal
+            const p = yield* Principal.Principal
             return p.tag === "oidc" ? `oidc:${p.val.sub}` : p.tag
           }),
         currentGreeting: () =>

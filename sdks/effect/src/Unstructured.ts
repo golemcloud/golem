@@ -4,8 +4,8 @@
 import { Effect, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
-import { ElementValueKindError, type ElementCodec } from "./element.js"
-import { Uint8ArraySchema } from "./wit-types.js"
+import { ElementValueKindError, type ElementCodec } from "./Element.js"
+import { Uint8ArraySchema } from "./WitTypes.js"
 
 // ---------- Wire-shape schemas (composable in component-model records) ----------
 

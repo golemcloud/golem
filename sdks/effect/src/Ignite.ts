@@ -75,7 +75,7 @@ import {
   type DbValue,
 } from "golem:rdbms/ignite2@1.5.0"
 import { IgniteHostClient } from "./host/IgniteHostClient.js"
-import { ParamEncodingError, READ_PREFIX_RE, sqlErrorFor, toBigIntChecked } from "./rdbms-shared.js"
+import { ParamEncodingError, READ_PREFIX_RE, sqlErrorFor, toBigIntChecked } from "./RdbmsShared.js"
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name"
 

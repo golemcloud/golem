@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
-import { SqliteClient } from "../src/sqlite.js"
+import { SqliteClient } from "../src/Sqlite.js"
 
 describe("SqliteClient (mocked node:sqlite)", () => {
   it.effect("opens an in-memory db, runs DDL, and inserts a row via the tagged template", () =>

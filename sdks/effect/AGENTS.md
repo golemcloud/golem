@@ -4,8 +4,8 @@ A TypeScript library for writing [Golem](https://golem.cloud) agents on top of [
 
 ## Layout
 
-- `src/` library (`agent.ts`, `client.ts`, `method.ts`, `wit-codec.ts`, `wit-tree.ts`, `exports.ts`, `index.ts`); `src/effect-bundle.mjs` re-exports `effect` for the standalone runtime bundle.
-- `src/http.ts` HTTP routes namespace (`Http.mount` / `Http.endpoint` + verb shorthands, path/segment IR, `validateAgentHttp`, `HttpRouteError`).
+- `src/` library (`Agent.ts`, `Client.ts`, `Method.ts`, `WitCodec.ts`, `WitTree.ts`, `Exports.ts`, `index.ts`); `src/effect-bundle.mjs` re-exports `effect` for the standalone runtime bundle.
+- `src/Http.ts` HTTP routes namespace (`Http.mount` / `Http.endpoint` + verb shorthands, path/segment IR, `validateAgentHttp`, `HttpRouteError`).
 - `golem-types/` ambient `.d.ts` for `golem:*` / `wasi:*` / `agent-guest`. Mirror in `test/mocks/` + alias in `vitest.config.ts` if used at runtime in `src/`.
 - `wit/main.wit` (world `agent-guest`) + vendored `wit/deps/` (from `golemcloud/golem` `sdks/ts/wit/deps/`).
 - `scripts/` Node build helpers (`generate-agent-template.mjs`, `copy-agent-template.mjs`, `build-types-entry.mjs`).
@@ -44,7 +44,7 @@ If anything fails inside the runtime, treat it as a real bug and fix the SDK —
 
 All access to the WIT host bindings (`golem:*`, `wasi:*`, `node:sqlite` host extensions, etc.) flows through tagged `Context.Service`-class wrappers under `src/host/`. Each service is a thin 1:1 mirror of a single WIT interface (sometimes split by concern within an interface — e.g. `golem:agent/host` is split into `AgentHostClient` for parse/metadata/webhook and `RpcClient` for the RPC subset). Every service has a `XxxLive` Layer that calls the real WIT specifier; tests provide alternative Layers (Layer.succeed, Layer.scoped, or shared fakes under `test/host/`) instead of mutating module-level `__setX/__resetX` indirection.
 
-The complete bundle is composed in `src/host/HostLive.ts` as a single `Layer.mergeAll(...)`. The dispatcher in `src/agent.ts` builds this once at module load (see `userRuntimeLayer`) and provides it to every user-effect path: `dispatchInitialize`, `dispatchInvoke`, `dispatchSaveSnapshot`, and `dispatchLoadSnapshot`. **This is the dispatcher-erasure pattern**: SDK combinators are free to thread host-service tags through their `R` channel (e.g. `Durability.checkpoint` requires `OplogClient | AgentHostClient | SelfAgentId`), and the dispatcher's `Effect.provide(userRuntimeLayer)` strips them all before user code observes its own `R`. Consequence: **never** put `Effect.provide(layer)` inside a user-facing combinator — that defeats the seam (it forces a Layer rebuild per call and shadows any test-side override). Always let the host-service tag bubble out to the dispatcher.
+The complete bundle is composed in `src/host/HostLive.ts` as a single `Layer.mergeAll(...)`. The dispatcher in `src/Agent.ts` builds this once at module load (see `userRuntimeLayer`) and provides it to every user-effect path: `dispatchInitialize`, `dispatchInvoke`, `dispatchSaveSnapshot`, and `dispatchLoadSnapshot`. **This is the dispatcher-erasure pattern**: SDK combinators are free to thread host-service tags through their `R` channel (e.g. `Durability.checkpoint` requires `OplogClient | AgentHostClient | SelfAgentId`), and the dispatcher's `Effect.provide(userRuntimeLayer)` strips them all before user code observes its own `R`. Consequence: **never** put `Effect.provide(layer)` inside a user-facing combinator — that defeats the seam (it forces a Layer rebuild per call and shadows any test-side override). Always let the host-service tag bubble out to the dispatcher.
 
 When adding a new host-binding wrapper:
 
@@ -111,11 +111,24 @@ Direct host-call signatures (raw `(a, b) => Host.fn(a, b)` wrappers in `src/host
 ## Conventions
 
 - Strict TS (`noUnusedLocals`/`Parameters`, `noImplicitReturns`); ESM (`"type": "module"`); imports must end in `.js` (NodeNext); 2-space indent, no semicolons, double quotes, trailing commas (Prettier).
-- Public surface re-exported from `src/index.ts`; runtime hooks (`guest`, `saveSnapshot`, `loadSnapshot`) declared in `src/exports.ts` with inlined types (no `import "agent-guest"` in published `.d.ts`).
+- Public surface re-exported from `src/index.ts`; runtime hooks (`guest`, `saveSnapshot`, `loadSnapshot`) declared in `src/Exports.ts` with inlined types (no `import "agent-guest"` in published `.d.ts`).
 - Errors as Effect typed failures (e.g. `UnsupportedSchemaError`, `InvalidDataValueError`, `RemoteCallError`); avoid throwing.
 - The base WASM externalizes `effect`, `effect-golem`, `agent-guest`, all `golem:*`/`wasi:*`; user component bundles must externalize the same set so all components share one Effect runtime instance.
 - When adding deps to user code, prefer importing types/runtime from `effect` and APIs from `effect-golem`.
-- HTTP routing metadata is authored through the `Http.*` namespace re-exported from `src/http.ts` (mount on the agent, endpoints on each method).
+- HTTP routing metadata is authored through the `Http.*` namespace re-exported from `src/Http.ts` (mount on the agent, endpoints on each method).
+
+## Module organisation conventions
+
+`effect-golem` follows the same module-organisation conventions as the official `effect` / `@effect/*` packages. The conventions are inferred from the source layout of `Effect-TS/effect` and `Effect-TS/effect-smol` (neither repo writes them down — the only documented rule is "do not hand-edit `index.ts`"); we mirror them here so this codebase keeps the same shape.
+
+- **PascalCase filenames**, one module per file. Every public source file under `src/` is named `<ModuleName>.ts` (`Agent.ts`, `Http.ts`, `Quota.ts`, `WitCodec.ts`, `SelfAgentId.ts`, …). Compound names use PascalCase concatenation, no separators (`DurabilityMode`, `WitCodec`, not `Durability-Mode` or `Wit_Codec`). Files under `src/host/` follow the same rule (`AgentHostClient.ts`, `RpcClient.ts`).
+- **`src/index.ts` is a namespace-only barrel**. Each public module is surfaced via `export * as <Ns> from "./<Ns>.js"` — never `export * from "./<Ns>.js"` and never named hoists like `export { FooError } from "./Foo.js"`. Consumers always reach the API through its namespace: `Quota.acquireQuotaToken`, `Snapshot.define`, `Webhook.WebhookPayload`, `Http.mount`. This matches `effect`'s `Effect.map` / `Layer.provide` / `SqlClient.make` style. The barrel is hand-edited in this repo (we do not have `pnpm codegen`); keep its entries alphabetised inside each section.
+- **Flat DSL aliases — only three.** `defineAgent`, `defineConfig`, and `method` are also re-exported at the package root, in addition to being reachable through `Agent.defineAgent` / `Config.defineConfig` / `Method.method`. They are the canonical authoring constructors used in every `defineAgent({ ... })` call site, so keeping them un-namespaced matches the precedent set by `effect`'s flat `pipe` / `flow` re-exports. **No other symbol gets a flat alias.** When you add a new module, do not add a flat re-export of its error class, its constructor, or its types — make consumers reach them through the namespace (`Snapshot.InvalidSnapshotError`, `Quota.FailedReservationError`, `Webhook.WebhookPayload`).
+- **Sub-imports are independent files.** The four RDBMS / SQLite adapters (`src/Sqlite.ts`, `src/Postgres.ts`, `src/Mysql.ts`, `src/Ignite.ts`) are bundled separately by Rollup into `dist/{sqlite,postgres,mysql,ignite}.mjs` and exposed under the `effect-golem/{sqlite,postgres,mysql,ignite2}` package.json export names. The export name (kebab/lowercase, dictated by the npm convention) is independent of the source filename (PascalCase). When adding a new sub-import, follow the same split: source `src/Foo.ts`, rollup input `src/Foo.ts`, output `dist/foo.mjs`, package.json `"./foo": { "types": "./dist/effect-golem-foo.d.ts", "import": "./dist/foo.mjs" }`, plus a matching `body` line in `scripts/build-types-entry.mjs`.
+- **Mandatory guest hooks** (`guest`, `saveSnapshot`, `loadSnapshot`) are the WIT protocol bindings the generated `agent-guest` shim imports by name. They are flat re-exported from `src/Exports.ts` because the host requires them at the package root — they are not API. Do not rename them and do not move them into a namespace.
+- **Naming collisions are accepted.** A namespace and a value can share a name (e.g. `Principal.Principal` is the `Context.Service` class inside the `Principal` namespace). This matches `effect`'s `Effect.Effect`, `Cause.Cause`, `Schema.Schema` pattern. When `yield* X` would have worked before namespacing, it becomes `yield* X.X` after — that is the expected idiom, not a workaround.
+- **JSDoc on every public export.** Every `export` in a public module gets at minimum `@since 0.1.0` and `@category <…>` (use `models`, `constructors`, `errors`, `dsl`, `host services`, `modules`, `symbols`, etc.). The barrel itself documents each `export * as Ns` with one short paragraph plus `@since` + `@category modules`. This matches the rule documented in [`Effect-TS/effect`'s contributing section](https://github.com/Effect-TS/effect#contributing-via-pull-requests) — the only piece of the convention that is officially written down.
+- **No internal-tier separation yet.** `effect`'s convention is that implementation details live under `src/internal/` and the package.json blocks them via `"./internal/*": null`. This codebase does not split that way (yet). When a module file becomes large enough to need a facade / impl split, follow the `effect` pattern: keep the public types and re-exports in `src/<Module>.ts`, move the implementation to `src/internal/<module>.ts` (camelCase under `internal/`), and import siblings as `type *` to avoid runtime cycles. Do **not** introduce single-purpose helper files at the top level — they belong under `src/internal/` so they never accidentally appear in the public namespace.
 
 ## HTTP routes
 
@@ -150,7 +163,7 @@ Path syntax:
 - `?key={var}&…` — inline query bindings; endpoint-only (mount paths reject `?`).
 - `headers: { "X-Foo": "paramName" }` on endpoint options — binds an HTTP header to a method param (case-insensitive).
 
-Rules (enforced by `validateAgentHttp` in `src/http.ts`):
+Rules (enforced by `validateAgentHttp` in `src/Http.ts`):
 
 - Every constructor param must appear as a `{var}` in the mount path.
 - Every endpoint binding (`{var}` in path/query, or in `headers`) must reference a method param.
@@ -232,7 +245,7 @@ defineAgent({
 })
 ```
 
-Field shape rules (compiled by `compileConfig` in `src/config.ts`):
+Field shape rules (compiled by `compileConfig` in `src/Config.ts`):
 
 - A bare `Schema.Top` becomes a **local** leaf accessed as `Effect<T, ConfigError>`.
 - `Schema.Redacted(inner)` becomes a **secret** leaf accessed as `{ get: Effect<Redacted<T>, ConfigError> }`. Use `Redacted.value(r)` to extract the underlying string only at the moment you actually need it.
@@ -272,7 +285,7 @@ Snapshot interaction: **config values are never embedded in the snapshot envelop
 
 Errors: `ConfigError` carries a tagged `reason` (`HostTrap | DecodeFailure | WireMismatch | Unsupported`) and the failing path. Registration-time validation produces `UnsupportedSchemaError` (e.g. `Schema.Any` as a leaf, malformed `Schema.Redacted`, or — defence-in-depth — duplicate compiled paths). Both are exported from the package barrel.
 
-Test mocks: `test/mocks/golem-agent-host.ts` exposes a settable `getConfigValueImpl` plus `__set/__resetGetConfigValueForTest` hooks; `src/config.ts` mirrors this with module-local `getConfigValueImpl` indirection so unit tests can drive arbitrary `WitValue` returns without touching the real host.
+Test mocks: `test/mocks/golem-agent-host.ts` exposes a settable `getConfigValueImpl` plus `__set/__resetGetConfigValueForTest` hooks; `src/Config.ts` mirrors this with module-local `getConfigValueImpl` indirection so unit tests can drive arbitrary `WitValue` returns without touching the real host.
 
 ## Webhooks (`Webhook.*`)
 
@@ -708,7 +721,7 @@ All adapters classify the host's tagged `Error` variants into the standard `effe
 - Param-encoding failures (NaN, out-of-range bigint, malformed UUID, unsupported JS type) → `SqlSyntaxError`
 - Authentication-looking thrown `Error` instances (regex on `authent|password|role|access denied`) → `AuthenticationError`
 
-The shared classification logic lives in `src/rdbms-shared.ts` (`sqlErrorFor`, `extractTaggedError`, `ParamEncodingError`, `READ_PREFIX_RE`, `RETURNING_RE`); each adapter wires its own dialect-specific `isReader`, `Pg|MySql|Ignite` helper namespace, and `DbValue` codec on top.
+The shared classification logic lives in `src/RdbmsShared.ts` (`sqlErrorFor`, `extractTaggedError`, `ParamEncodingError`, `READ_PREFIX_RE`, `RETURNING_RE`); each adapter wires its own dialect-specific `isReader`, `Pg|MySql|Ignite` helper namespace, and `DbValue` codec on top.
 
 ### Integration testing
 

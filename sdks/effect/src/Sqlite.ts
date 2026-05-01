@@ -59,7 +59,7 @@ const sqlError = (cause: unknown, message: string, operation: string): SqlError 
  * client from a raw `DatabaseSync`. The symbol is keyed via
  * `Symbol.for(...)` so multiple module copies (e.g. one bundled into
  * `effect-golem`'s main bundle for `src/snapshot.ts`'s relative
- * import of `./sqlite.js`, and one in the standalone
+ * import of `./Sqlite.js`, and one in the standalone
  * `effect-golem/sqlite` sub-import) still agree on the same key.
  *
  * @since 0.1.0

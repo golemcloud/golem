@@ -32,18 +32,18 @@ const body = `export * from "./src/index.js"\n`
 writeFileSync(outFile, refs + "\n" + body, "utf-8")
 console.log(`wrote ${outFile}`)
 
-const sqliteBody = `export * from "./src/sqlite.js"\n`
+const sqliteBody = `export * from "./src/Sqlite.js"\n`
 writeFileSync(sqliteOutFile, refs + "\n" + sqliteBody, "utf-8")
 console.log(`wrote ${sqliteOutFile}`)
 
-const postgresBody = `export * from "./src/postgres.js"\n`
+const postgresBody = `export * from "./src/Postgres.js"\n`
 writeFileSync(postgresOutFile, refs + "\n" + postgresBody, "utf-8")
 console.log(`wrote ${postgresOutFile}`)
 
-const mysqlBody = `export * from "./src/mysql.js"\n`
+const mysqlBody = `export * from "./src/Mysql.js"\n`
 writeFileSync(mysqlOutFile, refs + "\n" + mysqlBody, "utf-8")
 console.log(`wrote ${mysqlOutFile}`)
 
-const igniteBody = `export * from "./src/ignite.js"\n`
+const igniteBody = `export * from "./src/Ignite.js"\n`
 writeFileSync(igniteOutFile, refs + "\n" + igniteBody, "utf-8")
 console.log(`wrote ${igniteOutFile}`)

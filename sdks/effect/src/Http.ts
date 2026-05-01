@@ -1,6 +1,6 @@
 import { Effect, Pipeable, Schema, SchemaAST } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
-import { withPipe } from "./pipeable.js"
+import { withPipe } from "./Pipeable.js"
 
 /**
  * HTTP route metadata for Golem agents.

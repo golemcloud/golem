@@ -15,7 +15,7 @@
 
 import { Effect, Layer, Option, Ref } from "effect"
 import { KeyValueClient, type HostBucket } from "../../src/host/KeyValueClient.js"
-import { KeyValueHostError } from "../../src/keyvalue.js"
+import { KeyValueHostError } from "../../src/KeyValue.js"
 
 type EventualOp = "get" | "set" | "delete" | "exists"
 type BatchOp = "get-many" | "set-many" | "delete-many" | "keys"

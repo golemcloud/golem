@@ -4,7 +4,7 @@
 import { Effect, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
-import { componentModelElement, ElementValueKindError, type ElementCodec } from "./element.js"
+import { componentModelElement, ElementValueKindError, type ElementCodec } from "./Element.js"
 import {
   isElementSpec,
   UnstructuredBinary,
@@ -12,8 +12,8 @@ import {
   type BinaryReferenceValue,
   type ElementSpec,
   type TextReferenceValue,
-} from "./unstructured.js"
-import { toWitCodec, type UnsupportedSchemaError } from "./wit-codec.js"
+} from "./Unstructured.js"
+import { toWitCodec, type UnsupportedSchemaError } from "./WitCodec.js"
 
 /**
  * One named element of a multimodal payload — either an

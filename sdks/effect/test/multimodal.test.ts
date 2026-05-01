@@ -1,13 +1,13 @@
 import { describe, it, expect } from "@effect/vitest"
 import { Effect, Schema } from "effect"
-import { compileMethodSpec, invokeDataValue, method } from "../src/method.js"
-import { multimodal, multimodalTextImage } from "../src/multimodal.js"
+import { compileMethodSpec, invokeDataValue, method } from "../src/Method.js"
+import { multimodal, multimodalTextImage } from "../src/Multimodal.js"
 import {
   UnstructuredBinary,
   UnstructuredText,
   type BinaryReferenceValue,
   type TextReferenceValue,
-} from "../src/unstructured.js"
+} from "../src/Unstructured.js"
 
 const Meta = Schema.Struct({ prompt: Schema.String })
 const Content = multimodal({

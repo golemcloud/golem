@@ -5,15 +5,15 @@ import {
   defineAgent,
   dispatchLoadSnapshot,
   dispatchSaveSnapshot,
-} from "../src/agent.js"
+} from "../src/Agent.js"
 import {
   __resetParseAgentIdImpl as __resetParseAgentIdForTest,
   __setParseAgentIdImpl as __setParseAgentIdForTest,
 } from "./mocks/golem-agent-host.js"
-import { method } from "../src/method.js"
-import { guest } from "../src/exports.js"
-import * as Snapshot from "../src/snapshot.js"
-import { defineConfig } from "../src/config.js"
+import { method } from "../src/Method.js"
+import { guest } from "../src/Exports.js"
+import * as Snapshot from "../src/Snapshot.js"
+import { defineConfig } from "../src/Config.js"
 import {
   __resetEnvironment as __resetGetEnvironmentForTest,
   __setEnvironment as __setGetEnvironmentForTest,
@@ -22,13 +22,13 @@ import {
   __resetGetConfigValueImpl as __resetGetConfigValueForTest,
   __setGetConfigValueImpl as __setGetConfigValueForTest,
 } from "./mocks/golem-agent-host.js"
-import { toWitCodec } from "../src/wit-codec.js"
+import { toWitCodec } from "../src/WitCodec.js"
 import {
   encodeBinaryEnvelope,
   encodeJsonEnvelope,
   SnapshotEnvelopeError,
   UnsupportedSnapshotFormatError,
-} from "../src/snapshot-envelope.js"
+} from "../src/SnapshotEnvelope.js"
 
 const anonymous = { tag: "anonymous" } as const
 const oidcBob = {

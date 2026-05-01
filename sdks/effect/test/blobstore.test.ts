@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Schema, Stream } from "effect"
-import * as Blobstore from "../src/blobstore.js"
+import * as Blobstore from "../src/Blobstore.js"
 import { make as makeBlobFake } from "./host/BlobFake.js"
 
 const u8 = (s: string): Uint8Array => new TextEncoder().encode(s)

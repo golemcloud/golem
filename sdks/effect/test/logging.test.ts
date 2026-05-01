@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Exit, Layer, References } from "effect"
 import { LoggingHost, LoggingHostLive } from "../src/host/LoggingHost.js"
 import { TracingHost, TracingHostLive } from "../src/host/TracingHost.js"
-import * as Logging from "../src/logging.js"
+import * as Logging from "../src/Logging.js"
 import * as ContextMock from "./mocks/golem-api-context.js"
 import * as WasiLoggingMock from "./mocks/wasi-logging.js"
 
@@ -285,7 +285,7 @@ describe("Logging — trace/log correlation regression", () => {
     "Effect.log inside Effect.withSpan emits the host child span's trace_id / span_id",
     () =>
       Effect.gen(function* () {
-        const Tracing = yield* Effect.promise(() => import("../src/tracing.js"))
+        const Tracing = yield* Effect.promise(() => import("../src/Tracing.js"))
         // Capture LoggingHost output into a closure so we can assert on
         // the exact (level, message) tuple that `Logging.layer` emits
         // — bypassing the WasiLoggingMock global to keep this test

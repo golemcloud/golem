@@ -1,7 +1,7 @@
 import { describe, it, expect } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 import type * as CoreTypes from "golem:core/types@1.5.0"
-import { witGraphCodec, type WitValueTree } from "../src/wit-tree.js"
+import { witGraphCodec, type WitValueTree } from "../src/WitTree.js"
 
 /**
  * WitType describing `record { name: string, alive: bool, scores: list<u32> }`,

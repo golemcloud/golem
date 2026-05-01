@@ -12,7 +12,7 @@
  *
  * Resource handles are *not* exposed; the service surface is purely
  * by-value (records of `Effect`-returning methods). The public
- * {@link import("../blobstore.js").Container} type wraps a
+ * {@link import("../Blobstore.js").Container} type wraps a
  * {@link HostContainer} returned from `createContainer` /
  * `getContainer` and adds the schema-typed view + JS `Date`
  * decoding + whole-object read recovery.
@@ -21,7 +21,7 @@
  */
 import { Context, Effect, Layer, Option, Stream } from "effect"
 import type * as Scope from "effect/Scope"
-import { BlobstoreHostError } from "../blobstore.js"
+import { BlobstoreHostError } from "../Blobstore.js"
 import * as Blob from "wasi:blobstore/blobstore"
 import * as ContainerNS from "wasi:blobstore/container"
 import * as Types from "wasi:blobstore/types"

@@ -23,7 +23,7 @@ import {
   type HostObjectId,
   type HostObjectMetadata,
 } from "../../src/host/BlobstoreClient.js"
-import { BlobstoreHostError } from "../../src/blobstore.js"
+import { BlobstoreHostError } from "../../src/Blobstore.js"
 
 interface ObjectEntry {
   bytes: Uint8Array

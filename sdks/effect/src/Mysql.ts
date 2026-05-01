@@ -88,7 +88,7 @@ import {
   RETURNING_RE,
   sqlErrorFor,
   toBigIntChecked,
-} from "./rdbms-shared.js"
+} from "./RdbmsShared.js"
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name"
 

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from "@effect/vitest"
 import { Cause, Effect, Option, Schema } from "effect"
-import { defineAgent, __resetAgents } from "../src/agent.js"
-import { method } from "../src/method.js"
-import { guest } from "../src/exports.js"
+import { defineAgent, __resetAgents } from "../src/Agent.js"
+import { method } from "../src/Method.js"
+import { guest } from "../src/Exports.js"
 import {
   agentType,
   agentVersion,
@@ -33,9 +33,9 @@ import {
   withHeaders,
   withPhantomAgent,
   withWebhookSuffix,
-} from "../src/http.js"
-import { multimodal } from "../src/multimodal.js"
-import { UnstructuredText } from "../src/unstructured.js"
+} from "../src/Http.js"
+import { multimodal } from "../src/Multimodal.js"
+import { UnstructuredText } from "../src/Unstructured.js"
 
 /**
  * Run an Effect that is expected to fail and extract its typed error from

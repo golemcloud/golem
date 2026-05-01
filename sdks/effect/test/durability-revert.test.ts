@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Fiber, Layer } from "effect"
-import * as Agents from "../src/agents.js"
-import * as Durability from "../src/durability.js"
+import * as Agents from "../src/Agents.js"
+import * as Durability from "../src/Durability.js"
 import { AgentHostLive } from "../src/host/AgentHostClient.js"
 import { DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import { OplogLive } from "../src/host/OplogClient.js"
-import { SelfAgentId } from "../src/self-agent-id.js"
+import { SelfAgentId } from "../src/SelfAgentId.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 
 const self: Agents.AgentId = {

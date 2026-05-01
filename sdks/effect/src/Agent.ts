@@ -6,7 +6,7 @@ import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import type { DatabaseSync } from "node:sqlite"
-import { ElementValueKindError } from "./element.js"
+import { ElementValueKindError } from "./Element.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { EnvironmentClient } from "./host/EnvironmentClient.js"
 import { HostLive, type HostServices } from "./host/HostLive.js"
@@ -17,8 +17,8 @@ import {
   validateAgentHttp,
   type MethodHttpInput,
   type MountDef,
-} from "./http.js"
-import { isMultimodal } from "./multimodal.js"
+} from "./Http.js"
+import { isMultimodal } from "./Multimodal.js"
 import {
   compileMethodSpec,
   compileParamBindings,
@@ -29,9 +29,9 @@ import {
   type MethodParams,
   type MethodSpec,
   type ParamBinding,
-} from "./method.js"
-import { Principal } from "./principal.js"
-import { SelfAgentId } from "./self-agent-id.js"
+} from "./Method.js"
+import { Principal } from "./Principal.js"
+import { SelfAgentId } from "./SelfAgentId.js"
 import {
   compileSnapshot,
   createBinding,
@@ -46,7 +46,7 @@ import {
   type CompiledSnapshot,
   type SnapshotBinding,
   type SnapshotDef,
-} from "./snapshot.js"
+} from "./Snapshot.js"
 import {
   decodeEnvelope,
   encodeBinaryEnvelope,
@@ -54,13 +54,13 @@ import {
   encodeMultipartJsonEnvelope,
   SnapshotEnvelopeError,
   UnsupportedSnapshotFormatError,
-} from "./snapshot-envelope.js"
-import { isElementSpec } from "./unstructured.js"
-import { type UnsupportedSchemaError, type WitCodec } from "./wit-codec.js"
-import { clientFor, type AgentClient } from "./client.js"
-import type { CompiledConfig, ConfigClass, ConfigFields, ConfigShape } from "./config.js"
-import * as GolemLogging from "./logging.js"
-import * as GolemTracing from "./tracing.js"
+} from "./SnapshotEnvelope.js"
+import { isElementSpec } from "./Unstructured.js"
+import { type UnsupportedSchemaError, type WitCodec } from "./WitCodec.js"
+import { clientFor, type AgentClient } from "./Client.js"
+import type { CompiledConfig, ConfigClass, ConfigFields, ConfigShape } from "./Config.js"
+import * as GolemLogging from "./Logging.js"
+import * as GolemTracing from "./Tracing.js"
 
 /**
  * Combined Logger + Tracer layer applied automatically to every piece
