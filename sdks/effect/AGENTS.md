@@ -539,8 +539,8 @@ Live vs replay protocol (matches Rust bit-for-bit):
 Key guarantees:
 
 - **Bit-compat with `golem-rust`**: function names are emitted as `${iface}::${function}`; responses use WIT `result<ok, err>` (via `Schema.Result`), not `Either`. Verified via the `host-features::wrappedQuote` integration component — live oplog entries display as `CALL host-features::wrappedQuote / input: {symbol: "AAPL"} / result: {symbol, price}` (success) or `err({code, symbol})` (typed fail).
-- **Concurrency**: a module-level single-permit semaphore serializes `wrap` invocations across fibers (the host's replay cursor is sequential). Re-entrant calls from the same fiber tree fail fast with `NestedDurableFunctionError` rather than deadlocking.
-- **Error ergonomics**: SDK-internal failures (`DurabilityHostError`, `DurabilityReplayMismatchError`, `DurabilityDecodeError`, `NestedDurableFunctionError`, `UnsupportedSchemaError`) are routed into the **defect** channel, NOT the typed `E`. Method authors only declare their own typed errors; infrastructure errors propagate as panics through the dispatcher's normal failure path.
+- **Nesting is allowed**: a typical pattern is to use `wrap` to mark a higher-level persisted block whose body itself contains other custom or host-side durable calls (including a nested `wrap`). In live mode `wrap` explicitly wraps the body with `withPersistenceLevel(persist-nothing, ...)`, so inner host I/O does not double-record into the outer block's oplog. In replay mode the body is skipped entirely.
+- **Error ergonomics**: SDK-internal failures (`DurabilityHostError`, `DurabilityReplayMismatchError`, `DurabilityDecodeError`, `UnsupportedSchemaError`) are routed into the **defect** channel, NOT the typed `E`. Method authors only declare their own typed errors; infrastructure errors propagate as panics through the dispatcher's normal failure path.
 - **Schema services**: `wit-codec` services (`EncodingServices` / `DecodingServices`) flow through `wrap`'s `R` channel, so schemas with services compose normally.
 
 `Durability.FunctionType.writeRemoteBatched(begin?)` and `writeRemoteTransaction(begin?)` are NOT accepted by `wrap` — they imply a multi-step lifecycle the unary combinator does not model. Use the lower-level escape hatches (`beginDurableFunction`, `endDurableFunction`, `persistDurableFunctionInvocation`, `readPersistedDurableFunctionInvocation`, `currentDurableExecutionState`, `isLive`, `observeFunctionCall`) to compose those flows manually.
@@ -607,7 +607,7 @@ Failure-cause classification:
 | `Effect.interrupt`      | propagate unchanged (comps still run)     | compensate reverse → `setIndex >> never` |
 | `Effect.die` (defect)   | propagate unchanged (NO comps)            | propagate unchanged (NO rewind)          |
 
-Errors: `Saga.NestedSagaError` (raised when a saga is started inside an already-active saga in the same fiber tree — mirrors `NestedDurableFunctionError`); `TransactionFailure<E>` is a tagged union (`FailedAndRolledBackCompletely { error }` / `FailedAndRolledBackPartially { error, compensationError }`). Both are exported from the package barrel.
+Errors: `Saga.NestedSagaError` (raised when a saga is started inside an already-active saga in the same fiber tree — the host's atomic-region bracketing and the in-fiber checkpoint stack are single-frame); `TransactionFailure<E>` is a tagged union (`FailedAndRolledBackCompletely { error }` / `FailedAndRolledBackPartially { error, compensationError }`). Both are exported from the package barrel.
 
 Caveats:
 

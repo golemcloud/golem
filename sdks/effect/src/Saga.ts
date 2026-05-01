@@ -73,7 +73,9 @@ interface SagaContextValue {
 /**
  * Fiber-local marker for "this fiber tree is currently inside a
  * `Saga.fallibleTransaction` / `Saga.infallibleTransaction` call".
- * Mirrors the `InsideWrapRef` pattern in `src/durable-function.ts`.
+ * A `Context.Reference` (Effect 4's replacement for `FiberRef`) is
+ * the right primitive: child fibers inherit it from their parent,
+ * but unrelated fibers see the default (`null`).
  *
  * @internal
  */
@@ -110,8 +112,8 @@ const CauseStoreRef = Context.Reference<CauseStoreValue | null>("effect-golem/sa
 /**
  * Raised when a `Saga.fallibleTransaction` or
  * `Saga.infallibleTransaction` is called inside a fiber that already
- * has a saga context active. Mirrors `NestedDurableFunctionError` in
- * spirit: the host's bracketing is sequential, so nesting cannot be
+ * has a saga context active. The host's bracketing is sequential and
+ * the in-fiber checkpoint stack is single-frame, so nesting cannot be
  * made safe without changing the wire model.
  *
  * @since 1.5.0

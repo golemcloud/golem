@@ -42,11 +42,13 @@
  * `${iface}::${function}` exactly like
  * `golem-rust::durability::Durability::persist_serializable`.
  *
- * Concurrency: a module-local single-permit semaphore serializes
- * `wrap` invocations across fibers (the host's replay cursor is
- * inherently sequential). Re-entrant calls from the same fiber tree
- * fail with {@link NestedDurableFunctionError} rather than
- * deadlocking.
+ * Nesting is allowed: a typical pattern is to use `wrap` to mark a
+ * higher-level persisted block and let the body include other custom
+ * or host-side durable calls (including a nested `wrap`). In live
+ * mode the body is explicitly wrapped with
+ * `withPersistenceLevel(persist-nothing, ...)` (see `runLiveBody`),
+ * so inner host I/O does not double-record into the outer block's
+ * oplog. In replay mode the body is skipped entirely.
  *
  * Variants beyond the unary subset (`write-remote-batched`,
  * `write-remote-transaction`) are NOT accepted by `wrap` because they
@@ -58,7 +60,7 @@
  *
  * @since 1.5.0
  */
-import { Cause, Context, Effect, Exit, Layer, Result, Schema, Semaphore } from "effect"
+import { Cause, Effect, Exit, Result, Schema } from "effect"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import type * as DurabilityHost from "golem:durability/durability@1.5.0"
 import {
@@ -167,29 +169,6 @@ export class DurabilityDecodeError {
     this.message = `DurabilityDecodeError(${phase}): ${
       cause instanceof Error ? cause.message : String(cause)
     }`
-  }
-}
-
-/**
- * Raised when a {@link wrap} call is observed while another `wrap` is
- * already in progress on the same fiber stack. The host's replay
- * cursor and begin/end bracketing are inherently sequential — nesting
- * would either corrupt replay (interleave entries) or deadlock on the
- * serialization permit. We surface the situation as a typed failure
- * so callers can refactor the offending nest.
- *
- * @since 1.5.0
- * @category errors
- */
-export class NestedDurableFunctionError {
-  readonly _tag = "NestedDurableFunctionError"
-  readonly [sdkErrorBrand] = true
-  readonly message: string
-  constructor(
-    readonly outerFunctionName: string,
-    readonly innerFunctionName: string,
-  ) {
-    this.message = `NestedDurableFunctionError: ${innerFunctionName} called inside ${outerFunctionName}`
   }
 }
 
@@ -438,72 +417,6 @@ export interface DurabilityWrapInfallibleOptions<
   readonly forcedCommit?: boolean
 }
 
-// ---- internal: WrapSemaphore service + fiber-local nesting marker -----
-
-/**
- * Single-permit semaphore that serializes {@link wrap} calls across
- * fibers. The host's replay cursor + begin/end bracketing is
- * inherently sequential, so concurrent fibers (e.g. via
- * `Effect.all([wrap1, wrap2], { concurrency: "unbounded" })`) must
- * fan-in through this one permit.
- *
- * Encapsulated as an Effect-typed service tag (rather than a
- * module-level mutable `let`) so tests can supply a fresh semaphore
- * per `it.effect` body via {@link WrapSemaphoreLive}, replacing the
- * old `__resetWrapStateForTest` indirection.
- *
- * @internal
- * @since 1.5.0
- */
-export class WrapSemaphore extends Context.Service<WrapSemaphore, Semaphore.Semaphore>()(
-  "effect-golem/durable-function/wrap-semaphore",
-) {}
-
-/**
- * Layer that allocates a fresh single-permit semaphore. Included in
- * the per-process `HostLive` macro layer so production code shares
- * one semaphore across the lifetime of a single dispatcher entry;
- * tests get a fresh semaphore per provided layer.
- *
- * @internal
- * @since 1.5.0
- */
-export const WrapSemaphoreLive: Layer.Layer<WrapSemaphore> = Layer.effect(
-  WrapSemaphore,
-  Effect.map(Semaphore.make(1), (s) => WrapSemaphore.of(s)),
-)
-
-/**
- * Fiber-local marker for "this fiber tree is currently inside a
- * `Durability.wrap` call". A `Context.Reference` (Effect 4's
- * replacement for `FiberRef`) is the right primitive: child fibers
- * inherit it from their parent, but unrelated fibers see the default
- * (`null`). That makes nesting detection structurally accurate —
- * concurrent unrelated fibers correctly serialize through the
- * semaphore instead of being mis-flagged as nested.
- *
- * @internal
- */
-const InsideWrapRef = Context.Reference<string | null>(
-  "effect-golem/durable-function/inside-wrap",
-  { defaultValue: () => null },
-)
-
-/**
- * Test-only helper: wrap `effect` so that it sees `outerName` as the
- * already-active outer-wrap function name in {@link InsideWrapRef}.
- * Used by the unit tests to drive the nesting-detection branch of
- * {@link wrap} without needing a real outer wrap (which would widen
- * the body's error channel beyond the inner call's typed-error set).
- *
- * @internal
- * @since 1.5.0
- */
-export const __forceInsideWrapForTest = <A, E, R>(
-  outerName: string,
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E, R> => effect.pipe(Effect.provideService(InsideWrapRef, outerName))
-
 // ---- helpers ----------------------------------------------------------
 
 const qualifiedName = (iface: string, fn: string): string => `${iface}::${fn}`
@@ -582,9 +495,9 @@ export const wrap = <
   | ErrorS["EncodingServices"]
   | ErrorS["DecodingServices"]
 > =>
-  // Internally widens R with `DurabilityClient | WrapSemaphore` (and
-  // anything `withPersistenceLevel` adds, e.g. `DurabilityModeClient`);
-  // the cast hides them from user-facing types because the agent
+  // Internally widens R with `DurabilityClient` (and anything
+  // `withPersistenceLevel` adds, e.g. `DurabilityModeClient`); the
+  // cast hides them from user-facing types because the agent
   // dispatcher's `provideUserRuntime` provides them before any user
   // code runs.
   sdkErrorsToDefects(wrapInternal(opts, request, body, opts.error)) as Effect.Effect<
@@ -617,8 +530,8 @@ export const wrapInfallible = <RequestS extends Schema.Top, SuccessS extends Sch
   R | RequestS["EncodingServices"] | SuccessS["EncodingServices"] | SuccessS["DecodingServices"]
 > =>
   // Same internal-vs-public R discrepancy as {@link wrap}; cast hides
-  // `DurabilityClient | WrapSemaphore | DurabilityModeClient` from the
-  // user-facing type.
+  // `DurabilityClient | DurabilityModeClient` from the user-facing
+  // type.
   sdkErrorsToDefects(
     wrapInternal<RequestS, SuccessS, Schema.Never, R>(opts, request, body, undefined),
   ) as Effect.Effect<
@@ -629,11 +542,11 @@ export const wrapInfallible = <RequestS extends Schema.Top, SuccessS extends Sch
 
 /**
  * Reroute SDK-internal failures (host errors, schema/codec failures,
- * replay drift, nested-call rejection) into the defect channel. The
- * user's typed `E` keeps its original meaning — methods can declare a
- * narrow `error` schema without having to widen it to mention every
- * infrastructure error. Defects propagate through Effect's panic path,
- * which the dispatcher routes to the host's normal failure semantics.
+ * replay drift) into the defect channel. The user's typed `E` keeps
+ * its original meaning — methods can declare a narrow `error` schema
+ * without having to widen it to mention every infrastructure error.
+ * Defects propagate through Effect's panic path, which the dispatcher
+ * routes to the host's normal failure semantics.
  *
  * Users who want to handle these errors as values can use the
  * lower-level escape hatches ({@link beginDurableFunction} /
@@ -643,7 +556,6 @@ type SdkInternalError =
   | DurabilityHostError
   | DurabilityReplayMismatchError
   | DurabilityDecodeError
-  | NestedDurableFunctionError
   | UnsupportedSchemaError
 
 /**
@@ -686,7 +598,6 @@ const wrapInternal = <
   | DurabilityHostError
   | DurabilityReplayMismatchError
   | DurabilityDecodeError
-  | NestedDurableFunctionError
   | UnsupportedSchemaError,
   | R
   | RequestS["EncodingServices"]
@@ -699,15 +610,6 @@ const wrapInternal = <
   const forcedCommit = opts.forcedCommit ?? false
 
   return Effect.gen(function* () {
-    // Reject re-entry from the SAME fiber tree BEFORE acquiring the
-    // serialization permit (acquiring while we already hold it would
-    // deadlock). Concurrent unrelated fibers see the default `null`
-    // and serialize cleanly via the semaphore.
-    const outer = yield* Effect.service(InsideWrapRef)
-    if (outer !== null) {
-      return yield* Effect.fail(new NestedDurableFunctionError(outer, fnName))
-    }
-
     // Build the wit codecs once per call. Schema-derived codecs are
     // cheap (graph build); caching them across invocations would
     // couple us to the user's reuse of schema instances.
@@ -725,18 +627,20 @@ const wrapInternal = <
       "request-encode",
     )
 
-    const sem = yield* WrapSemaphore
-    return yield* sem.withPermits(1)(
-      protocol<RequestS, SuccessS, ErrorS, R>({
-        fnName,
-        functionType: opts.functionType,
-        forcedCommit,
-        reqVT,
-        responseWc,
-        hasError: error !== undefined,
-        body,
-      }).pipe(Effect.provideService(InsideWrapRef, fnName)),
-    )
+    // Nested wraps are allowed: in live mode `runLiveBody` explicitly
+    // wraps the body with `withPersistenceLevel(persist-nothing, ...)`
+    // so any inner host I/O — including a nested `wrap` — does not
+    // double-record into the outer block's oplog. In replay mode the
+    // body is skipped entirely.
+    return yield* protocol<RequestS, SuccessS, ErrorS, R>({
+      fnName,
+      functionType: opts.functionType,
+      forcedCommit,
+      reqVT,
+      responseWc,
+      hasError: error !== undefined,
+      body,
+    })
   })
 }
 

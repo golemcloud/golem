@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Exit, Layer, Result, Schema } from "effect"
 import * as Durability from "../src/Durability.js"
-import { WrapSemaphore, WrapSemaphoreLive } from "../src/internal/durableFunction.js"
 import { DurabilityClient, DurabilityLive } from "../src/host/DurabilityClient.js"
 import { DurabilityModeClient, DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import { toWitCodec } from "../src/WitCodec.js"
@@ -10,17 +9,16 @@ import * as DurabilityMock from "./mocks/golem-durability.js"
 
 /**
  * Per-test layer that wires the mock-backed `DurabilityHost`
- * implementations up as a fresh `DurabilityClient` instance plus a
- * fresh `WrapSemaphore`. The vitest alias on
- * `golem:durability/durability@1.5.0` already points at
- * `test/mocks/golem-durability.ts`, so `DurabilityLive` (which
+ * implementations up as a fresh `DurabilityClient` instance. The
+ * vitest alias on `golem:durability/durability@1.5.0` already points
+ * at `test/mocks/golem-durability.ts`, so `DurabilityLive` (which
  * delegates straight to that import) reads/writes the mock module's
- * state. `WrapSemaphoreLive` is `Layer.effect` so each `Effect.provide`
- * call allocates a fresh single-permit semaphore — replacing the old
- * `Durability.__resetWrapStateForTest()` reset hook.
+ * state.
  */
-const TestLayer: Layer.Layer<DurabilityClient | DurabilityModeClient | WrapSemaphore> =
-  Layer.mergeAll(DurabilityLive, DurabilityModeLive, WrapSemaphoreLive)
+const TestLayer: Layer.Layer<DurabilityClient | DurabilityModeClient> = Layer.mergeAll(
+  DurabilityLive,
+  DurabilityModeLive,
+)
 
 beforeEach(() => {
   ApiHostMock.__resetAll()
@@ -427,45 +425,44 @@ describe("Durability.wrap — replay mode", () => {
   )
 })
 
-describe("Durability.wrap — concurrency / nesting", () => {
-  it.effect("rejects nested wrap calls with NestedDurableFunctionError", () =>
+describe("Durability.wrap — nesting", () => {
+  it.effect("allows a nested wrap inside the outer body", () =>
     Effect.gen(function* () {
       DurabilityMock.__setIsLive(true)
-      // Simulate "already inside a wrap" without resorting to a real
-      // nested call (which would widen the body's error channel beyond
-      // what the outer accepts at the type level). The helper provides
-      // the fiber-local `InsideWrapRef` so the inner `wrap` sees a
-      // non-null outer marker and bails out via NestedDurableFunctionError.
-      const ex = yield* Effect.exit(
-        Durability.__forceInsideWrapForTest(
-          "i::outer",
-          Durability.wrap(
-            {
-              iface: "i",
-              function: "inner",
-              functionType: Durability.FunctionType.writeRemote,
-              requestSchema: Req,
-              success: Ok,
-              error: Err,
-            },
-            { symbol: "x" },
-            Effect.succeed({ price: 1 }),
-          ),
-        ),
+      const inner = Durability.wrap(
+        {
+          iface: "i",
+          function: "inner",
+          functionType: Durability.FunctionType.writeRemote,
+          requestSchema: Req,
+          success: Ok,
+          error: Err,
+        },
+        { symbol: "i" },
+        Effect.succeed({ price: 1 }),
       )
-      expect(Exit.isFailure(ex)).toBe(true)
-      if (Exit.isFailure(ex)) {
-        expect(JSON.stringify(ex.cause)).toMatch(/NestedDurableFunctionError/)
-        expect(JSON.stringify(ex.cause)).toMatch(/i::outer/)
-        expect(JSON.stringify(ex.cause)).toMatch(/i::inner/)
-      }
-      // The nested call must NOT begin a bracket or persist anything.
-      expect(DurabilityMock.__getBeginCalls()).toHaveLength(0)
-      expect(DurabilityMock.__getPersistedCalls()).toHaveLength(0)
+      const outer = yield* Durability.wrap(
+        {
+          iface: "i",
+          function: "outer",
+          functionType: Durability.FunctionType.writeRemote,
+          requestSchema: Req,
+          success: Ok,
+          error: Err,
+        },
+        { symbol: "o" },
+        inner,
+      )
+      expect(outer).toEqual({ price: 1 })
+      // Both the outer and inner brackets opened and closed cleanly:
+      // nesting is allowed because `runLiveBody` explicitly wraps the
+      // body in `withPersistenceLevel(persist-nothing, ...)` in live
+      // mode, so the inner `wrap` does not double-record.
+      expect(DurabilityMock.__getOpenBrackets()).toEqual([])
     }).pipe(Effect.provide(TestLayer)),
   )
 
-  it.effect("serialises concurrent wraps via the module-level semaphore", () =>
+  it.effect("runs concurrent wraps to completion", () =>
     Effect.gen(function* () {
       DurabilityMock.__setIsLive(true)
       const op = (n: number) =>
