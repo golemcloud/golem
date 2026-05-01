@@ -64,6 +64,7 @@ services:
 
       GOLEM__DB__TYPE: Postgres
       GOLEM__DB__CONFIG__DATABASE: golem_db
+      GOLEM__DB__CONFIG__SCHEMA: golem_registry_service
       GOLEM__DB__CONFIG__MAX_CONNECTIONS: 10
       GOLEM__DB__CONFIG__HOST: postgres
       GOLEM__DB__CONFIG__PORT: 5432
@@ -88,8 +89,12 @@ services:
       GOLEM__HTTP_PORT: ${SHARD_MANAGER_HTTP_PORT}
       GOLEM__GRPC__PORT: ${SHARD_MANAGER_GRPC_PORT}
 
-      GOLEM__DB__TYPE: "Postgres"
+      GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
+      GOLEM__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
+
+      GOLEM__DB__TYPE: Postgres
       GOLEM__DB__CONFIG__DATABASE: golem_db
+      GOLEM__DB__CONFIG__SCHEMA: golem_shard_manager
       GOLEM__DB__CONFIG__MAX_CONNECTIONS: 10
       GOLEM__DB__CONFIG__HOST: postgres
       GOLEM__DB__CONFIG__PORT: 5432
@@ -98,6 +103,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      golem-registry-service:
+        condition: service_started
 
   golem-worker-service:
     image: golemservices/golem-worker-service:${GOLEM_IMAGES_VERSION}
@@ -109,6 +116,7 @@ services:
       GOLEM__ENVIRONMENT: local
 
       GOLEM__CUSTOM_REQUEST_PORT: ${WORKER_SERVICE_CUSTOM_REQUEST_PORT}
+      GOLEM__MCP_PORT: ${WORKER_SERVICE_MCP_PORT}
       GOLEM__PORT: ${WORKER_SERVICE_HTTP_PORT}
       GOLEM__GRPC__PORT: ${WORKER_SERVICE_GRPC_PORT}
 
@@ -119,8 +127,8 @@ services:
       GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
       GOLEM__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
 
-      GOLEM__ROUTING_TABLE__HOST: golem-shard-manager
-      GOLEM__ROUTING_TABLE__PORT: ${SHARD_MANAGER_GRPC_PORT}
+      GOLEM__SHARD_MANAGER__HOST: golem-shard-manager
+      GOLEM__SHARD_MANAGER__PORT: ${SHARD_MANAGER_GRPC_PORT}
     volumes:
       - blob_storage:/blob_storage
     ports:
@@ -191,13 +199,13 @@ services:
       GOLEM__REGISTRY_SERVICE__HOST: golem-registry-service
       GOLEM__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
 
-      GOLEM__SHARD_MANAGER_SERVICE__TYPE: "Grpc"
-      GOLEM__SHARD_MANAGER_SERVICE__CONFIG__HOST: golem-shard-manager
-      GOLEM__SHARD_MANAGER_SERVICE__CONFIG__PORT: ${SHARD_MANAGER_GRPC_PORT}
-      GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_ATTEMPTS: 5
-      GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MIN_DELAY: "100ms"
-      GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MAX_DELAY: "2s"
-      GOLEM__SHARD_MANAGER_SERVICE__CONFIG__RETRIES__MULTIPLIER: 2
+      GOLEM__SHARD_MANAGER__TYPE: "Grpc"
+      GOLEM__SHARD_MANAGER__HOST: golem-shard-manager
+      GOLEM__SHARD_MANAGER__CONFIG__PORT: ${SHARD_MANAGER_GRPC_PORT}
+      GOLEM__SHARD_MANAGER__CONFIG__RETRIES__MAX_ATTEMPTS: 5
+      GOLEM__SHARD_MANAGER__CONFIG__RETRIES__MIN_DELAY: "100ms"
+      GOLEM__SHARD_MANAGER__CONFIG__RETRIES__MAX_DELAY: "2s"
+      GOLEM__SHARD_MANAGER__CONFIG__RETRIES__MULTIPLIER: 2
 
       GOLEM__PUBLIC_WORKER_API__HOST: golem-worker-service
       GOLEM__PUBLIC_WORKER_API__PORT: ${WORKER_SERVICE_GRPC_PORT}
@@ -208,8 +216,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      - golem-shard-manager
-      - golem-registry-service
+      golem-shard-manager:
+        condition: service_started
+      golem-registry-service:
+        condition: service_started
 
   golem-debugging-service:
     image: golemservices/golem-debugging-service:${GOLEM_IMAGES_VERSION}
@@ -252,8 +262,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      - golem-shard-manager
-      - golem-registry-service
+      golem-shard-manager:
+        condition: service_started
+      golem-registry-service:
+        condition: service_started
 
 volumes:
   redis_data:
