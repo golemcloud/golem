@@ -1,5 +1,5 @@
 /**
- * @since 0.1.0
+ * @since 1.5.0
  */
 import { Effect, Exit, Layer, ManagedRuntime, Ref, Schema, Scope } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
@@ -130,7 +130,7 @@ interface ParamCodec {
  * service tag (provided by the dispatcher); defaults to `never` for
  * agents without `config`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type Handlers<Methods extends Record<string, AnyMethodSpec>, CfgTag = never> = {
@@ -148,7 +148,7 @@ export type Handlers<Methods extends Record<string, AnyMethodSpec>, CfgTag = nev
  * assignable. The runtime tag identity comes from the unique
  * `KeyClass` minted by `Context.Service` for each `defineConfig` call.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type ConfigDef<F extends ConfigFields> = ConfigClass<F>
@@ -158,7 +158,7 @@ export type ConfigDef<F extends ConfigFields> = ConfigClass<F>
  * record. `never` for agents without a `config` field — that collapses
  * the union below back to `Scope.Scope | Principal`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type CfgTagOf<F> = [F] extends [never]
@@ -180,7 +180,7 @@ export type CfgTagOf<F> = [F] extends [never]
  * keep the original `R = Principal` exactly. The dispatcher always
  * provides the matching services at runtime.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type ImplArgs<C extends MethodParams, S, CfgTag = never> = [S] extends [never]
@@ -205,7 +205,7 @@ export type ImplArgs<C extends MethodParams, S, CfgTag = never> = [S] extends [n
  * `SnapshotBinding<S>` argument and the agent's WIT
  * `snapshotting` metadata is `enabled` rather than `disabled`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface AgentDefinition<
@@ -269,7 +269,7 @@ export interface AgentDefinition<
  * - durable agents expose `get`, `getPhantom`, and `newPhantom`.
  * - ephemeral agents expose only `getPhantom` and `newPhantom`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type DefinedAgent<
@@ -297,7 +297,7 @@ export type DefinedAgent<
  * @see {@link registerAgent} for the lower-level registration-only
  *      entry point.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const defineAgent = <
@@ -350,7 +350,7 @@ const registry = new Map<string, CompiledAgent>()
  * @see {@link defineAgent} for the eager-registration shorthand that
  *      additionally returns a typed RPC client.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const registerAgent = <
@@ -533,7 +533,7 @@ let activeAgent: ActiveAgent | null = null
  * is left intact (those are populated at module import time).
  *
  * @internal
- * @since 0.1.0
+ * @since 1.5.0
  */
 export const __resetAgents = async (): Promise<void> => {
   if (activeAgent !== null) {
@@ -669,7 +669,7 @@ const initAgentInstance = async (
 /**
  * Implementation of `agent-guest.guest.initialize`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category runtime hooks
  */
 export const dispatchInitialize = async (
@@ -711,7 +711,7 @@ export const dispatchInitialize = async (
 /**
  * Implementation of `agent-guest.guest.invoke`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category runtime hooks
  */
 export const dispatchInvoke = async (
@@ -761,7 +761,7 @@ export const dispatchInvoke = async (
 /**
  * Implementation of `agent-guest.guest.discoverAgentTypes`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category runtime hooks
  */
 export const dispatchDiscoverAgentTypes = async (): Promise<Array<AgentCommon.AgentType>> =>
@@ -770,7 +770,7 @@ export const dispatchDiscoverAgentTypes = async (): Promise<Array<AgentCommon.Ag
 /**
  * Implementation of `agent-guest.guest.getDefinition`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category runtime hooks
  */
 export const dispatchGetDefinition = async (): Promise<AgentCommon.AgentType> => {
@@ -895,7 +895,7 @@ const encodeAutoSnapshot = (
  * trap shows up there too, we'll need to either restrict the user
  * handler shape or push the host investigation further.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category runtime hooks
  */
 export const dispatchSaveSnapshot = (): ApiHost.Snapshot | Promise<ApiHost.Snapshot> => {
@@ -959,7 +959,7 @@ const dispatchSaveCustomSnapshot = async (
  * 5. Mark the agent active so subsequent `invoke`s see the restored
  *    state.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category runtime hooks
  */
 export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<void> => {

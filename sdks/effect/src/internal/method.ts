@@ -1,5 +1,5 @@
 /**
- * @since 0.1.0
+ * @since 1.5.0
  */
 import { Effect, Pipeable, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
@@ -20,7 +20,7 @@ import { toWitCodec, type UnsupportedSchemaError, type WitCodec } from "../WitCo
  * (unstructured-text/binary), or a `Multimodal<S>` (the param maps to
  * `DataSchema.multimodal`; only valid when it is the sole parameter).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type MethodParam = Schema.Top | ElementSpec<any> | Multimodal<any>
@@ -28,7 +28,7 @@ export type MethodParam = Schema.Top | ElementSpec<any> | Multimodal<any>
 /**
  * A record of named parameter shapes.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type MethodParams = Readonly<Record<string, MethodParam>>
@@ -36,7 +36,7 @@ export type MethodParams = Readonly<Record<string, MethodParam>>
 /**
  * Decoded user-side type for one parameter.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type ParamInputType<P extends MethodParam> =
@@ -51,7 +51,7 @@ export type ParamInputType<P extends MethodParam> =
 /**
  * Decoded shape of a method's named-input record.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type MethodInput<Params extends MethodParams> = {
@@ -72,7 +72,7 @@ export type MethodInput<Params extends MethodParams> = {
  * {@link withPromptHint}) compose additively with the literal-options
  * form accepted by {@link method}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface MethodSpec<
@@ -172,7 +172,7 @@ export interface MethodSpec<
  * @see {@link withDescription} for the pipeable description combinator.
  * @see {@link withPromptHint} for the pipeable prompt-hint combinator.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const method: {
@@ -232,7 +232,7 @@ export const method: {
  * {@link Method} (which carries a `body` and a `name`) those extra
  * fields are preserved in the returned value.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const withHttp =
@@ -257,7 +257,7 @@ export const withHttp =
  * {@link Method} (which carries a `body` and a `name`) those extra
  * fields are preserved in the returned value.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const withDescription =
@@ -274,7 +274,7 @@ export const withDescription =
  * {@link Method} (which carries a `body` and a `name`) those extra
  * fields are preserved in the returned value.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const withPromptHint =
@@ -291,7 +291,7 @@ export const withPromptHint =
  * provide the body inside the agent's `impl` block — that gives the body
  * access to per-instance state via closure.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface Method<
@@ -307,7 +307,7 @@ export interface Method<
 /**
  * Standalone Method (spec + name + body), useful outside agents.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const defineMethod: {
@@ -342,7 +342,7 @@ export const defineMethod: {
  * to `never`). The dispatcher always provides all of these via the
  * `userRuntimeLayer`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type Handler<S extends MethodSpec<any, any, any>, CfgTag = never> = (
@@ -358,7 +358,7 @@ export type Handler<S extends MethodSpec<any, any, any>, CfgTag = never> = (
  * for tests; production code goes through `invokeDataValue` (with an
  * explicit handler) at the Golem boundary.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const invoke = <
@@ -378,7 +378,7 @@ export const invoke = <
  * {@link Principal} are not modeled as bindings at all — they reach
  * user code as Effect services provided by the dispatcher.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type ParamBinding =
@@ -418,7 +418,7 @@ export type ParamBinding =
  * and the matching Golem `DataSchema`s. Compiled once via
  * {@link compileMethodSpec}, then re-used per call by {@link invokeDataValue}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface MethodCodec<
@@ -449,7 +449,7 @@ const isVoidSchema = (s: Schema.Top): boolean => s.ast._tag === "Void"
  * Reused by both `compileMethodSpec` (per-method) and `agent.ts`
  * (per-constructor) so the two share a single param-shape pipeline.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const compileParamBindings = (
@@ -487,7 +487,7 @@ export const compileParamBindings = (
 /**
  * Compile a method spec (name + params + success + error) to a MethodCodec.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const compileMethodSpec = <
@@ -598,7 +598,7 @@ export const compileMethodSpec = <
 /**
  * Convenience: compile a standalone {@link Method}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const compileMethod = <
@@ -616,7 +616,7 @@ export const compileMethod = <
  * shape does not match the compiled method codec — wrong tag, wrong
  * arity, or an element of the wrong kind.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class InvalidDataValueError {
@@ -636,7 +636,7 @@ export class InvalidDataValueError {
  * - Output is the `tuple` variant, with 0 elements for a unit return type
  *   and 1 element otherwise.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const invokeDataValue = <

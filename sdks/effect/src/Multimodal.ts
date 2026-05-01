@@ -1,5 +1,5 @@
 /**
- * @since 0.1.0
+ * @since 1.5.0
  */
 import { Effect, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
@@ -20,7 +20,7 @@ import { toWitCodec, type UnsupportedSchemaError } from "./WitCodec.js"
  * {@link ElementSpec} (unstructured-text/binary) or a regular
  * `Schema.Top` (compiled to a `component-model` element).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type MultimodalMember = ElementSpec<any> | Schema.Top
@@ -28,7 +28,7 @@ export type MultimodalMember = ElementSpec<any> | Schema.Top
 /**
  * Record mapping case names to their multimodal members.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type MultimodalShape = Readonly<Record<string, MultimodalMember>>
@@ -36,7 +36,7 @@ export type MultimodalShape = Readonly<Record<string, MultimodalMember>>
 /**
  * Domain-side type emitted by a multimodal element of the given shape.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type MultimodalValue<S extends MultimodalShape> = ReadonlyArray<
@@ -61,7 +61,7 @@ export type MultimodalValue<S extends MultimodalShape> = ReadonlyArray<
  * The carrier captures everything needed to encode/decode multimodal
  * `DataValue.multimodal` payloads to/from a `ReadonlyArray<{_tag, value}>`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface Multimodal<S extends MultimodalShape> {
@@ -131,7 +131,7 @@ const compileMember = (
  * })
  * ```
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const multimodal = <S extends MultimodalShape>(shape: S): Multimodal<S> => {
@@ -214,7 +214,7 @@ export const multimodal = <S extends MultimodalShape>(shape: S): Multimodal<S> =
 /**
  * Type-guard for `Multimodal` carriers.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category guards
  */
 export const isMultimodal = (x: unknown): x is Multimodal<MultimodalShape> =>
@@ -227,7 +227,7 @@ export const isMultimodal = (x: unknown): x is Multimodal<MultimodalShape> =>
 /**
  * Multimodal payload with arbitrary text + image elements.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const multimodalTextImage = (opts?: {
@@ -243,7 +243,7 @@ export const multimodalTextImage = (opts?: {
  * Multimodal payload with arbitrary text + image elements plus a custom
  * component-model schema under a named slot (default: `"custom"`).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const multimodalTextImageCustom = <S extends Schema.Top>(

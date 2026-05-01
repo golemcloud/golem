@@ -38,7 +38,7 @@ import { safeStringify } from "./Logging.js"
  *   conflicts with the host's stack, we fall back to a local
  *   `Tracer.NativeSpan` so the host stack is never corrupted.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 
 // ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ import { safeStringify } from "./Logging.js"
 /**
  * Raised when one of the imperative `Tracing.*` host calls throws.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class TracingHostError {
@@ -273,7 +273,7 @@ const makeGolemTracer = (host: TracingHostShape): Tracer.Tracer =>
  * `Effect.withSpan` (and the built-in span events emitted by
  * `Logger.tracerLogger`, when enabled) flows through it.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category layers
  */
 export const layer: Layer.Layer<never, never, TracingHost> = Layer.effect(
@@ -291,7 +291,7 @@ export const layer: Layer.Layer<never, never, TracingHost> = Layer.effect(
 /**
  * A snapshot of `golem:api/context.currentContext()`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface InvocationContextSnapshot {
@@ -312,7 +312,7 @@ const snapshotOf = (host: TracingHostShape): InvocationContextSnapshot => {
 /**
  * Read the host's current invocation context, wrapped in Effect.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category getters
  */
 export const currentContext: Effect.Effect<
@@ -330,7 +330,7 @@ export const currentContext: Effect.Effect<
 /**
  * Read the W3C Trace Context headers for the current invocation.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category getters
  */
 export const traceContextHeaders: Effect.Effect<
@@ -353,7 +353,7 @@ export const traceContextHeaders: Effect.Effect<
  * Toggle the host setting that controls whether outgoing HTTP requests
  * carry W3C Trace Context headers. Returns the previous setting.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const allowForwardingTraceContextHeaders = (
@@ -372,7 +372,7 @@ export const allowForwardingTraceContextHeaders = (
  * the host setting for the surrounding `Scope`'s lifetime, then
  * restores the previous value on close.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const useForwardedHeaders = (
@@ -398,7 +398,7 @@ export const useForwardedHeaders = (
  * temporarily set to `allow`; restores the previous value on success,
  * failure, or interruption.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const withForwardedHeaders = <A, E, R>(
@@ -424,7 +424,7 @@ export const withForwardedHeaders = <A, E, R>(
  * combinator before `Effect.provide(userRuntimeLayer)` strips the
  * dependency).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const withInvocationParent = <A, E, R>(

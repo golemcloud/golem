@@ -7,7 +7,7 @@
  * repeat across all three RDBMS host bindings live here.
  *
  * @internal
- * @since 0.1.0
+ * @since 1.5.0
  */
 import {
   AuthenticationError,

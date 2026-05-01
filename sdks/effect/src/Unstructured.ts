@@ -1,5 +1,5 @@
 /**
- * @since 0.1.0
+ * @since 1.5.0
  */
 import { Effect, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
@@ -12,7 +12,7 @@ import { Uint8ArraySchema } from "./WitTypes.js"
 /**
  * Schema for `golem:core/types@1.5.0`.TextType.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const TextType = Schema.Struct({ languageCode: Schema.String })
@@ -20,7 +20,7 @@ export const TextType = Schema.Struct({ languageCode: Schema.String })
 /**
  * Schema for `golem:core/types@1.5.0`.BinaryType.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const BinaryType = Schema.Struct({ mimeType: Schema.String })
@@ -28,7 +28,7 @@ export const BinaryType = Schema.Struct({ mimeType: Schema.String })
 /**
  * Schema for `golem:core/types@1.5.0`.TextSource.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const TextSource = Schema.Struct({
@@ -39,7 +39,7 @@ export const TextSource = Schema.Struct({
 /**
  * Schema for `golem:core/types@1.5.0`.BinarySource.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const BinarySource = Schema.Struct({
@@ -52,7 +52,7 @@ export const BinarySource = Schema.Struct({
  * string URL) or `inline` (a `TextSource` carrying the data and an
  * optional `TextType` hint).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const TextReference = Schema.Union([
@@ -63,7 +63,7 @@ export const TextReference = Schema.Union([
 /**
  * Schema for `golem:core/types@1.5.0`.BinaryReference — `url` or `inline`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const BinaryReference = Schema.Union([
@@ -78,7 +78,7 @@ export const BinaryReference = Schema.Union([
  * The wire shape is the same — `Schema.Union` returns the same encoded
  * JS shape.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type TextReferenceValue = typeof TextReference.Type
@@ -86,7 +86,7 @@ export type TextReferenceValue = typeof TextReference.Type
 /**
  * Domain-side shape of a `BinaryReference`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type BinaryReferenceValue = typeof BinaryReference.Type
@@ -105,7 +105,7 @@ export type BinaryReferenceValue = typeof BinaryReference.Type
  * category error. Embed `TextReference` / `BinaryReference` schemas
  * instead when you need that.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface ElementSpec<T> {
@@ -116,7 +116,7 @@ export interface ElementSpec<T> {
 /**
  * Type-guard for `ElementSpec` carriers.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category guards
  */
 export const isElementSpec = (x: unknown): x is ElementSpec<unknown> =>
@@ -147,7 +147,7 @@ const passthroughReference = <V>(
 /**
  * Restriction descriptor accepted by `UnstructuredText()`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface TextRestriction {
@@ -157,7 +157,7 @@ export interface TextRestriction {
 /**
  * Restriction descriptor accepted by `UnstructuredBinary()`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface BinaryRestriction {
@@ -171,7 +171,7 @@ export interface BinaryRestriction {
  * or `inline`). Restrictions, if provided, surface in the emitted
  * `ElementSchema`'s `restrictions` field.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const UnstructuredText = (opts?: {
@@ -200,7 +200,7 @@ export const UnstructuredText = (opts?: {
 /**
  * Element spec for an unstructured binary input parameter.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const UnstructuredBinary = (opts?: {

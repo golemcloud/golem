@@ -33,7 +33,7 @@ import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./WitCodec.js
  * runs the constructor with those parameters, then applies the
  * snapshot.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 
 // ---------------------------------------------------------------------------
@@ -45,7 +45,7 @@ import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./WitCodec.js
  * `golem:agent/common.snapshotting-config` variant. `manual` is an
  * alias for `default` (the official TS SDK names it that way).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type SnapshotPolicy =
@@ -64,7 +64,7 @@ const policyEveryN = (n: number): SnapshotPolicy => ({ _tag: "EveryN", n })
  * Namespace of policy constructors used inside `Snapshot.define` /
  * `Snapshot.custom`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const policy = {
@@ -128,7 +128,7 @@ const policyToWit = (
  * Surfaced from `registerAgent` for malformed
  * `Snapshot.define`/`Snapshot.custom` shapes.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class InvalidSnapshotError {
@@ -143,7 +143,7 @@ export class InvalidSnapshotError {
  * Raised when an agent declared `snapshot` but `impl` never called
  * `init`/`register`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class SnapshotNotBoundError {
@@ -158,7 +158,7 @@ export class SnapshotNotBoundError {
  * Raised when `init`/`register` is called more than once during a
  * single agent lifetime.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class SnapshotAlreadyBoundError {
@@ -173,7 +173,7 @@ export class SnapshotAlreadyBoundError {
  * Raised when `attachDatabase` is called more than once for the same
  * name.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class SnapshotDatabaseDuplicateAttachError {
@@ -192,7 +192,7 @@ export class SnapshotDatabaseDuplicateAttachError {
  * corresponding `attachDatabase` call (save) or no corresponding part
  * in the loaded envelope (load).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class SnapshotDatabaseMissingPartError {
@@ -215,7 +215,7 @@ export class SnapshotDatabaseMissingPartError {
  * part whose `<name>` is not in the agent's declared `databases`
  * tuple.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class SnapshotDatabaseUnknownPartError {
@@ -233,7 +233,7 @@ export class SnapshotDatabaseUnknownPartError {
  * Raised at save time when a declared database has an open transaction
  * (`isAutocommitDatabaseSync` returns false).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class SnapshotDatabaseNotInAutocommitError {
@@ -251,7 +251,7 @@ export class SnapshotDatabaseNotInAutocommitError {
  * Raised at save time when a declared database has ATTACHed schemas
  * beyond the default `main`/`temp` (PRAGMA database_list).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class SnapshotDatabaseHasAttachmentsError {
@@ -290,7 +290,7 @@ const DB_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
  * envelope on the wire becomes `multipart/mixed` with one
  * `application/x-sqlite3` part per declared database.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface AutoSnapshotDef<S extends Schema.Top, DBs extends ReadonlyArray<string> = []> {
@@ -308,7 +308,7 @@ export interface AutoSnapshotDef<S extends Schema.Top, DBs extends ReadonlyArray
  * The user is responsible for serializing/deserializing their own state
  * through the `register({ save, load })` call inside `impl`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface CustomSnapshotDef {
@@ -320,7 +320,7 @@ export interface CustomSnapshotDef {
  * Either flavour of snapshot definition that may appear on
  * `AgentDefinition.snapshot`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type SnapshotDef = AutoSnapshotDef<Schema.Top, ReadonlyArray<string>> | CustomSnapshotDef
@@ -340,7 +340,7 @@ export type SnapshotDef = AutoSnapshotDef<Schema.Top, ReadonlyArray<string>> | C
  * (when one is declared via `defineAgent({ config: ... })`). Auto
  * bindings ignore `R` because they don't run user effects on save.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type SnapshotBinding<S, R = Principal> =
@@ -353,7 +353,7 @@ export type SnapshotBinding<S, R = Principal> =
 /**
  * Acceptable second argument to `attachDatabase`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type AttachableDatabase = SqliteClient | DatabaseSync
@@ -361,7 +361,7 @@ export type AttachableDatabase = SqliteClient | DatabaseSync
 /**
  * Auto-variant binding: yields a `Ref` initialised by the user.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface AutoSnapshotBinding<S extends Schema.Top, DBs extends ReadonlyArray<string> = []> {
@@ -394,7 +394,7 @@ export interface AutoSnapshotBinding<S extends Schema.Top, DBs extends ReadonlyA
  * surrounding agent declares a `config:` field, so user save/load
  * effects can also yield from that config `Context.Service`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface CustomSnapshotBinding<R = Principal> {
@@ -423,7 +423,7 @@ export interface CustomSnapshotBinding<R = Principal> {
  * dispatcher) must be supplied by the user with `Effect.provideService` /
  * `Effect.provide` BEFORE the effect reaches `register({...})`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface CustomSnapshotHandlers<R = Principal> {
@@ -451,7 +451,7 @@ export interface CustomSnapshotHandlers<R = Principal> {
  * accepted names is reflected at compile time in the binding's
  * `attachDatabase` first argument.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const define = <S extends Schema.Top, const DBs extends ReadonlyArray<string> = []>(spec: {
@@ -477,7 +477,7 @@ export const define = <S extends Schema.Top, const DBs extends ReadonlyArray<str
  * `save`/`load` effects from inside `impl` via the
  * {@link CustomSnapshotBinding} that the dispatcher passes in.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const custom = (spec: { readonly policy: SnapshotPolicy }): CustomSnapshotDef => ({
@@ -492,7 +492,7 @@ export const custom = (spec: { readonly policy: SnapshotPolicy }): CustomSnapsho
 /**
  * Compiled view of the user's snapshot definition.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type CompiledSnapshot =
@@ -522,7 +522,7 @@ export type CompiledSnapshot =
  * `Snapshot.custom`. Walks the schema (auto path), validates the
  * policy, and produces the WIT-side `snapshotting-config`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category metadata
  */
 export const compileSnapshot = (
@@ -574,7 +574,7 @@ export const compileSnapshot = (
  * (auto) or save/load effects (custom) the user bound from inside
  * `impl`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type BoundSnapshot =
@@ -604,7 +604,7 @@ export type BoundSnapshot =
  * user bound. The same shape underlies both `init` (auto) and
  * `register` (custom).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface BindingHandle {
@@ -619,7 +619,7 @@ export interface BindingHandle {
  * calls `read()` to capture whatever the user bound (or `null` if
  * nothing was bound — that's a `SnapshotNotBoundError`).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const createBinding = (agentName: string, compiled: CompiledSnapshot): BindingHandle => {
@@ -691,11 +691,11 @@ export const createBinding = (agentName: string, compiled: CompiledSnapshot): Bi
 // two error classes it raises, however, are part of the public `Snapshot.*`
 // namespace contract: any `dispatchLoadSnapshot` failure surfaces one of them.
 //
-// @since 0.1.0
+// @since 1.5.0
 // ---------------------------------------------------------------------------
 
 /**
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export {

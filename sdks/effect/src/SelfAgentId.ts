@@ -1,5 +1,5 @@
 /**
- * @since 0.1.0
+ * @since 1.5.0
  */
 import { Context } from "effect"
 import type * as CoreTypes from "golem:core/types@1.5.0"
@@ -22,7 +22,7 @@ import type * as CoreTypes from "golem:core/types@1.5.0"
  * provided explicitly via `Effect.provideService(SelfAgentId, …)`,
  * mirroring how {@link Principal} works.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category host services
  */
 export class SelfAgentId extends Context.Service<SelfAgentId, CoreTypes.AgentId>()(

@@ -1,5 +1,5 @@
 /**
- * @since 0.1.0
+ * @since 1.5.0
  */
 import { Context } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
@@ -13,7 +13,7 @@ import type * as AgentCommon from "golem:agent/common@1.5.0"
  * `PrincipalValue` to avoid a clash with the {@link Principal} service
  * class below — `yield* Principal` returns a `PrincipalValue`.)
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type PrincipalValue = AgentCommon.Principal
@@ -21,7 +21,7 @@ export type PrincipalValue = AgentCommon.Principal
 /**
  * OIDC-authenticated principal variant of {@link PrincipalValue}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type OidcPrincipal = AgentCommon.OidcPrincipal
@@ -29,7 +29,7 @@ export type OidcPrincipal = AgentCommon.OidcPrincipal
 /**
  * Agent-to-agent principal variant of {@link PrincipalValue}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type AgentPrincipal = AgentCommon.AgentPrincipal
@@ -37,7 +37,7 @@ export type AgentPrincipal = AgentCommon.AgentPrincipal
 /**
  * Golem-user principal variant of {@link PrincipalValue}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type GolemUserPrincipal = AgentCommon.GolemUserPrincipal
@@ -77,7 +77,7 @@ export type GolemUserPrincipal = AgentCommon.GolemUserPrincipal
  *   })
  * ```
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category host services
  */
 export class Principal extends Context.Service<Principal, AgentCommon.Principal>()(

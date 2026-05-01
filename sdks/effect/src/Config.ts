@@ -5,7 +5,7 @@
  * `#[derive(ConfigSchema)]`, Scala's `ConfigLoader.createLazyConfig`, and
  * MoonBit's `#derive.config`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 
 import { Context, Effect, Redacted, Schema, SchemaAST } from "effect"
@@ -21,7 +21,7 @@ type WitValue = CoreTypes.WitValue
  * Effect channel. Mirrors the rest of effect-golem's "errors as Effect
  * typed failures" convention (avoid throwing in Effect bodies).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class ConfigError {
@@ -45,7 +45,7 @@ export class ConfigError {
  * - or a literal `Schema.Struct(...)` (recursed into, prefixing the
  *   path with the field's name).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type ConfigField = Schema.Top
@@ -53,7 +53,7 @@ export type ConfigField = Schema.Top
 /**
  * Record of named config fields, supplied to {@link defineConfig}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type ConfigFields = Readonly<Record<string, ConfigField>>
@@ -62,7 +62,7 @@ export type ConfigFields = Readonly<Record<string, ConfigField>>
  * Recursively map a {@link ConfigFields} record to its decoded
  * "config shape". See {@link ConfigError} for the failure channel.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type ConfigShape<F extends ConfigFields> = {
@@ -82,7 +82,7 @@ export type ConfigShape<F extends ConfigFields> = {
  * secret leaf via RPC overrides at compile time (a runtime guard
  * enforces the same invariant).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type NonSecretOverride<F extends ConfigFields> = {
@@ -107,7 +107,7 @@ interface ConfigLeaf {
 /**
  * Compiled bundle held alongside the {@link defineConfig}-class metadata.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface CompiledConfig {
@@ -156,7 +156,7 @@ const isPlainStructSchema = (s: Schema.Top): s is Schema.Struct<ConfigFields> =>
  * (each with its WIT type, decoder, and path) plus the matching
  * AgentConfigDeclaration array used during agent registration.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category metadata
  */
 export const compileConfig = (
@@ -343,7 +343,7 @@ export const compileConfig = (
  * compiled bundle, build per-invocation shapes, and type the
  * `overrides` channel of {@link AgentClient.GetOptions}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface ConfigStatics<F extends ConfigFields> {
@@ -393,7 +393,7 @@ export interface ConfigStatics<F extends ConfigFields> {
  * }) {}
  * ```
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type ConfigClass<F extends ConfigFields> = Context.ServiceClass<
@@ -415,7 +415,7 @@ export type ConfigClass<F extends ConfigFields> = Context.ServiceClass<
  * AgentConfigDeclarations and runtime shapes without re-walking the
  * schema.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const defineConfig = <const F extends ConfigFields>(
@@ -471,7 +471,7 @@ export const defineConfig = <const F extends ConfigFields>(
  * Returns the encoded array; failure paths surface as
  * {@link UnsupportedSchemaError} or {@link ConfigError}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const encodeOverrides = (

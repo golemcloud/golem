@@ -1,5 +1,5 @@
 /**
- * @since 0.1.0
+ * @since 1.5.0
  */
 import { Schema, SchemaGetter } from "effect"
 import type * as CoreTypes from "golem:core/types@1.5.0"
@@ -18,7 +18,7 @@ type WitValue = CoreTypes.WitValue
  * The set of variants mirrors {@link CoreTypes.WitNode} 1:1, except that
  * every child is the inlined sub-tree instead of an index.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type WitValueTree =
@@ -58,7 +58,7 @@ export type WitValueTree =
  * accompanying `WitType` graph disagree on shape (e.g. an out-of-range
  * node index, or a value-tag that doesn't match the type-tag).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class WitGraphError {
@@ -271,7 +271,7 @@ const ValueTree = Schema.declare((_u): _u is WitValueTree => true)
  * that doesn't match `witType` throws a `WitGraphError` synchronously
  * (i.e. surfaces as a Schema decode failure issue).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const witGraphCodec = (witType: WitType) =>
@@ -286,6 +286,6 @@ export const witGraphCodec = (witType: WitType) =>
  * Internal helpers exported for unit tests.
  *
  * @internal
- * @since 0.1.0
+ * @since 1.5.0
  */
 export const _internal = { inflate, flatten }

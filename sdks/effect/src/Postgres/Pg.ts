@@ -10,7 +10,7 @@
  * by the facade so consumers reach both via
  * `import { Pg, PgClient } from "effect-golem/postgres"`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 import {
   type Interval,
@@ -28,7 +28,7 @@ import type { IpAddress, MacAddress } from "golem:rdbms/types@1.5.0"
  * Brand applied to values produced by the {@link Pg} constructors,
  * so the codec can distinguish them from raw JS values.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export const PgParamTag: unique symbol = Symbol.for(
@@ -38,7 +38,7 @@ export const PgParamTag: unique symbol = Symbol.for(
 /**
  * Tagged-value envelope produced by every {@link Pg} constructor.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface PgParam<T extends string, V> {
@@ -51,7 +51,7 @@ export interface PgParam<T extends string, V> {
  * Internal factory for {@link PgParam} envelopes.
  *
  * @internal
- * @since 0.1.0
+ * @since 1.5.0
  */
 export const pgParam = <T extends string, V>(kind: T, value: V): PgParam<T, V> => ({
   [PgParamTag]: true,
@@ -63,7 +63,7 @@ export const pgParam = <T extends string, V>(kind: T, value: V): PgParam<T, V> =
  * Probe for the {@link PgParam} brand. Used by the codec to detect
  * helper-produced values.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category guards
  */
 export const isPgParam = (v: unknown): v is PgParam<string, unknown> =>
@@ -76,7 +76,7 @@ export const isPgParam = (v: unknown): v is PgParam<string, unknown> =>
 /**
  * Pg-only range bound.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type PgBound<T> =
@@ -87,7 +87,7 @@ export type PgBound<T> =
 /**
  * Pg-only range value: closed/open bounds on each side.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface PgRange<T> {
@@ -98,7 +98,7 @@ export interface PgRange<T> {
 /**
  * Pg-only sparse-vector value.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface PgSparseVec {
@@ -110,7 +110,7 @@ export interface PgSparseVec {
 /**
  * Pg-only IP address (struct mirrored from `golem:rdbms/types@1.5.0`).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type PgIp =
@@ -127,7 +127,7 @@ export type PgIp =
  * Hint used when constructing `Pg.range(...)` so the encoder knows
  * which range bound variant to emit.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type PgRangeElementHint = "int4" | "int8" | "num" | "ts" | "tstz" | "date"
@@ -147,7 +147,7 @@ export type PgRangeElementHint = "int4" | "int8" | "num" | "ts" | "tstz" | "date
  * yield* sql`INSERT INTO t (id, data) VALUES (${Pg.uuid(id)}, ${Pg.jsonb({ foo: 1 })})`
  * ```
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const Pg = {

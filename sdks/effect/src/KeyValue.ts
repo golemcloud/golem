@@ -36,7 +36,7 @@
  * })
  * ```
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 
 import { Effect, Option, Scope, Schema } from "effect"
@@ -70,7 +70,7 @@ const traceOf = (e: unknown): string => {
  * driver-specific (Redis / SQLite / Postgres / in-memory all produce
  * different formats) and should not be parsed.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class KeyValueHostError {
@@ -90,7 +90,7 @@ export class KeyValueHostError {
 /**
  * Raised when {@link SchemaBucket} cannot parse a stored value as JSON.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class KeyValueDecodeError {
@@ -110,7 +110,7 @@ export class KeyValueDecodeError {
  * instance. Lets cross-bundle code reliably check whether an unknown
  * value is a `Bucket` even when several copies of this module exist.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export const BucketTypeId: unique symbol = Symbol.for(
@@ -118,7 +118,7 @@ export const BucketTypeId: unique symbol = Symbol.for(
 ) as BucketTypeId
 
 /**
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export type BucketTypeId = typeof BucketTypeId
@@ -126,7 +126,7 @@ export type BucketTypeId = typeof BucketTypeId
 /**
  * Type guard: true when `u` is a {@link Bucket}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category guards
  */
 export const isBucket = (u: unknown): u is Bucket =>
@@ -145,7 +145,7 @@ export const isBucket = (u: unknown): u is Bucket =>
  * The underlying WIT `bucket` resource has no explicit close method;
  * dropping the JS handle is enough.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface Bucket {
@@ -200,7 +200,7 @@ export interface Bucket {
  * `effect/platform/KeyValueStore.SchemaStore` so users coming from
  * `@effect/platform` see the same shape.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface SchemaBucket<S extends Schema.Top> {
@@ -366,7 +366,7 @@ const makeBucket = (host: HostBucket): Bucket => {
  * malformed name or backend rejection) surface as
  * {@link KeyValueHostError}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const openBucket = (

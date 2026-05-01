@@ -1,5 +1,5 @@
 /**
- * @since 0.1.0
+ * @since 1.5.0
  */
 import { Pipeable } from "effect"
 
@@ -33,7 +33,7 @@ import { Pipeable } from "effect"
  * )
  * ```
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category utils
  */
 export const withPipe = <T extends object>(obj: T): T & Pipeable.Pipeable =>

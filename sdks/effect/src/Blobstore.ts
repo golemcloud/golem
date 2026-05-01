@@ -28,7 +28,7 @@
  * })
  * ```
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 
 import { Effect, Schema, Scope, Stream } from "effect"
@@ -52,7 +52,7 @@ const messageOf = (e: unknown): string => {
  * the keyvalue host the blobstore error type is a plain `string`
  * (per the WIT), so {@link trace} just carries that string verbatim.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class BlobstoreHostError {
@@ -72,7 +72,7 @@ export class BlobstoreHostError {
 /**
  * Raised when {@link SchemaContainer} cannot parse a stored object as JSON.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class BlobstoreDecodeError {
@@ -92,7 +92,7 @@ export class BlobstoreDecodeError {
  * instance. Lets cross-bundle code reliably check whether an unknown
  * value is a `Container` even when several copies of this module exist.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export const ContainerTypeId: unique symbol = Symbol.for(
@@ -100,7 +100,7 @@ export const ContainerTypeId: unique symbol = Symbol.for(
 ) as ContainerTypeId
 
 /**
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export type ContainerTypeId = typeof ContainerTypeId
@@ -108,7 +108,7 @@ export type ContainerTypeId = typeof ContainerTypeId
 /**
  * Type guard: true when `u` is a {@link Container}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category guards
  */
 export const isContainer = (u: unknown): u is Container =>
@@ -123,7 +123,7 @@ export const isContainer = (u: unknown): u is Container =>
 /**
  * Object identifier — `(containerName, objectName)` pair.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface ObjectId {
@@ -141,7 +141,7 @@ export interface ObjectId {
  * Note: in the host, this field is actually `last_modified_at` —
  * there is no separate creation time on object storage backends.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface ContainerMetadata {
@@ -157,7 +157,7 @@ export interface ContainerMetadata {
  * milliseconds — there is no separate creation time on object
  * storage backends.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface ObjectMetadata {
@@ -181,7 +181,7 @@ export interface ObjectMetadata {
  * host fixes the in-memory/fs backends, ranged reads are not
  * portable — prefer reading whole objects.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface ByteRange {
@@ -194,7 +194,7 @@ export interface ByteRange {
  * {@link getContainer} or {@link getOrCreateContainer} inside an Effect
  * `Scope`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface Container {
@@ -242,7 +242,7 @@ export interface Container {
 /**
  * Schema-typed view returned by {@link Container.forSchema}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface SchemaContainer<S extends Schema.Top> {
@@ -414,7 +414,7 @@ const makeContainer = (host: HostContainer): Container => {
  * Create a new empty container. Fails with {@link BlobstoreHostError}
  * if a container with the same name already exists.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const createContainer = (
@@ -430,7 +430,7 @@ export const createContainer = (
  * Open an existing container by name. Fails with {@link BlobstoreHostError}
  * if the container does not exist.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const getContainer = (
@@ -449,7 +449,7 @@ export const getContainer = (
  * Idempotent — safe to call from `defineAgent` `impl` after a
  * snapshot load.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const getOrCreateContainer = (
@@ -464,7 +464,7 @@ export const getOrCreateContainer = (
 /**
  * True if a container with the given name exists.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const containerExists = (
@@ -478,7 +478,7 @@ export const containerExists = (
 /**
  * Delete a container and all of its objects.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const deleteContainer = (
@@ -492,7 +492,7 @@ export const deleteContainer = (
 /**
  * Copy an object to the same or a different container. Overwrites the destination.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const copyObject = (
@@ -507,7 +507,7 @@ export const copyObject = (
 /**
  * Move (rename) an object to the same or a different container. Overwrites the destination.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const moveObject = (

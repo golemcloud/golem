@@ -44,7 +44,7 @@
  * the in-fiber checkpoint stack are inherently sequential, and
  * nesting would silently corrupt the comp-stack drain order.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 
 import { Cause, Context, Effect, Ref, Scope } from "effect"
@@ -114,7 +114,7 @@ const CauseStoreRef = Context.Reference<CauseStoreValue | null>("effect-golem/sa
  * spirit: the host's bracketing is sequential, so nesting cannot be
  * made safe without changing the wire model.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class NestedSagaError {
@@ -136,7 +136,7 @@ export class NestedSagaError {
  *   compensations still run (best-effort), but only the first failure
  *   is surfaced.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type TransactionFailure<E> =
@@ -176,7 +176,7 @@ export type TransactionFailure<E> =
  *
  * Available in both pipe-friendly and data-first overloads.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const withCompensation: {
@@ -248,7 +248,7 @@ const withCompensationImpl = <A, E, R, R2>(
  * dropped because the infallible path never returns a value the
  * caller could inspect.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const withFallibleCompensation: {
@@ -325,7 +325,7 @@ const withFallibleCompensationImpl = <A, E, R, E2, R2>(
  * {@link withFallibleCompensation} directly if you need the
  * partial-rollback signal.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const operation = <In, Out, E, R, R2>(input: {
@@ -426,7 +426,7 @@ const rewindAndSuspend = (checkpoint: bigint): Effect.Effect<never, OplogHostErr
  *
  * Nesting another saga inside the body raises {@link NestedSagaError}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const fallibleTransaction = <A, E, R>(
@@ -522,7 +522,7 @@ export const fallibleTransaction = <A, E, R>(
  *
  * Nesting another saga inside the body raises {@link NestedSagaError}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const infallibleTransaction = <A, R>(

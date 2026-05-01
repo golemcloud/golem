@@ -62,7 +62,7 @@
  * const channel = Websocket.makeChannel("wss://echo.example/ws")
  * ```
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 
 import type { NonEmptyReadonlyArray } from "effect/Array"
@@ -232,7 +232,7 @@ const mapToSocketError = (
  *   handshake is complete or has failed), so there is no separate
  *   "open" event to await.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface ConnectOptions {
@@ -257,7 +257,7 @@ const toHostHeaders = (
  * you want full control over the resource lifecycle (e.g. reusing a
  * persisted connection across invocations).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const fromConnection = <RO>(
@@ -410,7 +410,7 @@ export const fromConnection = <RO>(
  *
  * Wire-compatible with `golem-rust.WebsocketConnection::connect(...)`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const connect = (
@@ -450,7 +450,7 @@ export const connect = (
  * Equivalent to `Socket.layerWebSocket(...)` in the canonical
  * browser/Node setup.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category layers
  */
 export const layer = (
@@ -478,7 +478,7 @@ export const layer = (
  * `Stream.fromChannel(...)` / `Stream.pipeThroughChannel(...)` for
  * stream-based pipelines.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const makeChannel = <IE = never>(

@@ -1,5 +1,5 @@
 /**
- * @since 0.1.0
+ * @since 1.5.0
  */
 import { Effect, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
@@ -25,7 +25,7 @@ import type { WitCodec } from "./WitCodec.js"
  * (method/agent/client) speaks a single uniform shape per parameter slot
  * regardless of which element kind it is.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export interface ElementCodec<T> {
@@ -44,7 +44,7 @@ export interface ElementCodec<T> {
  * doesn't match what the codec expects (e.g. a `component-model` codec
  * receives an `unstructured-text` value).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class ElementValueKindError {
@@ -60,7 +60,7 @@ export class ElementValueKindError {
  * Lift a `WitCodec<S>` to the `ElementCodec<S["Type"]>` that wraps the
  * underlying `WitValue` in `{ tag: "component-model", val: ... }`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const componentModelElement = <S extends Schema.Top>(

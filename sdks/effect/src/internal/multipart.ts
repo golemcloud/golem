@@ -25,7 +25,7 @@
  * and after delimiter), rejects duplicate part names, and tolerates a
  * leading CRLF/LF before the first boundary.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 
 const CRLF = "\r\n"
@@ -35,7 +35,7 @@ const textDecoder = new TextDecoder()
 /**
  * One named, content-typed part of a `multipart/mixed` body.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface MultipartPart {
@@ -100,7 +100,7 @@ const containsBoundary = (parts: ReadonlyArray<MultipartPart>, boundary: string)
  * encoded bytes alongside the chosen boundary (so the caller can
  * embed it into the Content-Type header).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const encodeMultipart = (
@@ -173,7 +173,7 @@ const findDoubleLf = (data: Uint8Array, start: number): number => {
  * tolerated (we always split on `\n--<boundary>` and strip a trailing
  * `\r` from each section).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const decodeMultipart = (data: Uint8Array, boundary: string): Array<MultipartPart> => {
@@ -257,7 +257,7 @@ export const decodeMultipart = (data: Uint8Array, boundary: string): Array<Multi
  * Extract the `boundary` parameter from a `multipart/mixed; boundary=…`
  * mime type. Returns `null` if the parameter is missing/malformed.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category utils
  */
 export const extractBoundary = (mimeType: string): string | null => {

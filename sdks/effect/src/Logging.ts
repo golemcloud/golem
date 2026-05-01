@@ -31,7 +31,7 @@ import { TracingHost, type TracingHostShape } from "./host/TracingHost.js"
  * annotations (set with `Effect.annotateLogs`) and Effect's log spans
  * (`Effect.withLogSpan`) are folded in automatically.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 
 // ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ import { TracingHost, type TracingHostShape } from "./host/TracingHost.js"
 /**
  * Raised when the imperative {@link log} effect's host call throws.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class LoggingHostError {
@@ -62,7 +62,7 @@ export class LoggingHostError {
  * `info` (it should never reach a logger after filtering, but mapping
  * defensively keeps the call total).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category utils
  */
 export const wasiLevelOf = (level: LogLevel.LogLevel): WasiLogging.Level => {
@@ -96,7 +96,7 @@ export const wasiLevelOf = (level: LogLevel.LogLevel): WasiLogging.Level => {
  * functions. Used to render log annotations / message payloads — must
  * never throw inside a logger callback.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category utils
  */
 export const safeStringify = (value: unknown): string => {
@@ -265,7 +265,7 @@ const golemLoggerEffect: Effect.Effect<
  * in `wasi:logging` and nothing else. Requires `LoggingHost` and
  * `TracingHost` (provided by `HostLive`).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category layers
  */
 export const layer: Layer.Layer<never, never, LoggingHost | TracingHost> = Logger.layer([
@@ -276,7 +276,7 @@ export const layer: Layer.Layer<never, never, LoggingHost | TracingHost> = Logge
  * Add the Golem host logger alongside Effect's default loggers.
  * Convenient for dev / vitest where console output is also helpful.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category layers
  */
 export const mergeLayer: Layer.Layer<never, never, LoggingHost | TracingHost> = Logger.layer(
@@ -297,7 +297,7 @@ export const mergeLayer: Layer.Layer<never, never, LoggingHost | TracingHost> = 
  * logger pipeline (e.g. inside a synchronous host shim or a test
  * harness).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const log = (
@@ -320,7 +320,7 @@ export const log = (
 /**
  * Re-export of the host's `wasi:logging/logging.Level` enum.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category re-exports
  */
 export type { Level } from "wasi:logging/logging"

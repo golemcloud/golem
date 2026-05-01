@@ -52,7 +52,7 @@
  * on `DbConnection`. The adapter relies on the host's GC to free
  * resources once the JS handle becomes unreachable.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 import {
   Context,
@@ -95,7 +95,7 @@ const ATTR_DB_SYSTEM_NAME = "db.system.name"
  * `effect-golem` and one in the standalone `effect-golem/mysql`
  * sub-import) still agree on the same key.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export const MySqlClientTypeId: unique symbol = Symbol.for(
@@ -103,7 +103,7 @@ export const MySqlClientTypeId: unique symbol = Symbol.for(
 ) as MySqlClientTypeId
 
 /**
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export type MySqlClientTypeId = typeof MySqlClientTypeId
@@ -119,7 +119,7 @@ const MySqlConnectionTxSymbol: unique symbol = Symbol.for(
 /**
  * How temporal values (datetime/timestamp/date/time) are decoded from rows.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type TemporalDecodeMode = "raw" | "date"
@@ -128,7 +128,7 @@ export type TemporalDecodeMode = "raw" | "date"
  * Configuration accepted by {@link MySqlClient.make} /
  * {@link MySqlClient.layer}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface MySqlClientConfig {
@@ -164,7 +164,7 @@ export interface MySqlClientConfig {
  * `SqlResolver` / `Migrator`, and resolve the canonical
  * `Client.SqlClient` tag.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface MySqlClient extends Client.SqlClient {
@@ -183,7 +183,7 @@ export interface MySqlClient extends Client.SqlClient {
  * Both this tag and the upstream `Client.SqlClient` tag are populated
  * by {@link MySqlClient.layer}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category host services
  */
 export class MySqlClientService extends Context.Service<MySqlClientService, MySqlClient>()(
@@ -567,7 +567,7 @@ const layer = (
 /**
  * Public namespace mirror used by `import { MySqlClient } from "effect-golem/mysql"`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const MySqlClient = {
@@ -580,7 +580,7 @@ export const MySqlClient = {
 /**
  * Probe an arbitrary value for the MySqlClient brand.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category guards
  */
 export const isMySqlClient = (v: unknown): v is MySqlClient => {

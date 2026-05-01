@@ -16,7 +16,7 @@
  * Both are re-exported here so users see a single unified
  * `Durability.*` namespace.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * from "./internal/durabilityMode.js"

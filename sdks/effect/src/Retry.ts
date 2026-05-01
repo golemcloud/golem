@@ -37,7 +37,7 @@
  * because the flatten algorithm and validation rules match — see
  * `toRaw*` for the wire conversion.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 
 import { Duration, Effect, Scope } from "effect"
@@ -56,7 +56,7 @@ import { RetryClient } from "./host/RetryClient.js"
  * doesn't fit a `u64`, a numeric predicate value that doesn't fit an
  * `i64`).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class RetryPolicyValidationError {
@@ -72,7 +72,7 @@ export class RetryPolicyValidationError {
  * The host calls are oplog-persisted on the Golem side; this only fires
  * on hard runtime failures (e.g. the binding is missing).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class RetryHostError {
@@ -90,7 +90,7 @@ export class RetryHostError {
 /**
  * Allowed leaf values in property-comparison predicates.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type PredicateValueInput = string | boolean | bigint | number
@@ -188,7 +188,7 @@ type PolicyNodeDef =
  * Predicates select *when* a policy applies. The host evaluates them
  * against per-operation context properties (see {@link Props}).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export class Predicate {
@@ -295,7 +295,7 @@ export class Predicate {
  * `withJitter`, `onlyWhen`) and joined via `andThen` / `union` /
  * `intersect`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export class Policy {
@@ -396,7 +396,7 @@ const NAMED_POLICY_TYPE_ID = Symbol.for("effect-golem/Retry/NamedPolicy")
  * predicate `Predicate.always()`. Both can be overridden with the
  * (immutable) `priority(...)` and `appliesWhen(...)` chain methods.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export class NamedPolicy {
@@ -450,7 +450,7 @@ const isNamedPolicy = (value: unknown): value is NamedPolicy =>
 /**
  * Either flavour accepted by the high-level setters / scoping helpers.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type NamedPolicyInput = NamedPolicy | RetryHost.NamedRetryPolicy
@@ -463,7 +463,7 @@ export type NamedPolicyInput = NamedPolicy | RetryHost.NamedRetryPolicy
  * Well-known property names exposed by the Golem host in retry contexts.
  * Mirrors the official `golem-ts-sdk` `Props` constants.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category metadata
  */
 export const Props = {
@@ -566,7 +566,7 @@ const toRawPredicateValue = (
 /**
  * Encode a {@link PredicateValueInput} to its WIT `predicate-value` shape.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const encodePredicateValue = (
@@ -749,7 +749,7 @@ const buildRawPolicy = (
 /**
  * Compile a {@link Predicate} to its flattened WIT shape.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const toRawPredicate = (
@@ -760,7 +760,7 @@ export const toRawPredicate = (
 /**
  * Compile a {@link Policy} to its flattened WIT shape.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const toRawPolicy = (
@@ -773,7 +773,7 @@ export const toRawPolicy = (
  * `NamedRetryPolicy`) to its WIT shape. Validates the priority is a
  * `u32` and the predicate / policy trees are well-formed.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const toRawNamedPolicy = (
@@ -801,7 +801,7 @@ export const toRawNamedPolicy = (
 /**
  * Get all named retry policies currently active on this agent.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const getPolicies = (): Effect.Effect<
@@ -820,7 +820,7 @@ export const getPolicies = (): Effect.Effect<
 /**
  * Look up a single named policy. Resolves to `undefined` when no rule with that name exists.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const getPolicyByName = (
@@ -843,7 +843,7 @@ export const getPolicyByName = (
  * (`string | bigint | number | boolean`) — the SDK encodes it to the
  * WIT `predicate-value` variant for you.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const resolvePolicy = (
@@ -873,7 +873,7 @@ export const resolvePolicy = (
  * Add or overwrite a named retry policy. Mirrors the host's
  * `set-retry-policy` (oplog-persisted on durable agents).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const setPolicy = (
@@ -891,7 +891,7 @@ export const setPolicy = (
 /**
  * Remove a named retry policy. Mirrors the host's `remove-retry-policy`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const removePolicy = (name: string): Effect.Effect<void, RetryHostError, RetryClient> =>
@@ -915,7 +915,7 @@ export const removePolicy = (name: string): Effect.Effect<void, RetryHostError, 
  * Use directly with `Effect.scoped`, or via {@link withPolicy} for the
  * common "run this Effect with a temporary policy" shape.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const useScoped = (
@@ -947,7 +947,7 @@ export const useScoped = (
  * previous policy (or absence thereof) is restored on success, error,
  * and interruption alike.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const withPolicy = <A, E, R>(
@@ -969,7 +969,7 @@ export const withPolicy = <A, E, R>(
  * functions themselves are intentionally NOT re-exported — use the
  * Effect-typed wrappers above instead.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category re-exports
  */
 export type {

@@ -39,7 +39,7 @@
  * working unchanged — passing a token across an RPC boundary continues
  * to use `toRecord` / `fromRecord` under the hood.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 import { Cause, Effect, Exit, Schema, SchemaGetter, Scope } from "effect"
 import * as QuotaHost from "golem:quota/types@1.5.0"
@@ -62,7 +62,7 @@ import { Int64, Uint32, Uint64 } from "./WitTypes.js"
  * type position refers to the host class instance; `QuotaToken` in a
  * value position refers to the schema codec.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type QuotaToken = QuotaHost.QuotaToken
@@ -73,7 +73,7 @@ export type QuotaToken = QuotaHost.QuotaToken
  * {@link commit}, or let the surrounding `Scope` close (drop ≡
  * `commit(0)` per the WIT contract).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface Reservation {
@@ -83,12 +83,12 @@ export interface Reservation {
 /**
  * Brand symbol identifying SDK-owned reservations.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export const ReservationTypeId: unique symbol = Symbol.for("@effect-golem/quota/Reservation")
 /**
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export type ReservationTypeId = typeof ReservationTypeId
@@ -121,7 +121,7 @@ const makeReservation = (raw: QuotaHost.Reservation): ReservationImpl => ({
  * the caller would need to wait for capacity (rate-limited resources);
  * `undefined` for `reject` enforcement on quota-based resources.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class FailedReservationError {
@@ -155,7 +155,7 @@ export class FailedReservationError {
  * committing twice, calling `split` / `merge` with arguments that the
  * host rejects with a panic.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class QuotaHostError {
@@ -177,7 +177,7 @@ export class QuotaHostError {
  * Schema for `golem:core/types@1.5.0`.Uuid — a 128-bit value carried as
  * two 64-bit halves.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const Uuid = Schema.Struct({
@@ -188,7 +188,7 @@ export const Uuid = Schema.Struct({
 /**
  * Schema for `golem:api/host@1.5.0`.EnvironmentId.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const EnvironmentId = Schema.Struct({
@@ -198,7 +198,7 @@ export const EnvironmentId = Schema.Struct({
 /**
  * Schema for `wasi:clocks/wall-clock@0.2.3`.Datetime.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const Datetime = Schema.Struct({
@@ -210,7 +210,7 @@ export const Datetime = Schema.Struct({
  * Schema for the wire shape of a `QuotaToken` — the record returned by
  * `QuotaToken.toRecord()` and accepted by `QuotaToken.fromRecord()`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const QuotaTokenRecord = Schema.Struct({
@@ -231,7 +231,7 @@ export const QuotaTokenRecord = Schema.Struct({
  * Bridging is done by `QuotaToken.fromRecord` / `QuotaToken.toRecord` —
  * the official host class invariants are preserved end-to-end.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const QuotaToken: Schema.Codec<
@@ -276,7 +276,7 @@ const isFailedReservation = (e: unknown): e is QuotaHost.FailedReservation =>
  * - `expectedUse` is the typical units per reservation; the host uses
  *   it to derive credit rate / max-credit for fair scheduling.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const acquireQuotaToken = (
@@ -303,7 +303,7 @@ export const acquireQuotaToken = (
  * enforcement policy is `reject` (`throttle` / `terminate` policies are
  * handled inside the host before `reserve` returns).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const reserve = (
@@ -352,7 +352,7 @@ export const reserve = (
  * {@link QuotaHostError}. Calling it once consumes the reservation; the
  * surrounding scope's finalizer becomes a no-op.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const commit = (
@@ -383,7 +383,7 @@ export const commit = (
  * the parent's current `expectedUse` — that surfaces as a
  * {@link QuotaHostError}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const split = (
@@ -404,7 +404,7 @@ export const split = (
  * {@link QuotaHostError}. After a successful merge, `other` is
  * consumed and must not be used again.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category operations
  */
 export const merge = (
@@ -443,7 +443,7 @@ export const merge = (
  * )
  * ```
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const withReservation = <A, E, R>(
@@ -472,7 +472,7 @@ export const withReservation = <A, E, R>(
 // ---------------------------------------------------------------------------
 
 /**
- * @since 0.1.0
+ * @since 1.5.0
  * @category re-exports
  */
 export type {

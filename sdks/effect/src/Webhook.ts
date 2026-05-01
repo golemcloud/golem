@@ -65,7 +65,7 @@
  * })
  * ```
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 
 import { Effect, Schema } from "effect"
@@ -86,7 +86,7 @@ import { PromiseClient } from "./host/PromiseClient.js"
  * - the promise was created by a different component than the one
  *   calling `create-webhook`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class WebhookHostError {
@@ -107,7 +107,7 @@ const strictDecoder = new TextDecoder("utf-8", { fatal: true })
  * The HTTP POST body delivered to the webhook URL. Mirrors the
  * official SDKs' `WebhookRequestPayload` shape.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export class WebhookPayload {
@@ -158,7 +158,7 @@ export class WebhookPayload {
  * UTF-8. JSON syntax errors and schema-level validation failures both
  * surface as `effect/Schema.SchemaError` instead.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class WebhookDecodeError {
@@ -184,7 +184,7 @@ export class WebhookDecodeError {
  * `IntoFuture` shims, so durability, oplog replay, and Effect-style
  * interruption all work for free.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface WebhookHandle {
@@ -227,7 +227,7 @@ export interface WebhookHandle {
  * Wire-compatible with `golem-ts-sdk.createWebhook()` /
  * `golem-rust.create_webhook()`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const create: Effect.Effect<

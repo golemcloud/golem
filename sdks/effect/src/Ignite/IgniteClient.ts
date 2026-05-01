@@ -48,7 +48,7 @@
  * in some Golem deployments; the integration-test agent for Ignite
  * is therefore deployed as a separate, gated component.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 import {
   Context,
@@ -95,7 +95,7 @@ const ATTR_DB_SYSTEM_NAME = "db.system.name"
  * consumers can reliably distinguish an Ignite client. Keyed via
  * `Symbol.for` so multiple module copies still agree on the same key.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export const IgniteClientTypeId: unique symbol = Symbol.for(
@@ -103,7 +103,7 @@ export const IgniteClientTypeId: unique symbol = Symbol.for(
 ) as IgniteClientTypeId
 
 /**
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export type IgniteClientTypeId = typeof IgniteClientTypeId
@@ -119,7 +119,7 @@ const IgniteConnectionTxSymbol: unique symbol = Symbol.for(
 /**
  * How temporal values (db-date / db-timestamp) are decoded from rows.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type TemporalDecodeMode = "raw" | "date"
@@ -127,7 +127,7 @@ export type TemporalDecodeMode = "raw" | "date"
 /**
  * Configuration accepted by {@link IgniteClient.make} / {@link IgniteClient.layer}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface IgniteClientConfig {
@@ -163,7 +163,7 @@ export interface IgniteClientConfig {
  * Note: `withTransaction` rejects nested calls with a
  * `SqlSyntaxError` because Ignite does not support savepoints.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface IgniteClient extends Client.SqlClient {
@@ -181,7 +181,7 @@ export interface IgniteClient extends Client.SqlClient {
  * environment. Both this tag and the upstream `Client.SqlClient` tag
  * are populated by {@link IgniteClient.layer}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category host services
  */
 export class IgniteClientService extends Context.Service<IgniteClientService, IgniteClient>()(
@@ -563,7 +563,7 @@ const layer = (
 /**
  * Public namespace mirror used by `import { IgniteClient } from "effect-golem/ignite2"`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const IgniteClient = {
@@ -576,7 +576,7 @@ export const IgniteClient = {
 /**
  * Probe an arbitrary value for the IgniteClient brand.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category guards
  */
 export const isIgniteClient = (v: unknown): v is IgniteClient => {

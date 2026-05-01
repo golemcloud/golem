@@ -55,7 +55,7 @@
  * do **not** ship a `fromConnection` constructor for v1 because the
  * caller would have no way to clean up.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 import {
   Context,
@@ -108,13 +108,13 @@ const ATTR_DB_SYSTEM_NAME = "db.system.name"
  * and one in the standalone `effect-golem/postgres` sub-import) still
  * agree on the same key.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export const PgClientTypeId: unique symbol = Symbol.for("effect-golem/PgClient") as PgClientTypeId
 
 /**
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export type PgClientTypeId = typeof PgClientTypeId
@@ -130,7 +130,7 @@ const PgConnectionTxSymbol: unique symbol = Symbol.for(
 /**
  * How temporal values (timestamp/timestamptz/date/time) are decoded from rows.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type TemporalDecodeMode = "raw" | "date"
@@ -138,7 +138,7 @@ export type TemporalDecodeMode = "raw" | "date"
 /**
  * Configuration accepted by {@link PgClient.make} / {@link PgClient.layer}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface PgClientConfig {
@@ -176,7 +176,7 @@ export interface PgClientConfig {
  * `SqlResolver` / `Migrator`, and resolve the canonical
  * `Client.SqlClient` tag.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface PgClient extends Client.SqlClient {
@@ -195,7 +195,7 @@ export interface PgClient extends Client.SqlClient {
  * Both this tag and the upstream `Client.SqlClient` tag are populated
  * by {@link PgClient.layer}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category host services
  */
 export class PgClientService extends Context.Service<PgClientService, PgClient>()(
@@ -595,7 +595,7 @@ const layer = (
 /**
  * Public namespace mirror used by `import { PgClient } from "effect-golem/postgres"`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const PgClient = {
@@ -608,7 +608,7 @@ export const PgClient = {
 /**
  * Probe an arbitrary value for the PgClient brand.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category guards
  */
 export const isPgClient = (v: unknown): v is PgClient => {

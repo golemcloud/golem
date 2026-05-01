@@ -1,5 +1,5 @@
 /**
- * @since 0.1.0
+ * @since 1.5.0
  */
 import { Effect, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
@@ -36,7 +36,7 @@ type AnyMethodSpec = MethodSpec<any, any, any>
 /**
  * Re-exported for users who want to pattern-match on RPC errors.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category re-exports
  */
 export type RpcError = AgentHost.RpcError
@@ -44,7 +44,7 @@ export type RpcError = AgentHost.RpcError
 /**
  * Errors a `RemoteMethod` call can produce, before adding any user-typed error.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export type RemoteCallError =
@@ -74,7 +74,7 @@ const wrapHostThrow = (e: unknown): RemoteCallError => {
  * the scheduled time has already passed and the invocation has started,
  * it is a no-op.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface ScheduledInvocation {
@@ -114,7 +114,7 @@ export interface ScheduledInvocation {
  * plus `Fiber.interrupt(fiber)`; no separate API is required because
  * fiber-interrupt already chains to the host cancel.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface RemoteMethod<
@@ -133,7 +133,7 @@ export interface RemoteMethod<
 /**
  * A typed remote handle to one agent instance.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type RemoteAgent<Methods extends Record<string, AnyMethodSpec>> = {
@@ -145,7 +145,7 @@ export type RemoteAgent<Methods extends Record<string, AnyMethodSpec>> = {
 /**
  * Same as {@link RemoteAgent} but additionally carries the generated phantom id.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type PhantomRemoteAgent<Methods extends Record<string, AnyMethodSpec>> =
@@ -154,7 +154,7 @@ export type PhantomRemoteAgent<Methods extends Record<string, AnyMethodSpec>> =
 /**
  * Optional knobs accepted by every constructor variant.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface GetOptions<F extends ConfigFields = never> {
@@ -222,7 +222,7 @@ interface EphemeralClient<
  * is hidden at the type level; only `getPhantom` and `newPhantom`
  * remain.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type AgentClient<
@@ -528,7 +528,7 @@ const parsePhantomId = (id: string): Effect.Effect<CoreTypes.Uuid, RemoteCallErr
  * `registerAgent`'d in the same component — pure consumers can use it
  * standalone.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const clientFor = <

@@ -22,7 +22,7 @@
  * throws as {@link DurabilityHostError}; user-supplied numeric inputs
  * are validated with {@link DurabilityValidationError}.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 import { Cause, Effect, Scope } from "effect"
 import type * as ApiHost from "golem:api/host@1.5.0"
@@ -38,7 +38,7 @@ import { SelfAgentId } from "../SelfAgentId.js"
 // ---------------------------------------------------------------------------
 
 /**
- * @since 0.1.0
+ * @since 1.5.0
  * @category re-exports
  */
 export type { OplogIndex, Uuid } from "golem:api/host@1.5.0"
@@ -48,7 +48,7 @@ export type { OplogIndex, Uuid } from "golem:api/host@1.5.0"
  * value-level {@link PersistenceLevel} const namespace can keep the
  * un-suffixed name.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type PersistenceLevelValue = ApiHost.PersistenceLevel
@@ -72,7 +72,7 @@ const sdkErrorBrand: unique symbol = Symbol.for("effect-golem/durable-function/s
 /**
  * Raised when a `golem:api/host@1.5.0` execution-mode call throws unexpectedly.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class DurabilityHostError {
@@ -87,7 +87,7 @@ export class DurabilityHostError {
 /**
  * Raised when a user-supplied input to a durability call is out of range.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category errors
  */
 export class DurabilityValidationError {
@@ -105,7 +105,7 @@ export class DurabilityValidationError {
 /**
  * Pure-data constructors for the WIT `persistence-level` variant.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category constructors
  */
 export const PersistenceLevel = {
@@ -137,7 +137,7 @@ void ({
 /**
  * Read the current persistence level.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category host bindings
  */
 export const getPersistenceLevel: Effect.Effect<
@@ -155,7 +155,7 @@ export const getPersistenceLevel: Effect.Effect<
 /**
  * Write the persistence level. Persists to the oplog.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category host bindings
  */
 export const setPersistenceLevel = (
@@ -172,7 +172,7 @@ export const setPersistenceLevel = (
 /**
  * Read the current idempotence mode. `true` = at-least-once; `false` = at-most-once.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category host bindings
  */
 export const getIdempotenceMode: Effect.Effect<boolean, DurabilityHostError, DurabilityModeClient> =
@@ -187,7 +187,7 @@ export const getIdempotenceMode: Effect.Effect<boolean, DurabilityHostError, Dur
 /**
  * Write the idempotence mode.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category host bindings
  */
 export const setIdempotenceMode = (
@@ -206,7 +206,7 @@ export const setIdempotenceMode = (
  * replicas (or the maximum if `replicas` exceeds the maximum). The host
  * type is `u8`, so `replicas` is validated to fit `0..=255`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category host bindings
  */
 export const oplogCommit = (
@@ -234,7 +234,7 @@ export const oplogCommit = (
  * {@link atomically} or {@link markAtomicOperationScoped} unless you
  * really need imperative control.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category host bindings
  */
 export const beginOperation: Effect.Effect<
@@ -254,7 +254,7 @@ export const beginOperation: Effect.Effect<
  * Idempotent on the host side: subsequent calls with the same index
  * are no-ops.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category host bindings
  */
 export const endOperation = (
@@ -274,7 +274,7 @@ export const endOperation = (
  * to use against external systems' idempotence checks (e.g. payment
  * gateways).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category host bindings
  */
 export const generateIdempotencyKey: Effect.Effect<
@@ -298,7 +298,7 @@ export const generateIdempotencyKey: Effect.Effect<
  * restores the previous value on scope close (success, failure or
  * interruption).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const usePersistenceLevelScoped = (
@@ -316,7 +316,7 @@ export const usePersistenceLevelScoped = (
  * level. Restores the previous level on success, error and
  * interruption.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const withPersistenceLevel = <A, E, R>(
@@ -329,7 +329,7 @@ export const withPersistenceLevel = <A, E, R>(
  * Acquire-release pair that sets the idempotence mode on entry and
  * restores the previous value on scope close.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const useIdempotenceModeScoped = (
@@ -345,7 +345,7 @@ export const useIdempotenceModeScoped = (
 /**
  * Run `effect` with `idempotent` temporarily installed as the idempotence mode.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const withIdempotenceMode = <A, E, R>(
@@ -360,7 +360,7 @@ export const withIdempotenceMode = <A, E, R>(
  * or interruption) calls `mark-end-operation` with the captured begin
  * index. Returns the begin index for callers that need it.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const markAtomicOperationScoped: Effect.Effect<
@@ -375,7 +375,7 @@ export const markAtomicOperationScoped: Effect.Effect<
  * If `effect` fails or is interrupted, the host treats the region as
  * needing reexecution on the next replay.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const atomically = <A, E, R>(
@@ -429,7 +429,7 @@ const revertAndSuspend = (
  * body's `E` channel is suppressed because the failure branch never
  * resumes (revert is followed by `Effect.never`).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const unwrapOrRevert = <A, E, R>(
@@ -457,7 +457,7 @@ export const unwrapOrRevert = <A, E, R>(
  * the body may have been interrupted (no `E` value) or failed with a
  * typed error.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type CheckpointResult<A, E> =
@@ -477,7 +477,7 @@ export type CheckpointResult<A, E> =
  * useful inside test runtimes that do not preempt on revert and for
  * callers that want to inspect the post-revert state.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const checkpoint = <A, E, R>(
@@ -514,7 +514,7 @@ export const checkpoint = <A, E, R>(
  * to a remote system). `acquire` failures bubble up directly without
  * compensation; defects bubble up unchanged.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category combinators
  */
 export const compensable = <A, B, E, R>(input: {

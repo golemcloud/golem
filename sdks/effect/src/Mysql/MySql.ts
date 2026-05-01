@@ -10,7 +10,7 @@
  * by the facade so consumers reach both via
  * `import { MySql, MySqlClient } from "effect-golem/mysql"`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 import { type Date as MyDate, type Time, type Timestamp } from "golem:rdbms/mysql@1.5.0"
 
@@ -22,7 +22,7 @@ import { type Date as MyDate, type Time, type Timestamp } from "golem:rdbms/mysq
  * Brand applied to values produced by the {@link MySql} constructors,
  * so the codec can distinguish them from raw JS values.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export const MySqlParamTag: unique symbol = Symbol.for(
@@ -32,7 +32,7 @@ export const MySqlParamTag: unique symbol = Symbol.for(
 /**
  * Tagged-value envelope produced by every {@link MySql} constructor.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface MySqlParam<T extends string, V> {
@@ -47,7 +47,7 @@ export interface MySqlParam<T extends string, V> {
  * public surface.
  *
  * @internal
- * @since 0.1.0
+ * @since 1.5.0
  */
 export const mysqlParam = <T extends string, V>(kind: T, value: V): MySqlParam<T, V> => ({
   [MySqlParamTag]: true,
@@ -59,7 +59,7 @@ export const mysqlParam = <T extends string, V>(kind: T, value: V): MySqlParam<T
  * Probe for the {@link MySqlParam} brand. Used by the codec to detect
  * helper-produced values.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category guards
  */
 export const isMySqlParam = (v: unknown): v is MySqlParam<string, unknown> =>
@@ -80,7 +80,7 @@ export const isMySqlParam = (v: unknown): v is MySqlParam<string, unknown> =>
  * yield* sql`INSERT INTO t (id, data) VALUES (${id}, ${MySql.json({ foo: 1 })})`
  * ```
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const MySql = {

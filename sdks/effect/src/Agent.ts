@@ -12,7 +12,7 @@
  * Mirrors the {@link Durability} facade pattern (see also the
  * "Module organisation conventions" section in `AGENTS.md`).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * from "./internal/agent.js"

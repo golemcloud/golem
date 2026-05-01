@@ -1,5 +1,5 @@
 /**
- * @since 0.1.0
+ * @since 1.5.0
  */
 
 // ---------------------------------------------------------------------------
@@ -19,7 +19,7 @@
  * re-exported as a flat alias below), `registerAgent`, and the dispatcher
  * entry points consumed by the generated `agent-guest` shim.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Agent from "./Agent.js"
@@ -29,7 +29,7 @@ export * as Agent from "./Agent.js"
  * `golem:api/host@1.5.0` (metadata, fork/revert/update, the `GetAgents`
  * pager, and the promise rendezvous).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Agents from "./Agents.js"
@@ -38,7 +38,7 @@ export * as Agents from "./Agents.js"
  * Effect-typed wrappers around `wasi:blobstore/*` — container CRUD, object
  * I/O, listing as a `Stream`, and a `forSchema` typed view per container.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Blobstore from "./Blobstore.js"
@@ -46,7 +46,7 @@ export * as Blobstore from "./Blobstore.js"
 /**
  * Typed RPC client proxies attached to each `defineAgent` result.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Client from "./Client.js"
@@ -55,7 +55,7 @@ export * as Client from "./Client.js"
  * `defineConfig` (also re-exported as a flat alias below) plus the
  * `ConfigError` plumbing it produces.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Config from "./Config.js"
@@ -66,7 +66,7 @@ export * as Config from "./Config.js"
  * regions, oplog commit, idempotency-key generation), plus the high-level
  * `wrap` / `wrapInfallible` durable-function combinator.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Durability from "./Durability.js"
@@ -74,7 +74,7 @@ export * as Durability from "./Durability.js"
 /**
  * `Element` schema for tagged primitives inside `Unstructured` payloads.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Element from "./Element.js"
@@ -83,7 +83,7 @@ export * as Element from "./Element.js"
  * Declarative HTTP routing metadata exposed via `Http.mount` /
  * `Http.endpoint` / verb shorthands (`Http.get` / `Http.post` / …).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Http from "./Http.js"
@@ -92,7 +92,7 @@ export * as Http from "./Http.js"
  * Effect-typed wrappers around the eventually-consistent subset of
  * `wasi:keyvalue@0.1.0` (`eventual` + `eventual-batch`).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as KeyValue from "./KeyValue.js"
@@ -102,7 +102,7 @@ export * as KeyValue from "./KeyValue.js"
  * `Logging.layer` automatically; this module is re-exported for users that
  * want to replace or augment the default wiring.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Logging from "./Logging.js"
@@ -111,7 +111,7 @@ export * as Logging from "./Logging.js"
  * `method` factory (also re-exported as a flat alias below) plus the
  * method-definition models consumed by `defineAgent`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Method from "./Method.js"
@@ -119,7 +119,7 @@ export * as Method from "./Method.js"
 /**
  * Multipart payloads (text + binary parts) for agent inputs and outputs.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Multimodal from "./Multimodal.js"
@@ -128,7 +128,7 @@ export * as Multimodal from "./Multimodal.js"
  * Effect-typed wrappers around `golem:api/oplog@1.5.0` plus
  * `getOplogIndex` / `setOplogIndex`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Oplog from "./Oplog.js"
@@ -136,7 +136,7 @@ export * as Oplog from "./Oplog.js"
 /**
  * Principal identity types attached to agent invocations and snapshots.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Principal from "./Principal.js"
@@ -146,7 +146,7 @@ export * as Principal from "./Principal.js"
  * `reserve`, `commit`, `withReservation`, `split`, `merge`) plus the Schema
  * codec for sending a `QuotaToken` across an RPC boundary.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Quota from "./Quota.js"
@@ -155,7 +155,7 @@ export * as Quota from "./Quota.js"
  * Retry-policy DSL — builders for `Predicate` / `Policy` / `NamedPolicy`
  * plus Effect-typed wrappers around `golem:api/retry@1.5.0`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Retry from "./Retry.js"
@@ -165,7 +165,7 @@ export * as Retry from "./Retry.js"
  * (`withCompensation`, `withFallibleCompensation`, `operation`,
  * `fallibleTransaction`, `infallibleTransaction`).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Saga from "./Saga.js"
@@ -173,7 +173,7 @@ export * as Saga from "./Saga.js"
 /**
  * Accessors for the running agent's own identity (`SelfAgentId`).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as SelfAgentId from "./SelfAgentId.js"
@@ -182,7 +182,7 @@ export * as SelfAgentId from "./SelfAgentId.js"
  * Snapshot opt-in (`Snapshot.define` / `Snapshot.custom`) and supporting
  * binding / policy / attachable-database types.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Snapshot from "./Snapshot.js"
@@ -192,7 +192,7 @@ export * as Snapshot from "./Snapshot.js"
  * installs `Tracing.layer` automatically; this module is re-exported for
  * users that want to replace or augment the default wiring.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Tracing from "./Tracing.js"
@@ -201,7 +201,7 @@ export * as Tracing from "./Tracing.js"
  * Heterogeneous, JSON-like data payloads carried alongside structured agent
  * inputs.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Unstructured from "./Unstructured.js"
@@ -211,7 +211,7 @@ export * as Unstructured from "./Unstructured.js"
  * Bundles `Promises.create` with the host's URL minting and exposes a
  * `Webhook` handle whose `await` Effect resumes when the URL is POSTed to.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Webhook from "./Webhook.js"
@@ -220,7 +220,7 @@ export * as Webhook from "./Webhook.js"
  * Effect-typed bridge from the host `golem:websocket/client@1.5.0` resource
  * to the canonical `effect/unstable/socket` `Socket` abstraction.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as Websocket from "./Websocket.js"
@@ -228,7 +228,7 @@ export * as Websocket from "./Websocket.js"
 /**
  * Schema ↔ WIT `wit-value` codec machinery (encoders / decoders / errors).
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as WitCodec from "./WitCodec.js"
@@ -237,7 +237,7 @@ export * as WitCodec from "./WitCodec.js"
  * Schema ↔ WIT `wit-type` lowering helpers (`Uint8`, `Int32`, …) used to
  * publish agent metadata.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category modules
  */
 export * as WitTypes from "./WitTypes.js"
@@ -258,7 +258,7 @@ export * as WitTypes from "./WitTypes.js"
 /**
  * Declare an agent type. See {@link Agent} for the full surface.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category dsl
  */
 export { defineAgent } from "./Agent.js"
@@ -267,7 +267,7 @@ export { defineAgent } from "./Agent.js"
  * Declare an agent's host-managed configuration. See {@link Config} for the
  * full surface.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category dsl
  */
 export { defineConfig } from "./Config.js"
@@ -275,7 +275,7 @@ export { defineConfig } from "./Config.js"
 /**
  * Declare a method on an agent type. See {@link Method} for the full surface.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category dsl
  */
 export { method } from "./Method.js"
@@ -287,7 +287,7 @@ export { method } from "./Method.js"
 // ---------------------------------------------------------------------------
 
 /**
- * @since 0.1.0
+ * @since 1.5.0
  * @category internal
  */
 export { guest, saveSnapshot, loadSnapshot } from "./internal/guest.js"

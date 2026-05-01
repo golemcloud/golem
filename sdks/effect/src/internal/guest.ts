@@ -1,6 +1,6 @@
 /**
  * @internal
- * @since 0.1.0
+ * @since 1.5.0
  */
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
@@ -66,7 +66,7 @@ interface LoadSnapshotExports {
  * these dispatchers — they should never need to interact with `guest`,
  * `saveSnapshot`, or `loadSnapshot` directly.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category runtime hooks
  */
 export const guest: GuestExports = {
@@ -82,7 +82,7 @@ export const guest: GuestExports = {
  * `snapshotting: { tag: "disabled" }`, so the host should never invoke
  * these for them; the dispatchers raise a clear error if it does.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category runtime hooks
  */
 export const saveSnapshot: SaveSnapshotExports = {
@@ -94,7 +94,7 @@ export const saveSnapshot: SaveSnapshotExports = {
  * in `./agent`. The host calls `load` instead of `initialize` when an
  * agent is being restored from a snapshot envelope.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category runtime hooks
  */
 export const loadSnapshot: LoadSnapshotExports = {

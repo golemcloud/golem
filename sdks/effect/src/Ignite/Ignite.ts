@@ -9,7 +9,7 @@
  * re-exported by the facade so consumers reach both via
  * `import { Ignite, IgniteClient } from "effect-golem/ignite2"`.
  *
- * @since 0.1.0
+ * @since 1.5.0
  */
 
 // ---------------------------------------------------------------------------
@@ -20,7 +20,7 @@
  * Brand applied to values produced by the {@link Ignite} constructors,
  * so the codec can distinguish them from raw JS values.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category symbols
  */
 export const IgniteParamTag: unique symbol = Symbol.for(
@@ -30,7 +30,7 @@ export const IgniteParamTag: unique symbol = Symbol.for(
 /**
  * Tagged-value envelope produced by every {@link Ignite} constructor.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export interface IgniteParam<T extends string, V> {
@@ -43,7 +43,7 @@ export interface IgniteParam<T extends string, V> {
  * Internal factory for {@link IgniteParam} envelopes.
  *
  * @internal
- * @since 0.1.0
+ * @since 1.5.0
  */
 export const igniteParam = <T extends string, V>(kind: T, value: V): IgniteParam<T, V> => ({
   [IgniteParamTag]: true,
@@ -55,7 +55,7 @@ export const igniteParam = <T extends string, V>(kind: T, value: V): IgniteParam
  * Probe for the {@link IgniteParam} brand. Used by the codec to detect
  * helper-produced values.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category guards
  */
 export const isIgniteParam = (v: unknown): v is IgniteParam<string, unknown> =>
@@ -68,7 +68,7 @@ export const isIgniteParam = (v: unknown): v is IgniteParam<string, unknown> =>
 /**
  * Ignite uuid — `[hi, lo]` 128-bit identifier.
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category models
  */
 export type IgniteUuid = string | { readonly hi: bigint; readonly lo: bigint } | [bigint, bigint]
@@ -86,7 +86,7 @@ export type IgniteUuid = string | { readonly hi: bigint; readonly lo: bigint } |
  * yield* sql`INSERT INTO t (id, ts) VALUES (${Ignite.uuid(id)}, ${Ignite.timestamp(BigInt(Date.now()), 0)})`
  * ```
  *
- * @since 0.1.0
+ * @since 1.5.0
  * @category codecs
  */
 export const Ignite = {
