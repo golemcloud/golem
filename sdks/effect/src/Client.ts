@@ -1,7 +1,7 @@
 /**
  * @since 1.5.0
  */
-import { Effect, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import type * as AgentHost from "golem:agent/host@1.5.0"
@@ -447,7 +447,25 @@ const buildRemoteMethod = (
 ): RemoteMethod<MethodParams, Schema.Top, Schema.Top> => {
   const call = (input: Record<string, unknown>) =>
     Effect.flatMap(encodeMethodInput(mc, input), (dv) =>
-      Effect.flatMap(asyncInvoke(rpc, mc.name, dv), (out) => decodeMethodOutput(mc, out)),
+      Effect.flatMap(asyncInvoke(rpc, mc.name, dv), (out) =>
+        // When the method declares a typed error, the wire response is
+        // a component-model `result<S, E>`. Decode it via
+        // `decodeMethodOutput` (which produces a `Result.Result<S, E>`),
+        // then split: success → succeed; failure → typed `Effect.fail`.
+        // `AgentError.custom-error` is NOT inspected — typed errors
+        // travel exclusively on the success-DataValue's Result wrapper.
+        Effect.flatMap(decodeMethodOutput(mc, out), (decoded) => {
+          if (!mc.errorWrapped) return Effect.succeed(decoded)
+          const r = decoded as Result.Result<unknown, unknown>
+          if (Result.isSuccess(r)) {
+            // Undo the empty-record stand-in for void-success methods
+            // (server-side encodes `undefined` as `{}` so it can ride
+            // the component-model `result<_, E>`).
+            return Effect.succeed(mc.successVoid ? undefined : r.success)
+          }
+          return Effect.fail(r.failure) as Effect.Effect<unknown, unknown>
+        }),
+      ),
     )
   const trigger = (input: Record<string, unknown>) =>
     Effect.flatMap(encodeMethodInput(mc, input), (dv) =>

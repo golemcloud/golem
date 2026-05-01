@@ -17,7 +17,6 @@ import {
   TestFailure,
   TestSession,
   defineCase,
-  expectInvokeFails,
   expectMatch,
   liftCliError,
   updateTolerant,
@@ -44,10 +43,12 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
   const session = yield* TestSession
   const name = `hf-${session.stamp}`
   const r = `HostFeatures("${name}")`
-  // wrappedQuoteFailing leaves the agent in a "Previous Invocation
-  // Failed" state on the host; subsequent invocations on the same
-  // worker get rejected. We therefore drive that probe on a
-  // separate, throwaway instance.
+  // wrappedQuoteFailing's typed `Effect.fail` rides the SDK's wire
+  // `result<S, E>` envelope (NOT a worker-level failure), so the call
+  // succeeds on the wire and the agent stays healthy. We still drive
+  // it on a throwaway instance just to keep the snapshot/oplog drill
+  // on `r` deterministic — sharing a Durability function name across
+  // success+failure runs would interleave their replay entries.
   const failingName = `hf-fail-${session.stamp}`
   const failingRef = `HostFeatures("${failingName}")`
 
@@ -120,25 +121,23 @@ const run: Effect.Effect<void, TestFailure, GolemCli | TestSession> = Effect.gen
   yield* expectMatch(liveQuote.stdout, /AAPL/, "wrappedQuote response contains the symbol")
   const livePrice = yield* extractQuotePrice(liveQuote.stdout)
 
-  // wrappedQuoteFailing: typed Effect.fail round-trips through the
-  // oplog as Result.fail. Run on a fresh instance so the resulting
-  // "Previous Invocation Failed" host state does not poison the
-  // snapshot / update drill on `r` below.
-  const failed = yield* expectInvokeFails(failingRef, "wrappedQuoteFailing", [`"AAPL"`]).pipe(
-    Effect.catchTag("GolemCliError", (e) =>
-      Effect.fail(
-        new TestFailure({
-          testName: session.currentTest,
-          message: `golem CLI failed unexpectedly: ${e.command.join(" ")}`,
-          diagnostic: `exit=${e.exitCode}\nstdout:\n${e.stdout}\nstderr:\n${e.stderr}`,
-        }),
-      ),
-    ),
+  // wrappedQuoteFailing: typed Effect.fail rides the wire as the
+  // err arm of the SDK's `result<S, E>` envelope. The CLI invocation
+  // therefore SUCCEEDS at the host/transport level and the response
+  // body carries the err payload (printed by the host as
+  // `{ error: { code: "UNAVAILABLE", symbol: "AAPL" } }`). Pre-fix,
+  // typed E was undeliverable and the call surfaced as a worker
+  // "Previous Invocation Failed".
+  const failed = yield* liftCliError(cli.invoke(failingRef, "wrappedQuoteFailing", [`"AAPL"`]))
+  yield* expectMatch(
+    failed.stdout,
+    /UNAVAILABLE/,
+    "wrappedQuoteFailing delivers typed E via the wire result.err arm",
   )
   yield* expectMatch(
-    failed.stdout + failed.stderr,
-    /UNAVAILABLE|AAPL|fail/i,
-    "wrappedQuoteFailing surfaces a typed failure",
+    failed.stdout,
+    /AAPL/,
+    "wrappedQuoteFailing's typed E payload preserves the symbol field",
   )
 
   void livePrice // verified by the schema-decode at parse time

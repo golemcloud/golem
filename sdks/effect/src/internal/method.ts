@@ -1,7 +1,7 @@
 /**
  * @since 1.5.0
  */
-import { Effect, Pipeable, Schema } from "effect"
+import { Effect, Pipeable, Result, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
 import { componentModelElement, ElementValueKindError, type ElementCodec } from "../Element.js"
@@ -435,8 +435,36 @@ export interface MethodCodec<
     readonly name: string
     readonly codec: WitCodec<Schema.Top>
   }>
-  readonly outputCodec: WitCodec<Success> | null
-  readonly outputElement: ElementCodec<Success["Type"]> | null
+  /**
+   * The wit-codec for the method's wire response. When
+   * {@link errorWrapped} is `false`, this is the codec for `Success`
+   * (or `null` if the method returns void). When `errorWrapped` is
+   * `true`, this is the codec for `Result<Success, Error>` and is
+   * always non-null — the result wrapper carries the error tag even
+   * when `Success` is `Schema.Void`.
+   */
+  readonly outputCodec: WitCodec<Schema.Top> | null
+  /**
+   * Element codec for the method's wire response, paired with
+   * {@link outputCodec}. Decoded value is `Success["Type"]` when
+   * {@link errorWrapped} is `false`, or
+   * `Result.Result<Success["Type"], Error["Type"]>` when `true`.
+   */
+  readonly outputElement: ElementCodec<unknown> | null
+  /**
+   * `true` when the method declares a non-Void typed `error`; the
+   * wire response is folded into a component-model `result<S, E>`.
+   * `false` for the default unfailable case (back-compat).
+   */
+  readonly errorWrapped: boolean
+  /**
+   * `true` when `spec.success` is `Schema.Void`. Together with
+   * {@link errorWrapped}: if both are `true`, the wire `result<_, E>`
+   * uses an empty-record stand-in for the success arm (component model
+   * lacks a free-standing unit type), and the SDK substitutes
+   * `undefined` ↔ `{}` automatically.
+   */
+  readonly successVoid: boolean
   readonly inputSchema: AgentCommon.DataSchema
   readonly outputSchema: AgentCommon.DataSchema
 }
@@ -501,15 +529,34 @@ export const compileMethodSpec = <
   Effect.gen(function* () {
     const paramEntries = Object.entries(spec.params)
 
-    const outputCodec = isVoidSchema(spec.success)
-      ? null
-      : ((yield* toWitCodec(spec.success)) as WitCodec<Success>)
-    const outputElement: ElementCodec<Success["Type"]> | null =
+    // When the method declares a non-Void typed error, fold success and
+    // error into a single component-model `result<S, E>` carried by the
+    // same single-element output tuple. AgentError is reserved for
+    // host/SDK-level conditions (invalid-input, etc.) and is not used
+    // to transport user-domain errors.
+    const errorWrapped = !isVoidSchema(spec.error)
+    const successVoid = isVoidSchema(spec.success)
+    // Component model has no free-standing unit type; substitute an
+    // empty record for the success arm of `result<_, E>` when the
+    // method's success is `Schema.Void`. The SDK transparently
+    // substitutes `undefined` ↔ `{}` on encode/decode (see
+    // `runHandlerAndEncode` server-side and `buildRemoteMethod`
+    // client-side).
+    const responseSchema: Schema.Top = errorWrapped
+      ? (Schema.Result(
+          successVoid ? (Schema.Struct({}) as Schema.Top) : spec.success,
+          spec.error,
+        ) as unknown as Schema.Top)
+      : spec.success
+
+    const outputCodec: WitCodec<Schema.Top> | null =
+      !errorWrapped && successVoid
+        ? null
+        : ((yield* toWitCodec(responseSchema)) as WitCodec<Schema.Top>)
+    const outputElement: ElementCodec<unknown> | null =
       outputCodec === null
         ? null
-        : (componentModelElement(outputCodec, `${name}: return value`) as ElementCodec<
-            Success["Type"]
-          >)
+        : (componentModelElement(outputCodec, `${name}: return value`) as ElementCodec<unknown>)
     const outputSchema: AgentCommon.DataSchema =
       outputElement === null
         ? { tag: "tuple", val: [] }
@@ -563,6 +610,8 @@ export const compileMethodSpec = <
         inputCodecs: [],
         outputCodec,
         outputElement,
+        errorWrapped,
+        successVoid,
         inputSchema,
         outputSchema,
       }
@@ -591,6 +640,8 @@ export const compileMethodSpec = <
       inputCodecs,
       outputCodec,
       outputElement,
+      errorWrapped,
+      successVoid,
       inputSchema,
       outputSchema,
     }
@@ -626,6 +677,74 @@ export class InvalidDataValueError {
 }
 
 /**
+ * Run the user handler and encode its outcome into the on-the-wire
+ * `DataValue`. Two paths:
+ *
+ * - `errorWrapped === false` (default, no typed error declared): the
+ *   handler's typed `E` channel propagates unchanged. Success is
+ *   encoded into a single-element `tuple` (or empty tuple for void).
+ *
+ * - `errorWrapped === true`: the handler's typed `E` is folded into
+ *   `Result.fail(e)` via `Effect.matchEffect`; success becomes
+ *   `Result.succeed(s)`. The `Result` is encoded through
+ *   `mc.outputElement`, whose codec is `Schema.Result(success, error)`.
+ *   `AgentError.custom-error` is NOT used — typed user errors travel
+ *   on the success channel as a component-model `result<S, E>`.
+ *
+ * Defects (`Effect.die`) and SDK-internal failures continue to propagate
+ * untouched — they are not user-domain errors and surface as host-level
+ * traps / `remote-internal-error`.
+ */
+const runHandlerAndEncode = <
+  Params extends MethodParams,
+  Success extends Schema.Top,
+  Error extends Schema.Top,
+  R,
+>(
+  mc: MethodCodec<Params, Success, Error>,
+  handler: (input: MethodInput<Params>) => Effect.Effect<Success["Type"], Error["Type"], R>,
+  decoded: MethodInput<Params>,
+): Effect.Effect<
+  CoreTypes.DataValue,
+  Error["Type"] | Schema.SchemaError | InvalidDataValueError,
+  R
+> =>
+  Effect.gen(function* () {
+    if (mc.errorWrapped) {
+      // outputElement is always non-null when errorWrapped is true
+      // (Result<S,E> is not Void even if S is Void — it uses an empty
+      // record stand-in for the success arm).
+      const folded = handler(decoded).pipe(
+        Effect.matchEffect({
+          onFailure: (e: Error["Type"]) =>
+            Effect.succeed(Result.fail(e) as Result.Result<unknown, Error["Type"]>),
+          onSuccess: (s: Success["Type"]) =>
+            // When success is `Schema.Void`, substitute `{}` for the
+            // void value so it round-trips through the empty-record
+            // stand-in compiled into `Schema.Result(Schema.Struct({}),
+            // error)`.
+            Effect.succeed(
+              Result.succeed(mc.successVoid ? {} : s) as Result.Result<unknown, Error["Type"]>,
+            ),
+        }),
+      )
+      const result = yield* folded
+      const ev = yield* mc.outputElement!.encode(result)
+      return { tag: "tuple", val: [ev] } as CoreTypes.DataValue
+    }
+    const result = yield* handler(decoded)
+    if (mc.outputElement === null) {
+      return { tag: "tuple", val: [] } as CoreTypes.DataValue
+    }
+    const ev = yield* mc.outputElement.encode(result)
+    return { tag: "tuple", val: [ev] } as CoreTypes.DataValue
+  }) as Effect.Effect<
+    CoreTypes.DataValue,
+    Error["Type"] | Schema.SchemaError | InvalidDataValueError,
+    R
+  >
+
+/**
  * Invoke a compiled method using a Golem `DataValue` as input and producing
  * a Golem `DataValue` as output. The actual implementation is provided
  * separately as `handler` so the same compiled codec can be paired with
@@ -635,7 +754,11 @@ export class InvalidDataValueError {
  *   with the declared parameters; each element must be the
  *   `component-model` variant carrying a `WitValue`.
  * - Output is the `tuple` variant, with 0 elements for a unit return type
- *   and 1 element otherwise.
+ *   and 1 element otherwise. When the method declares a non-Void typed
+ *   error, the single output element is a component-model `result<S, E>`
+ *   carrying either the success value or the typed failure (this is the
+ *   ONLY channel for user-typed errors; `AgentError` is reserved for
+ *   host/SDK-level conditions).
  *
  * @since 1.5.0
  * @category operations
@@ -669,12 +792,7 @@ export const invokeDataValue = <
           : err,
       )
       const decoded = { [multimodalBinding.name]: value } as MethodInput<Params>
-      const result = yield* handler(decoded)
-      if (mc.outputElement === null) {
-        return { tag: "tuple", val: [] } as CoreTypes.DataValue
-      }
-      const ev = yield* mc.outputElement.encode(result)
-      return { tag: "tuple", val: [ev] } as CoreTypes.DataValue
+      return yield* runHandlerAndEncode(mc, handler, decoded)
     }
 
     if (input.tag !== "tuple") {
@@ -707,13 +825,7 @@ export const invokeDataValue = <
       )
     }
 
-    const result = yield* handler(decoded as MethodInput<Params>)
-
-    if (mc.outputElement === null) {
-      return { tag: "tuple", val: [] } as CoreTypes.DataValue
-    }
-    const ev = yield* mc.outputElement.encode(result)
-    return { tag: "tuple", val: [ev] } as CoreTypes.DataValue
+    return yield* runHandlerAndEncode(mc, handler, decoded as MethodInput<Params>)
   }) as Effect.Effect<
     CoreTypes.DataValue,
     Error["Type"] | Schema.SchemaError | InvalidDataValueError,

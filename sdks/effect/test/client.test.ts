@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "@effect/vitest"
-import { Cause, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Result, Schema } from "effect"
 import { defineAgent } from "../src/Agent.js"
 import { method } from "../src/Method.js"
 import { defineConfig } from "../src/Config.js"
@@ -612,6 +612,208 @@ describe("AgentClient (interruptibility)", () => {
       expect(afterCount).toBe(1)
       const cancellations = yield* fake.getCancellations
       expect(cancellations.length).toBe(1)
+    }),
+  )
+})
+
+// ---------------------------------------------------------------------------
+// Typed errors — the wire response is a component-model `result<S, E>`
+// carried by the success-DataValue. Verifies the *client* side of the
+// "RemoteMethod over-promises typed remote failures" fix: the
+// `RemoteMethod`'s typed E channel actually delivers when the host returns
+// a `Result.fail(...)`-encoded ValueAndType, and a successful Result
+// unwraps to the bare success value.
+// ---------------------------------------------------------------------------
+
+const NotFoundErr = Schema.Struct({
+  _tag: Schema.Literal("NotFoundErr"),
+  resource: Schema.String,
+})
+
+const Lookup = defineAgent({
+  name: "Lookup",
+  mode: "durable",
+  constructorParams: { realm: Schema.String },
+  methods: {
+    fetch: method({
+      params: { id: Schema.String },
+      success: Schema.Number,
+      error: NotFoundErr,
+    }),
+    cmd: method({
+      params: { fail: Schema.Boolean },
+      success: Schema.Void,
+      error: NotFoundErr,
+    }),
+  },
+  impl: () =>
+    Effect.succeed({
+      fetch: () => Effect.succeed(0),
+      cmd: () => Effect.void,
+    }),
+})
+
+describe("AgentClient — typed errors", () => {
+  beforeEach(() => {
+    __resetIdempotency()
+  })
+
+  it.effect("rpc response carrying Result.succeed unwraps to the bare success value", () =>
+    Effect.gen(function* () {
+      const { fake, layer } = yield* makeRpcRuntime
+      // Server side encodes its handler's success as Result.succeed(N)
+      // through `Schema.Result(Schema.Number, NotFoundErr)`.
+      const okWv = yield* encodeWv(
+        Schema.Result(Schema.Number, NotFoundErr),
+        Result.succeed(123) as any,
+      )
+      yield* fake.setResponder(({ methodName }) => {
+        if (methodName === "fetch") {
+          return {
+            tag: "ok",
+            val: { tag: "tuple", val: [{ tag: "component-model", val: okWv }] } as any,
+          }
+        }
+        return { tag: "throw", error: new Error("unexpected method") }
+      })
+
+      const value = yield* Effect.provide(
+        Effect.gen(function* () {
+          const remote = yield* Lookup.client.get({ realm: "users" })
+          return yield* remote.fetch({ id: "alice" })
+        }) as Effect.Effect<number, any, never>,
+        layer,
+      )
+      expect(value).toBe(123)
+    }),
+  )
+
+  it.effect("rpc response carrying Result.fail surfaces as the typed E (NOT RpcCallError)", () =>
+    Effect.gen(function* () {
+      const { fake, layer } = yield* makeRpcRuntime
+      const errWv = yield* encodeWv(
+        Schema.Result(Schema.Number, NotFoundErr),
+        Result.fail({ _tag: "NotFoundErr" as const, resource: "alice" }) as any,
+      )
+      yield* fake.setResponder(({ methodName }) => {
+        if (methodName === "fetch") {
+          return {
+            tag: "ok",
+            val: { tag: "tuple", val: [{ tag: "component-model", val: errWv }] } as any,
+          }
+        }
+        return { tag: "throw", error: new Error("unexpected method") }
+      })
+
+      const result = yield* Effect.provide(
+        Effect.result(
+          Effect.gen(function* () {
+            const remote = yield* Lookup.client.get({ realm: "users" })
+            return yield* remote.fetch({ id: "alice" })
+          }) as Effect.Effect<number, any, never>,
+        ),
+        layer,
+      )
+      expect(result._tag).toBe("Failure")
+      if (result._tag !== "Failure") return
+      const failure: any = result.failure
+      // Must be the user-typed error — NOT the legacy RpcCallError wrapper.
+      expect(failure._tag).toBe("NotFoundErr")
+      expect(failure.resource).toBe("alice")
+    }),
+  )
+
+  it.effect("Schema.Void success + typed error: success arm round-trips as undefined", () =>
+    Effect.gen(function* () {
+      const { fake, layer } = yield* makeRpcRuntime
+      // Server-side encodes the success arm as Result.succeed({}) over an
+      // empty-record stand-in (component model has no unit type).
+      const okWv = yield* encodeWv(
+        Schema.Result(Schema.Struct({}), NotFoundErr),
+        Result.succeed({}) as any,
+      )
+      yield* fake.setResponder(({ methodName }) => {
+        if (methodName === "cmd") {
+          return {
+            tag: "ok",
+            val: { tag: "tuple", val: [{ tag: "component-model", val: okWv }] } as any,
+          }
+        }
+        return { tag: "throw", error: new Error("unexpected method") }
+      })
+
+      const value = yield* Effect.provide(
+        Effect.gen(function* () {
+          const remote = yield* Lookup.client.get({ realm: "users" })
+          return yield* remote.cmd({ fail: false })
+        }) as Effect.Effect<unknown, any, never>,
+        layer,
+      )
+      // Caller observes plain undefined for void success even though the
+      // wire carried `Result.succeed({})`.
+      expect(value).toBeUndefined()
+    }),
+  )
+
+  it.effect("Schema.Void success + typed error: failure arm surfaces typed E", () =>
+    Effect.gen(function* () {
+      const { fake, layer } = yield* makeRpcRuntime
+      const errWv = yield* encodeWv(
+        Schema.Result(Schema.Struct({}), NotFoundErr),
+        Result.fail({ _tag: "NotFoundErr" as const, resource: "missing" }) as any,
+      )
+      yield* fake.setResponder(({ methodName }) => {
+        if (methodName === "cmd") {
+          return {
+            tag: "ok",
+            val: { tag: "tuple", val: [{ tag: "component-model", val: errWv }] } as any,
+          }
+        }
+        return { tag: "throw", error: new Error("unexpected method") }
+      })
+
+      const result = yield* Effect.provide(
+        Effect.result(
+          Effect.gen(function* () {
+            const remote = yield* Lookup.client.get({ realm: "users" })
+            return yield* remote.cmd({ fail: true })
+          }) as Effect.Effect<unknown, any, never>,
+        ),
+        layer,
+      )
+      expect(result._tag).toBe("Failure")
+      if (result._tag !== "Failure") return
+      const failure: any = result.failure
+      expect(failure._tag).toBe("NotFoundErr")
+      expect(failure.resource).toBe("missing")
+    }),
+  )
+
+  it.effect("transport-layer RpcError still surfaces as RemoteCallError (NOT typed E)", () =>
+    Effect.gen(function* () {
+      const { fake, layer } = yield* makeRpcRuntime
+      // Even on a typed-error method, transport / remote-internal errors
+      // continue to flow through `RemoteCallError` — the typed-E channel
+      // is reserved exclusively for the host returning a `result.err`
+      // payload on the success DataValue.
+      yield* fake.setResponder(() => ({
+        tag: "throw",
+        error: { tag: "remote-internal-error", val: "boom" },
+      }))
+      const result = yield* Effect.provide(
+        Effect.result(
+          Effect.gen(function* () {
+            const remote = yield* Lookup.client.get({ realm: "users" })
+            return yield* remote.fetch({ id: "alice" })
+          }) as Effect.Effect<number, any, never>,
+        ),
+        layer,
+      )
+      expect(result._tag).toBe("Failure")
+      if (result._tag !== "Failure") return
+      const failure: any = result.failure
+      expect(failure._tag).toBe("RpcCallError")
+      expect(failure.cause).toEqual({ tag: "remote-internal-error", val: "boom" })
     }),
   )
 })
