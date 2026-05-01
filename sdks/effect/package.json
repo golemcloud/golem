@@ -25,6 +25,12 @@
     "./ignite2": {
       "types": "./dist/effect-golem-ignite2.d.ts",
       "import": "./dist/ignite.mjs"
+    },
+    "./internal/*": null,
+    "./host/*": null,
+    "./*": {
+      "types": "./dist/src/*.d.ts",
+      "import": "./dist/src/*.js"
     }
   },
   "files": [

@@ -1,15 +1,15 @@
 /**
  * Public `Durability` namespace barrel.
  *
- * The actual implementations live in two files to keep the
+ * The implementation lives in two internal modules to keep the
  * `golem:api/host@1.5.0` execution-mode controls and the
  * `golem:durability/durability@1.5.0` typed-invocation wrapper
  * decoupled (and to avoid a module-level cycle):
  *
- * - {@link ./durability-mode} — persistence level / idempotence /
+ * - `internal/durabilityMode.ts` — persistence level / idempotence /
  *   atomic regions / oplog-commit / idempotency keys / `unwrapOrRevert`
  *   / `checkpoint` / `compensable`.
- * - {@link ./durable-function} — `wrap` / `wrapInfallible` /
+ * - `internal/durableFunction.ts` — `wrap` / `wrapInfallible` /
  *   `FunctionType` and the lower-level escape hatches around the
  *   durability host interface.
  *
@@ -17,14 +17,7 @@
  * `Durability.*` namespace.
  *
  * @since 0.1.0
+ * @category modules
  */
-/**
- * @since 0.1.0
- * @category re-exports
- */
-export * from "./DurabilityMode.js"
-/**
- * @since 0.1.0
- * @category re-exports
- */
-export * from "./DurableFunction.js"
+export * from "./internal/durabilityMode.js"
+export * from "./internal/durableFunction.js"

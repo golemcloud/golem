@@ -21,7 +21,7 @@ import {
   __setEnvironment,
 } from "./mocks/wasi-cli-environment.js"
 import { method } from "../src/Method.js"
-import { guest } from "../src/Exports.js"
+import { guest } from "../src/internal/guest.js"
 import * as Snapshot from "../src/Snapshot.js"
 import { toWitCodec } from "../src/WitCodec.js"
 import { DatabaseSync } from "node:sqlite"
@@ -187,7 +187,7 @@ describe("snapshot + sqlite databases", () => {
     // Hand-craft an envelope with an extra 'db:bogus' part by editing
     // the multipart body. Simpler: build via encodeMultipartJsonEnvelope
     // directly (re-importing for the test).
-    const { encodeMultipartJsonEnvelope } = await import("../src/SnapshotEnvelope.js")
+    const { encodeMultipartJsonEnvelope } = await import("../src/internal/snapshotEnvelope.js")
     const tampered = encodeMultipartJsonEnvelope({ tag: "anonymous" }, { note: "zoe" }, [
       { name: "counters", bytes: new Uint8Array([1]) },
       { name: "bogus", bytes: new Uint8Array([2]) },
@@ -209,7 +209,7 @@ describe("snapshot + sqlite databases", () => {
     const xWv = await Effect.runPromise(Schema.encodeEffect(stringCodec.codec)("zoe"))
     __setIsAutocommitDatabaseSyncForTest(() => true)
     __setRestoreDatabaseSyncForTest(() => {})
-    const { encodeMultipartJsonEnvelope } = await import("../src/SnapshotEnvelope.js")
+    const { encodeMultipartJsonEnvelope } = await import("../src/internal/snapshotEnvelope.js")
     const tampered = encodeMultipartJsonEnvelope({ tag: "anonymous" }, { note: "zoe" }, [])
     __setEnvironment([["GOLEM_AGENT_ID", "SqliteCounterTest:zoe"]])
     __setParseAgentIdForTest(() => [

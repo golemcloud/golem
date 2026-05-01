@@ -11,7 +11,7 @@ import {
   __setParseAgentIdImpl as __setParseAgentIdForTest,
 } from "./mocks/golem-agent-host.js"
 import { method } from "../src/Method.js"
-import { guest } from "../src/Exports.js"
+import { guest } from "../src/internal/guest.js"
 import * as Snapshot from "../src/Snapshot.js"
 import { defineConfig } from "../src/Config.js"
 import {
@@ -28,7 +28,7 @@ import {
   encodeJsonEnvelope,
   SnapshotEnvelopeError,
   UnsupportedSnapshotFormatError,
-} from "../src/SnapshotEnvelope.js"
+} from "../src/internal/snapshotEnvelope.js"
 
 const anonymous = { tag: "anonymous" } as const
 const oidcBob = {

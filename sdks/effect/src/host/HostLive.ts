@@ -13,7 +13,7 @@
  * @internal — not re-exported from `src/index.ts`.
  */
 import { Layer } from "effect"
-import { WrapSemaphore, WrapSemaphoreLive } from "../DurableFunction.js"
+import { WrapSemaphore, WrapSemaphoreLive } from "../internal/durableFunction.js"
 import { AgentHostClient, AgentHostLive } from "./AgentHostClient.js"
 import { BlobstoreClient, BlobstoreLive } from "./BlobstoreClient.js"
 import { ConfigClient, ConfigLive } from "./ConfigClient.js"

@@ -2,7 +2,7 @@ import { Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import * as CoreTypes from "golem:core/types@1.5.0"
-import { decodeMultipart, encodeMultipart, extractBoundary } from "./Multipart.js"
+import { decodeMultipart, encodeMultipart, extractBoundary } from "./multipart.js"
 
 /**
  * @internal

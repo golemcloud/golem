@@ -42,7 +42,7 @@ import { classifySqliteError, SqlError } from "effect/unstable/sql/SqlError"
 import * as Statement from "effect/unstable/sql/Statement"
 import type { DatabaseSync, SQLInputValue } from "node:sqlite"
 import { serializeDatabaseSync } from "node:sqlite"
-import { NodeSqliteClient, NodeSqliteLive } from "./host/NodeSqliteClient.js"
+import { NodeSqliteClient, NodeSqliteLive } from "../host/NodeSqliteClient.js"
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name"
 

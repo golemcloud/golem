@@ -66,10 +66,10 @@ import {
   PersistenceLevel,
   withPersistenceLevel,
   type PersistenceLevelValue,
-} from "./DurabilityMode.js"
-import { DurabilityClient } from "./host/DurabilityClient.js"
-import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
-import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./WitCodec.js"
+} from "./durabilityMode.js"
+import { DurabilityClient } from "../host/DurabilityClient.js"
+import { DurabilityModeClient } from "../host/DurabilityModeClient.js"
+import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "../WitCodec.js"
 
 /**
  * Nominal brand attached to every SDK-internal error class produced by

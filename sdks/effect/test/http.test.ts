@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "@effect/vitest"
 import { Cause, Effect, Option, Schema } from "effect"
 import { defineAgent, __resetAgents } from "../src/Agent.js"
 import { method } from "../src/Method.js"
-import { guest } from "../src/Exports.js"
+import { guest } from "../src/internal/guest.js"
 import {
   agentType,
   agentVersion,

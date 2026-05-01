@@ -2,7 +2,11 @@ import { Duration, Effect, Ref, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type { DatabaseSync } from "node:sqlite"
 import type { Principal } from "./Principal.js"
-import { __getUnderlyingDatabase, isSqliteClient, type SqliteClient } from "./Sqlite.js"
+import {
+  __getUnderlyingDatabase,
+  isSqliteClient,
+  type SqliteClient,
+} from "./Sqlite/SqliteClient.js"
 import { toWitCodec, UnsupportedSchemaError, type WitCodec } from "./WitCodec.js"
 
 /**
@@ -677,3 +681,24 @@ export const createBinding = (agentName: string, compiled: CompiledSnapshot): Bi
     read: () => bound,
   }
 }
+
+// ---------------------------------------------------------------------------
+// Re-exports from the snapshot envelope codec.
+//
+// The envelope encoder/decoder (JSON / binary v2 / multipart-mixed for SQLite
+// databases) lives in `src/internal/snapshotEnvelope.ts` because consumers
+// never construct envelopes directly — that is the SDK dispatcher's job. The
+// two error classes it raises, however, are part of the public `Snapshot.*`
+// namespace contract: any `dispatchLoadSnapshot` failure surfaces one of them.
+//
+// @since 0.1.0
+// ---------------------------------------------------------------------------
+
+/**
+ * @since 0.1.0
+ * @category errors
+ */
+export {
+  SnapshotEnvelopeError,
+  UnsupportedSnapshotFormatError,
+} from "./internal/snapshotEnvelope.js"

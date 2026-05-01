@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
 import { Cause, Effect, Exit, Layer, Result, Schema } from "effect"
 import * as Durability from "../src/Durability.js"
-import { WrapSemaphore, WrapSemaphoreLive } from "../src/DurableFunction.js"
+import { WrapSemaphore, WrapSemaphoreLive } from "../src/internal/durableFunction.js"
 import { DurabilityClient, DurabilityLive } from "../src/host/DurabilityClient.js"
 import { DurabilityModeClient, DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
 import { toWitCodec } from "../src/WitCodec.js"

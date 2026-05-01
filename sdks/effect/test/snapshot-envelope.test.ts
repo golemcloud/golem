@@ -5,7 +5,7 @@ import {
   encodeJsonEnvelope,
   SnapshotEnvelopeError,
   UnsupportedSnapshotFormatError,
-} from "../src/SnapshotEnvelope.js"
+} from "../src/internal/snapshotEnvelope.js"
 
 const anonymous = { tag: "anonymous" } as const
 const oidcAlice = {

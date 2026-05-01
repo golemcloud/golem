@@ -4,7 +4,7 @@
 import { Effect, HashMap, Option, Result, Schema, SchemaAST, SchemaGetter } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
-import { witGraphCodec, type WitValueTree } from "./WitTree.js"
+import { witGraphCodec, type WitValueTree } from "./internal/witTree.js"
 import {
   variantCaseNameAnnotationKey,
   witTypeAnnotationKey,

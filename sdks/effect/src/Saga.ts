@@ -48,7 +48,7 @@
  */
 
 import { Cause, Context, Effect, Ref, Scope } from "effect"
-import { atomically, DurabilityHostError } from "./DurabilityMode.js"
+import { atomically, DurabilityHostError } from "./internal/durabilityMode.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { OplogClient } from "./host/OplogClient.js"
 import { currentIndex, OplogHostError, setIndex } from "./Oplog.js"

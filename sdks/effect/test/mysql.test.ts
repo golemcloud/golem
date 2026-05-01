@@ -12,7 +12,7 @@ import {
   UnknownError,
 } from "effect/unstable/sql/SqlError"
 import { MysqlHostClient } from "../src/host/MysqlHostClient.js"
-import { MySql, MySqlClient } from "../src/Mysql.js"
+import { MySql, MySqlClient } from "../src/Mysql/MySqlClient.js"
 import * as MockMy from "./mocks/golem-rdbms-mysql.js"
 import {
   __getExecuteLog,

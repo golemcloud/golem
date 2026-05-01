@@ -290,4 +290,4 @@ export { method } from "./Method.js"
  * @since 0.1.0
  * @category internal
  */
-export { guest, saveSnapshot, loadSnapshot } from "./Exports.js"
+export { guest, saveSnapshot, loadSnapshot } from "./internal/guest.js"

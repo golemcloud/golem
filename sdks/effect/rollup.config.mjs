@@ -102,7 +102,7 @@ export default defineConfig([
   // `node:sqlite` so the resulting bundle is small and shares the
   // single Effect runtime instance embedded into the base WASM.
   {
-    input: "src/Sqlite.ts",
+    input: "src/Sqlite/SqliteClient.ts",
     output: {
       file: "dist/sqlite.mjs",
       format: "esm",
@@ -132,7 +132,7 @@ export default defineConfig([
   // `golem:rdbms/*` host bindings so the bundle stays small and shares
   // the single Effect runtime instance embedded into the base WASM.
   {
-    input: "src/Postgres.ts",
+    input: "src/Postgres/PgClient.ts",
     output: {
       file: "dist/postgres.mjs",
       format: "esm",
@@ -160,7 +160,7 @@ export default defineConfig([
 
   // MySqlClient adapter. Same externalization as PgClient.
   {
-    input: "src/Mysql.ts",
+    input: "src/Mysql/MySqlClient.ts",
     output: {
       file: "dist/mysql.mjs",
       format: "esm",
@@ -190,7 +190,7 @@ export default defineConfig([
   // optional adapter — some Golem environments may not expose
   // `golem:rdbms/ignite2@1.5.0`.
   {
-    input: "src/Ignite.ts",
+    input: "src/Ignite/IgniteClient.ts",
     output: {
       file: "dist/ignite.mjs",
       format: "esm",
