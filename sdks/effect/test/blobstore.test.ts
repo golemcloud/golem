@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Schema, Stream } from "effect"
 import * as Blobstore from "../src/Blobstore.js"
+import { BlobstoreLive } from "../src/host/BlobstoreClient.js"
 import { make as makeBlobFake } from "./host/BlobFake.js"
+import { __deleteContainerEntry, __ensureContainer } from "./mocks/wasi-blobstore-container.js"
 
 const u8 = (s: string): Uint8Array => new TextEncoder().encode(s)
 const s = (b: Uint8Array): string => new TextDecoder().decode(b)
@@ -67,6 +69,21 @@ describe("Blobstore.createContainer / getContainer / containerExists", () => {
         const c2 = yield* Blobstore.getOrCreateContainer("oc")
         expect(c2.name).toBe("oc")
       }).pipe(Effect.provide(fake.layer))
+    }),
+  )
+
+  // The Live impl optimistically calls `createContainer` first; on
+  // failure it consults `containerExists` and replays `getContainer`
+  // if the container is now present. This collapses the TOCTOU
+  // window vs. a raw exists-then-create. Pre-seeding the wasi
+  // mock simulates the "another actor won the create" race.
+  it.effect("BlobstoreLive.getOrCreateContainer falls back to getContainer when create races", () =>
+    Effect.gen(function* () {
+      __deleteContainerEntry("race")
+      __ensureContainer("race")
+      const c = yield* Blobstore.getOrCreateContainer("race").pipe(Effect.provide(BlobstoreLive))
+      expect(c.name).toBe("race")
+      __deleteContainerEntry("race")
     }),
   )
 
