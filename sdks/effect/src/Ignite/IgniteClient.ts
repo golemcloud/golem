@@ -287,12 +287,7 @@ const buildConnection = (target: Target, decodeTemporal: TemporalDecodeMode): Co
         ReadonlyArray<Record<string, unknown>>,
         SqlError
       >
-      return transformRows
-        ? (Effect.map(eff, transformRows as never) as Effect.Effect<
-            ReadonlyArray<Record<string, unknown>>,
-            SqlError
-          >)
-        : eff
+      return transformRows ? Effect.map(eff, (rows) => transformRows(rows)) : eff
     },
     executeRaw(sql, params) {
       return runQuery(sql, params, true) as Effect.Effect<unknown, SqlError>
@@ -305,12 +300,7 @@ const buildConnection = (target: Target, decodeTemporal: TemporalDecodeMode): Co
         ReadonlyArray<Record<string, unknown>>,
         SqlError
       >
-      return transformRows
-        ? (Effect.map(eff, transformRows as never) as Effect.Effect<
-            ReadonlyArray<Record<string, unknown>>,
-            SqlError
-          >)
-        : eff
+      return transformRows ? Effect.map(eff, (rows) => transformRows(rows)) : eff
     },
     executeStream(sql, params, transformRows) {
       return Stream.unwrap(
