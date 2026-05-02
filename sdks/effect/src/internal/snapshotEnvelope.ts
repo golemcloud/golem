@@ -373,6 +373,11 @@ const decodeMultipartEnvelope = (payload: Uint8Array, mime: string): DecodedMult
   if (!statePart) {
     throw new SnapshotEnvelopeError(`multipart envelope: missing 'state' part`)
   }
+  if (statePart.contentType !== JSON_MIME) {
+    throw new SnapshotEnvelopeError(
+      `multipart envelope: 'state' part has Content-Type '${statePart.contentType}' (expected '${JSON_MIME}')`,
+    )
+  }
   const stateText = decodeUtf8(statePart.body, "multipart envelope: 'state' part")
   const env = parseEnvelopeJson(stateText, "multipart envelope: 'state' part")
   const principal = deserializePrincipal(env.principal)
@@ -383,6 +388,11 @@ const decodeMultipartEnvelope = (payload: Uint8Array, mime: string): DecodedMult
     if (!part.name.startsWith(DB_PART_PREFIX)) {
       throw new SnapshotEnvelopeError(
         `multipart envelope: unrecognised part name '${part.name}' (expected 'state' or 'db:<name>')`,
+      )
+    }
+    if (part.contentType !== SQLITE_PART_MIME) {
+      throw new SnapshotEnvelopeError(
+        `multipart envelope: '${part.name}' part has Content-Type '${part.contentType}' (expected '${SQLITE_PART_MIME}')`,
       )
     }
     const dbName = part.name.slice(DB_PART_PREFIX.length)
