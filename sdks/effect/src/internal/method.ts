@@ -8,6 +8,13 @@ import { componentModelElement, ElementValueKindError, type ElementCodec } from 
 import type { HostServices } from "../host/HostLive.js"
 import type { EndpointDef } from "../Http.js"
 import { isMultimodal, type Multimodal, type MultimodalShape } from "../Multimodal.js"
+import type {
+  BindableKeys,
+  EndpointBound,
+  Invalid,
+  NoCaseFoldDuplicates,
+  NoDuplicateBindings,
+} from "./httpTypes.js"
 import { withPipe } from "./pipeable.js"
 import { Principal } from "../Principal.js"
 import { SelfAgentId } from "../SelfAgentId.js"
@@ -58,6 +65,8 @@ export type MethodInput<Params extends MethodParams> = {
   readonly [K in keyof Params]: ParamInputType<Params[K]>
 }
 
+declare const methodHasHttpBrand: unique symbol
+
 /**
  * A `MethodSpec` describes a method's wire contract — its named input
  * parameters, success type, and typed failure type — *without* an
@@ -72,6 +81,22 @@ export type MethodInput<Params extends MethodParams> = {
  * {@link withPromptHint}) compose additively with the literal-options
  * form accepted by {@link method}.
  *
+ * The fourth `HasHttp` phantom records whether the spec was constructed
+ * with one or more HTTP endpoints — `true` when `method({ http: [...] })`
+ * is built with a non-empty `http` tuple OR when `withHttp(...)` adds
+ * endpoints, `false` otherwise. The `AnyMethodHasHttp<Methods>` helper
+ * in `src/internal/agent.ts` reads this phantom to decide whether the
+ * agent's `http: Http.mount(...)` field is required.
+ *
+ * Carried via a `readonly` optional unique-symbol-keyed property so the
+ * variance is covariant — `MethodSpec<P, S, E, true>` is assignable to
+ * `MethodSpec<P, S, E, boolean>` (the implicit shape when consumers
+ * write `MethodSpec<P, S, E>` and rely on the default). This matters
+ * because existing destructuring patterns (e.g. `Methods[K] extends
+ * MethodSpec<infer P, infer S, infer E>` in `Client.ts`) leave the
+ * fourth slot unspecified — the default of `boolean` plus covariance
+ * keeps those patterns working unchanged.
+ *
  * @since 1.5.0
  * @category models
  */
@@ -79,8 +104,10 @@ export interface MethodSpec<
   in out Params extends MethodParams,
   in out Success extends Schema.Top,
   in out Error extends Schema.Top,
+  HasHttp extends boolean = boolean,
 >
   extends Pipeable.Pipeable {
+  readonly [methodHasHttpBrand]?: HasHttp
   readonly params: Params
   readonly success: Success
   readonly error: Error
@@ -92,9 +119,14 @@ export interface MethodSpec<
    * Optional list of HTTP endpoints exposing this method through the
    * Golem host. Compiled to `agent-method.http-endpoint`. Each endpoint
    * may bind path / query / header variables to entries of `Params`;
-   * type-level constraint: every binding name must be a `keyof Params`.
+   * type-level constraint: every binding name must be a `keyof Params`
+   * AND must be statically eligible for path/query/header binding (i.e.
+   * not a {@link Multimodal} or {@link ElementSpec} carrier — see
+   * {@link BindableKeys}). Full string-bindability (rejecting
+   * `Schema.Struct` etc.) is enforced at registration time by the
+   * runtime validators in `Http.ts`.
    */
-  readonly http?: ReadonlyArray<EndpointDef<keyof Params & string>>
+  readonly http?: ReadonlyArray<EndpointDef<BindableKeys<Params>>>
 }
 
 /**
@@ -168,6 +200,36 @@ export interface MethodSpec<
  * )
  * ```
  *
+ * **Compile-time guarantees on the `http` array**
+ *
+ * Each element of the optional `http: ReadonlyArray<EndpointDef<...>>`
+ * is validated independently by the type system. For each endpoint:
+ *
+ * - Every binding `{var}` (path / query / header) must reference a
+ *   key of `params` AND that key must be statically eligible for
+ *   binding (i.e. NOT a {@link Multimodal} or {@link ElementSpec}
+ *   carrier — see `BindableKeys`). Misnamed bindings produce a normal
+ *   "no such property" error on `EndpointDef<BindableKeys<Params>>`.
+ * - A method parameter may be bound from at most one source within
+ *   the same endpoint — enforced via the structured `EndpointBound`
+ *   phantom on `EndpointDef`.
+ * - Header names declared on the same endpoint must be unique when
+ *   compared case-insensitively — enforced via the `HeaderNames`
+ *   phantom on `EndpointDef`.
+ * - `Http.get(...)` / `Http.head(...)` shorthands are tagged
+ *   `"bodyless"` and rejected at compile time when the endpoint's
+ *   bound-var union does NOT cover every key of `params` — there is
+ *   no request body in which to deliver an unbound parameter.
+ *
+ * On any of these violations, the type-level helper substitutes the
+ * offending endpoint with an `Invalid<"…">` carrier whose message
+ * names the offending parameter / header — `tsc` then reports the
+ * mismatch at the `method({ http: [...] })` call site.
+ *
+ * Full string-bindability of bound parameters (rejecting a
+ * `Schema.Struct` schema as a path var, etc.) remains runtime-only
+ * and is surfaced as an `HttpRouteError` from `registerAgent`.
+ *
  * @see {@link withHttp} for the pipeable HTTP-endpoint combinator.
  * @see {@link withDescription} for the pipeable description combinator.
  * @see {@link withPromptHint} for the pipeable prompt-hint combinator.
@@ -175,22 +237,109 @@ export interface MethodSpec<
  * @since 1.5.0
  * @category constructors
  */
+/**
+ * Apply the cross-source binding-uniqueness check, the case-insensitive
+ * header-name-uniqueness check, AND the bodyless-verb unbound-param
+ * check to each user-supplied endpoint by mapping over the inferred
+ * `Eps` tuple. For each element:
+ *
+ *   - destructure its `EndpointDef<V, K, B, HN>` to recover the
+ *     bound-vars union, the kind, the structured `Bound` slot AND the
+ *     header-names tuple;
+ *   - if `K extends "bodyless"` and `Exclude<keyof Params & string, V>`
+ *     is non-empty, surface an {@link Invalid} naming the missing
+ *     parameter — bodyless verbs (`GET` / `HEAD`) have no request
+ *     body in which to deliver an unbound value;
+ *   - run `NoDuplicateBindings<B>` over the bindings;
+ *   - run `NoCaseFoldDuplicates<HN>` over the header names;
+ *   - if any of the three checks resolves to {@link Invalid}, surface
+ *     that carrier at this position (the user's literal `EndpointDef`
+ *     cannot satisfy `Invalid`, so the call site fails with a
+ *     readable message);
+ *   - otherwise pass the original element type through unchanged.
+ *
+ * The `Eps` array constraint already restricts each endpoint to
+ * `EndpointDef<BindableKeys<Params>>` — multimodal / unstructured
+ * params are rejected before any of the three checks is tried.
+ */
+type ValidateEndpointsTuple<Eps extends ReadonlyArray<EndpointDef<string>>, Params> = {
+  readonly [K in keyof Eps]: Eps[K] extends EndpointDef<infer V, infer Kind, infer B, infer HN>
+    ? Kind extends "bodyless"
+      ? [Exclude<keyof Params & string, V>] extends [never]
+        ? ValidateEndpointStructure<Eps[K], B, HN>
+        : Invalid<`GET/HEAD endpoint cannot have unbound param '${Exclude<
+            keyof Params & string,
+            V
+          > &
+            string}' (only path / query / header bindings are allowed because there is no request body)`>
+      : ValidateEndpointStructure<Eps[K], B, HN>
+    : Eps[K]
+}
+
+// The cross-source binding-uniqueness and case-insensitive
+// header-name-uniqueness checks, factored out so the bodyless-verb
+// wrapper above can dispatch on `Kind` without duplicating the
+// dup-check ladder.
+type ValidateEndpointStructure<E, B, HN> = B extends EndpointBound
+  ? HN extends ReadonlyArray<string>
+    ? NoDuplicateBindings<B> extends infer R1
+      ? [R1] extends [Invalid<string>]
+        ? R1
+        : NoCaseFoldDuplicates<HN> extends infer R2
+          ? [R2] extends [Invalid<string>]
+            ? R2
+            : E
+          : E
+      : E
+    : E
+  : E
+
+/**
+ * Resolves to `true` when `T` is statically known to be a non-empty
+ * tuple, else `false`. Used by the `method({...})` factory and
+ * `withHttp(...)` to compute the `HasHttp` phantom on `MethodSpec`.
+ *
+ * Mirrors (defence-in-depth) the runtime "any endpoints declared" check
+ * in `validateAgentHttp` (Http.ts L1452: `m.endpoints.length > 0`). When
+ * `T` widens to a non-tuple `ReadonlyArray<...>` (e.g. because the user
+ * passed an unspread variable instead of an array literal), this helper
+ * conservatively resolves to `false`, deferring entirely to the runtime
+ * check. That keeps existing wide-array call patterns working without
+ * forcing a mount on agents that may or may not have endpoints — the
+ * runtime validator catches any actual violation at registration time.
+ */
+type IsNonEmptyTuple<T extends ReadonlyArray<unknown>> = T extends readonly [
+  unknown,
+  ...ReadonlyArray<unknown>,
+]
+  ? true
+  : false
+
 export const method: {
-  <const Params extends MethodParams, Success extends Schema.Top, Error extends Schema.Top>(spec: {
+  <
+    const Params extends MethodParams,
+    Success extends Schema.Top,
+    Error extends Schema.Top,
+    const Eps extends ReadonlyArray<EndpointDef<BindableKeys<Params>>> = readonly [],
+  >(spec: {
     readonly params: Params
     readonly success: Success
     readonly error: Error
     readonly description?: string
     readonly promptHint?: string
-    readonly http?: ReadonlyArray<EndpointDef<keyof Params & string>>
-  }): MethodSpec<Params, Success, Error>
-  <const Params extends MethodParams, Success extends Schema.Top>(spec: {
+    readonly http?: ValidateEndpointsTuple<Eps, Params>
+  }): MethodSpec<Params, Success, Error, IsNonEmptyTuple<Eps>>
+  <
+    const Params extends MethodParams,
+    Success extends Schema.Top,
+    const Eps extends ReadonlyArray<EndpointDef<BindableKeys<Params>>> = readonly [],
+  >(spec: {
     readonly params: Params
     readonly success: Success
     readonly description?: string
     readonly promptHint?: string
-    readonly http?: ReadonlyArray<EndpointDef<keyof Params & string>>
-  }): MethodSpec<Params, Success, typeof Schema.Void>
+    readonly http?: ValidateEndpointsTuple<Eps, Params>
+  }): MethodSpec<Params, Success, typeof Schema.Void, IsNonEmptyTuple<Eps>>
 } = (spec: any): any => withPipe({ error: Schema.Void, ...spec })
 
 // ---------------------------------------------------------------------------
@@ -237,16 +386,31 @@ export const method: {
  */
 export const withHttp =
   <V extends string>(...endpoints: ReadonlyArray<EndpointDef<V>>) =>
-  <T extends MethodSpec<any, any, any>>(
+  <T extends MethodSpec<any, any, any, any>>(
     spec: T & { readonly params: Readonly<Record<V, unknown>> },
-  ): T =>
+  ): T extends MethodSpec<infer P, infer Su, infer Er, infer _H>
+    ? // `withHttp` only matters at the type level when the endpoint
+      // tuple is non-empty (the runtime check in `validateAgentHttp`
+      // gates on `endpoints.length > 0`). The factory-arg signature
+      // accepts a (possibly empty) `ReadonlyArray<...>` so we cannot
+      // detect emptiness here without a `const Eps` modifier — and
+      // that modifier breaks V inference (it tightens `EndpointDef<V>`
+      // capture so V no longer flows from the endpoint's path
+      // variables, which would silently drop the
+      // "binding-not-in-params" rejection enforced via the `spec
+      // params` constraint above). Always-flip-to-true is acceptable
+      // because the runtime check ignores empty `withHttp()` calls
+      // anyway, and `withHttp()` with zero args is a no-op users do
+      // not actually write.
+      MethodSpec<P, Su, Er, true>
+    : T =>
     withPipe({
       ...spec,
       http: [
         ...(spec.http ?? []),
-        ...(endpoints as ReadonlyArray<EndpointDef<keyof T["params"] & string>>),
+        ...(endpoints as unknown as ReadonlyArray<EndpointDef<BindableKeys<T["params"]>>>),
       ],
-    }) as unknown as T
+    }) as never
 
 /**
  * Set the free-text description on a `MethodSpec`, surfaced as

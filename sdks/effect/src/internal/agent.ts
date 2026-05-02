@@ -16,8 +16,8 @@ import {
   isStringBindableSchema,
   validateAgentHttp,
   type MethodHttpInput,
-  type MountDef,
 } from "../Http.js"
+import type { BindableKeys, MountDefCovering, WebhookVarsValid } from "./httpTypes.js"
 import { isMultimodal } from "../Multimodal.js"
 import {
   compileMethodSpec,
@@ -117,6 +117,67 @@ const runUserPromise = <A, E, R>(eff: Effect.Effect<A, E, R>): Promise<A> =>
 
 type AnyMethodSpec = MethodSpec<any, any, any>
 
+/**
+ * Resolves to `true` when at least one entry in `Methods` carries the
+ * `HasHttp = true` phantom (i.e. was built via `method({ http: [...] })`
+ * with a non-empty `http` tuple OR via `withHttp(...)` with at least
+ * one endpoint), else `false`.
+ *
+ * Mirrors (defence-in-depth) the runtime "any endpoints declared" check
+ * in `validateAgentHttp` (Http.ts L1452: `m.endpoints.length > 0`). The
+ * runtime check stays the canonical error source — this helper is
+ * consumed by {@link AgentDefinition} below to make the agent's `http`
+ * field a *required* mount when at least one method has endpoints, and
+ * an *optional* mount otherwise.
+ *
+ * The `true extends Union ? true : false` shape (rather than
+ * `Union extends true ? ...`) is required because the union of
+ * per-method `HasHttp` values is a `boolean`-shaped distribution that
+ * otherwise distributes back into `boolean` and loses the "any one of
+ * them is true" signal.
+ *
+ * @since 1.5.0
+ * @category models
+ */
+type AnyMethodHasHttp<Methods extends Record<string, AnyMethodSpec>> = true extends {
+  [K in keyof Methods]: Methods[K] extends MethodSpec<any, any, any, infer H> ? H : false
+}[keyof Methods]
+  ? true
+  : false
+
+/**
+ * Per-call constraint added on top of {@link AgentDefinition} that
+ * makes the agent's `http` field required (and fully constrained by
+ * {@link MountDefCovering} + {@link WebhookVarsValid}) iff
+ * {@link AnyMethodHasHttp} resolves to `true` for the agent's
+ * `methods` record. Otherwise resolves to `unknown` — a no-op
+ * intersection that keeps the original `http?: …` optional.
+ *
+ * Intersected with the `def` parameter at the `defineAgent` /
+ * `registerAgent` call sites. Intersection rather than
+ * an in-line conditional on `AgentDefinition.http` because the
+ * interface declares `http?: …` (optional) and there is no per-arity
+ * way to flip a property between optional and required inside an
+ * interface body. The intersection makes `http` required exactly when
+ * `AnyMethodHasHttp<Methods>` is `true` — TS treats the intersection
+ * `{ http?: T } & { http: T }` as `{ http: T }` (non-optional).
+ *
+ * Mirrors (defence-in-depth) the runtime check in `validateAgentHttp`
+ * (Http.ts L1452-1461).
+ *
+ * @since 1.5.0
+ * @category models
+ */
+type AgentHttpRequirement<
+  C extends MethodParams,
+  Methods extends Record<string, AnyMethodSpec>,
+  MV extends string,
+  WV extends string,
+> =
+  AnyMethodHasHttp<Methods> extends true
+    ? { readonly http: MountDefCovering<C, MV, WV> & WebhookVarsValid<C, WV> }
+    : unknown
+
 interface ParamCodec {
   readonly name: string
   readonly codec: WitCodec<Schema.Top>
@@ -214,6 +275,8 @@ export interface AgentDefinition<
   M extends AgentCommon.AgentMode = AgentCommon.AgentMode,
   F extends ConfigFields = never,
   S extends SnapshotDef = never,
+  MV extends string = BindableKeys<C>,
+  WV extends string = never,
 > {
   readonly name: string
   readonly description?: string
@@ -225,10 +288,21 @@ export interface AgentDefinition<
   /**
    * Optional HTTP mount declaration. When present, this agent is exposed
    * via the Golem host's HTTP server under the declared path prefix.
-   * Type-level constraint: every `{var}` in the mount path must be a
-   * `keyof C` (a constructor parameter name).
+   *
+   * Type-level constraints:
+   * - Every `{var}` in the mount path must be a constructor parameter
+   *   name AND must be statically eligible for path binding (i.e. not
+   *   a {@link Multimodal} or {@link ElementSpec} carrier — see
+   *   {@link BindableKeys}); enforced via {@link MountDefCovering}.
+   * - Every `{var}` in the optional `webhookSuffix` must likewise be a
+   *   bindable constructor-parameter name; enforced via
+   *   {@link WebhookVarsValid}.
+   *
+   * Full string-bindability (rejecting `Schema.Struct` etc.) and
+   * full constructor-coverage are enforced at registration time by
+   * the runtime validators in `Http.ts`.
    */
-  readonly http?: MountDef<keyof C & string>
+  readonly http?: MountDefCovering<C, MV, WV> & WebhookVarsValid<C, WV>
   /**
    * Optional Effect-Context-based config service. Built with
    * {@link defineConfig}. When present, the dispatcher fetches each
@@ -294,6 +368,43 @@ export type DefinedAgent<
  * {@link clientFor} `client` namespace for connecting to remote
  * instances of this agent type.
  *
+ * **Compile-time guarantees on the `http` field**
+ *
+ * When at least one method in `methods` declares an `http` array of
+ * endpoints, the agent's `http: Http.mount(...)` field becomes
+ * *required* — `tsc` rejects the call site with "Property 'http' is
+ * missing" when it is omitted. When no method declares HTTP
+ * endpoints, `http` remains optional, matching the runtime "any
+ * endpoints declared" check in `validateAgentHttp`.
+ *
+ * When `http` IS supplied, two additional type-level constraints
+ * apply to it:
+ *
+ * - Every constructor parameter in `constructorParams` must appear as
+ *   a `{var}` segment in the mount path; missing vars surface as an
+ *   `Invalid<"mount path missing var '…'">` carrier on the assigned
+ *   {@link MountDefCovering} type.
+ * - Every `{var}` in the optional `webhookSuffix` must match a
+ *   constructor-parameter name AND must be statically eligible for
+ *   binding (i.e. NOT a {@link Multimodal} or {@link ElementSpec}
+ *   carrier — see {@link BindableKeys}); violations surface as a
+ *   {@link WebhookVarsValid} carrier with a readable reason string.
+ *
+ * Trivial path-shape rules and per-endpoint duplicate-binding /
+ * case-fold / bodyless-unbound checks fire earlier — at the
+ * `Http.mount(...)` / `Http.get(...)` / `method({ http: [...] })`
+ * call sites — so by the time `defineAgent` is called the only
+ * remaining type-level checks are the three agent-wide ones above.
+ *
+ * **Runtime fallbacks (defence-in-depth)**
+ *
+ * Full string-bindability of mount-path / webhook-suffix vars,
+ * the brace-balance check, the var-name regex, and any
+ * configuration whose path string was supplied as a non-literal
+ * `string` value still run inside `validateAgentHttp` /
+ * `validateMount` / `validateEndpoint` and surface as `HttpRouteError`
+ * — re-thrown synchronously by `defineAgent` at module-import time.
+ *
  * @see {@link registerAgent} for the lower-level registration-only
  *      entry point.
  *
@@ -306,17 +417,21 @@ export const defineAgent = <
   M extends AgentCommon.AgentMode = "durable",
   F extends ConfigFields = never,
   S extends SnapshotDef = never,
+  MV extends string = BindableKeys<C>,
+  WV extends string = never,
 >(
-  def: AgentDefinition<C, Methods, M, F, S>,
+  def: AgentDefinition<C, Methods, M, F, S, MV, WV> & AgentHttpRequirement<C, Methods, MV, WV>,
 ): DefinedAgent<C, Methods, M, F, S> => {
   // Register eagerly so simply importing an agent module makes it
   // discoverable by the runtime — no separate `registerAgent` call is
   // required at the component entrypoint.
   Effect.runSync(registerAgent(def))
   // The client view ignores the snapshot definition; erase `S` here so
-  // `clientFor` can stay snapshot-agnostic.
+  // `clientFor` can stay snapshot-agnostic. Likewise erase the `MV`
+  // mount-vars phantom — the public {@link DefinedAgent} type only
+  // surfaces the value, not the inferred mount-vars set.
   const clientDef = def as unknown as AgentDefinition<C, Methods, M, F>
-  return { ...def, client: clientFor(clientDef) }
+  return { ...def, client: clientFor(clientDef) } as unknown as DefinedAgent<C, Methods, M, F, S>
 }
 
 interface CompiledAgent {
@@ -379,8 +494,10 @@ export const registerAgent = <
   M extends AgentCommon.AgentMode = AgentCommon.AgentMode,
   F extends ConfigFields = never,
   S extends SnapshotDef = never,
+  MV extends string = BindableKeys<C>,
+  WV extends string = never,
 >(
-  def: AgentDefinition<C, Methods, M, F, S>,
+  def: AgentDefinition<C, Methods, M, F, S, MV, WV> & AgentHttpRequirement<C, Methods, MV, WV>,
 ): Effect.Effect<
   void,
   UnsupportedSchemaError | HttpRouteError | InvalidSnapshotError | DuplicateAgentNameError

@@ -103,22 +103,18 @@ export const LookupCaller = defineAgent({
       fetchAndReport: ({ id }) =>
         Effect.gen(function* () {
           const lookup = yield* Lookup.client.get({ realm })
-          return yield* lookup
-            .fetch({ id })
-            .pipe(
-              Effect.map((n) => `ok:${n}`),
-              Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),
-            )
+          return yield* lookup.fetch({ id }).pipe(
+            Effect.map((n) => `ok:${n}`),
+            Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),
+          )
         }),
       cmdAndReport: ({ fail }) =>
         Effect.gen(function* () {
           const lookup = yield* Lookup.client.get({ realm })
-          return yield* lookup
-            .cmd({ fail })
-            .pipe(
-              Effect.map(() => "ok:void"),
-              Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),
-            )
+          return yield* lookup.cmd({ fail }).pipe(
+            Effect.map(() => "ok:void"),
+            Effect.catch((e: unknown) => Effect.succeed(formatLookupError(e))),
+          )
         }),
     }),
 })

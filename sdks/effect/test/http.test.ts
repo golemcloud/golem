@@ -468,6 +468,10 @@ describe("Http defineAgent integration", () => {
   it("rejects an agent that declares method endpoints without a mount", () => {
     expectRouteError(
       () =>
+        // @ts-expect-error — when any method declares `http`, the
+        // agent's `http: Http.mount(...)` field is now a type-level
+        // requirement. The directive asserts the compile-time check
+        // fires; the runtime check below remains as defence-in-depth.
         defineAgent({
           name: "MissingMount",
           constructorParams: {},
@@ -559,6 +563,10 @@ describe("Http defineAgent integration", () => {
   })
 
   it("rejects a parameter bound from BOTH path and query", () => {
+    // The compile-time `NoDuplicateBindings` helper also rejects this
+    // combination; the `as never` cast bypasses the type check so this
+    // test continues to exercise the runtime defence (`seenSources`)
+    // in `validateEndpoint`.
     expectRouteError(
       () =>
         defineAgent({
@@ -569,7 +577,7 @@ describe("Http defineAgent integration", () => {
             op: method({
               params: { id: Schema.String },
               success: Schema.String,
-              http: [get("/items/{id}?id={id}")],
+              http: [get("/items/{id}?id={id}")] as never,
             }),
           },
           impl: () => Effect.succeed({ op: ({ id }) => Effect.succeed(id) }),
@@ -579,6 +587,9 @@ describe("Http defineAgent integration", () => {
   })
 
   it("rejects duplicate headers (case-insensitive)", () => {
+    // The compile-time `NoCaseFoldDuplicates` helper also catches
+    // this; the `as never` cast bypasses the type pre-filter so the
+    // runtime defence-in-depth check is exercised.
     expectRouteError(
       () =>
         defineAgent({
@@ -589,7 +600,7 @@ describe("Http defineAgent integration", () => {
             op: method({
               params: { a: Schema.String, b: Schema.String },
               success: Schema.String,
-              http: [get("/items", { headers: { "X-Foo": "a", "x-foo": "b" } as const })],
+              http: [get("/items", { headers: { "X-Foo": "a", "x-foo": "b" } as const }) as never],
             }),
           },
           impl: () => Effect.succeed({ op: ({ a, b }) => Effect.succeed(`${a}/${b}`) }),
@@ -609,6 +620,11 @@ describe("Http defineAgent integration", () => {
             op: method({
               params: { payload: Schema.String },
               success: Schema.String,
+              // @ts-expect-error — bodyless `Http.get(...)` cannot have
+              // an unbound `payload` param. We silence the static error
+              // here to keep covering the runtime validator (defence in
+              // depth) — see `test/http-types.test-d.ts` for the
+              // type-level test.
               http: [get("/op")],
             }),
           },
@@ -649,6 +665,9 @@ describe("Http defineAgent integration", () => {
             op: method({
               params: { text: UnstructuredText() },
               success: Schema.String,
+              // @ts-expect-error — the type-level pre-filter rejects
+              // ElementSpec params from path bindings; the runtime
+              // validator below still fires for defense-in-depth.
               http: [post("/items/{text}")],
             }),
           },
@@ -669,6 +688,9 @@ describe("Http defineAgent integration", () => {
             op: method({
               params: { mm: multimodal({ chunk: UnstructuredText() }) },
               success: Schema.String,
+              // @ts-expect-error — the type-level pre-filter rejects
+              // Multimodal params from path bindings; the runtime
+              // validator below still fires for defense-in-depth.
               http: [post("/items/{mm}")],
             }),
           },
@@ -865,6 +887,10 @@ describe("Http pipeable combinators — mounts", () => {
         defineAgent({
           name: "PipedBadWebhook",
           constructorParams: { tenant: Schema.String },
+          // @ts-expect-error — `WebhookVarsValid` also catches this at
+          // compile time. This test exercises the runtime
+          // defence-in-depth path; the cast bypasses the static check
+          // that would otherwise fire first.
           http: mount("/api/{tenant}").pipe(withWebhookSuffix("/{nope}")),
           methods: {},
           impl: () => Effect.succeed({}),

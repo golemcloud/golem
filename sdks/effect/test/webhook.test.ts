@@ -169,15 +169,21 @@ describe("Http.mount({ webhookSuffix }) — validation", () => {
   })
 
   it("rejects a query string in webhookSuffix at parse time", () => {
-    expect(() => Http.mount("/agents/{name}", { webhookSuffix: "/inbox?q={x}" })).toThrow(
-      Http.HttpRouteError,
-    )
+    expect(() =>
+      Http.mount("/agents/{name}", {
+        // @ts-expect-error compile-time rejection in addition to runtime parser
+        webhookSuffix: "/inbox?q={x}",
+      }),
+    ).toThrow(Http.HttpRouteError)
   })
 
   it("rejects a catch-all in webhookSuffix at parse time", () => {
-    expect(() => Http.mount("/agents/{name}", { webhookSuffix: "/{*rest}" })).toThrow(
-      Http.HttpRouteError,
-    )
+    expect(() =>
+      Http.mount("/agents/{name}", {
+        // @ts-expect-error compile-time rejection in addition to runtime parser
+        webhookSuffix: "/{*rest}",
+      }),
+    ).toThrow(Http.HttpRouteError)
   })
 
   it.effect("rejects a webhookSuffix path variable that is not a constructor param", () =>
@@ -200,4 +206,35 @@ describe("Http.mount({ webhookSuffix }) — validation", () => {
       }
     }),
   )
+
+  it.effect("rejects a duplicate webhookSuffix path variable", () =>
+    Effect.gen(function* () {
+      const m = Http.mount("/agents/{name}", { webhookSuffix: "/{name}/x/{name}" })
+      const exit = yield* Effect.exit(
+        Http.validateAgentHttp({
+          agentName: "Test",
+          mount: m,
+          constructorParamNames: ["name"],
+          nonStringBindableConstructorParams: new Set(),
+          stringBindableConstructorParams: new Set(["name"]),
+          methods: [],
+        }),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const json = JSON.stringify(exit.cause)
+        expect(json).toContain("duplicate webhook-suffix path variable 'name'")
+      }
+    }),
+  )
+
+  // The remaining two webhook-suffix bindability checks (multimodal /
+  // non-string-bindable constructor param) are kept in the implementation
+  // as defence-in-depth, but cannot be exercised through the public
+  // `validateAgentHttp` surface today: the mount-path validation runs the
+  // SAME checks on every constructor parameter, and the rule "every
+  // constructor parameter must appear as a `{var}` in the mount path"
+  // forces any such param into the mount-path loop, where it is rejected
+  // first. The compile-time `WebhookVarsValid` helper covers these cases
+  // statically (see `test/http-types.test-d.ts` for the negative tests).
 })

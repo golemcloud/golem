@@ -165,21 +165,49 @@ Path syntax:
 - `?key={var}&…` — inline query bindings; endpoint-only (mount paths reject `?`).
 - `headers: { "X-Foo": "paramName" }` on endpoint options — binds an HTTP header to a method param (case-insensitive).
 
-Rules (enforced by `validateAgentHttp` in `src/Http.ts`):
+### Validation rules — compile-time vs runtime
 
-- Every constructor param must appear as a `{var}` in the mount path.
-- Every endpoint binding (`{var}` in path/query, or in `headers`) must reference a method param.
-- A method param can be bound from at most one source (path, query, or header).
-- Path/query/header bindings are only allowed for "string-bindable" schemas — `Schema.String`, `Schema.Number`, `Schema.BigInt`, `Schema.Boolean`, literals, and refined/branded variants thereof (see `isStringBindableSchema`). Multimodal and unstructured params are body-only.
-- `GET` / `HEAD` endpoints may not have unbound (= body) parameters.
-- If any method declares `http`, the agent must declare `http: Http.mount(...)`.
-- Body convention is host-defined: unbound params on body-allowing verbs become JSON body fields keyed by name.
+Validation is layered: most rules now fire at the `tsc` boundary (so misconfigured agents fail to compile, with the offending name baked into the error message), and the same rules ALSO run inside `validateAgentHttp` / `validateMount` / `validateEndpoint` / `parseMountPath` / `parseEndpointPath` as defence-in-depth — for non-literal path strings, `as any` callers, escape hatches like `Http.restVar` / `Http.literal`, and any future deserialisation pathways. **Runtime validators are never removed; the compile-time pre-filter only refuses to compile call sites whose violations are statically visible.**
+
+Compile-time (string-literal call shapes only — non-literal paths short-circuit and defer to runtime):
+
+- Trivial template-literal shape on mount + endpoint paths: must start with `/`, must not end with `/` (except `"/"`), no `//`, mount paths reject `?`, endpoint paths allow at most one `?`.
+- Brace shape: each segment is a pure literal OR a single `{var}` / `{*rest}`; `{*rest}` only allowed as the LAST endpoint segment (mount paths reject catch-all entirely); rest variable name must be non-empty. Plus empty `{}` and nested-brace rejection.
+- Endpoint query string: no duplicate query keys, no empty `?=…` parameter names, no empty `&` runs (`&&`, leading `&`, trailing `&`).
+- Every constructor param must appear as a `{var}` in the mount path. Enforced via `MountDefCovering<C, V>` on `defineAgent`'s `http` field.
+- Multimodal / unstructured (`Multimodal` / `ElementSpec` carrier) params are statically excluded from path/query/header binding via `BindableKeys<C>` on `MountDef` and `EndpointDef`.
+- Webhook-suffix `{var}` names are tracked in a separate `WebhookVars` phantom on `MountDef` and validated against constructor-parameter bindability via `WebhookVarsValid<C, W>` at the `defineAgent` call site. The webhook-suffix string itself is run through `ValidMountPath` (no query, no catch-all, balanced/non-empty `{var}` braces).
+- A method param may be bound from at most one source (path / query / header) within the same endpoint. Enforced via the structured `EndpointBound` phantom + `NoDuplicateBindings` on `EndpointDef`.
+- Header names declared on the same endpoint must be unique when compared case-insensitively. Enforced via the `HeaderNames` phantom + `NoCaseFoldDuplicates`. (Header names introduced via the `withHeaders({...})` block widen to `ReadonlyArray<string>` and short-circuit; chained `withHeader(...)` calls preserve the tuple.)
+- `Http.get(...)` / `Http.head(...)` shorthands are tagged `"bodyless"` and rejected at the `method({ http: [...] })` call site when their bound-var union does NOT cover every method param. `Http.endpoint("GET", ...)` and `Http.custom("GET", ...)` are tagged `"bodyful"` and bypass this check, matching the runtime `isBodylessVerb` convention.
+- When at least one method declares an `http` array, the agent's `http: Http.mount(...)` field becomes required. Enforced by intersecting `defineAgent`'s `def` parameter with `AgentHttpRequirement<C, Methods, MV, WV>` when `AnyMethodHasHttp<Methods>` resolves to `true`.
+
+Runtime-only by design (kept as the canonical defence even when the compile-time pre-filter fires):
+
+- Full string-bindability of constructor / method params bound from path / query / header (i.e. rejecting `Schema.Struct`, `Schema.Class`, etc. on a binding). Requires `Schema.AST` introspection (`isStringBindableSchema` in `src/Http.ts`); no static counterpart. The `BindableKeys<…>` helper covers the discriminated multimodal/unstructured exclusion only.
+- Any non-Multimodal / non-ElementSpec schema that nonetheless cannot be decoded from a string still falls through to the runtime AST walk.
+- Brace balance for malformed cases not caught by the segment-level `{` / `}` discipline (e.g. unmatched-but-not-on-segment-boundary). Type-level form would produce noisy hover output for low ROI.
+- Var-name regex (`/^[A-Za-z_][A-Za-z0-9_-]*$/`). Same reasoning — type-level character-class enforcement is verbose and slow to compile for negligible gain.
+- For non-literal endpoints, path / query / header `{var}` matches a method parameter. Enforced statically by `EndpointDef<BindableKeys<Params>>` for literal call shapes; the runtime check covers code that passes a widened `EndpointDef<string>`.
+- Webhook-suffix `{var}` uniqueness within the suffix — caught by `validateMount`; the type-level `WebhookVars` phantom only tracks identity, not ordering.
+
+### Authoring API summary
+
+Path syntax:
+
+- `{var}` — path variable; must reference a constructor param (mount) or method param (endpoint).
+- `{*rest}` — catch-all; only valid as the last segment, never in mount paths.
+- `{agent-type}` / `{agent-version}` — host-injected system variables (also available as `Http.agentType()` / `Http.agentVersion()`; raw IR via `Http.literal` / `Http.pathVar` / `Http.restVar`).
+- `?key={var}&…` — inline query bindings; endpoint-only (mount paths reject `?`).
+- `headers: { "X-Foo": "paramName" }` on endpoint options — binds an HTTP header to a method param (case-insensitive).
 
 Verbs: `Http.get` / `post` / `put` / `del` / `patch` / `head` / `options` / `trace` / `connect`, plus `Http.custom("VERB", path, opts?)` for non-standard verbs. `Http.endpoint(verb, path, opts?)` is the generic form.
 
 Auth & CORS: both `Http.mount(...)` and individual endpoints accept `auth?: boolean` and `cors?: string[]`. Merge semantics are host-defined; the SDK emits both verbatim into `HttpMountDetails` / `HttpEndpointDetails`.
 
-Errors: validation failures surface as `HttpRouteError` Effect typed failures from `registerAgent` (alongside `UnsupportedSchemaError`); the synchronous `defineAgent` re-throws them at module-import time so misconfigurations fail fast.
+Body convention is host-defined: unbound params on body-allowing verbs become JSON body fields keyed by name.
+
+Errors: validation failures surface as `HttpRouteError` Effect typed failures from `registerAgent` (alongside `UnsupportedSchemaError`); the synchronous `defineAgent` re-throws them at module-import time so misconfigurations fail fast. The compile-time pre-filter surfaces failures as a branded `Invalid<"…">` carrier whose `Reason` string is the diagnostic — the carrier type itself is intentionally NOT exported from the package barrel; user code never names it directly. Type-level helpers live in `src/internal/httpTypes.ts`.
 
 ## RPC clients — cancellation
 

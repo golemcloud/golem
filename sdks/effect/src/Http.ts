@@ -1,6 +1,34 @@
 import { Effect, Pipeable, Schema, SchemaAST } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import { withPipe } from "./internal/pipeable.js"
+import type {
+  EndpointBound,
+  EndpointBoundAny,
+  HeaderKeysTuple,
+  ValidEndpointPath,
+  ValidMountPath,
+} from "./internal/httpTypes.js"
+
+export type {
+  EndpointBound,
+  EndpointBoundAny,
+  HeaderKeysTuple,
+  NoCaseFoldDuplicates,
+  NoDuplicateBindings,
+  UnionToTuple,
+  ValidEndpointPath,
+  ValidMountPath,
+} from "./internal/httpTypes.js"
+
+// `Invalid<…>` (the branded "compile-time error" carrier used by every
+// type-level helper above) is intentionally NOT re-exported. It is an
+// internal mechanism — user code never names the type directly; it
+// only ever encounters `Invalid<"…">` as a hover/error message
+// produced by the compile-time validators (mount-coverage, duplicate
+// bindings, case-fold header uniqueness, bodyless-unbound, etc.). The
+// literal `Reason` string carries the diagnostic, so exposing the
+// carrier publicly would only widen the SDK's surface area without
+// improving any user-visible workflow.
 
 /**
  * HTTP route metadata for Golem agents.
@@ -251,11 +279,98 @@ export type ValuesOf<R> = [keyof R] extends [never]
     : never
 
 // ---------------------------------------------------------------------------
+// Tuple-emitting variants of PathVarsOf / QueryVarsOf
+// ---------------------------------------------------------------------------
+//
+// `PathVarsOf` and `QueryVarsOf` collapse to a *union* of variable
+// names, which is what the `EndpointVars` phantom on `EndpointDef`
+// consumes. The duplicate-binding check needs *tuples* (the union
+// form drops `"a" | "a"` to `"a"` before we can spot the duplicate),
+// so we extract them via the tuple-emitting helpers below and feed
+// them into the structured `Bound` phantom on `EndpointDef`.
+
+type ExtractPathTupleRec<
+  S extends string,
+  Acc extends ReadonlyArray<string> = readonly [],
+> = S extends `${string}{${infer V}}${infer Rest}`
+  ? ExtractPathTupleRec<Rest, readonly [...Acc, CleanVarName<V>]>
+  : Acc
+
+type ExtractQueryTupleRec<
+  S extends string,
+  Acc extends ReadonlyArray<string> = readonly [],
+> = S extends `${string}={${infer V}}${infer Rest}`
+  ? ExtractQueryTupleRec<Rest, readonly [...Acc, V]>
+  : Acc
+
+type FilterSystemVarsRec<
+  T extends ReadonlyArray<string>,
+  Acc extends ReadonlyArray<string> = readonly [],
+> = T extends readonly [infer Head extends string, ...infer Tail extends ReadonlyArray<string>]
+  ? Head extends SystemVariableName
+    ? FilterSystemVarsRec<Tail, Acc>
+    : FilterSystemVarsRec<Tail, readonly [...Acc, Head]>
+  : Acc
+
+/**
+ * Tuple of path-variable names extracted from a literal endpoint path
+ * template, with `{agent-type}` / `{agent-version}` system variables
+ * stripped. Catch-all (`{*rest}`) names are included with the leading
+ * `*` already removed.
+ *
+ * Used as the `path` slot of the structured `Bound` phantom on
+ * {@link EndpointDef} (consumed by `NoDuplicateBindings`). For the
+ * union-shaped variant — which is what `EndpointVars` consumes — see
+ * {@link PathVarsOf}.
+ *
+ * @since 1.5.0
+ * @category models
+ */
+export type PathTupleOf<S extends string> = FilterSystemVarsRec<
+  ExtractPathTupleRec<SplitPathQuery<S>["path"]>
+>
+
+/**
+ * Tuple of query-variable names extracted from the inline query
+ * portion of a literal endpoint path template.
+ *
+ * Used as the `query` slot of the structured `Bound` phantom on
+ * {@link EndpointDef} (consumed by `NoDuplicateBindings`). For the
+ * union-shaped variant — which is what `EndpointVars` consumes — see
+ * {@link QueryVarsOf}.
+ *
+ * @since 1.5.0
+ * @category models
+ */
+export type QueryTupleOf<S extends string> = ExtractQueryTupleRec<SplitPathQuery<S>["query"]>
+
+// ---------------------------------------------------------------------------
 // Mount and Endpoint typed wrappers
 // ---------------------------------------------------------------------------
 
 declare const mountVarsBrand: unique symbol
+declare const mountWebhookVarsBrand: unique symbol
 declare const endpointVarsBrand: unique symbol
+declare const endpointKindBrand: unique symbol
+declare const endpointBoundBrand: unique symbol
+declare const endpointHeaderNamesBrand: unique symbol
+
+/**
+ * Whether an endpoint's HTTP verb permits a request body. Used as a
+ * phantom on {@link EndpointDef} so the `method({...})` factory can
+ * statically reject bodyless endpoints (`GET` / `HEAD`) whose path /
+ * query / header bindings do not cover every method parameter — the
+ * Golem host has no body in which to deliver an unbound value.
+ *
+ * Custom verbs (`Http.endpoint(verb, ...)` / `Http.custom(verb, ...)`)
+ * always tag as `"bodyful"` regardless of the verb string, matching
+ * the runtime `isBodylessVerb` convention which only treats the
+ * literal `"GET"` / `"HEAD"` shorthands as bodyless.
+ *
+ * @since 1.5.0
+ * @category models
+ */
+export type EndpointKind = "bodyful" | "bodyless"
 
 /**
  * Mount declaration carried by `AgentDefinition.http`. Compiled to
@@ -266,6 +381,16 @@ declare const endpointVarsBrand: unique symbol
  * give a compile-time signal when a `{var}` in the mount path doesn't
  * match a constructor param.
  *
+ * The second phantom `WebhookVars` carries the union of `{var}` names
+ * appearing in the optional `webhookSuffix`. It is intentionally kept
+ * SEPARATE from `MountVars`: webhook-suffix vars are validated against
+ * constructor parameters rather than being part of the routable mount
+ * URL, and folding them into `MountVars` would conflate "this var is
+ * resolved during HTTP routing" with "this var is rendered into the
+ * webhook URL at deploy time". `agent.ts` consumes `WebhookVars` via
+ * `WebhookVarsValid<C, WebhookVars>` to enforce the constructor-param
+ * + bindability constraints at compile time.
+ *
  * Instances are {@link Pipeable.Pipeable}: the pipeable-builder
  * combinators ({@link withAuth}, {@link withCors},
  * {@link withPhantomAgent}, {@link withWebhookSuffix}) compose
@@ -274,8 +399,10 @@ declare const endpointVarsBrand: unique symbol
  * @since 1.5.0
  * @category models
  */
-export interface MountDef<MountVars extends string> extends Pipeable.Pipeable {
+export interface MountDef<MountVars extends string, WebhookVars extends string = never>
+  extends Pipeable.Pipeable {
   readonly [mountVarsBrand]?: MountVars
+  readonly [mountWebhookVarsBrand]?: WebhookVars
   readonly pathPrefix: ReadonlyArray<PathSegment>
   readonly authRequired: boolean
   readonly cors: ReadonlyArray<string>
@@ -289,7 +416,35 @@ export interface MountDef<MountVars extends string> extends Pipeable.Pipeable {
  * registration time.
  *
  * `EndpointVars` collects all variable names referenced by the path,
- * query string, and header bindings of this single endpoint.
+ * query string, and header bindings of this single endpoint as a
+ * *union* — used by {@link "./internal/method.js".MethodSpec}'s
+ * `http?` array constraint to ensure every binding maps to a method
+ * parameter. `Kind` tracks whether the endpoint's HTTP verb permits a
+ * request body (see {@link EndpointKind}); narrowed to `"bodyless"`
+ * by the `Http.get` / `Http.head` shorthands and to `"bodyful"` by
+ * every other verb constructor. Defaults to the full `EndpointKind`
+ * union so existing structural code (`EndpointDef<string>`,
+ * `compileEndpoint`, …) keeps working unchanged.
+ *
+ * `Bound` carries the *structured* shape of the same bindings —
+ * `{ path; query; header }` of three readonly tuples of literal
+ * strings — so that {@link NoDuplicateBindings} can detect a
+ * parameter being bound from more than one source within the same
+ * endpoint. Defaults to {@link EndpointBoundAny} (each
+ * slot a non-tuple `ReadonlyArray<string>`), which short-circuits the
+ * dup walk and defers to the runtime `seenSources` check — preserving
+ * back-compat for code that only declares the union form.
+ *
+ * `HeaderNames` carries the readonly tuple of *header name* literals
+ * (e.g. `"X-Idempotency-Key"`) declared via
+ * {@link EndpointOptions.headers}, {@link withHeader}, and
+ * {@link withHeaders}. Note this is the **header-name** tuple, which
+ * is distinct from `Bound["header"]` (which holds the **method-param
+ * name** the header maps to). Consumed by `NoCaseFoldDuplicates` to
+ * reject endpoints declaring the same header twice when names are
+ * compared case-insensitively. Defaults to a non-tuple
+ * `ReadonlyArray<string>` so back-compat callers short-circuit and
+ * defer to the runtime `seenHeaderKeys` check.
  *
  * Instances are {@link Pipeable.Pipeable}: the pipeable-builder
  * combinators ({@link withAuth}, {@link withCors}, {@link withHeader},
@@ -299,8 +454,17 @@ export interface MountDef<MountVars extends string> extends Pipeable.Pipeable {
  * @since 1.5.0
  * @category models
  */
-export interface EndpointDef<EndpointVars extends string> extends Pipeable.Pipeable {
+export interface EndpointDef<
+  EndpointVars extends string,
+  Kind extends EndpointKind = EndpointKind,
+  Bound extends EndpointBound = EndpointBoundAny,
+  HeaderNames = ReadonlyArray<string>,
+>
+  extends Pipeable.Pipeable {
   readonly [endpointVarsBrand]?: EndpointVars
+  readonly [endpointKindBrand]?: Kind
+  readonly [endpointBoundBrand]?: Bound
+  readonly [endpointHeaderNamesBrand]?: HeaderNames
   readonly verb: HttpVerb
   readonly pathSuffix: ReadonlyArray<PathSegment>
   readonly queryVars: ReadonlyArray<QueryVariable>
@@ -543,7 +707,7 @@ const runParse = <A>(eff: Effect.Effect<A, HttpRouteError>): A => {
  * @since 1.5.0
  * @category models
  */
-export interface MountOptions {
+export interface MountOptions<W extends string = string> {
   /** When `true`, the host treats every endpoint as authentication-required. */
   readonly auth?: boolean
   /** CORS allowed-origin patterns advertised at the mount level. */
@@ -552,9 +716,13 @@ export interface MountOptions {
   readonly phantomAgent?: boolean
   /**
    * Optional custom webhook suffix path. Parsed with the same rules as
-   * the mount path (no query, no catch-all).
+   * the mount path (no query, no catch-all). Validated at the type
+   * level via {@link ValidMountPath}: when a non-literal `string` is
+   * supplied (default `W = string`) the constraint reduces to plain
+   * `string` and is enforced by the runtime parser; literal templates
+   * are validated at compile time.
    */
-  readonly webhookSuffix?: string
+  readonly webhookSuffix?: string extends W ? string : ValidMountPath<W>
 }
 
 /**
@@ -562,16 +730,58 @@ export interface MountOptions {
  * `{agent-type}` / `{agent-version}` segments; every `{var}` must
  * correspond to a constructor parameter on the agent.
  *
+ * The optional `opts.webhookSuffix` is parsed with the same rules as
+ * the mount path (no query, no catch-all). Its `{var}` names are
+ * extracted into the `WebhookVars` phantom on the returned
+ * {@link MountDef} so `agent.ts` can validate them against the agent's
+ * constructor parameters at compile time via `WebhookVarsValid`.
+ *
+ * **Compile-time guarantees**
+ *
+ * When the path argument is a string literal (the typical call shape),
+ * the following rules are enforced by `tsc` before the call ever runs:
+ *
+ * - The path must start with `/`, must not end with `/` (except `"/"`
+ *   itself), must not contain `//`, and must not include a `?` (mounts
+ *   have no query string).
+ * - Each segment must be either a pure literal OR a single `{var}` /
+ *   `{*rest}` (no mixing of literal text with `{…}` variables) and
+ *   variable braces must be balanced and non-empty (also rejecting
+ *   empty `{}` and nested-brace shapes).
+ * - Mount paths may NOT contain a catch-all `{*rest}` segment.
+ * - The optional `webhookSuffix` is parsed with the same rules.
+ *
+ * Coverage of constructor parameters by `{var}` segments and
+ * webhook-suffix `{var}` validity are enforced separately, at the
+ * `defineAgent` call site, via the `MountDefCovering<C, V>` and
+ * `WebhookVarsValid<C, W>` constraints applied to the agent's `http`
+ * field.
+ *
+ * **Runtime fallbacks (defence-in-depth)**
+ *
+ * The brace-balance check, the var-name regex, AND full
+ * string-bindability of the bound constructor parameter (i.e.
+ * rejecting `Schema.Struct` / `Schema.Class` schemas on a path var)
+ * remain runtime-only because they need either parser-level loops or
+ * `Schema.AST` introspection that cannot be expressed at the type
+ * level without unreasonable hover output. They surface as
+ * `HttpRouteError` from `registerAgent` (re-thrown by `defineAgent`
+ * at module-import time).
+ *
+ * Non-literal path arguments (e.g. `Http.mount(somePathVariable)`)
+ * widen `Path` to plain `string`; the compile-time gates short-circuit
+ * and the runtime parser becomes the only line of defence.
+ *
  * @since 1.5.0
  * @category constructors
  */
-export const mount: <const Path extends string>(
-  path: Path,
-  opts?: MountOptions,
-) => MountDef<Exclude<PathVarsOf<Path>, SystemVariableName>> = ((
-  path: string,
-  opts?: MountOptions,
-) => {
+export const mount: <const Path extends string, const W extends string = string>(
+  path: ValidMountPath<Path>,
+  opts?: MountOptions<W>,
+) => MountDef<
+  Exclude<PathVarsOf<Path>, SystemVariableName>,
+  Exclude<PathVarsOf<W>, SystemVariableName>
+> = ((path: string, opts?: MountOptions) => {
   const segments = runParse(parseMountPath(path))
   const webhookSuffix = opts?.webhookSuffix ? runParse(parseMountPath(opts.webhookSuffix)) : []
   return withPipe({
@@ -580,7 +790,7 @@ export const mount: <const Path extends string>(
     cors: opts?.cors ?? [],
     phantomAgent: opts?.phantomAgent ?? false,
     webhookSuffix,
-  }) as unknown as MountDef<never>
+  }) as unknown as MountDef<never, never>
 }) as never
 
 /**
@@ -636,10 +846,117 @@ const buildEndpoint = <H extends Readonly<Record<string, string>>>(
 }
 
 /**
+ * Header values extracted from `H`, used as the seed for the
+ * structured `Bound`'s `header` slot on the verb shorthands and on
+ * {@link endpoint} / {@link custom}.
+ *
+ * The empty case (`ValuesOf<H>` collapses to `never` — either because
+ * the user did not pass `headers` at all, OR because the `headers`
+ * record is the empty `{}` literal) resolves to a *tuple* `readonly []`
+ * so that {@link withHeader}'s subsequent `readonly [...B["header"],
+ * Var]` produces a real tuple `readonly [Var]` (and therefore drives
+ * `NoDuplicateBindings` correctly). Anything else falls through to a
+ * `ReadonlyArray<…>` (NOT a tuple), short-circuiting the dup walk for
+ * the headers-via-literal-options form — the runtime `seenHeaderKeys`
+ * / `seenSources` checks remain the canonical defence in that case.
+ *
+ * @since 1.5.0
+ * @category models
+ */
+export type HeaderValuesArray<H extends Readonly<Record<string, string>>> = [ValuesOf<H>] extends [
+  never,
+]
+  ? readonly []
+  : ReadonlyArray<ValuesOf<H>>
+
+/**
+ * Shape of a verb-shorthand factory, parameterised by {@link EndpointKind}.
+ *
+ * `Http.get` / `Http.head` instantiate it with `"bodyless"` so the
+ * compile-time check rejecting `GET` / `HEAD` endpoints with unbound
+ * method parameters fires; every other verb shorthand instantiates it
+ * with `"bodyful"` so unbound parameters are allowed to map to the
+ * request body.
+ *
+ * @since 1.5.0
+ * @category models
+ */
+export type EndpointFactory<Kind extends EndpointKind> = <
+  const Path extends string,
+  H extends Readonly<Record<string, string>> = NoHeaderBindings,
+>(
+  path: ValidEndpointPath<Path>,
+  opts?: EndpointOptions<H>,
+) => EndpointDef<
+  Exclude<PathVarsOf<Path> | QueryVarsOf<Path>, SystemVariableName> | ValuesOf<H>,
+  Kind,
+  {
+    readonly path: PathTupleOf<Path>
+    readonly query: QueryTupleOf<Path>
+    readonly header: HeaderValuesArray<H>
+  },
+  HeaderKeysTuple<H>
+>
+
+/**
  * Declare an HTTP endpoint for a method. The path is relative to the
  * agent's mount prefix and may include `{var}`, `{*rest}`,
  * `{agent-type}`, `{agent-version}`, and inline `?key={var}&…` query
  * bindings.
+ *
+ * The returned endpoint is tagged `"bodyful"` regardless of the verb
+ * string — `Http.endpoint("GET", ...)` does NOT participate in the
+ * compile-time bodyless-binding check; use the `Http.get(...)`
+ * shorthand if you want that. This matches the runtime `isBodylessVerb`
+ * convention in `validateEndpoint`, which only treats the literal
+ * `"GET"` / `"HEAD"` shorthands as bodyless.
+ *
+ * **Compile-time guarantees**
+ *
+ * When the path argument is a string literal (the typical call shape),
+ * the following rules are enforced by `tsc` before the call ever runs:
+ *
+ * - The path must start with `/`, must not end with `/` (except `"/"`
+ *   itself), must not contain `//`, and must contain at most one `?`.
+ * - Each segment must be either a pure literal OR a single `{var}` /
+ *   `{*rest}` (no mixing of literal text with `{…}` variables) and
+ *   variable braces must be balanced and non-empty (also rejecting
+ *   empty `{}` and nested-brace shapes).
+ * - A `{*rest}` catch-all segment is only allowed as the LAST path
+ *   segment.
+ * - The query portion (the part after `?`, if any) may not contain
+ *   empty `&` runs (`&&`, leading `&`, trailing `&`), may not contain
+ *   empty parameter names (`?=…`), and may not declare the same query
+ *   key twice.
+ *
+ * The endpoint's bound parameter names are also tracked via three
+ * structural phantoms on the returned {@link EndpointDef} —
+ * {@link NoDuplicateBindings}, {@link NoCaseFoldDuplicates}, and the
+ * `"bodyless"` / `"bodyful"` `Kind` tag — so that the `method({...})`
+ * factory can additionally enforce, also at compile time:
+ *
+ * - A method parameter may be bound from at most one source
+ *   (path / query / header) within the same endpoint.
+ * - Header names declared on the same endpoint must be unique when
+ *   compared case-insensitively.
+ * - Bodyless verbs (`GET` / `HEAD`) — only via the {@link get} /
+ *   {@link head} shorthands — may not have any unbound method
+ *   parameter, since there is no request body in which to deliver it.
+ * - Path / query / header bindings to multimodal or unstructured
+ *   parameters (i.e. `Multimodal` or `ElementSpec` carriers) are
+ *   rejected via the `BindableKeys<Params>` constraint on
+ *   `EndpointDef`.
+ *
+ * **Runtime fallbacks (defence-in-depth)**
+ *
+ * The brace-balance check, the var-name regex, AND full
+ * string-bindability of bound parameters (i.e. rejecting a
+ * `Schema.Struct` schema as a path var) remain runtime-only because
+ * they need parser-level loops or `Schema.AST` introspection. The
+ * matching-parameter check for every binding is enforced by the type
+ * system via `EndpointDef<BindableKeys<Params>>` for literal call
+ * shapes and by `validateEndpoint` at registration time for the
+ * widened cases.
  *
  * @since 1.5.0
  * @category constructors
@@ -649,91 +966,116 @@ export const endpoint: <
   H extends Readonly<Record<string, string>> = NoHeaderBindings,
 >(
   verb: HttpVerb,
-  path: Path,
+  path: ValidEndpointPath<Path>,
   opts?: EndpointOptions<H>,
-) => EndpointDef<Exclude<PathVarsOf<Path> | QueryVarsOf<Path>, SystemVariableName> | ValuesOf<H>> =
-  buildEndpoint as never
+) => EndpointDef<
+  Exclude<PathVarsOf<Path> | QueryVarsOf<Path>, SystemVariableName> | ValuesOf<H>,
+  "bodyful",
+  {
+    readonly path: PathTupleOf<Path>
+    readonly query: QueryTupleOf<Path>
+    readonly header: HeaderValuesArray<H>
+  },
+  HeaderKeysTuple<H>
+> = buildEndpoint as never
 
-const verbHelper = (verb: HttpVerb) =>
-  (<const Path extends string, H extends Readonly<Record<string, string>> = NoHeaderBindings>(
-    path: Path,
-    opts?: EndpointOptions<H>,
-  ): EndpointDef<Exclude<PathVarsOf<Path> | QueryVarsOf<Path>, SystemVariableName> | ValuesOf<H>> =>
+const verbHelper = <Kind extends EndpointKind>(verb: HttpVerb): EndpointFactory<Kind> =>
+  ((path: string, opts?: EndpointOptions<NoHeaderBindings>) =>
     buildEndpoint(verb, path, opts) as never) as never
 
 /**
- * Shorthand for `Http.endpoint("GET", path, opts?)`.
+ * Shorthand for `Http.endpoint("GET", path, opts?)`. Bodyless: every
+ * method parameter MUST be bound from a path / query / header variable
+ * within the same endpoint; unbound params would otherwise have to
+ * travel in the request body, which `GET` does not have. The
+ * "no-unbound-param" check is enforced at compile time by tagging the
+ * returned endpoint as `"bodyless"` and surfacing an `Invalid<…>`
+ * carrier at the offending `method({ http: [...] })` call site;
+ * see {@link endpoint} for the full set of compile-time guarantees
+ * shared with every verb shorthand.
  *
  * @since 1.5.0
  * @category constructors
  */
-export const get: <
-  const Path extends string,
-  H extends Readonly<Record<string, string>> = NoHeaderBindings,
->(
-  path: Path,
-  opts?: EndpointOptions<H>,
-) => EndpointDef<Exclude<PathVarsOf<Path> | QueryVarsOf<Path>, SystemVariableName> | ValuesOf<H>> =
-  verbHelper("GET")
+export const get: EndpointFactory<"bodyless"> = verbHelper<"bodyless">("GET")
 /**
- * Shorthand for `Http.endpoint("HEAD", path, opts?)`.
+ * Shorthand for `Http.endpoint("HEAD", path, opts?)`. Bodyless: see
+ * {@link get} for the compile-time parameter-binding restriction.
  *
  * @since 1.5.0
  * @category constructors
  */
-export const head: typeof get = verbHelper("HEAD")
+export const head: EndpointFactory<"bodyless"> = verbHelper<"bodyless">("HEAD")
 /**
- * Shorthand for `Http.endpoint("POST", path, opts?)`.
+ * Shorthand for `Http.endpoint("POST", path, opts?)`. Bodyful — unbound
+ * method parameters are allowed to map to JSON body fields keyed by
+ * name. Compile-time path-shape, duplicate-binding, and case-fold
+ * header-uniqueness rules apply identically to every verb shorthand;
+ * see {@link endpoint} for the full list.
  *
  * @since 1.5.0
  * @category constructors
  */
-export const post: typeof get = verbHelper("POST")
+export const post: EndpointFactory<"bodyful"> = verbHelper<"bodyful">("POST")
 /**
- * Shorthand for `Http.endpoint("PUT", path, opts?)`.
+ * Shorthand for `Http.endpoint("PUT", path, opts?)`. Bodyful — see
+ * {@link post}.
  *
  * @since 1.5.0
  * @category constructors
  */
-export const put: typeof get = verbHelper("PUT")
+export const put: EndpointFactory<"bodyful"> = verbHelper<"bodyful">("PUT")
 /**
- * Shorthand for `Http.endpoint("DELETE", path, opts?)`.
+ * Shorthand for `Http.endpoint("DELETE", path, opts?)`. Bodyful — see
+ * {@link post}.
  *
  * @since 1.5.0
  * @category constructors
  */
-export const del: typeof get = verbHelper("DELETE")
+export const del: EndpointFactory<"bodyful"> = verbHelper<"bodyful">("DELETE")
 /**
- * Shorthand for `Http.endpoint("PATCH", path, opts?)`.
+ * Shorthand for `Http.endpoint("PATCH", path, opts?)`. Bodyful — see
+ * {@link post}.
  *
  * @since 1.5.0
  * @category constructors
  */
-export const patch: typeof get = verbHelper("PATCH")
+export const patch: EndpointFactory<"bodyful"> = verbHelper<"bodyful">("PATCH")
 /**
- * Shorthand for `Http.endpoint("OPTIONS", path, opts?)`.
+ * Shorthand for `Http.endpoint("OPTIONS", path, opts?)`. Bodyful — see
+ * {@link post}.
  *
  * @since 1.5.0
  * @category constructors
  */
-export const options: typeof get = verbHelper("OPTIONS")
+export const options: EndpointFactory<"bodyful"> = verbHelper<"bodyful">("OPTIONS")
 /**
- * Shorthand for `Http.endpoint("TRACE", path, opts?)`.
+ * Shorthand for `Http.endpoint("TRACE", path, opts?)`. Bodyful — see
+ * {@link post}.
  *
  * @since 1.5.0
  * @category constructors
  */
-export const trace: typeof get = verbHelper("TRACE")
+export const trace: EndpointFactory<"bodyful"> = verbHelper<"bodyful">("TRACE")
 /**
- * Shorthand for `Http.endpoint("CONNECT", path, opts?)`.
+ * Shorthand for `Http.endpoint("CONNECT", path, opts?)`. Bodyful — see
+ * {@link post}.
  *
  * @since 1.5.0
  * @category constructors
  */
-export const connect: typeof get = verbHelper("CONNECT")
+export const connect: EndpointFactory<"bodyful"> = verbHelper<"bodyful">("CONNECT")
 
 /**
- * Shorthand for a custom (non-standard) HTTP verb.
+ * Shorthand for a custom (non-standard) HTTP verb. Always tagged
+ * `"bodyful"` — custom verbs do NOT participate in the compile-time
+ * bodyless-binding check, matching the runtime `isBodylessVerb`
+ * convention which only treats the literal `"GET"` / `"HEAD"`
+ * shorthands as bodyless. All other compile-time guarantees on the
+ * path string (shape, query-key uniqueness, …) and on the resulting
+ * endpoint (duplicate bindings, case-fold header uniqueness,
+ * `BindableKeys` filtering of multimodal/unstructured params) apply
+ * identically; see {@link endpoint} for the full list.
  *
  * @since 1.5.0
  * @category constructors
@@ -743,11 +1085,19 @@ export const custom: <
   H extends Readonly<Record<string, string>> = NoHeaderBindings,
 >(
   verb: string,
-  path: Path,
+  path: ValidEndpointPath<Path>,
   opts?: EndpointOptions<H>,
-) => EndpointDef<Exclude<PathVarsOf<Path> | QueryVarsOf<Path>, SystemVariableName> | ValuesOf<H>> =
-  ((verb: string, path: string, opts?: EndpointOptions<NoHeaderBindings>) =>
-    buildEndpoint({ custom: verb }, path, opts)) as never
+) => EndpointDef<
+  Exclude<PathVarsOf<Path> | QueryVarsOf<Path>, SystemVariableName> | ValuesOf<H>,
+  "bodyful",
+  {
+    readonly path: PathTupleOf<Path>
+    readonly query: QueryTupleOf<Path>
+    readonly header: HeaderValuesArray<H>
+  },
+  HeaderKeysTuple<H>
+> = ((verb: string, path: string, opts?: EndpointOptions<NoHeaderBindings>) =>
+  buildEndpoint({ custom: verb }, path, opts)) as never
 
 // ---------------------------------------------------------------------------
 // Pipeable combinators
@@ -783,7 +1133,7 @@ export const custom: <
  */
 export const withAuth =
   (auth: boolean) =>
-  <T extends MountDef<string> | EndpointDef<string>>(t: T): T =>
+  <T extends MountDef<string, string> | EndpointDef<string>>(t: T): T =>
     withPipe({ ...t, authRequired: auth }) as unknown as T
 
 /**
@@ -801,73 +1151,162 @@ export const withAuth =
  */
 export const withCors =
   (...patterns: ReadonlyArray<string>) =>
-  <T extends MountDef<string> | EndpointDef<string>>(t: T): T =>
+  <T extends MountDef<string, string> | EndpointDef<string>>(t: T): T =>
     withPipe({ ...t, cors: patterns }) as unknown as T
 
 /**
  * Append a single header → method-parameter binding to an endpoint.
- * Header names are case-insensitive at HTTP level; collisions after
- * lower-casing are rejected at registration time. Widens the
- * `EndpointVars` phantom to include the bound parameter name.
+ *
+ * **Compile-time guarantees**
+ *
+ * Adds the bound `varName` to the structured `Bound["header"]` tuple
+ * carried by the endpoint, and adds `header` to the `HeaderNames`
+ * tuple. As a result the `method({ http: [...] })` factory:
+ *
+ * - rejects this endpoint if `varName` is already bound from a path
+ *   or query variable (or from an earlier `withHeader` call) — that
+ *   is the same parameter bound from more than one source.
+ * - rejects this endpoint if `header` matches an earlier-declared
+ *   header on the same endpoint after both are lowercased.
+ *
+ * Both checks fire only when the header name and `varName` are string
+ * literals (the typical call shape); a non-literal `header` widens
+ * `HeaderNames` to `ReadonlyArray<string>` and the case-fold walker
+ * short-circuits, deferring to the runtime `seenHeaderKeys` /
+ * `seenSources` checks in `validateEndpoint`.
+ *
+ * Header names are case-insensitive at HTTP level — collisions after
+ * lower-casing are rejected at registration time even when the
+ * compile-time check has been short-circuited.
  *
  * @since 1.5.0
  * @category combinators
  */
 export const withHeader =
-  <const Var extends string>(header: string, varName: Var) =>
-  <V extends string>(ep: EndpointDef<V>): EndpointDef<V | Var> =>
+  <const HName extends string, const Var extends string>(header: HName, varName: Var) =>
+  <V extends string, K extends EndpointKind, B extends EndpointBound, HN>(
+    ep: EndpointDef<V, K, B, HN>,
+  ): EndpointDef<
+    V | Var,
+    K,
+    {
+      readonly path: B["path"]
+      readonly query: B["query"]
+      readonly header: readonly [...B["header"], Var]
+    },
+    HN extends ReadonlyArray<string> ? readonly [...HN, HName] : ReadonlyArray<string>
+  > =>
     withPipe({
       ...ep,
       headerVars: [...ep.headerVars, { header, varName }],
-    }) as unknown as EndpointDef<V | Var>
+    }) as never
 
 /**
  * Append multiple header → method-parameter bindings to an endpoint.
- * Equivalent to chaining a series of {@link withHeader} calls. Widens
- * the `EndpointVars` phantom to include every bound parameter name.
+ * Equivalent to chaining a series of {@link withHeader} calls.
+ *
+ * **Compile-time guarantees**
+ *
+ * The header names from `H` are appended to the endpoint's
+ * `HeaderNames` tuple via {@link UnionToTuple}, so the
+ * `method({ http: [...] })` factory still rejects the endpoint when a
+ * later header collides with an earlier one (case-insensitive).
+ *
+ * The bound `varName`s are appended to the structured `Bound["header"]`
+ * slot as a `ReadonlyArray<…>` (NOT a tuple — TypeScript's mapped
+ * types do not preserve record-key insertion order well enough to
+ * drive duplicate detection inside the appended block). The
+ * compile-time {@link NoDuplicateBindings} walk therefore short-
+ * circuits inside the `withHeaders`-introduced range; the runtime
+ * `seenSources` check in `validateEndpoint` remains the canonical
+ * defence for cross-source collisions involving header names
+ * introduced via `withHeaders`. To preserve the compile-time
+ * cross-source check, prefer chained {@link withHeader} calls over
+ * a single `withHeaders({...})` block.
  *
  * @since 1.5.0
  * @category combinators
  */
 export const withHeaders =
   <const H extends Readonly<Record<string, string>>>(headers: H) =>
-  <V extends string>(ep: EndpointDef<V>): EndpointDef<V | ValuesOf<H>> => {
+  <V extends string, K extends EndpointKind, B extends EndpointBound, HN>(
+    ep: EndpointDef<V, K, B, HN>,
+  ): EndpointDef<
+    V | ValuesOf<H>,
+    K,
+    {
+      readonly path: B["path"]
+      readonly query: B["query"]
+      readonly header: readonly [...B["header"], ...HeaderValuesArray<H>]
+    },
+    HN extends ReadonlyArray<string>
+      ? HeaderKeysTuple<H> extends infer Hk extends ReadonlyArray<string>
+        ? readonly [...HN, ...Hk]
+        : ReadonlyArray<string>
+      : ReadonlyArray<string>
+  > => {
     const headerVars = [...ep.headerVars]
     for (const [header, varName] of Object.entries(headers)) {
       headerVars.push({ header, varName: String(varName) })
     }
-    return withPipe({ ...ep, headerVars }) as unknown as EndpointDef<V | ValuesOf<H>>
+    return withPipe({ ...ep, headerVars }) as never
   }
 
 /**
  * Set the `phantom-agent` flag on a mount (one fresh agent instance per
- * HTTP request). Pipeable; `MountVars` is preserved unchanged.
+ * HTTP request). Pipeable; both `MountVars` and `WebhookVars` are
+ * preserved unchanged.
  *
  * @since 1.5.0
  * @category combinators
  */
 export const withPhantomAgent =
   (phantom: boolean = true) =>
-  <V extends string>(m: MountDef<V>): MountDef<V> =>
-    withPipe({ ...m, phantomAgent: phantom }) as unknown as MountDef<V>
+  <V extends string, W extends string>(m: MountDef<V, W>): MountDef<V, W> =>
+    withPipe({ ...m, phantomAgent: phantom }) as unknown as MountDef<V, W>
 
 /**
- * Override the webhook-suffix path on a mount. Parsed with the same
- * rules as the mount path itself — no query string and no catch-all
- * (`{*rest}`) are allowed. Webhook-suffix path variables are validated
- * against constructor-parameter names at registration time, so they
- * are NOT folded into the `MountVars` phantom.
+ * Override the webhook-suffix path on a mount.
+ *
+ * **Compile-time guarantees**
+ *
+ * The suffix string is run through the same {@link ValidMountPath}
+ * checks as the mount path itself — must start with `/`, no trailing
+ * `/`, no `//`, no `?`, no catch-all `{*rest}`, balanced and
+ * non-empty `{var}` braces, no mixed literal+`{…}` segments.
+ *
+ * The webhook-suffix `{var}` names are extracted into the `WebhookVars`
+ * phantom on the returned {@link MountDef}, replacing (not merging)
+ * any previously-declared suffix vars — most-recent call wins,
+ * matching the runtime behaviour where a later call overwrites the
+ * earlier `webhookSuffix` array. At the `defineAgent` call site,
+ * `WebhookVarsValid<C, WebhookVars>` then enforces that every
+ * suffix `{var}` matches a constructor-parameter name AND is
+ * statically eligible for binding (i.e. NOT a {@link Multimodal} or
+ * {@link ElementSpec} carrier — see {@link BindableKeys}).
+ *
+ * Webhook-suffix vars are intentionally NOT folded into `MountVars` —
+ * that union represents URL routing, while webhook vars are rendered
+ * into the deploy-time webhook URL. Conflating the two would
+ * over-constrain `MountDef` at every call site that does not declare
+ * a webhook suffix.
+ *
+ * Full string-bindability of webhook-suffix vars (rejecting
+ * `Schema.Struct` etc.) and webhook-suffix `{var}` uniqueness within
+ * the suffix remain runtime-only — see `validateMount` in `Http.ts`.
  *
  * @since 1.5.0
  * @category combinators
  */
 export const withWebhookSuffix =
-  (suffix: string) =>
-  <V extends string>(m: MountDef<V>): MountDef<V> =>
+  <const Suffix extends string>(suffix: ValidMountPath<Suffix>) =>
+  <V extends string>(
+    m: MountDef<V, string>,
+  ): MountDef<V, Exclude<PathVarsOf<Suffix>, SystemVariableName>> =>
     withPipe({
       ...m,
-      webhookSuffix: runParse(parseMountPath(suffix)),
-    }) as unknown as MountDef<V>
+      webhookSuffix: runParse(parseMountPath(suffix as unknown as string)),
+    }) as unknown as MountDef<V, Exclude<PathVarsOf<Suffix>, SystemVariableName>>
 
 // ---------------------------------------------------------------------------
 // Compilation: MountDef / EndpointDef → WIT records
@@ -892,7 +1331,7 @@ const segmentToWit = (s: PathSegment): AgentCommon.PathSegment => {
  * @since 1.5.0
  * @category metadata
  */
-export const compileMount = (mountDef: MountDef<string>): AgentCommon.HttpMountDetails => ({
+export const compileMount = (mountDef: MountDef<string, string>): AgentCommon.HttpMountDetails => ({
   pathPrefix: mountDef.pathPrefix.map(segmentToWit),
   authDetails: mountDef.authRequired ? { required: true } : undefined,
   phantomAgent: mountDef.phantomAgent,
@@ -970,7 +1409,7 @@ export interface MethodHttpInput {
  */
 export interface AgentHttpInput {
   readonly agentName: string
-  readonly mount: MountDef<string> | undefined
+  readonly mount: MountDef<string, string> | undefined
   readonly constructorParamNames: ReadonlyArray<string>
   /**
    * Names of constructor parameters that are NOT eligible to be bound
@@ -1244,12 +1683,41 @@ const validateMount = (
         )
       }
     }
-    // Webhook suffix variables, if any, must also resolve to constructor params.
+    // Webhook suffix variables, if any, must:
+    //   (a) be unique within the suffix,
+    //   (b) match a constructor parameter,
+    //   (c) NOT refer to a multimodal / unstructured constructor param,
+    //   (d) be on a string-bindable schema (string / number / bigint /
+    //       boolean / literal / branded variants thereof).
+    // Mirrors the mount-path checks above so the rules are consistent
+    // between the routable mount path and the deploy-time webhook URL.
+    const webhookVars = new Set<string>()
     for (const s of mountDef.webhookSuffix) {
-      if (s._tag === "PathVar" && !input.constructorParamNames.includes(s.name)) {
+      if (s._tag !== "PathVar") continue
+      if (webhookVars.has(s.name)) {
+        return yield* Effect.fail(
+          new HttpRouteError(`${ctx}: duplicate webhook-suffix path variable '${s.name}'`),
+        )
+      }
+      webhookVars.add(s.name)
+      if (!input.constructorParamNames.includes(s.name)) {
         return yield* Effect.fail(
           new HttpRouteError(
             `${ctx}: webhook-suffix path variable '${s.name}' does not match any constructor parameter`,
+          ),
+        )
+      }
+      if (input.nonStringBindableConstructorParams.has(s.name)) {
+        return yield* Effect.fail(
+          new HttpRouteError(
+            `${ctx}: webhook-suffix constructor parameter '${s.name}' is multimodal/unstructured and cannot be bound from a path variable`,
+          ),
+        )
+      }
+      if (!input.stringBindableConstructorParams.has(s.name)) {
+        return yield* Effect.fail(
+          new HttpRouteError(
+            `${ctx}: webhook-suffix constructor parameter '${s.name}' has a schema that is not bindable from a path variable (only String, Number, BigInt, Boolean, Literal, or branded variants thereof are supported)`,
           ),
         )
       }
