@@ -1,7 +1,7 @@
 /**
  * @since 1.5.0
  */
-import { Effect, Exit, Layer, ManagedRuntime, Ref, Schema, Scope } from "effect"
+import { Cause, Effect, Exit, Layer, ManagedRuntime, Ref, Schema, Scope } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import type * as CoreTypes from "golem:core/types@1.5.0"
@@ -402,8 +402,27 @@ export type DefinedAgent<
  * the brace-balance check, the var-name regex, and any
  * configuration whose path string was supplied as a non-literal
  * `string` value still run inside `validateAgentHttp` /
- * `validateMount` / `validateEndpoint` and surface as `HttpRouteError`
- * — re-thrown synchronously by `defineAgent` at module-import time.
+ * `validateMount` / `validateEndpoint` and surface as `HttpRouteError`.
+ *
+ * **Validation-error reporting**
+ *
+ * `defineAgent` does NOT throw on validation failures from
+ * {@link registerAgent} (i.e. `UnsupportedSchemaError`,
+ * `HttpRouteError`, `InvalidSnapshotError`,
+ * `DuplicateAgentNameError`, or any other typed failure /
+ * defect). Instead the failure is captured in
+ * {@link pendingRegistrationErrors} and re-emitted as a typed
+ * `golem:agent/common@1.5.0.agent-error` (`invalid-type` variant)
+ * thrown from the WIT-exported
+ * {@link dispatchDiscoverAgentTypes} host call. This lets the
+ * Golem CLI's metadata-extraction step surface misconfigurations
+ * as proper structured diagnostics rather than as a WASM
+ * instantiation crash. The returned {@link DefinedAgent} value is
+ * still constructed so that other modules importing the agent
+ * (e.g. for its typed `client` proxy) keep working — any
+ * subsequent `initialize` / `invoke` against an un-registered
+ * type still fails at the dispatcher with the usual "unknown
+ * agent" error.
  *
  * @see {@link registerAgent} for the lower-level registration-only
  *      entry point.
@@ -425,7 +444,21 @@ export const defineAgent = <
   // Register eagerly so simply importing an agent module makes it
   // discoverable by the runtime — no separate `registerAgent` call is
   // required at the component entrypoint.
-  Effect.runSync(registerAgent(def))
+  //
+  // Validation failures are NOT thrown here: they are stashed in
+  // {@link pendingRegistrationErrors} and re-emitted as a typed
+  // `AgentError` from {@link dispatchDiscoverAgentTypes}. This lets
+  // tooling (e.g. the Golem CLI's metadata-extraction step) surface
+  // misconfigurations as proper diagnostics rather than as a WASM
+  // instantiation crash. The returned {@link DefinedAgent} value is
+  // still constructed (the typed `client` proxy is purely structural),
+  // so importing a misconfigured agent module won't break siblings —
+  // any subsequent `initialize` / `invoke` against the un-registered
+  // type will fail with the usual "unknown agent" error.
+  const exit = Effect.runSyncExit(registerAgent(def))
+  if (Exit.isFailure(exit)) {
+    pendingRegistrationErrors.push({ agentName: def.name, cause: exit.cause })
+  }
   // The client view ignores the snapshot definition; erase `S` here so
   // `clientFor` can stay snapshot-agnostic. Likewise erase the `MV`
   // mount-vars phantom — the public {@link DefinedAgent} type only
@@ -458,13 +491,34 @@ interface CompiledAgent {
 const registry = new Map<string, CompiledAgent>()
 
 /**
- * Raised by {@link registerAgent} (and surfaced synchronously by
- * {@link defineAgent}) when an agent type name is registered more than
- * once in the same component. The SDK rejects the second registration
- * fail-fast rather than silently overwriting the earlier definition,
- * because two `defineAgent` calls sharing a `name` would otherwise leave
- * `discoverAgentTypes` / `initialize` operating on whichever module
- * happened to be imported last.
+ * Validation failures captured by {@link defineAgent} (i.e. typed
+ * failures or defects from {@link registerAgent} — invalid schemas,
+ * malformed HTTP routes, malformed snapshot config, duplicate agent
+ * names, etc.). These are deliberately NOT thrown at module-import
+ * time; instead they are surfaced from the WIT-exported
+ * `discover-agent-types` host call as a typed `AgentError` so that
+ * tooling (e.g. the Golem CLI's metadata-extraction pass) can present
+ * them as structured diagnostics rather than as a WASM instantiation
+ * crash.
+ */
+const pendingRegistrationErrors: Array<{
+  readonly agentName: string
+  readonly cause: Cause.Cause<unknown>
+}> = []
+
+/**
+ * Raised by {@link registerAgent} when an agent type name is registered
+ * more than once in the same component. The SDK rejects the second
+ * registration fail-fast rather than silently overwriting the earlier
+ * definition, because two `defineAgent` calls sharing a `name` would
+ * otherwise leave `discoverAgentTypes` / `initialize` operating on
+ * whichever module happened to be imported last.
+ *
+ * `defineAgent` does NOT throw this error synchronously: it stashes
+ * the failure in {@link pendingRegistrationErrors} and re-emits it as
+ * a typed `agent-error` (`invalid-type` variant) from
+ * {@link dispatchDiscoverAgentTypes} so the host / CLI can surface
+ * the conflict as a structured diagnostic.
  *
  * @since 1.5.0
  * @category errors
@@ -685,6 +739,7 @@ export const __resetAgents = async (): Promise<void> => {
     await Effect.runPromise(Scope.close(activeAgent.scope, Exit.void))
     activeAgent = null
   }
+  pendingRegistrationErrors.length = 0
 }
 
 /** Decode an incoming constructor-input `DataValue` into a record of
@@ -909,8 +964,37 @@ export const dispatchInvoke = async (
  * @since 1.5.0
  * @category runtime hooks
  */
-export const dispatchDiscoverAgentTypes = async (): Promise<Array<AgentCommon.AgentType>> =>
-  Array.from(registry.values()).map((c) => c.agentType)
+export const dispatchDiscoverAgentTypes = async (): Promise<Array<AgentCommon.AgentType>> => {
+  if (pendingRegistrationErrors.length > 0) {
+    throw makeRegistrationAgentError(pendingRegistrationErrors)
+  }
+  return Array.from(registry.values()).map((c) => c.agentType)
+}
+
+/**
+ * Render the stashed `defineAgent` registration failures as the
+ * `invalid-type` variant of the WIT
+ * `golem:agent/common@1.5.0.agent-error` ADT — that's the closest
+ * variant to "this component's declared agent types could not be
+ * built". The `val` string concatenates one section per failing agent
+ * (the agent name, plus `Cause.pretty` of its underlying Effect
+ * cause), giving the Golem CLI / host a human-readable diagnostic
+ * payload while staying within the host-defined `string`-typed
+ * variant.
+ */
+const makeRegistrationAgentError = (
+  errors: ReadonlyArray<{ readonly agentName: string; readonly cause: Cause.Cause<unknown> }>,
+): AgentCommon.AgentError => {
+  const sections = errors.map(
+    ({ agentName, cause }) => `agent '${agentName}': ${Cause.pretty(cause)}`,
+  )
+  const header =
+    errors.length === 1
+      ? "effect-golem: 1 agent registration error"
+      : `effect-golem: ${errors.length} agent registration errors`
+  const message = `${header}\n${sections.join("\n")}`
+  return { tag: "invalid-type", val: message }
+}
 
 /**
  * Implementation of `agent-guest.guest.getDefinition`.

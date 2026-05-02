@@ -61,13 +61,20 @@ const runFail = <A, E>(eff: Effect.Effect<A, E>): Effect.Effect<E, Error> =>
   })
 
 /**
- * Run `defineAgent` (which calls `Effect.runSync(registerAgent(...))`)
- * and expect it to fail with an `HttpRouteError` whose `reason` matches
- * the given pattern. The plain `expect(...).toThrow(/.../)` matcher
- * cannot peek inside the wrapped Effect failure (HttpRouteError does
- * not extend `Error`), so we extract the reason ourselves.
+ * Run `defineAgent` and expect that the registration was rejected
+ * with an `HttpRouteError` whose rendered reason matches the given
+ * pattern. `defineAgent` no longer throws synchronously on validation
+ * failure — failures are stashed and re-emitted from
+ * `discoverAgentTypes()` as a typed `AgentError` so the Golem CLI can
+ * present them as proper diagnostics. This helper drives that path:
+ * call the thunk (which may itself synchronously throw on shapes that
+ * the parser rejects pre-registration, e.g. malformed `Http.mount`
+ * paths), then call `guest.discoverAgentTypes()` and assert that
+ * either the synchronous throw OR the deferred `AgentError.val`
+ * carries the expected reason. The deferred path is reset in
+ * `beforeEach` via `__resetAgents()`.
  */
-const expectRouteError = (thunk: () => unknown, pattern: RegExp): void => {
+const expectRouteError = async (thunk: () => unknown, pattern: RegExp): Promise<void> => {
   let caught: unknown
   try {
     thunk()
@@ -75,12 +82,23 @@ const expectRouteError = (thunk: () => unknown, pattern: RegExp): void => {
     caught = e
   }
   if (caught === undefined) {
+    try {
+      await guest.discoverAgentTypes()
+    } catch (e) {
+      caught = e
+    }
+  }
+  if (caught === undefined) {
     throw new Error(`expected HttpRouteError matching ${pattern}, got success`)
   }
   // The wrapper's string form embeds the cause; that's enough for
-  // robust matching across Effect versions.
+  // robust matching across Effect versions. The deferred path uses
+  // the WIT `agent-error.invalid-type` variant whose `val` is a
+  // `Cause.pretty`-rendered string — that string contains the
+  // `HttpRouteError.reason`, so the same pattern matches.
   const text =
     (caught as { reason?: string }).reason ??
+    (caught as { val?: string }).val ??
     (caught as { message?: string }).message ??
     String(caught)
   if (!pattern.test(text)) {
@@ -465,8 +483,8 @@ describe("Http defineAgent integration", () => {
     }),
   )
 
-  it("rejects an agent that declares method endpoints without a mount", () => {
-    expectRouteError(
+  it("rejects an agent that declares method endpoints without a mount", async () => {
+    await expectRouteError(
       () =>
         // @ts-expect-error — when any method declares `http`, the
         // agent's `http: Http.mount(...)` field is now a type-level
@@ -484,8 +502,8 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects a mount path-var that does not match a constructor param", () => {
-    expectRouteError(
+  it("rejects a mount path-var that does not match a constructor param", async () => {
+    await expectRouteError(
       () =>
         defineAgent({
           name: "BadMountVar",
@@ -498,8 +516,8 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects when a constructor param is not covered by the mount path", () => {
-    expectRouteError(
+  it("rejects when a constructor param is not covered by the mount path", async () => {
+    await expectRouteError(
       () =>
         defineAgent({
           name: "UncoveredCtor",
@@ -512,8 +530,8 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects a non-string-bindable constructor param bound to a mount path variable", () => {
-    expectRouteError(
+  it("rejects a non-string-bindable constructor param bound to a mount path variable", async () => {
+    await expectRouteError(
       () =>
         defineAgent({
           name: "StructCtor",
@@ -542,8 +560,8 @@ describe("Http defineAgent integration", () => {
     ).not.toThrow()
   })
 
-  it("rejects an endpoint path-var that does not match a method param", () => {
-    expectRouteError(
+  it("rejects an endpoint path-var that does not match a method param", async () => {
+    await expectRouteError(
       () =>
         defineAgent({
           name: "BadEndpointVar",
@@ -562,12 +580,12 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects a parameter bound from BOTH path and query", () => {
+  it("rejects a parameter bound from BOTH path and query", async () => {
     // The compile-time `NoDuplicateBindings` helper also rejects this
     // combination; the `as never` cast bypasses the type check so this
     // test continues to exercise the runtime defence (`seenSources`)
     // in `validateEndpoint`.
-    expectRouteError(
+    await expectRouteError(
       () =>
         defineAgent({
           name: "DualBind",
@@ -586,11 +604,11 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects duplicate headers (case-insensitive)", () => {
+  it("rejects duplicate headers (case-insensitive)", async () => {
     // The compile-time `NoCaseFoldDuplicates` helper also catches
     // this; the `as never` cast bypasses the type pre-filter so the
     // runtime defence-in-depth check is exercised.
-    expectRouteError(
+    await expectRouteError(
       () =>
         defineAgent({
           name: "DupHeaders",
@@ -609,8 +627,8 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects a GET endpoint with an unbound (body) parameter", () => {
-    expectRouteError(
+  it("rejects a GET endpoint with an unbound (body) parameter", async () => {
+    await expectRouteError(
       () =>
         defineAgent({
           name: "GetWithBody",
@@ -634,8 +652,8 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects a non-string-bindable param bound from a path variable", () => {
-    expectRouteError(
+  it("rejects a non-string-bindable param bound from a path variable", async () => {
+    await expectRouteError(
       () =>
         defineAgent({
           name: "BadBindShape",
@@ -654,8 +672,8 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects an unstructured param bound from a path variable", () => {
-    expectRouteError(
+  it("rejects an unstructured param bound from a path variable", async () => {
+    await expectRouteError(
       () =>
         defineAgent({
           name: "UnstructuredBind",
@@ -677,8 +695,8 @@ describe("Http defineAgent integration", () => {
     )
   })
 
-  it("rejects a multimodal param bound from a path variable", () => {
-    expectRouteError(
+  it("rejects a multimodal param bound from a path variable", async () => {
+    await expectRouteError(
       () =>
         defineAgent({
           name: "MultimodalBind",
@@ -837,6 +855,10 @@ describe("Http pipeable combinators — endpoints", () => {
 })
 
 describe("Http pipeable combinators — mounts", () => {
+  beforeEach(async () => {
+    await __resetAgents()
+  })
+
   it("Http.mount(...) is pipeable (has a `.pipe` method)", () => {
     const m = mount("/api/{tenant}")
     expect(typeof m.pipe).toBe("function")
@@ -881,8 +903,8 @@ describe("Http pipeable combinators — mounts", () => {
     expect(compileMount(piped)).toEqual(compileMount(literal))
   })
 
-  it("pipeable webhook-suffix path variables are still validated against constructor params", () => {
-    expectRouteError(
+  it("pipeable webhook-suffix path variables are still validated against constructor params", async () => {
+    await expectRouteError(
       () =>
         defineAgent({
           name: "PipedBadWebhook",

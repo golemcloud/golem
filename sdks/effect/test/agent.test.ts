@@ -358,28 +358,31 @@ describe("agent-guest exports", () => {
     ).rejects.toThrow(/already initialized/)
   })
 
-  it("defining two agents with the same name fails fast", () => {
+  it("defining two agents with the same name surfaces from discoverAgentTypes", async () => {
     // `Greeter` is already in the registry from this file's top-level
     // `defineAgent`. Re-registering the same name with a fresh definition
-    // must throw a `DuplicateAgentNameError` rather than silently
-    // overwriting the earlier entry.
+    // must NOT throw at import time — the failure is stashed and
+    // re-emitted from the WIT-exported `discoverAgentTypes` host call as
+    // a typed `AgentError` (so the Golem CLI can surface it as a proper
+    // diagnostic instead of as a WASM instantiation crash).
+    defineAgent({
+      name: "Greeter",
+      constructorParams: {},
+      methods: { ping: method({ params: {}, success: Schema.Void }) },
+      impl: () => Effect.succeed({ ping: () => Effect.void }),
+    })
     let caught: unknown
     try {
-      defineAgent({
-        name: "Greeter",
-        constructorParams: {},
-        methods: { ping: method({ params: {}, success: Schema.Void }) },
-        impl: () => Effect.succeed({ ping: () => Effect.void }),
-      })
+      await guest.discoverAgentTypes()
     } catch (e) {
       caught = e
     }
-    if (caught === undefined) throw new Error("expected DuplicateAgentNameError, got success")
-    const text =
-      (caught as { agentName?: string }).agentName ??
-      (caught as { message?: string }).message ??
-      String(caught)
-    expect(text).toMatch(/Greeter/)
+    if (caught === undefined) throw new Error("expected AgentError from discoverAgentTypes")
+    const tag = (caught as { tag?: string }).tag
+    const val = (caught as { val?: unknown }).val
+    expect(tag).toBe("invalid-type")
+    expect(typeof val).toBe("string")
+    expect(val).toMatch(/Greeter/)
   })
 
   it.effect("Principal service resolves to the initialize-time principal in impl", () =>
