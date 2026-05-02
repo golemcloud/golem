@@ -960,6 +960,53 @@ export const withPolicy = <A, E, R>(
 > => Effect.scoped(useScoped(policy).pipe(Effect.andThen(effect)))
 
 // ---------------------------------------------------------------------------
+// Schedule conversion (Effect-side retry/repeat integration)
+// ---------------------------------------------------------------------------
+
+export {
+  /**
+   * Evaluate a flattened {@link RetryHost.RetryPredicate} against an
+   * in-memory property bag. Used by {@link toSchedule} to decide whether
+   * `filtered-on` sub-trees fire; also handy for tests / introspection.
+   *
+   * @since 1.5.0
+   * @category operations
+   */
+  evaluatePredicate,
+  /**
+   * Optional inputs to {@link toSchedule}.
+   *
+   * @since 1.5.0
+   * @category models
+   */
+  type ToScheduleOptions,
+  /**
+   * Property-bag shape consumed by {@link toSchedule}'s
+   * `properties` projection.
+   *
+   * @since 1.5.0
+   * @category models
+   */
+  type PredicateContext,
+  /**
+   * Convert a Golem retry policy AST (or a raw `RetryPolicy` returned by
+   * the host) into an Effect `Schedule`. The result composes with
+   * `Effect.retry` / `Effect.repeat` and any other `Schedule.*`
+   * combinators.
+   *
+   * The schedule runs entirely on the Effect side — the Golem host does
+   * NOT see retries as `RetryAttempt` oplog entries. Use this for
+   * fine-grained Effect-native retry behaviour; use {@link useScoped} or
+   * {@link withPolicy} for host-driven retries that participate in the
+   * durability oplog (e.g. cross-`SUSPEND` survival).
+   *
+   * @since 1.5.0
+   * @category combinators
+   */
+  toSchedule,
+} from "./internal/retrySchedule.js"
+
+// ---------------------------------------------------------------------------
 // Re-exports of raw WIT types (no re-export of the host functions; use
 // the Effect-typed wrappers above instead).
 // ---------------------------------------------------------------------------
