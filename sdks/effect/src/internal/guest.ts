@@ -36,20 +36,7 @@ interface GuestExports {
 }
 
 interface SaveSnapshotExports {
-  /**
-   * Returns either a `Snapshot` directly or a Promise of one.
-   *
-   * The auto-snapshot path returns synchronously (the wasm-rquickjs
-   * runtime then takes the non-Promise branch in
-   * `call_js_export_internal`, never awaiting); the custom path
-   * returns a Promise because the user's save handler is an Effect.
-   * See the long comment on `dispatchSaveSnapshot` for the empirical
-   * reason the auto path must stay synchronous (an `async` JS save
-   * was reliably trapping the host with
-   * `wasm trap: cannot enter component instance` on every Nth
-   * invocation once `Snapshot.policy.everyN(N)` triggered a save).
-   */
-  save: () => ApiHost.Snapshot | Promise<ApiHost.Snapshot>
+  save: () => Promise<ApiHost.Snapshot>
 }
 
 interface LoadSnapshotExports {

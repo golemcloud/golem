@@ -295,7 +295,7 @@ describe("snapshotting", () => {
         ),
       )
 
-      const snapshot = yield* Effect.promise(() => Promise.resolve(dispatchSaveSnapshot()))
+      const snapshot = yield* Effect.promise(() => dispatchSaveSnapshot())
       expect(snapshot.mimeType).toBe("application/json")
       const obj = JSON.parse(new TextDecoder().decode(snapshot.payload))
       expect(obj.version).toBe(1)
@@ -392,7 +392,7 @@ describe("snapshotting", () => {
         ),
       )
 
-      const snapshot = yield* Effect.promise(() => Promise.resolve(dispatchSaveSnapshot()))
+      const snapshot = yield* Effect.promise(() => dispatchSaveSnapshot())
       expect(snapshot.mimeType).toBe("application/octet-stream")
       expect(customStore.saveCalls).toBe(1)
 
@@ -444,7 +444,7 @@ describe("snapshotting", () => {
         ),
       )
 
-      const snapshot = yield* Effect.promise(() => Promise.resolve(dispatchSaveSnapshot()))
+      const snapshot = yield* Effect.promise(() => dispatchSaveSnapshot())
       expect(snapshot.mimeType).toBe("application/octet-stream")
       expect(configCustomStore.saveCalls).toBe(1)
 
@@ -521,11 +521,7 @@ describe("snapshotting", () => {
   // -------------------------------------------------------------------------
 
   it("save without an active agent fails", async () => {
-    // dispatchSaveSnapshot is intentionally synchronous on its error
-    // paths and on the auto path (see comment on dispatchSaveSnapshot
-    // for why); use `expect(fn).toThrow` instead of
-    // `await expect(promise).rejects.toThrow`.
-    expect(() => dispatchSaveSnapshot()).toThrow(/not initialized/)
+    await expect(dispatchSaveSnapshot()).rejects.toThrow(/not initialized/)
   })
 
   it("save fails for an active agent that did not declare a snapshot", async () => {
@@ -537,7 +533,7 @@ describe("snapshotting", () => {
     })
     void NoSnap
     await guest.initialize("NoSnap", { tag: "tuple", val: [] }, anonymous)
-    expect(() => dispatchSaveSnapshot()).toThrow(/did not declare a snapshot/)
+    await expect(dispatchSaveSnapshot()).rejects.toThrow(/did not declare a snapshot/)
   })
 
   it("load fails when an agent is already initialized", async () => {

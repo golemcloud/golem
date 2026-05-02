@@ -33,6 +33,24 @@ const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 
 /**
+ * Tagged failure raised by {@link decodeMultipart} when the input is
+ * malformed (no leading boundary, missing header terminator, missing or
+ * duplicate part name, etc.). The owner of the multipart codec catches
+ * this at its boundary and re-wraps it; users never see it directly.
+ *
+ * @internal
+ * @since 1.5.0
+ * @category errors
+ */
+export class MultipartCodecError extends Error {
+  readonly _tag = "MultipartCodecError"
+  constructor(readonly reason: string) {
+    super(reason)
+    this.name = "MultipartCodecError"
+  }
+}
+
+/**
  * One named, content-typed part of a `multipart/mixed` body.
  *
  * @since 1.5.0
@@ -189,7 +207,7 @@ export const decodeMultipart = (data: Uint8Array, boundary: string): Array<Multi
   else if (data.length >= 1 && data[0] === 0x0a) start = 1
 
   if (!startsWith(data, firstDelimiter, start)) {
-    throw new Error("multipart: body does not start with boundary")
+    throw new MultipartCodecError("body does not start with boundary")
   }
 
   const rawSections = splitOnDelimiter(data, delimiter, start + firstDelimiter.length)
@@ -216,7 +234,7 @@ export const decodeMultipart = (data: Uint8Array, boundary: string): Array<Multi
       headerEnd = headerEndLf
       bodyStart = headerEndLf + 2
     } else {
-      throw new Error("multipart: could not find end of headers in part")
+      throw new MultipartCodecError("could not find end of headers in part")
     }
 
     const headerText = textDecoder.decode(section.slice(s, headerEnd))
@@ -236,8 +254,8 @@ export const decodeMultipart = (data: Uint8Array, boundary: string): Array<Multi
       }
     }
 
-    if (!name) throw new Error("multipart: part missing name in Content-Disposition")
-    if (seen.has(name)) throw new Error(`multipart: duplicate part name: ${name}`)
+    if (!name) throw new MultipartCodecError("part missing name in Content-Disposition")
+    if (seen.has(name)) throw new MultipartCodecError(`duplicate part name: ${name}`)
     seen.add(name)
 
     // Strip a single trailing `\r` from the body (the splitter already

@@ -2,7 +2,12 @@ import { Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@1.5.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import * as CoreTypes from "golem:core/types@1.5.0"
-import { decodeMultipart, encodeMultipart, extractBoundary } from "./multipart.js"
+import {
+  decodeMultipart,
+  encodeMultipart,
+  extractBoundary,
+  MultipartCodecError,
+} from "./multipart.js"
 
 /**
  * @internal
@@ -366,7 +371,10 @@ const decodeMultipartEnvelope = (payload: Uint8Array, mime: string): DecodedMult
   try {
     parts = decodeMultipart(payload, boundary)
   } catch (err) {
-    throw new SnapshotEnvelopeError(`multipart envelope: ${String((err as Error).message ?? err)}`)
+    if (err instanceof MultipartCodecError) {
+      throw new SnapshotEnvelopeError(`multipart envelope: ${err.reason}`)
+    }
+    throw err
   }
 
   const statePart = parts.find((p) => p.name === STATE_PART_NAME)

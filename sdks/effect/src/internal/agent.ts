@@ -1015,12 +1015,9 @@ export const dispatchGetDefinition = async (): Promise<AgentCommon.AgentType> =>
 
 /**
  * Resolve the `SqliteHostExtClient` impl out of the production
- * {@link userRuntimeLayer} synchronously. The save-snapshot dispatcher's
- * auto+sqlite path is fully synchronous on purpose (see the long
- * comment at the top of {@link dispatchSaveSnapshot}), so this helper
- * has to be too. `userRuntime.runSync` is safe here because the
- * underlying layers (`SqliteHostExtLive` etc.) are pure
- * `Layer.succeed`s — no async work happens during resolution.
+ * {@link userRuntimeLayer} synchronously. `userRuntime.runSync` is
+ * safe here because the underlying layers (`SqliteHostExtLive` etc.)
+ * are pure `Layer.succeed`s — no async work happens during resolution.
  */
 const resolveSqliteHostExtSync = (): {
   serializeDatabaseSync: (db: DatabaseSync) => Uint8Array
@@ -1039,11 +1036,7 @@ const resolveSqliteHostExtSync = (): {
   )
 
 /**
- * Encode the auto-snapshot path synchronously. Pulled out as a
- * standalone helper so {@link dispatchSaveSnapshot} can return its
- * result *without* a wrapping `async` (which would force the
- * wasm-rquickjs runtime to await a Promise — see the dispatcher
- * comment for why that matters).
+ * Encode the auto-snapshot path synchronously.
  */
 const encodeAutoSnapshot = (
   agent: ActiveAgent,
@@ -1085,49 +1078,10 @@ const encodeAutoSnapshot = (
  * are declared; custom → binary v2 envelope), and returns the resulting
  * `Snapshot` to the host.
  *
- * **Why the auto path is intentionally NOT `async`.** Empirically, the
- * previous `async` implementation (which used `await runUserPromise(...)`
- * to resolve the SqliteHostExt service) caused the host to trap with
- * `wasm trap: cannot enter component instance` on every Nth invocation
- * once `Snapshot.policy.everyN(N)` triggered a save. The trap landed
- * in the oplog as an `ERROR` with `retry from: <previous-invoke-index>`
- * and no `SNAPSHOT` entry was ever written; the host then waited a few
- * seconds and retried the next invoke, so the user-visible state was
- * preserved but no snapshot was captured.
- *
- * Note: this is NOT a host-side concurrency race. Golem's invocation
- * loop strictly serializes invoke / save-snapshot calls — the next
- * call only starts after the previous one fully returns (including
- * all JS Promise resolution). So the trap originates *inside* the
- * `save-snapshot.save` call itself, not from a parallel `invoke`
- * arriving concurrently.
- *
- * The fix is to make the auto path execute as a single synchronous
- * JS frame: the JS function returns a plain `Snapshot` value (not a
- * Promise), so the wasm-rquickjs runtime takes the `non-Promise`
- * branch in `call_js_export_internal` and never has to drive a JS
- * Promise to completion across host imports. With this change the
- * trap stops reproducing and the multipart `SNAPSHOT` entry is
- * recorded normally — the SqliteCounter integration case asserts
- * exactly this.
- *
- * The exact host-side reason `async` save + at-least-one-host-import
- * combined to trap "cannot enter component instance" is not yet
- * pinned down; both `host.currentContext()` (called by
- * `withInvocationParent` inside the old `runUserPromise`) and the
- * Promise return shape of the JS export are involved in the bad
- * path, and removing both was sufficient to make the trap go away.
- *
- * The custom path still has to await the user's `Effect<Uint8Array,
- * ...>` save handler, so it remains `async`. No integration case
- * currently exercises a long-running custom save handler; if a
- * trap shows up there too, we'll need to either restrict the user
- * handler shape or push the host investigation further.
- *
  * @since 1.5.0
  * @category runtime hooks
  */
-export const dispatchSaveSnapshot = (): ApiHost.Snapshot | Promise<ApiHost.Snapshot> => {
+export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
   if (activeAgent === null) {
     throw new Error("agent is not initialized; cannot save snapshot")
   }
@@ -1146,12 +1100,9 @@ export const dispatchSaveSnapshot = (): ApiHost.Snapshot | Promise<ApiHost.Snaps
 }
 
 /**
- * Custom (`Snapshot.custom(...)`) save path: must run the user's
+ * Custom (`Snapshot.custom(...)`) save path: runs the user's
  * `Effect<Uint8Array, ...>` handler under the same runtime layer the
- * dispatcher uses for `invoke`, so it stays inherently async. Pulled
- * into a standalone async helper so {@link dispatchSaveSnapshot}
- * itself can stay non-async for the auto path (see the long comment
- * on the dispatcher).
+ * dispatcher uses for `invoke`.
  */
 const dispatchSaveCustomSnapshot = async (
   agent: ActiveAgent,
