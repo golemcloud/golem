@@ -1098,13 +1098,13 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
         }
         for (const dbName of declared) {
           if (!seen.has(dbName)) {
-            throw new SnapshotDatabaseMissingPartError(agentTypeName, dbName, "load")
+            throw new SnapshotDatabaseMissingPartError(agentTypeName, dbName, "load-envelope")
           }
         }
         // Validate that the user attached every declared database.
         for (const dbName of declared) {
           if (!bound.databases.has(dbName)) {
-            throw new SnapshotDatabaseMissingPartError(agentTypeName, dbName, "save")
+            throw new SnapshotDatabaseMissingPartError(agentTypeName, dbName, "load-attach")
           }
         }
         // Restore each DB in place via the wasm-rquickjs extension.

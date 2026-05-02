@@ -188,9 +188,29 @@ export class SnapshotDatabaseDuplicateAttachError {
 }
 
 /**
+ * Raised when `attachDatabase` is called with a name that was not
+ * declared in `Snapshot.define({ databases: [...] })`.
+ *
+ * @since 1.5.0
+ * @category errors
+ */
+export class SnapshotDatabaseNotDeclaredError {
+  readonly _tag = "SnapshotDatabaseNotDeclaredError"
+  readonly message: string
+  constructor(
+    readonly agentName: string,
+    readonly databaseName: string,
+  ) {
+    this.message = `SnapshotDatabaseNotDeclaredError: agent '${agentName}' called snap.attachDatabase('${databaseName}', ...) but '${databaseName}' is not listed in 'Snapshot.define({ databases: [...] })'`
+  }
+}
+
+/**
  * Raised when, at save or load time, a declared database name has no
- * corresponding `attachDatabase` call (save) or no corresponding part
- * in the loaded envelope (load).
+ * corresponding `attachDatabase` call (`phase: "save"` — during
+ * dispatch-save; `phase: "load-attach"` — during dispatch-load, after
+ * the constructor was re-run by the load path) or no corresponding
+ * part in the loaded envelope (`phase: "load-envelope"`).
  *
  * @since 1.5.0
  * @category errors
@@ -201,12 +221,19 @@ export class SnapshotDatabaseMissingPartError {
   constructor(
     readonly agentName: string,
     readonly databaseName: string,
-    readonly phase: "save" | "load",
+    readonly phase: "save" | "load-attach" | "load-envelope",
   ) {
-    this.message =
-      phase === "save"
-        ? `SnapshotDatabaseMissingPartError: agent '${agentName}' declared database '${databaseName}' but never called snap.attachDatabase('${databaseName}', ...) inside impl`
-        : `SnapshotDatabaseMissingPartError: agent '${agentName}' load: snapshot envelope is missing required 'db:${databaseName}' part`
+    switch (phase) {
+      case "save":
+        this.message = `SnapshotDatabaseMissingPartError: agent '${agentName}' save: declared database '${databaseName}' but never called snap.attachDatabase('${databaseName}', ...) inside impl`
+        break
+      case "load-attach":
+        this.message = `SnapshotDatabaseMissingPartError: agent '${agentName}' load: declared database '${databaseName}' but never called snap.attachDatabase('${databaseName}', ...) inside impl while restoring`
+        break
+      case "load-envelope":
+        this.message = `SnapshotDatabaseMissingPartError: agent '${agentName}' load: snapshot envelope is missing required 'db:${databaseName}' part`
+        break
+    }
   }
 }
 
@@ -383,7 +410,7 @@ export interface AutoSnapshotBinding<S extends Schema.Top, DBs extends ReadonlyA
   readonly attachDatabase: (
     name: DBs[number],
     db: AttachableDatabase,
-  ) => Effect.Effect<void, SnapshotDatabaseDuplicateAttachError>
+  ) => Effect.Effect<void, SnapshotDatabaseDuplicateAttachError | SnapshotDatabaseNotDeclaredError>
 }
 
 /**
@@ -644,22 +671,22 @@ export const createBinding = (agentName: string, compiled: CompiledSnapshot): Bi
           return ref
         }),
       attachDatabase: (name, db) =>
-        Effect.suspend(() => {
-          if (!declaredSet.has(name)) {
-            return Effect.fail(
-              new SnapshotDatabaseDuplicateAttachError(
-                agentName,
-                `${name}: not declared in 'databases'`,
-              ),
-            )
-          }
-          if (databases.has(name)) {
-            return Effect.fail(new SnapshotDatabaseDuplicateAttachError(agentName, name))
-          }
-          const handle = isSqliteClient(db) ? __getUnderlyingDatabase(db) : (db as DatabaseSync)
-          databases.set(name, handle)
-          return Effect.void
-        }),
+        Effect.suspend(
+          (): Effect.Effect<
+            void,
+            SnapshotDatabaseNotDeclaredError | SnapshotDatabaseDuplicateAttachError
+          > => {
+            if (!declaredSet.has(name)) {
+              return Effect.fail(new SnapshotDatabaseNotDeclaredError(agentName, name))
+            }
+            if (databases.has(name)) {
+              return Effect.fail(new SnapshotDatabaseDuplicateAttachError(agentName, name))
+            }
+            const handle = isSqliteClient(db) ? __getUnderlyingDatabase(db) : (db as DatabaseSync)
+            databases.set(name, handle)
+            return Effect.void
+          },
+        ),
     }
     return {
       binding: auto as unknown as SnapshotBinding<SnapshotDef>,
