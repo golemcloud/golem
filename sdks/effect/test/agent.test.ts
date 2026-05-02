@@ -358,6 +358,30 @@ describe("agent-guest exports", () => {
     ).rejects.toThrow(/already initialized/)
   })
 
+  it("defining two agents with the same name fails fast", () => {
+    // `Greeter` is already in the registry from this file's top-level
+    // `defineAgent`. Re-registering the same name with a fresh definition
+    // must throw a `DuplicateAgentNameError` rather than silently
+    // overwriting the earlier entry.
+    let caught: unknown
+    try {
+      defineAgent({
+        name: "Greeter",
+        constructorParams: {},
+        methods: { ping: method({ params: {}, success: Schema.Void }) },
+        impl: () => Effect.succeed({ ping: () => Effect.void }),
+      })
+    } catch (e) {
+      caught = e
+    }
+    if (caught === undefined) throw new Error("expected DuplicateAgentNameError, got success")
+    const text =
+      (caught as { agentName?: string }).agentName ??
+      (caught as { message?: string }).message ??
+      String(caught)
+    expect(text).toMatch(/Greeter/)
+  })
+
   it.effect("Principal service resolves to the initialize-time principal in impl", () =>
     Effect.gen(function* () {
       const stringCodec = yield* toWitCodec(Schema.String)

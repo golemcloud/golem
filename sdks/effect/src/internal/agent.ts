@@ -343,6 +343,26 @@ interface CompiledAgent {
 const registry = new Map<string, CompiledAgent>()
 
 /**
+ * Raised by {@link registerAgent} (and surfaced synchronously by
+ * {@link defineAgent}) when an agent type name is registered more than
+ * once in the same component. The SDK rejects the second registration
+ * fail-fast rather than silently overwriting the earlier definition,
+ * because two `defineAgent` calls sharing a `name` would otherwise leave
+ * `discoverAgentTypes` / `initialize` operating on whichever module
+ * happened to be imported last.
+ *
+ * @since 1.5.0
+ * @category errors
+ */
+export class DuplicateAgentNameError {
+  readonly _tag = "DuplicateAgentNameError"
+  readonly message: string
+  constructor(readonly agentName: string) {
+    this.message = `DuplicateAgentNameError: an agent named '${agentName}' is already registered in this component`
+  }
+}
+
+/**
  * Register an agent definition with the runtime. Pure schema-walking work
  * — no `impl` is executed here, no per-instance state is created. Safe to
  * call at deploy time for type discovery.
@@ -361,8 +381,15 @@ export const registerAgent = <
   S extends SnapshotDef = never,
 >(
   def: AgentDefinition<C, Methods, M, F, S>,
-): Effect.Effect<void, UnsupportedSchemaError | HttpRouteError | InvalidSnapshotError> =>
+): Effect.Effect<
+  void,
+  UnsupportedSchemaError | HttpRouteError | InvalidSnapshotError | DuplicateAgentNameError
+> =>
   Effect.gen(function* () {
+    if (registry.has(def.name)) {
+      return yield* Effect.fail(new DuplicateAgentNameError(def.name))
+    }
+
     const constructorBindings = (yield* compileParamBindings(
       `${def.name} constructor`,
       def.constructorParams,
