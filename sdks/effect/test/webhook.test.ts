@@ -189,6 +189,7 @@ describe("Http.mount({ webhookSuffix }) — validation", () => {
           mount: m,
           constructorParamNames: ["name"],
           nonStringBindableConstructorParams: new Set(),
+          stringBindableConstructorParams: new Set(["name"]),
           methods: [],
         }),
       )

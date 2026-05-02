@@ -977,6 +977,12 @@ export interface AgentHttpInput {
    * from a path variable (e.g. multimodal / unstructured-binary).
    */
   readonly nonStringBindableConstructorParams: ReadonlySet<string>
+  /**
+   * Names of constructor parameters whose schema is a plain
+   * string-bindable Schema (string / number / bigint / boolean /
+   * literal / branded variants thereof).
+   */
+  readonly stringBindableConstructorParams: ReadonlySet<string>
   readonly methods: ReadonlyArray<MethodHttpInput>
 }
 
@@ -1217,6 +1223,13 @@ const validateMount = (
         return yield* Effect.fail(
           new HttpRouteError(
             `${ctx}: constructor parameter '${s.name}' is multimodal/unstructured and cannot be bound from a path variable`,
+          ),
+        )
+      }
+      if (!input.stringBindableConstructorParams.has(s.name)) {
+        return yield* Effect.fail(
+          new HttpRouteError(
+            `${ctx}: constructor parameter '${s.name}' has a schema that is not bindable from a path variable (only String, Number, BigInt, Boolean, Literal, or branded variants thereof are supported)`,
           ),
         )
       }

@@ -405,6 +405,7 @@ export const registerAgent = <
       mount: def.http,
       constructorParamNames: Object.keys(def.constructorParams),
       nonStringBindableConstructorParams: collectNonStringBindableParams(def.constructorParams),
+      stringBindableConstructorParams: collectStringBindableParams(def.constructorParams),
       methods: methodHttpInputs,
     })
 

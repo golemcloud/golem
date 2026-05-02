@@ -508,6 +508,36 @@ describe("Http defineAgent integration", () => {
     )
   })
 
+  it("rejects a non-string-bindable constructor param bound to a mount path variable", () => {
+    expectRouteError(
+      () =>
+        defineAgent({
+          name: "StructCtor",
+          constructorParams: {
+            name: Schema.String,
+            region: Schema.Struct({ code: Schema.String }),
+          },
+          http: mount("/x/{name}/{region}") as never,
+          methods: {},
+          impl: () => Effect.succeed({}),
+        }),
+      /constructor parameter 'region' has a schema that is not bindable from a path variable/,
+    )
+  })
+
+  it("accepts a branded string constructor param bound to a mount path variable", () => {
+    const Region = Schema.String.pipe(Schema.brand("Region"))
+    expect(() =>
+      defineAgent({
+        name: "BrandedCtor",
+        constructorParams: { name: Schema.String, region: Region },
+        http: mount("/x/{name}/{region}"),
+        methods: {},
+        impl: () => Effect.succeed({}),
+      }),
+    ).not.toThrow()
+  })
+
   it("rejects an endpoint path-var that does not match a method param", () => {
     expectRouteError(
       () =>
