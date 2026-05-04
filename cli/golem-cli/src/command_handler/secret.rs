@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::agent_id_display::{SourceLanguage, parse_type_for_language, parse_value_for_language};
-use crate::command::api::agent_secret::AgentSecretSubcommand;
+use crate::command::api::secret::SecretSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
@@ -21,9 +21,9 @@ use crate::error::service::AnyhowMapServiceError;
 use crate::log::log_error;
 use crate::model::GuestLanguage;
 use crate::model::environment::EnvironmentResolveMode;
-use crate::model::text::agent_secret::{
-    AgentSecretCreateView, AgentSecretDeleteView, AgentSecretGetView, AgentSecretListView,
-    AgentSecretUpdateView,
+use crate::model::text::secret::{
+    SecretCreateView, SecretDeleteView, SecretGetView, SecretListView,
+    SecretUpdateView,
 };
 use anyhow::bail;
 use golem_client::api::AgentSecretsClient;
@@ -37,30 +37,30 @@ use golem_wasm::json::ValueAndTypeJsonExtensions;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-pub struct AgentSecretCommandHandler {
+pub struct SecretCommandHandler {
     ctx: Arc<Context>,
 }
 
-impl AgentSecretCommandHandler {
+impl SecretCommandHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self { ctx }
     }
 
-    pub async fn handle_command(&self, command: AgentSecretSubcommand) -> anyhow::Result<()> {
+    pub async fn handle_command(&self, command: SecretSubcommand) -> anyhow::Result<()> {
         match command {
-            AgentSecretSubcommand::Create {
+            SecretSubcommand::Create {
                 path,
                 secret_type,
                 secret_value,
             } => self.cmd_create(path, secret_type, secret_value).await,
-            AgentSecretSubcommand::Get { path, id } => self.cmd_get(path, id).await,
-            AgentSecretSubcommand::UpdateValue {
+            SecretSubcommand::Get { path, id } => self.cmd_get(path, id).await,
+            SecretSubcommand::UpdateValue {
                 path,
                 id,
                 secret_value,
             } => self.cmd_update_value(path, id, secret_value).await,
-            AgentSecretSubcommand::Delete { path, id } => self.cmd_delete(path, id).await,
-            AgentSecretSubcommand::List { ids } => self.cmd_list(ids).await,
+            SecretSubcommand::Delete { path, id } => self.cmd_delete(path, id).await,
+            SecretSubcommand::List { ids } => self.cmd_list(ids).await,
         }
     }
 
@@ -163,7 +163,7 @@ impl AgentSecretCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&AgentSecretCreateView {
+        self.ctx.log_handler().log_view(&SecretCreateView {
             secret: result,
             show_sensitive: self.ctx.show_sensitive(),
         });
@@ -178,7 +178,7 @@ impl AgentSecretCommandHandler {
     ) -> anyhow::Result<()> {
         let result = self.resolve_secret(path, id).await?;
 
-        self.ctx.log_handler().log_view(&AgentSecretGetView {
+        self.ctx.log_handler().log_view(&SecretGetView {
             secret: result,
             show_sensitive: self.ctx.show_sensitive(),
         });
@@ -216,7 +216,7 @@ impl AgentSecretCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&AgentSecretUpdateView {
+        self.ctx.log_handler().log_view(&SecretUpdateView {
             secret: result,
             show_sensitive: self.ctx.show_sensitive(),
         });
@@ -239,7 +239,7 @@ impl AgentSecretCommandHandler {
             .await
             .map_service_error()?;
 
-        self.ctx.log_handler().log_view(&AgentSecretDeleteView {
+        self.ctx.log_handler().log_view(&SecretDeleteView {
             secret: result,
             show_sensitive: self.ctx.show_sensitive(),
         });
@@ -308,7 +308,7 @@ impl AgentSecretCommandHandler {
             .map_service_error()?
             .values;
 
-        self.ctx.log_handler().log_view(&AgentSecretListView {
+        self.ctx.log_handler().log_view(&SecretListView {
             show_sensitive: self.ctx.show_sensitive(),
             environment_name: environment.environment_name.0,
             show_ids,

@@ -20,83 +20,83 @@ use golem_common::model::agent_secret::AgentSecretDto;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSecretCreateView {
+pub struct SecretCreateView {
     pub secret: AgentSecretDto,
     #[serde(skip)]
     pub show_sensitive: bool,
 }
 
-impl MessageWithFields for AgentSecretCreateView {
+impl MessageWithFields for SecretCreateView {
     fn message(&self) -> String {
         format!(
-            "Created a new agent secret {}",
+            "Created a new secret {}",
             format_message_highlight(&self.secret.id),
         )
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        agent_secret_view_fields(&self.secret, self.show_sensitive)
+        secret_view_fields(&self.secret, self.show_sensitive)
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSecretGetView {
+pub struct SecretGetView {
     pub secret: AgentSecretDto,
     #[serde(skip)]
     pub show_sensitive: bool,
 }
 
-impl MessageWithFields for AgentSecretGetView {
+impl MessageWithFields for SecretGetView {
     fn message(&self) -> String {
-        format!("Agent secret {}", format_message_highlight(&self.secret.id),)
+        format!("Secret {}", format_message_highlight(&self.secret.id),)
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        agent_secret_view_fields(&self.secret, self.show_sensitive)
+        secret_view_fields(&self.secret, self.show_sensitive)
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSecretUpdateView {
+pub struct SecretUpdateView {
     pub secret: AgentSecretDto,
     #[serde(skip)]
     pub show_sensitive: bool,
 }
 
-impl MessageWithFields for AgentSecretUpdateView {
+impl MessageWithFields for SecretUpdateView {
     fn message(&self) -> String {
         format!(
-            "Updated agent secret {}",
+            "Updated secret {}",
             format_message_highlight(&self.secret.id),
         )
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        agent_secret_view_fields(&self.secret, self.show_sensitive)
+        secret_view_fields(&self.secret, self.show_sensitive)
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSecretDeleteView {
+pub struct SecretDeleteView {
     pub secret: AgentSecretDto,
     #[serde(skip)]
     pub show_sensitive: bool,
 }
 
-impl MessageWithFields for AgentSecretDeleteView {
+impl MessageWithFields for SecretDeleteView {
     fn message(&self) -> String {
         format!(
-            "Deleted agent secret {}",
+            "Deleted secret {}",
             format_message_highlight(&self.secret.id),
         )
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        agent_secret_view_fields(&self.secret, self.show_sensitive)
+        secret_view_fields(&self.secret, self.show_sensitive)
     }
 }
 
-fn agent_secret_view_fields(view: &AgentSecretDto, show_sensitive: bool) -> Vec<(String, String)> {
+fn secret_view_fields(view: &AgentSecretDto, show_sensitive: bool) -> Vec<(String, String)> {
     let mut fields = FieldsBuilder::new();
 
     fields
@@ -140,7 +140,7 @@ fn wrap_uuid_for_table(uuid: &str) -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSecretListView {
+pub struct SecretListView {
     pub secrets: Vec<AgentSecretDto>,
     #[serde(skip)]
     pub show_sensitive: bool,
@@ -150,7 +150,7 @@ pub struct AgentSecretListView {
     pub show_ids: bool,
 }
 
-impl AgentSecretListView {
+impl SecretListView {
     fn table(&self) -> ComfyTable {
         let mut table = new_table(vec![
             Column::new("Environment").fixed(),
@@ -196,7 +196,7 @@ impl AgentSecretListView {
     }
 }
 
-impl TextView for AgentSecretListView {
+impl TextView for SecretListView {
     fn log(&self) {
         let table = self.table();
         log_table(table);
@@ -205,7 +205,7 @@ impl TextView for AgentSecretListView {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentSecretListView, wrap_uuid_for_table};
+    use super::{SecretListView, wrap_uuid_for_table};
     use golem_common::model::agent_secret::{
         AgentSecretDto, AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
     };
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn list_view_json_stays_stable() {
-        let view = AgentSecretListView {
+        let view = SecretListView {
             secrets: vec![sample_secret()],
             show_sensitive: true,
             environment_name: "local".to_string(),
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn default_table_omits_ids_and_type_columns() {
-        let view = AgentSecretListView {
+        let view = SecretListView {
             secrets: vec![sample_secret()],
             show_sensitive: false,
             environment_name: "local".to_string(),
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn ids_table_includes_wrapped_id_columns() {
-        let view = AgentSecretListView {
+        let view = SecretListView {
             secrets: vec![sample_secret()],
             show_sensitive: false,
             environment_name: "local".to_string(),
