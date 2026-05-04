@@ -38,7 +38,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-wait-for-external-input-scala` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-scala` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
 | `golem-multi-instance-agent-scala` | Creating multiple agent instances with the same constructor parameters using phantom agents |
-| `golem-atomic-block-scala` | Atomic blocks, persistence control, and oplog management |
+| `golem-atomic-block-scala` | Atomic blocks, persistence control, and idempotency |
 | `golem-add-transactions-scala` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-scala` | Exposing an agent over HTTP with mount paths and endpoint annotations |
 | `golem-http-params-scala` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -68,6 +68,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-undo-agent-state` | Reverting agent state by undoing operations |
 | `golem-interrupt-resume-agent` | Interrupting and resuming a Golem agent |
 | `golem-test-crash-recovery` | Simulating a crash on an agent for testing crash recovery |
+| `golem-integration-test-setup` | Setting up a dedicated Golem environment for integration testing — isolated local server, test environment in golem.yaml, dynamic port discovery, and non-interactive deploys |
 | `golem-cancel-queued-invocation` | Canceling a pending (queued) invocation on an agent |
 | `golem-delete-agent` | Deleting an agent instance |
 | `golem-interactive-repl-scala` | Using the Golem REPL for interactive testing and scripting of agents |
@@ -90,6 +91,20 @@ Key concepts:
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no need for locks
 - Agents can **spawn other agents** and communicate with them via **RPC** (see Agent-to-Agent Communication)
 - An agent is created implicitly on first invocation — no separate creation step needed
+- **Futures cannot outlive invocations** — every `Future` (or other async effect, including the underlying JS `Promise`) started during an invocation must be awaited / completed before the invocation returns; do not store unresolved futures in agent state to await them from a later invocation
+
+## Durability & Automatic Retries
+
+Golem **automatically retries** failed operations using durable execution. **Do not add manual retry loops, `try/catch` + retry patterns, `Future.recoverWith` retry chains, or backoff utilities in agent code** — let operations fail and Golem will retry them. A built-in default policy (3 retries, exponential backoff with jitter, clamped to [100ms, 1s]) applies when no user-defined policy matches.
+
+The following are retried transparently:
+
+- **HTTP requests** to external services (via `fetch`, ZIO HTTP, `wasi:http`, etc.)
+- **RPC calls** between agents
+- **Database / storage calls** — `golem.host.Rdbms.Postgres`, `golem.host.Rdbms.Mysql`, `wasi:blobstore`, `wasi:keyvalue`
+- **Uncaught exceptions** (`Throwable`s thrown from, or `Future` failures escaping, an agent method) — the worker is restarted and the invocation is replayed from the oplog, with all previously-recorded side effects skipped
+
+Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the `golem-retry-policies-scala` skill.
 
 ## Project Structure
 
