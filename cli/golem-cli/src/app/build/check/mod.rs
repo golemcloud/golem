@@ -19,7 +19,9 @@ mod skills;
 mod ts;
 
 pub(crate) use skills::{
-    ClaudeSkillsContext, create_claude_symlink_if_needed, resolve_claude_skills_context,
+    ClaudePathState, ClaudeSkillsContext, ClaudeSkillsSyncMode, create_claude_symlink_if_needed,
+    map_embedded_skill_target_path, resolve_claude_skills_context, warn_claude_path_is_file,
+    SkillSyncTarget,
 };
 
 use crate::app::build::check::requirements::{

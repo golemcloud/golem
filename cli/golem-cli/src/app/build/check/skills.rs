@@ -24,6 +24,12 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SkillSyncTarget {
+    Agents,
+    Claude,
+}
+
 pub(super) fn plan_skill_fix_steps(
     ctx: &BuildContext<'_>,
     selected_languages: &BTreeSet<GuestLanguage>,
@@ -59,21 +65,25 @@ pub(super) fn plan_skill_fix_steps(
     }
 
     let mut steps = Vec::new();
-    collect_skill_fix_steps(app_root, &expected_files, &mut steps)?;
+    collect_skill_fix_steps_for_target(app_root, &expected_files, &mut steps, SkillSyncTarget::Agents)?;
 
     match claude_skills_ctx.mode {
         ClaudeSkillsSyncMode::ClaudeSymlink => {
             // NOP: in symlink mode, `.claude` resolves to `.agents`, so syncing app root is enough.
         }
         ClaudeSkillsSyncMode::SyncAll => {
-            let claude_root = app_root.join(".claude");
             match claude_skills_ctx.path_state {
                 ClaudePathState::File => {
                     warn_claude_path_is_file(app_root, claude_skills_ctx);
                     // NOP: `.claude` is a regular file. We skip Claude syncing for this run.
                 }
                 ClaudePathState::Missing | ClaudePathState::Symlink | ClaudePathState::Directory => {
-                    collect_skill_fix_steps(&claude_root, &expected_files, &mut steps)?;
+                    collect_skill_fix_steps_for_target(
+                        app_root,
+                        &expected_files,
+                        &mut steps,
+                        SkillSyncTarget::Claude,
+                    )?;
                 }
             }
         }
@@ -82,13 +92,14 @@ pub(super) fn plan_skill_fix_steps(
     Ok(steps)
 }
 
-fn collect_skill_fix_steps(
-    root: &Path,
+fn collect_skill_fix_steps_for_target(
+    app_root: &Path,
     expected_files: &BTreeMap<PathBuf, (GuestLanguage, String)>,
     steps: &mut Vec<DependencyFixStep>,
+    target: SkillSyncTarget,
 ) -> anyhow::Result<()> {
     for (rel_path, (_language, expected)) in expected_files {
-        let disk_path = root.join(rel_path);
+        let disk_path = map_embedded_skill_target_path(app_root, rel_path, target)?;
         let current = if disk_path.exists() {
             fs::read_to_string(&disk_path)?
         } else {
@@ -105,6 +116,23 @@ fn collect_skill_fix_steps(
     }
 
     Ok(())
+}
+
+pub(crate) fn map_embedded_skill_target_path(
+    app_root: &Path,
+    rel_path: &Path,
+    target: SkillSyncTarget,
+) -> anyhow::Result<PathBuf> {
+    match target {
+        SkillSyncTarget::Agents => Ok(fs::absolute_lexical_path_from_base_dir(rel_path, app_root)),
+        SkillSyncTarget::Claude => {
+            let claude_relative = fs::strip_prefix_or_err(rel_path, ".agents")?;
+            Ok(fs::absolute_lexical_path_from_base_dir(
+                &Path::new(".claude").join(claude_relative),
+                app_root,
+            ))
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

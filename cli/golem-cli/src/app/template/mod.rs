@@ -21,6 +21,7 @@ mod snippet;
 mod template;
 
 pub use metadata::AppTemplateMetadata;
+pub use generator::InMemoryFs;
 pub use plan::{
     MultiComponentLayoutUpgradePlan, MultiComponentLayoutUpgradePlanStep, SafeTemplatePlan,
     SafeTemplatePlanStep, TemplatePlan, TemplatePlanBuilder, TemplatePlanStep, UnsafeTemplatePlan,
