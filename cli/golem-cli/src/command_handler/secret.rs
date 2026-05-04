@@ -346,13 +346,10 @@ mod tests {
         NameTypePair, TypeBool, TypeF64, TypeList, TypeOption, TypeRecord, TypeS32, TypeStr,
         TypeU32,
     };
+    use proptest::prelude::*;
 
-    fn str_type() -> AnalysedType {
-        AnalysedType::Str(TypeStr)
-    }
-
-    fn u32_type() -> AnalysedType {
-        AnalysedType::U32(TypeU32)
+    fn other_lang() -> SourceLanguage {
+        SourceLanguage::Other(String::new())
     }
 
     fn option_u32_type() -> AnalysedType {
@@ -371,111 +368,8 @@ mod tests {
         })
     }
 
-    fn lang() -> SourceLanguage {
-        SourceLanguage::Other(String::new())
-    }
-
-    // --- String type ---
-
-    #[test]
-    fn bare_string_accepted_for_str_type() {
-        let result = parse_secret_value_to_json("sk-abc123", &str_type(), &lang());
-        assert_eq!(
-            result,
-            Ok(serde_json::Value::String("sk-abc123".to_string()))
-        );
-    }
-
-    #[test]
-    fn json_quoted_string_accepted_for_str_type() {
-        let result = parse_secret_value_to_json(r#""sk-abc123""#, &str_type(), &lang());
-        assert_eq!(
-            result,
-            Ok(serde_json::Value::String("sk-abc123".to_string()))
-        );
-    }
-
-    #[test]
-    fn bare_string_with_spaces_accepted_for_str_type() {
-        let result = parse_secret_value_to_json("hello world", &str_type(), &lang());
-        assert_eq!(
-            result,
-            Ok(serde_json::Value::String("hello world".to_string()))
-        );
-    }
-
-    #[test]
-    fn bare_string_api_key_like_accepted_for_str_type() {
-        let result = parse_secret_value_to_json("sk-abc123.endpoint/v2", &str_type(), &lang());
-        assert_eq!(
-            result,
-            Ok(serde_json::Value::String(
-                "sk-abc123.endpoint/v2".to_string()
-            ))
-        );
-    }
-
-    // --- Numeric types ---
-
-    #[test]
-    fn valid_json_number_accepted_for_u32_type() {
-        let result = parse_secret_value_to_json("42", &u32_type(), &lang());
-        assert_eq!(result, Ok(serde_json::json!(42)));
-    }
-
-    #[test]
-    fn negative_number_accepted_for_s32_type() {
-        let result = parse_secret_value_to_json("-7", &AnalysedType::S32(TypeS32), &lang());
-        assert_eq!(result, Ok(serde_json::json!(-7)));
-    }
-
-    #[test]
-    fn decimal_accepted_for_f64_type() {
-        let result = parse_secret_value_to_json("3.66", &AnalysedType::F64(TypeF64), &lang());
-        assert_eq!(result, Ok(serde_json::json!(3.66)));
-    }
-
-    // --- Bool type ---
-
-    #[test]
-    fn bool_true_accepted() {
-        let result = parse_secret_value_to_json("true", &AnalysedType::Bool(TypeBool), &lang());
-        assert_eq!(result, Ok(serde_json::json!(true)));
-    }
-
-    #[test]
-    fn bool_false_accepted() {
-        let result = parse_secret_value_to_json("false", &AnalysedType::Bool(TypeBool), &lang());
-        assert_eq!(result, Ok(serde_json::json!(false)));
-    }
-
-    // --- Option type ---
-
-    #[test]
-    fn option_null_accepted() {
-        let result = parse_secret_value_to_json("null", &option_u32_type(), &lang());
-        assert_eq!(result, Ok(serde_json::json!(null)));
-    }
-
-    #[test]
-    fn option_inner_value_accepted() {
-        let result = parse_secret_value_to_json("42", &option_u32_type(), &lang());
-        assert_eq!(result, Ok(serde_json::json!(42)));
-    }
-
-    // --- List type ---
-
-    #[test]
-    fn list_json_array_accepted() {
-        let result = parse_secret_value_to_json("[1,2,3]", &list_u32_type(), &lang());
-        assert_eq!(result, Ok(serde_json::json!([1, 2, 3])));
-    }
-
-    // --- Record type ---
-
-    #[test]
-    fn record_json_object_accepted() {
-        let rec_type = AnalysedType::Record(TypeRecord {
+    fn record_host_port_type() -> AnalysedType {
+        AnalysedType::Record(TypeRecord {
             name: None,
             owner: None,
             fields: vec![
@@ -488,36 +382,96 @@ mod tests {
                     typ: AnalysedType::U32(TypeU32),
                 },
             ],
-        });
-        let result =
-            parse_secret_value_to_json(r#"{"host":"localhost","port":5432}"#, &rec_type, &lang());
+        })
+    }
+
+    /// Identifiers, API keys, paths — strings whose first character cannot
+    /// start any JSON value (keywords t/f/n, digits, `-`, `"`, `[`, `{`),
+    /// so they are structurally guaranteed to not parse as JSON.
+    /// Covers:
+    /// 1. API keys: sk-abc123, Bearer token123
+    /// 2. Connection strings: postgres://user:pass@localhost/db
+    /// 3. Bare identifiers: mySecretKey
+    /// 4. Paths: path/to/neverland
+    fn bare_secret_value() -> impl Strategy<Value = String> {
+        "[a-eg-mo-su-zA-Z][a-zA-Z0-9_./@: -]*"
+    }
+
+    /// Generates valid JSON string literals by serializing arbitrary Rust strings
+    /// through serde_json, guaranteeing the output is always a properly quoted
+    /// and escaped JSON value (e.g. `"hello"`, `"line\nbreak"`, `"has \"quotes\""`)
+    fn json_encoded_string() -> impl Strategy<Value = String> {
+        any::<String>().prop_map(|s| serde_json::to_string(&s).unwrap())
+    }
+
+    proptest! {
+        #[test]
+        fn non_json_str_returned_as_is(input in bare_secret_value()) {
+            let result = parse_secret_value_to_json(&input, &AnalysedType::Str(TypeStr), &other_lang());
+            prop_assert_eq!(result, Ok(serde_json::Value::String(input)));
+        }
+
+        #[test]
+        fn json_encoded_str_is_decoded(json_input in json_encoded_string()) {
+            let expected: String = serde_json::from_str(&json_input).unwrap();
+            let result = parse_secret_value_to_json(&json_input, &AnalysedType::Str(TypeStr), &other_lang());
+            prop_assert_eq!(result, Ok(serde_json::Value::String(expected)));
+        }
+
+        #[test]
+        fn decimal_string_accepted_for_u32_type(n in any::<u32>()) {
+            let result = parse_secret_value_to_json(&n.to_string(), &AnalysedType::U32(TypeU32), &other_lang());
+            prop_assert_eq!(result, Ok(serde_json::json!(n)));
+        }
+
+        #[test]
+        fn decimal_string_accepted_for_s32_type(n in any::<i32>()) {
+            let result = parse_secret_value_to_json(&n.to_string(), &AnalysedType::S32(TypeS32), &other_lang());
+            prop_assert_eq!(result, Ok(serde_json::json!(n)));
+        }
+
+        #[test]
+        fn decimal_string_accepted_for_f64_type(n in proptest::num::f64::NORMAL) {
+            let json_str = serde_json::to_string(&n).unwrap();
+            let result = parse_secret_value_to_json(&json_str, &AnalysedType::F64(TypeF64), &other_lang());
+            prop_assert_eq!(result, Ok(serde_json::json!(n)));
+        }
+
+        #[test]
+        fn bool_literal_accepted_for_bool_type(b in any::<bool>()) {
+            let result = parse_secret_value_to_json(&b.to_string(), &AnalysedType::Bool(TypeBool), &other_lang());
+            prop_assert_eq!(result, Ok(serde_json::json!(b)));
+        }
+
+        #[test]
+        fn json_array_accepted_for_list_type(values in proptest::collection::vec(any::<u32>(), 0..=20)) {
+            let json_str = serde_json::to_string(&values).unwrap();
+            let result = parse_secret_value_to_json(&json_str, &list_u32_type(), &other_lang());
+            let expected: serde_json::Value = serde_json::to_value(&values).unwrap();
+            prop_assert_eq!(result, Ok(expected));
+        }
+
+        #[test]
+        fn json_object_accepted_for_record_type(host in "\\PC*", port in any::<u32>()) {
+            let json = serde_json::json!({"host": host, "port": port});
+            let result = parse_secret_value_to_json(&json.to_string(), &record_host_port_type(), &other_lang());
+            prop_assert_eq!(result, Ok(json));
+        }
+
+        #[test]
+        fn bare_word_rejected_for_numeric_type(input in "[a-zA-Z][a-zA-Z0-9_-]+") {
+            prop_assume!(serde_json::from_str::<serde_json::Value>(&input).is_err());
+            let result = parse_secret_value_to_json(&input, &AnalysedType::U32(TypeU32), &other_lang());
+            prop_assert!(result.is_err());
+            prop_assert!(result.unwrap_err().contains("Secret value is not valid"));
+        }
+    }
+
+    #[test]
+    fn option_null_accepted() {
         assert_eq!(
-            result,
-            Ok(serde_json::json!({"host": "localhost", "port": 5432}))
+            parse_secret_value_to_json("null", &option_u32_type(), &other_lang()),
+            Ok(serde_json::json!(null))
         );
-    }
-
-    // --- Language-specific: Rust dialect ---
-
-    #[test]
-    fn rust_dialect_some_option_accepted() {
-        let result =
-            parse_secret_value_to_json("Some(42)", &option_u32_type(), &SourceLanguage::Rust);
-        assert_eq!(result, Ok(serde_json::json!(42)));
-    }
-
-    #[test]
-    fn rust_dialect_none_option_accepted() {
-        let result = parse_secret_value_to_json("None", &option_u32_type(), &SourceLanguage::Rust);
-        assert_eq!(result, Ok(serde_json::json!(null)));
-    }
-
-    // --- Error cases ---
-
-    #[test]
-    fn bare_word_rejected_for_non_string_type() {
-        let result = parse_secret_value_to_json("notANumber", &u32_type(), &lang());
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Secret value is not valid"));
     }
 }
