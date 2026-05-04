@@ -368,21 +368,42 @@ mod tests {
         })
     }
 
-    fn record_host_port_type() -> AnalysedType {
-        AnalysedType::Record(TypeRecord {
-            name: None,
-            owner: None,
-            fields: vec![
-                NameTypePair {
-                    name: "host".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
-                },
-                NameTypePair {
-                    name: "port".to_string(),
-                    typ: AnalysedType::U32(TypeU32),
-                },
-            ],
-        })
+    /// Generates an arbitrary record schema paired with a matching JSON object,
+    /// with 1–5 fields of mixed simple types (String, U32, S32, F64, Bool).
+    /// Uses hash_map to guarantee unique field names.
+    fn arb_record_schema_and_json(
+    ) -> impl Strategy<Value = (AnalysedType, serde_json::Value)> {
+        let arb_field_value = prop_oneof![
+            any::<String>()
+                .prop_map(|s| (AnalysedType::Str(TypeStr), serde_json::Value::String(s))),
+            any::<u32>().prop_map(|n| (AnalysedType::U32(TypeU32), serde_json::json!(n))),
+            any::<i32>().prop_map(|n| (AnalysedType::S32(TypeS32), serde_json::json!(n))),
+            decimal_f64_input().prop_map(|s| {
+                let v = serde_json::from_str::<serde_json::Value>(&s).unwrap();
+                (AnalysedType::F64(TypeF64), v)
+            }),
+            any::<bool>().prop_map(|b| (AnalysedType::Bool(TypeBool), serde_json::json!(b))),
+        ];
+        proptest::collection::hash_map("[a-z][a-zA-Z0-9]{0,8}", arb_field_value, 1..=5).prop_map(
+            |fields| {
+                let mut json_map = serde_json::Map::new();
+                let type_fields: Vec<NameTypePair> = fields
+                    .into_iter()
+                    .map(|(name, (typ, val))| {
+                        json_map.insert(name.clone(), val);
+                        NameTypePair { name, typ }
+                    })
+                    .collect();
+                (
+                    AnalysedType::Record(TypeRecord {
+                        name: None,
+                        owner: None,
+                        fields: type_fields,
+                    }),
+                    serde_json::Value::Object(json_map),
+                )
+            },
+        )
     }
 
     /// Identifiers, API keys, paths — strings whose first character cannot
@@ -402,6 +423,13 @@ mod tests {
     /// and escaped JSON value (e.g. `"hello"`, `"line\nbreak"`, `"has \"quotes\""`)
     fn json_encoded_string() -> impl Strategy<Value = String> {
         any::<String>().prop_map(|s| serde_json::to_string(&s).unwrap())
+    }
+
+    /// Decimal numbers as a user would type them as a secret value: `3.14`, `-7.0`, `0.9999`.
+    fn decimal_f64_input() -> impl Strategy<Value = String> {
+        (any::<i32>(), 0u32..=9999u32).prop_map(|(int_part, frac_part)| {
+            format!("{int_part}.{frac_part}")
+        })
     }
 
     proptest! {
@@ -431,10 +459,10 @@ mod tests {
         }
 
         #[test]
-        fn decimal_string_accepted_for_f64_type(n in proptest::num::f64::NORMAL) {
-            let json_str = serde_json::to_string(&n).unwrap();
-            let result = parse_secret_value_to_json(&json_str, &AnalysedType::F64(TypeF64), &other_lang());
-            prop_assert_eq!(result, Ok(serde_json::json!(n)));
+        fn decimal_string_accepted_for_f64_type(input in decimal_f64_input()) {
+            let result = parse_secret_value_to_json(&input, &AnalysedType::F64(TypeF64), &other_lang());
+            let expected = serde_json::from_str::<serde_json::Value>(&input).unwrap();
+            prop_assert_eq!(result, Ok(expected));
         }
 
         #[test]
@@ -452,16 +480,21 @@ mod tests {
         }
 
         #[test]
-        fn json_object_accepted_for_record_type(host in "\\PC*", port in any::<u32>()) {
-            let json = serde_json::json!({"host": host, "port": port});
-            let result = parse_secret_value_to_json(&json.to_string(), &record_host_port_type(), &other_lang());
+        fn json_object_accepted_for_record_type((rec_type, json) in arb_record_schema_and_json()) {
+            let result = parse_secret_value_to_json(&json.to_string(), &rec_type, &other_lang());
             prop_assert_eq!(result, Ok(json));
         }
 
         #[test]
-        fn bare_word_rejected_for_numeric_type(input in "[a-zA-Z][a-zA-Z0-9_-]+") {
-            prop_assume!(serde_json::from_str::<serde_json::Value>(&input).is_err());
-            let result = parse_secret_value_to_json(&input, &AnalysedType::U32(TypeU32), &other_lang());
+        fn non_numeric_input_rejected_for_numeric_type(
+            input in bare_secret_value(),
+            typ in prop_oneof![
+                Just(AnalysedType::U32(TypeU32)),
+                Just(AnalysedType::S32(TypeS32)),
+                Just(AnalysedType::F64(TypeF64)),
+            ],
+        ) {
+            let result = parse_secret_value_to_json(&input, &typ, &other_lang());
             prop_assert!(result.is_err());
             prop_assert!(result.unwrap_err().contains("Secret value is not valid"));
         }
