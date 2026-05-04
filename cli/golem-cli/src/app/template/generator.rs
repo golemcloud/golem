@@ -63,6 +63,10 @@ impl InMemoryFs {
         Self::default()
     }
 
+    pub fn from_files(files: BTreeMap<PathBuf, String>) -> Self {
+        Self { files }
+    }
+
     pub fn files(&self) -> &BTreeMap<PathBuf, String> {
         &self.files
     }
