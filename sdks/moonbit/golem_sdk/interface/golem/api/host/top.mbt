@@ -654,6 +654,19 @@ pub fn mark_end_operation(begin : UInt64) -> Unit {
 }
 
 ///|
+/// Unconditionally traps the current invocation with the given reason.
+///
+/// This call never returns: it surfaces as an uncatchable wasm trap on the host
+/// side and the worker enters the standard trap-recovery flow. SDK guard helpers
+/// use this to guarantee that a failed atomic region always leads to a trap,
+/// regardless of whether the guest language could otherwise catch the failure.
+pub fn trap(reason : String) -> Unit {
+  let ptr = mbt_ffi_str2ptr(reason)
+  wasmImportTrap(ptr, reason.length())
+  mbt_ffi_free(ptr)
+}
+
+///|
 /// Gets the agent's current persistence level.
 pub fn get_oplog_persistence_level() -> PersistenceLevel {
   let result : Int = wasmImportGetOplogPersistenceLevel()

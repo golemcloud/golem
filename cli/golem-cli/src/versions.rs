@@ -16,7 +16,7 @@ pub mod sdk {
     pub const RUST: &str = "2.0.0";
     pub const TS: &str = "1.0.0";
     pub const SCALA: &str = "1.5.0";
-    pub const MOONBIT: &str = "0.5.0";
+    pub const MOONBIT: &str = "0.5.1";
     pub const MANIFEST: &str = "1.5.0";
 
     #[macro_export]
