@@ -16,7 +16,8 @@ use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::{ResponseBody, RouteExecutionResult};
 use golem_common::model::agent::{
     BinaryReference, ComponentModelElementValue, DataSchema, DataValue, ElementValue,
-    ElementValues, UnstructuredBinaryElementValue, UntypedDataValue,
+    ElementValues, TextReference, UnstructuredBinaryElementValue, UnstructuredTextElementValue,
+    UntypedDataValue,
 };
 use golem_wasm::ValueAndType;
 use golem_wasm::analysis::AnalysedType;
@@ -85,8 +86,27 @@ fn map_single_element_agent_response(
             body: ResponseBody::UnstructuredBinaryBody { body: binary },
         }),
 
-        _ => Err(RequestHandlerError::invariant_violated(
-            "Unexpected response type",
+        ElementValue::UnstructuredBinary(UnstructuredBinaryElementValue {
+            value: BinaryReference::Url(_),
+            ..
+        }) => Err(RequestHandlerError::invariant_violated(
+            "Unexpected unstructured binary URL response",
+        )),
+
+        ElementValue::UnstructuredText(UnstructuredTextElementValue {
+            value: TextReference::Inline(text),
+            ..
+        }) => Ok(RouteExecutionResult {
+            status: StatusCode::OK,
+            headers: HashMap::new(),
+            body: ResponseBody::UnstructuredTextBody { body: text },
+        }),
+
+        ElementValue::UnstructuredText(UnstructuredTextElementValue {
+            value: TextReference::Url(_),
+            ..
+        }) => Err(RequestHandlerError::invariant_violated(
+            "Unexpected unstructured text URL response",
         )),
     }
 }
@@ -195,5 +215,142 @@ fn unwrap_result_err_type(typ: AnalysedType) -> Result<AnalysedType, RequestHand
 fn json_response_body(value: golem_wasm::Value, typ: AnalysedType) -> ResponseBody {
     ResponseBody::ComponentModelJsonBody {
         body: ValueAndType::new(value, typ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert2::let_assert;
+    use golem_common::model::agent::{
+        BinaryDescriptor, BinaryReference, BinaryReferenceValue, BinarySource, BinaryType,
+        ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor, TextReference,
+        TextReferenceValue, TextSource, TextType, UntypedDataValue, UntypedElementValue, Url,
+    };
+    use test_r::test;
+
+    fn text_schema(restrictions: Option<Vec<TextType>>) -> DataSchema {
+        DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "body".into(),
+                schema: ElementSchema::UnstructuredText(TextDescriptor { restrictions }),
+            }],
+        })
+    }
+
+    fn binary_schema(restrictions: Option<Vec<BinaryType>>) -> DataSchema {
+        DataSchema::Tuple(NamedElementSchemas {
+            elements: vec![NamedElementSchema {
+                name: "body".into(),
+                schema: ElementSchema::UnstructuredBinary(BinaryDescriptor { restrictions }),
+            }],
+        })
+    }
+
+    #[test]
+    fn inline_text_response_returns_200_with_unstructured_text_body() {
+        let schema = text_schema(None);
+        let invoke_result = Some(UntypedDataValue::Tuple(vec![
+            UntypedElementValue::UnstructuredText(TextReferenceValue {
+                value: TextReference::Inline(TextSource {
+                    data: "hello".to_string(),
+                    text_type: Some(TextType {
+                        language_code: "en".to_string(),
+                    }),
+                }),
+            }),
+        ]));
+
+        let result = interpret_agent_response(invoke_result, &schema).unwrap();
+
+        assert_eq!(result.status, StatusCode::OK);
+        let_assert!(ResponseBody::UnstructuredTextBody { body } = result.body);
+        assert_eq!(body.data, "hello");
+        let text_type = body.text_type.unwrap();
+        assert_eq!(text_type.language_code, "en");
+    }
+
+    #[test]
+    fn inline_text_response_without_language_returns_200() {
+        let schema = text_schema(None);
+        let invoke_result = Some(UntypedDataValue::Tuple(vec![
+            UntypedElementValue::UnstructuredText(TextReferenceValue {
+                value: TextReference::Inline(TextSource {
+                    data: "hi".to_string(),
+                    text_type: None,
+                }),
+            }),
+        ]));
+
+        let result = interpret_agent_response(invoke_result, &schema).unwrap();
+
+        assert_eq!(result.status, StatusCode::OK);
+        let_assert!(ResponseBody::UnstructuredTextBody { body } = result.body);
+        assert_eq!(body.data, "hi");
+        assert!(body.text_type.is_none());
+    }
+
+    #[test]
+    fn url_text_response_is_invariant_violation() {
+        let schema = text_schema(None);
+        let invoke_result = Some(UntypedDataValue::Tuple(vec![
+            UntypedElementValue::UnstructuredText(TextReferenceValue {
+                value: TextReference::Url(Url {
+                    value: "https://example.com/text".into(),
+                }),
+            }),
+        ]));
+
+        let err = interpret_agent_response(invoke_result, &schema).unwrap_err();
+
+        let_assert!(RequestHandlerError::InvariantViolated { msg } = err);
+        assert!(msg.contains("text"));
+    }
+
+    #[test]
+    fn inline_binary_response_returns_200_with_unstructured_binary_body() {
+        let schema = binary_schema(None);
+        let invoke_result = Some(UntypedDataValue::Tuple(vec![
+            UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                value: BinaryReference::Inline(BinarySource {
+                    data: vec![0x01, 0x02, 0x03],
+                    binary_type: BinaryType {
+                        mime_type: "application/octet-stream".into(),
+                    },
+                }),
+            }),
+        ]));
+
+        let result = interpret_agent_response(invoke_result, &schema).unwrap();
+
+        assert_eq!(result.status, StatusCode::OK);
+        let_assert!(ResponseBody::UnstructuredBinaryBody { body } = result.body);
+        assert_eq!(body.data, vec![0x01, 0x02, 0x03]);
+        assert_eq!(body.binary_type.mime_type, "application/octet-stream");
+    }
+
+    #[test]
+    fn url_binary_response_is_invariant_violation() {
+        let schema = binary_schema(None);
+        let invoke_result = Some(UntypedDataValue::Tuple(vec![
+            UntypedElementValue::UnstructuredBinary(BinaryReferenceValue {
+                value: BinaryReference::Url(Url {
+                    value: "https://example.com/blob".into(),
+                }),
+            }),
+        ]));
+
+        let err = interpret_agent_response(invoke_result, &schema).unwrap_err();
+
+        let_assert!(RequestHandlerError::InvariantViolated { msg } = err);
+        assert!(msg.contains("binary"));
+    }
+
+    #[test]
+    fn no_response_returns_204() {
+        let schema = text_schema(None);
+        let result = interpret_agent_response(None, &schema).unwrap();
+        assert_eq!(result.status, StatusCode::NO_CONTENT);
+        let_assert!(ResponseBody::NoBody = result.body);
     }
 }

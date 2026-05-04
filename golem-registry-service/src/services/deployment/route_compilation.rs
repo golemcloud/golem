@@ -439,9 +439,10 @@ fn validate_http_method_agent_response_type(
                             Ok(())
                         }
 
-                        _ => Err(make_error(
-                            "Unsupported return type from agent method".to_string(),
-                        )),
+                        ElementSchema::UnstructuredText(_) => {
+                            // Full body taken from agent response
+                            Ok(())
+                        }
                     }
                 }
                 n => Err(make_error(format!(
