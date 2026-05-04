@@ -160,17 +160,28 @@ impl SdkOverrides {
         }
     }
 
-    pub fn moonbit_sdk_tools_build_path(&self) -> String {
+    /// Returns the command prefix used to invoke the `golem_sdk_tools` CLI
+    /// from the application root directory.
+    ///
+    /// In override (dev) mode it expands to a `moon -C <local-tools-path> run cmd --`
+    /// invocation that runs the tool from a local sibling checkout without changing
+    /// the working directory.
+    ///
+    /// In published mode it expands to the launcher script that `moon` installs into
+    /// `.mooncakes/golemcloud/golem_sdk_tools/golem-sdk-tools` when the project
+    /// declares `golemcloud/golem_sdk_tools` as a `bin-deps` dependency.
+    pub fn moonbit_sdk_tools_cmd(&self) -> String {
         match &self.moonbit_sdk_path {
             Some(path) => {
                 let sdk_path = Path::new(path);
-                sdk_path
+                let tools_path = sdk_path
                     .parent()
                     .map(|p| p.join("golem_sdk_tools"))
                     .and_then(|p| p.to_str().map(|s| s.to_string()))
-                    .unwrap_or_else(|| ".mooncakes/golemcloud/golem_sdk_tools".to_string())
+                    .unwrap_or_else(|| ".mooncakes/golemcloud/golem_sdk_tools".to_string());
+                format!("moon -C {tools_path} run cmd --")
             }
-            None => ".mooncakes/golemcloud/golem_sdk_tools".to_string(),
+            None => "./.mooncakes/golemcloud/golem_sdk_tools/golem-sdk-tools".to_string(),
         }
     }
 
