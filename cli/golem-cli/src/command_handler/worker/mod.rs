@@ -381,9 +381,11 @@ impl WorkerCommandHandler {
 
         // First, validate without the function name. The agent name was
         // already canonicalized when the `AgentNameMatch` was constructed.
-        let agent_name = agent_name_match.agent_name.clone();
-        let agent_id_and_type =
-            self.validate_worker_and_function_names(&component, &agent_name, None)?;
+        let agent_id_and_type = self.validate_worker_and_function_names(
+            &component,
+            &agent_name_match.agent_name,
+            None,
+        )?;
 
         let (agent_id, agent_type) =
             agent_id_and_type.ok_or_else(|| anyhow!("Agent invoke requires an agent component"))?;
